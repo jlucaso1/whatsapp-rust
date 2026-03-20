@@ -4480,11 +4480,13 @@ mod tests {
         let cache_key = client
             .make_retry_cache_key(&chat_jid, msg_id, &chat_jid)
             .await;
-        client
-            .message_retry_counts
-            .entry_by_ref(&cache_key)
-            .or_insert(max_sender_retry_count)
-            .await;
+        // Insert only if absent (portable alternative to moka's entry_by_ref().or_insert())
+        if client.message_retry_counts.get(&cache_key).await.is_none() {
+            client
+                .message_retry_counts
+                .insert(cache_key.clone(), max_sender_retry_count)
+                .await;
+        }
 
         assert_eq!(
             client.message_retry_counts.get(&cache_key).await,

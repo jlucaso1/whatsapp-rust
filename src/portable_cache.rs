@@ -7,8 +7,16 @@
 //!
 //! The API surface mirrors moka's [`Cache`](moka::future::Cache) so that
 //! call-sites can switch between moka and this implementation via a type alias.
+//!
+//! # Single-flight `get_with`
+//!
+//! Like moka, [`PortableCache::get_with`] guarantees that concurrent calls for
+//! the same missing key will only run the initializer **once**. Other callers
+//! wait for the first initialization to complete and receive the same value.
+//! This is critical for caches that store coordination primitives (mutexes,
+//! channels) where each key must map to exactly one instance.
 
-use async_lock::RwLock;
+use async_lock::{Mutex as AsyncMutex, RwLock};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -30,10 +38,14 @@ struct CacheEntry<V> {
 /// - Maximum capacity with oldest-inserted eviction
 /// - Time-to-live (TTL) -- entries expire a fixed duration after insertion
 /// - Time-to-idle (TTI) -- entries expire after a fixed duration of no access
+/// - Single-flight `get_with` / `get_with_by_ref` (concurrent inits coalesce)
 ///
 /// All time checks use [`wacore::time::now_millis`].
 pub struct PortableCache<K, V> {
     inner: Arc<RwLock<CacheInner<K, V>>>,
+    /// Per-key init locks for single-flight `get_with`. Stored separately from
+    /// `CacheInner` so we can hold an init lock without blocking cache reads.
+    init_locks: Arc<AsyncMutex<HashMap<K, Arc<AsyncMutex<()>>>>>,
     max_capacity: Option<u64>,
     ttl_ms: Option<i64>,
     tti_ms: Option<i64>,
@@ -111,6 +123,7 @@ where
     pub fn build(self) -> PortableCache<K, V> {
         PortableCache {
             inner: Arc::new(RwLock::new(CacheInner::new())),
+            init_locks: Arc::new(AsyncMutex::new(HashMap::new())),
             max_capacity: self.max_capacity,
             ttl_ms: self.ttl.map(|d| d.as_millis() as i64),
             tti_ms: self.tti.map(|d| d.as_millis() as i64),
@@ -206,9 +219,14 @@ where
             return;
         }
 
+        // Zero capacity means caching is disabled.
+        if self.max_capacity == Some(0) {
+            return;
+        }
+
         // Evict oldest entries if at capacity.
         if let Some(cap) = self.max_capacity {
-            while guard.map.len() as u64 >= cap && cap > 0 {
+            while guard.map.len() as u64 >= cap {
                 if let Some(oldest_key) = guard.insertion_order.first().cloned() {
                     guard.map.remove(&oldest_key);
                     guard.insertion_order.remove(0);
@@ -258,12 +276,26 @@ where
         }
     }
 
-    /// Remove all entries (sync, best-effort).
+    /// Remove all entries (sync, best-effort under contention).
+    ///
+    /// This matches moka's synchronous `invalidate_all()` signature. If a
+    /// concurrent reader/writer holds the lock, the clear is retried with a
+    /// spin loop to avoid silently dropping the operation.
     pub fn invalidate_all(&self) {
-        if let Some(mut guard) = self.inner.try_write() {
-            guard.map.clear();
-            guard.insertion_order.clear();
+        // Spin briefly to avoid silently skipping the clear under contention.
+        // The critical sections holding the RwLock are very short (in-memory
+        // HashMap ops), so contention resolves within a few iterations.
+        for _ in 0..64 {
+            if let Some(mut guard) = self.inner.try_write() {
+                guard.map.clear();
+                guard.insertion_order.clear();
+                return;
+            }
+            std::hint::spin_loop();
         }
+        // If we still can't acquire after 64 spins, log and skip.
+        // This is extremely unlikely given the short critical sections.
+        log::warn!("PortableCache::invalidate_all: could not acquire write lock after retries");
     }
 
     /// Approximate entry count (sync). May include expired entries.
@@ -274,15 +306,45 @@ where
             .unwrap_or(0)
     }
 
-    /// Get or insert: if key is present (and not expired), return its value.
-    /// Otherwise, evaluate the future and insert its result.
+    /// Get or insert with single-flight guarantee: if the key is present (and
+    /// not expired), return its value. Otherwise, evaluate the future and
+    /// insert its result. Concurrent calls for the same missing key will only
+    /// run the initializer **once**; other callers wait and receive the same
+    /// value.
     pub async fn get_with<F>(&self, key: K, init: F) -> V
     where
         F: std::future::Future<Output = V>,
     {
+        // Fast path: cache hit.
         if let Some(v) = self.get(&key).await {
             return v;
         }
+
+        // Get or create a per-key init mutex to serialize concurrent inits.
+        let init_mutex = {
+            let mut locks = self.init_locks.lock().await;
+
+            // Double-check under the init_locks map lock: another task may have
+            // completed initialization between our cache miss and acquiring this lock.
+            if let Some(v) = self.get(&key).await {
+                return v;
+            }
+
+            locks
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+                .clone()
+        };
+
+        // Serialize per key — only one task runs the initializer.
+        let _init_guard = init_mutex.lock().await;
+
+        // Double-check: another task that held this lock may have already initialized.
+        if let Some(v) = self.get(&key).await {
+            return v;
+        }
+
+        // We won the race — run the initializer and insert.
         let value = init.await;
         self.insert(key, value.clone()).await;
         value
@@ -293,15 +355,38 @@ where
     where
         F: std::future::Future<Output = V>,
     {
+        // Fast path: cache hit.
         if let Some(v) = self.get(key).await {
             return v;
         }
+
+        // Get or create a per-key init mutex.
+        let init_mutex = {
+            let mut locks = self.init_locks.lock().await;
+
+            if let Some(v) = self.get(key).await {
+                return v;
+            }
+
+            locks
+                .entry(key.clone())
+                .or_insert_with(|| Arc::new(AsyncMutex::new(())))
+                .clone()
+        };
+
+        let _init_guard = init_mutex.lock().await;
+
+        if let Some(v) = self.get(key).await {
+            return v;
+        }
+
         let value = init.await;
         self.insert(key.clone(), value.clone()).await;
         value
     }
 
-    /// Trigger an eviction sweep, removing all expired entries.
+    /// Trigger an eviction sweep, removing all expired entries and cleaning up
+    /// init locks for keys no longer in the cache.
     pub async fn run_pending_tasks(&self) {
         let now_ms = wacore::time::now_millis();
         let mut guard = self.inner.write().await;
@@ -315,6 +400,13 @@ where
             guard.map.remove(k);
         }
         guard.insertion_order.retain(|k| !expired_keys.contains(k));
+        drop(guard);
+
+        // Clean up init locks for keys no longer being initialized.
+        // Keep locks that are currently held (strong_count > 1 means someone
+        // has a clone and may be actively initializing).
+        let mut locks = self.init_locks.lock().await;
+        locks.retain(|_, v| Arc::strong_count(v) > 1);
     }
 }
 
@@ -322,9 +414,337 @@ impl<K, V> Clone for PortableCache<K, V> {
     fn clone(&self) -> Self {
         Self {
             inner: Arc::clone(&self.inner),
+            init_locks: Arc::clone(&self.init_locks),
             max_capacity: self.max_capacity,
             ttl_ms: self.ttl_ms,
             tti_ms: self.tti_ms,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn build_cache<K, V>() -> PortableCache<K, V>
+    where
+        K: Hash + Eq + Clone + Send + Sync + 'static,
+        V: Clone + Send + Sync + 'static,
+    {
+        PortableCache::builder().max_capacity(100).build()
+    }
+
+    #[tokio::test]
+    async fn test_basic_insert_and_get() {
+        let cache = build_cache::<String, String>();
+
+        assert!(cache.get("key1").await.is_none());
+
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        assert_eq!(cache.get("key1").await, Some("value1".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_update_existing_key() {
+        let cache = build_cache::<String, String>();
+
+        cache.insert("key1".to_string(), "v1".to_string()).await;
+        cache.insert("key1".to_string(), "v2".to_string()).await;
+        assert_eq!(cache.get("key1").await, Some("v2".to_string()));
+        assert_eq!(cache.entry_count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_capacity_eviction() {
+        let cache: PortableCache<String, u32> = PortableCache::builder().max_capacity(3).build();
+
+        cache.insert("a".into(), 1).await;
+        cache.insert("b".into(), 2).await;
+        cache.insert("c".into(), 3).await;
+        assert_eq!(cache.entry_count(), 3);
+
+        // Inserting a 4th should evict the oldest ("a").
+        cache.insert("d".into(), 4).await;
+        assert_eq!(cache.entry_count(), 3);
+        assert!(cache.get("a").await.is_none());
+        assert_eq!(cache.get("b").await, Some(2));
+        assert_eq!(cache.get("d").await, Some(4));
+    }
+
+    #[tokio::test]
+    async fn test_zero_capacity_disables_caching() {
+        let cache: PortableCache<String, u32> = PortableCache::builder().max_capacity(0).build();
+
+        cache.insert("a".into(), 1).await;
+        assert!(cache.get("a").await.is_none());
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_ttl_expiry() {
+        let cache: PortableCache<String, String> = PortableCache::builder()
+            .max_capacity(100)
+            .time_to_live(Duration::from_millis(50))
+            .build();
+
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        assert_eq!(cache.get("key1").await, Some("value1".to_string()));
+
+        // Wait for TTL to expire.
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert!(cache.get("key1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_invalidate() {
+        let cache = build_cache::<String, String>();
+
+        cache.insert("key1".to_string(), "value1".to_string()).await;
+        cache.invalidate("key1").await;
+        assert!(cache.get("key1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_invalidate_all() {
+        let cache = build_cache::<String, u32>();
+
+        cache.insert("a".into(), 1).await;
+        cache.insert("b".into(), 2).await;
+        cache.invalidate_all();
+        assert_eq!(cache.entry_count(), 0);
+        assert!(cache.get("a").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_remove() {
+        let cache = build_cache::<String, String>();
+
+        cache.insert("key1".to_string(), "v1".to_string()).await;
+        let removed = cache.remove("key1").await;
+        assert_eq!(removed, Some("v1".to_string()));
+        assert!(cache.get("key1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_get_with_basic() {
+        let cache = build_cache::<String, u32>();
+
+        let v = cache.get_with("key1".to_string(), async { 42 }).await;
+        assert_eq!(v, 42);
+
+        // Second call should return cached value without running init.
+        let v = cache.get_with("key1".to_string(), async { 99 }).await;
+        assert_eq!(v, 42);
+    }
+
+    #[tokio::test]
+    async fn test_get_with_by_ref_basic() {
+        let cache = build_cache::<String, u32>();
+        let key = "key1".to_string();
+
+        let v = cache.get_with_by_ref(&key, async { 42 }).await;
+        assert_eq!(v, 42);
+
+        let v = cache.get_with_by_ref(&key, async { 99 }).await;
+        assert_eq!(v, 42);
+    }
+
+    /// Verifies single-flight: concurrent `get_with` calls for the same key
+    /// only run the initializer once.
+    #[tokio::test]
+    async fn test_get_with_single_flight() {
+        let cache: PortableCache<String, Arc<AtomicUsize>> =
+            PortableCache::builder().max_capacity(100).build();
+
+        let init_count = Arc::new(AtomicUsize::new(0));
+        let num_tasks = 20;
+        let barrier = Arc::new(tokio::sync::Barrier::new(num_tasks));
+
+        let mut handles = Vec::new();
+        for _ in 0..num_tasks {
+            let cache = cache.clone();
+            let init_count = init_count.clone();
+            let barrier = barrier.clone();
+            handles.push(tokio::spawn(async move {
+                // Synchronize all tasks to start at the same time.
+                barrier.wait().await;
+                cache
+                    .get_with("shared_key".to_string(), async {
+                        init_count.fetch_add(1, Ordering::SeqCst);
+                        // Small yield to widen the race window.
+                        tokio::task::yield_now().await;
+                        Arc::new(AtomicUsize::new(0))
+                    })
+                    .await
+            }));
+        }
+
+        let mut results = Vec::new();
+        for h in handles {
+            results.push(h.await.unwrap());
+        }
+
+        // The initializer should have been called exactly once.
+        assert_eq!(
+            init_count.load(Ordering::SeqCst),
+            1,
+            "init should run exactly once (single-flight)"
+        );
+
+        // All tasks should receive the same Arc instance.
+        let first = &results[0];
+        for r in &results[1..] {
+            assert!(
+                Arc::ptr_eq(first, r),
+                "all tasks must receive the same Arc instance"
+            );
+        }
+    }
+
+    /// Verifies single-flight for `get_with_by_ref`.
+    #[tokio::test]
+    async fn test_get_with_by_ref_single_flight() {
+        let cache: PortableCache<String, Arc<AtomicUsize>> =
+            PortableCache::builder().max_capacity(100).build();
+
+        let init_count = Arc::new(AtomicUsize::new(0));
+        let num_tasks = 20;
+        let barrier = Arc::new(tokio::sync::Barrier::new(num_tasks));
+
+        let mut handles = Vec::new();
+        for _ in 0..num_tasks {
+            let cache = cache.clone();
+            let init_count = init_count.clone();
+            let barrier = barrier.clone();
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                let key = "shared_key".to_string();
+                cache
+                    .get_with_by_ref(&key, async {
+                        init_count.fetch_add(1, Ordering::SeqCst);
+                        tokio::task::yield_now().await;
+                        Arc::new(AtomicUsize::new(0))
+                    })
+                    .await
+            }));
+        }
+
+        let mut results = Vec::new();
+        for h in handles {
+            results.push(h.await.unwrap());
+        }
+
+        assert_eq!(init_count.load(Ordering::SeqCst), 1);
+        let first = &results[0];
+        for r in &results[1..] {
+            assert!(Arc::ptr_eq(first, r));
+        }
+    }
+
+    /// Concurrent get_with on DIFFERENT keys should run initializers in parallel.
+    #[tokio::test]
+    async fn test_get_with_different_keys_parallel() {
+        let cache = build_cache::<String, u32>();
+
+        let init_count = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::new();
+        for i in 0..10 {
+            let cache = cache.clone();
+            let init_count = init_count.clone();
+            handles.push(tokio::spawn(async move {
+                cache
+                    .get_with(format!("key_{i}"), async {
+                        init_count.fetch_add(1, Ordering::SeqCst);
+                        i as u32
+                    })
+                    .await
+            }));
+        }
+
+        for (i, h) in handles.into_iter().enumerate() {
+            assert_eq!(h.await.unwrap(), i as u32);
+        }
+        // Each key should have its own init call.
+        assert_eq!(init_count.load(Ordering::SeqCst), 10);
+    }
+
+    /// Verifies that session-lock-style usage works: concurrent `get_with` for
+    /// the same key returns the same `Arc<Mutex>`, so locking actually serializes.
+    #[tokio::test]
+    async fn test_session_lock_pattern() {
+        let cache: PortableCache<String, Arc<async_lock::Mutex<()>>> =
+            PortableCache::builder().max_capacity(100).build();
+
+        let counter = Arc::new(AtomicUsize::new(0));
+        let num_tasks = 50;
+        let barrier = Arc::new(tokio::sync::Barrier::new(num_tasks));
+
+        let mut handles = Vec::new();
+        for _ in 0..num_tasks {
+            let cache = cache.clone();
+            let counter = counter.clone();
+            let barrier = barrier.clone();
+            handles.push(tokio::spawn(async move {
+                barrier.wait().await;
+                let mutex = cache
+                    .get_with("sender_123".to_string(), async {
+                        Arc::new(async_lock::Mutex::new(()))
+                    })
+                    .await;
+                let _guard = mutex.lock().await;
+                // Critical section: read-modify-write that must be serialized.
+                let val = counter.load(Ordering::SeqCst);
+                tokio::task::yield_now().await;
+                counter.store(val + 1, Ordering::SeqCst);
+            }));
+        }
+
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        // If serialization works, final count should be exactly num_tasks.
+        assert_eq!(counter.load(Ordering::SeqCst), num_tasks);
+    }
+
+    #[tokio::test]
+    async fn test_run_pending_tasks_cleans_expired() {
+        let cache: PortableCache<String, u32> = PortableCache::builder()
+            .max_capacity(100)
+            .time_to_live(Duration::from_millis(50))
+            .build();
+
+        cache.insert("a".into(), 1).await;
+        cache.insert("b".into(), 2).await;
+        assert_eq!(cache.entry_count(), 2);
+
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        cache.run_pending_tasks().await;
+        assert_eq!(cache.entry_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_run_pending_tasks_cleans_init_locks() {
+        let cache: PortableCache<String, u32> = PortableCache::builder().max_capacity(100).build();
+
+        // Trigger init lock creation.
+        let _ = cache.get_with("key1".to_string(), async { 1 }).await;
+
+        // Init lock should exist.
+        {
+            let locks = cache.init_locks.lock().await;
+            assert!(locks.contains_key("key1"));
+        }
+
+        // run_pending_tasks should clean up init locks that aren't actively held.
+        cache.run_pending_tasks().await;
+        {
+            let locks = cache.init_locks.lock().await;
+            assert!(
+                !locks.contains_key("key1"),
+                "init lock should be cleaned up after run_pending_tasks"
+            );
         }
     }
 }

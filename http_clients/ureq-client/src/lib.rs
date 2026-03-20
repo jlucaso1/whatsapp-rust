@@ -1,3 +1,7 @@
+// ureq is a blocking HTTP client that depends on std::net and OS threads.
+// It cannot work on wasm32 targets.
+#![cfg(not(target_arch = "wasm32"))]
+
 use anyhow::Result;
 use async_trait::async_trait;
 use wacore::net::{HttpClient, HttpRequest, HttpResponse, StreamingHttpResponse};
@@ -39,8 +43,7 @@ fn build_agent() -> ureq::Agent {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[async_trait]
 impl HttpClient for UreqHttpClient {
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse> {
         let agent = self.agent.clone();
