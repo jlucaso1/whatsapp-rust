@@ -1564,7 +1564,16 @@ impl Client {
             .await
     }
 
-    /// Reject an incoming call.
+    /// Get business profile for a WhatsApp Business account.
+    pub async fn get_business_profile(
+        &self,
+        jid: &wacore_binary::jid::Jid,
+    ) -> Result<Option<wacore::iq::business::BusinessProfile>, crate::request::IqError> {
+        use wacore::iq::business::BusinessProfileSpec;
+        self.execute(BusinessProfileSpec::new(jid)).await
+    }
+
+    /// Reject an incoming call. Fire-and-forget — no server response is expected.
     pub async fn reject_call(
         &self,
         call_id: &str,

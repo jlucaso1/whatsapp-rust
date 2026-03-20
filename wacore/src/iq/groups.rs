@@ -1784,7 +1784,7 @@ impl IqSpec for GetLinkedGroupsParticipantsIq {
 // ---------------------------------------------------------------------------
 
 /// Result of joining a group via invite code.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum JoinGroupResult {
     Joined(Jid),
     PendingApproval(Jid),
