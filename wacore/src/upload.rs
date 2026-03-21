@@ -49,9 +49,9 @@ pub fn encrypt_media_streaming<R: Read, W: Write>(
     let (iv, cipher_key, mac_key) = DownloadUtils::get_media_keys(&media_key, media_type)?;
 
     let cipher = Aes256::new_from_slice(&cipher_key).map_err(|_| anyhow::anyhow!("Bad AES key"))?;
-    let mut hmac = CryptographicMac::new("HmacSha256", &mac_key).map_err(|e| anyhow::anyhow!(e))?;
-    let mut sha256_plain = CryptographicHash::new("SHA-256").map_err(|e| anyhow::anyhow!(e))?;
-    let mut sha256_enc = CryptographicHash::new("SHA-256").map_err(|e| anyhow::anyhow!(e))?;
+    let mut hmac = CryptographicMac::new("HmacSha256", &mac_key)?;
+    let mut sha256_plain = CryptographicHash::new("SHA-256")?;
+    let mut sha256_enc = CryptographicHash::new("SHA-256")?;
 
     // HMAC covers IV + ciphertext
     hmac.update(&iv);
@@ -109,21 +109,15 @@ pub fn encrypt_media_streaming<R: Read, W: Write>(
     }
 
     // Write 10-byte truncated HMAC
-    let mac_full = hmac
-        .finalize_sha256_array()
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let mac_full = hmac.finalize_sha256_array()?;
     let mac_truncated = &mac_full[..10];
     writer.write_all(mac_truncated)?;
     sha256_enc.update(mac_truncated);
 
     writer.flush()?;
 
-    let file_sha256 = sha256_plain
-        .finalize_sha256_array()
-        .map_err(|e| anyhow::anyhow!(e))?;
-    let file_enc_sha256 = sha256_enc
-        .finalize_sha256_array()
-        .map_err(|e| anyhow::anyhow!(e))?;
+    let file_sha256 = sha256_plain.finalize_sha256_array()?;
+    let file_enc_sha256 = sha256_enc.finalize_sha256_array()?;
 
     Ok(EncryptedMediaInfo {
         media_key,
