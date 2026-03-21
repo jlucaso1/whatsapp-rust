@@ -547,6 +547,70 @@ where
     Ok(stanza)
 }
 
+/// Pairwise-encrypted retry stanza for a single group participant.
+/// WA Web sends retries to the failing device only (RetryMsgJob.js:71),
+/// NOT as a sender-key broadcast to all participants.
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_group_retry_stanza<S, I>(
+    session_store: &mut S,
+    identity_store: &mut I,
+    group_jid: Jid,
+    participant_jid: Jid,
+    encryption_jid: Jid,
+    message: &wa::Message,
+    message_id: String,
+    retry_count: u8,
+    account: Option<&wa::AdvSignedDeviceIdentity>,
+) -> Result<Node>
+where
+    S: crate::libsignal::protocol::SessionStore,
+    I: crate::libsignal::protocol::IdentityKeyStore,
+{
+    let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+    let signal_address = encryption_jid.to_protocol_address();
+
+    let encrypted =
+        message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
+
+    let (enc_type, is_prekey, serialized) = match encrypted {
+        CiphertextMessage::SignalMessage(msg) => ("msg", false, msg.serialized().to_vec()),
+        CiphertextMessage::PreKeySignalMessage(msg) => ("pkmsg", true, msg.serialized().to_vec()),
+        _ => {
+            return Err(anyhow!(
+                "Unexpected encryption message type for group retry"
+            ));
+        }
+    };
+
+    // WA Web: enc node has count="N" for retries (MsgCreateDeviceStanza.js:150-153)
+    let enc_node = NodeBuilder::new("enc")
+        .attr("v", "2")
+        .attr("type", enc_type)
+        .attr("count", retry_count.to_string())
+        .bytes(serialized)
+        .build();
+
+    let mut children = vec![enc_node];
+
+    if is_prekey && let Some(acc) = account {
+        children.push(
+            NodeBuilder::new("device-identity")
+                .bytes(acc.encode_to_vec())
+                .build(),
+        );
+    }
+
+    let stanza = NodeBuilder::new("message")
+        .attr("to", group_jid)
+        .attr("participant", participant_jid)
+        .attr("id", message_id)
+        .attr("type", "text")
+        .children(children)
+        .build();
+
+    Ok(stanza)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_group_stanza<
     'a,
