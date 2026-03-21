@@ -561,6 +561,7 @@ pub async fn prepare_group_retry_stanza<S, I>(
     message_id: String,
     retry_count: u8,
     account: Option<&wa::AdvSignedDeviceIdentity>,
+    is_lid_addressing: bool,
 ) -> Result<Node>
 where
     S: crate::libsignal::protocol::SessionStore,
@@ -582,7 +583,7 @@ where
         }
     };
 
-    // WA Web: enc node has count="N" for retries (MsgCreateDeviceStanza.js:150-153)
+    // count="N" distinguishes retries from normal sends (MsgCreateDeviceStanza.js:150-153)
     let enc_node = NodeBuilder::new("enc")
         .attr("v", "2")
         .attr("type", enc_type)
@@ -600,15 +601,17 @@ where
         );
     }
 
-    let stanza = NodeBuilder::new("message")
+    let mut stanza_builder = NodeBuilder::new("message")
         .attr("to", group_jid)
         .attr("participant", participant_jid)
         .attr("id", message_id)
-        .attr("type", "text")
-        .children(children)
-        .build();
+        .attr("type", "text");
 
-    Ok(stanza)
+    if is_lid_addressing {
+        stanza_builder = stanza_builder.attr("addressing_mode", "lid");
+    }
+
+    Ok(stanza_builder.children(children).build())
 }
 
 #[allow(clippy::too_many_arguments)]

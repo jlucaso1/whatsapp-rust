@@ -243,30 +243,25 @@ impl Client {
             }
         }
 
+        // Cache group info once — used for both SKDM rotation check and addressing_mode
+        let cached_group_info = if receipt.source.chat.is_group() {
+            self.get_group_cache().await.get(&receipt.source.chat).await
+        } else {
+            None
+        };
+
         if is_group_or_status {
-            // For groups and status broadcasts, mark participant as needing fresh SKDM.
-            // WhatsApp Web uses `markForgetSenderKey` which lazily marks participants for
-            // SKDM redistribution on the next send, rather than immediately deleting
-            // the sender key.
             let group_jid = receipt.source.chat.to_string();
             let participant_str = participant_jid.to_string();
 
-            // WA Web rotateKey check: if the requesting device is NOT in the group's
-            // participant list and is NOT a LID device, force full sender key rotation
-            // by clearing all SKDM recipients. This ensures unknown devices (new phone,
-            // re-registration) trigger SKDM redistribution to ALL participants.
+            // WA Web rotateKey: unknown device (not in participant list, not LID) →
+            // force full sender key rotation by clearing all SKDM recipients.
             if !participant_jid.is_lid() && !receipt.source.chat.is_status_broadcast() {
-                let is_known_participant = if let Some(group_info) =
-                    self.get_group_cache().await.get(&receipt.source.chat).await
-                {
-                    group_info
-                        .participants
+                let is_known_participant = cached_group_info.as_ref().is_none_or(|g| {
+                    g.participants
                         .iter()
                         .any(|p| p.user == participant_jid.user)
-                } else {
-                    // No cached group info — assume known to avoid false rotations
-                    true
-                };
+                });
 
                 if !is_known_participant {
                     log::warn!(
@@ -416,6 +411,10 @@ impl Client {
             let encryption_jid = self.resolve_encryption_jid(&participant_jid).await;
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
+            let is_lid_addressing = cached_group_info
+                .as_ref()
+                .is_some_and(|g| g.addressing_mode == crate::types::message::AddressingMode::Lid);
+
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
                 device_store_arc,
@@ -432,6 +431,7 @@ impl Client {
                 message_id,
                 retry_count,
                 device_snapshot.account.as_ref(),
+                is_lid_addressing,
             )
             .await?;
 
