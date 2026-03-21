@@ -7,6 +7,7 @@ mod groups;
 mod media_reupload;
 mod mex;
 pub(crate) mod newsletter;
+mod polls;
 mod presence;
 mod profile;
 pub(crate) mod status;
@@ -39,6 +40,8 @@ pub use newsletter::{
     Newsletter, NewsletterMessage, NewsletterMetadata, NewsletterReactionCount, NewsletterRole,
     NewsletterState, NewsletterVerification,
 };
+
+pub use polls::{PollOptionResult, Polls};
 
 pub use presence::{Presence, PresenceError, PresenceStatus};
 
