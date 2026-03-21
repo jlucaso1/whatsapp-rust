@@ -2062,7 +2062,7 @@ mod tests {
             let (mut ss, mut is, jid) = setup_session().await;
             let group: Jid = "120363001234567890@g.us".parse().unwrap();
             let p: Jid = jid.to_string().parse().unwrap();
-            // Second → msg, with LID addressing
+            // Fresh session → pkmsg (pre-key), with LID addressing
             let n = prepare_group_retry_stanza(
                 &mut ss,
                 &mut is,
