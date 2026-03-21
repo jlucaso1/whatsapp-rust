@@ -144,7 +144,11 @@ async fn test_cross_collection_mutations() -> anyhow::Result<()> {
     client_a.client.chat_actions().pin_chat(&jid_b).await?;
     info!("Pin (regular_low) succeeded");
 
-    client_a.client.chat_actions().archive_chat(&jid_b).await?;
+    client_a
+        .client
+        .chat_actions()
+        .archive_chat(&jid_b, None)
+        .await?;
     info!("Archive (regular_low) succeeded");
 
     // regular_high collection
@@ -325,7 +329,11 @@ async fn test_rapid_successive_mutations() -> anyhow::Result<()> {
     // Fire mutations rapidly — each increments the version
     client_a.client.chat_actions().pin_chat(&jid_b).await?;
     client_a.client.chat_actions().mute_chat(&jid_b).await?;
-    client_a.client.chat_actions().archive_chat(&jid_b).await?;
+    client_a
+        .client
+        .chat_actions()
+        .archive_chat(&jid_b, None)
+        .await?;
     client_a.client.chat_actions().unpin_chat(&jid_b).await?;
     client_a.client.chat_actions().unmute_chat(&jid_b).await?;
 

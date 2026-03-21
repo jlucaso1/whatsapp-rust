@@ -64,7 +64,8 @@ pub use features::{
     MexResponse, Newsletter, NewsletterMessage, NewsletterMetadata, NewsletterReactionCount,
     NewsletterRole, NewsletterState, NewsletterVerification, ParticipantChangeResponse, Presence,
     PresenceError, PresenceStatus, Profile, ProfilePicture, SetProfilePictureResponse, Status,
-    StatusPrivacySetting, StatusSendOptions, TcToken, UnlinkSubgroupsResult, UserInfo, group_type,
+    StatusPrivacySetting, StatusSendOptions, SyncActionMessageRange, TcToken,
+    UnlinkSubgroupsResult, UserInfo, group_type, message_key, message_range,
 };
 
 pub mod bot;

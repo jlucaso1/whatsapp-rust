@@ -14,7 +14,7 @@ mod tctoken;
 
 pub use blocking::{Blocking, BlocklistEntry};
 
-pub use chat_actions::ChatActions;
+pub use chat_actions::{ChatActions, SyncActionMessageRange, message_key, message_range};
 
 pub use community::{
     Community, CommunitySubgroup, CreateCommunityOptions, CreateCommunityResult, GroupType,
