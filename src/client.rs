@@ -1014,8 +1014,15 @@ impl Client {
         self.signal_cache.clear().await;
         // Reset message processing semaphore to 1 permit (sequential mode for next offline sync).
         // Old workers holding the previous semaphore Arc will finish normally.
-        *self.message_processing_semaphore.lock().unwrap() =
-            Arc::new(async_lock::Semaphore::new(1));
+        // Scoped block ensures MutexGuard is dropped before any .await (MutexGuard is !Send).
+        // Handles poison gracefully — the semaphore is still safe to replace.
+        {
+            let mut guard = match self.message_processing_semaphore.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            *guard = Arc::new(async_lock::Semaphore::new(1));
+        }
         // Reset dead-socket timestamps so stale values from the previous
         // connection don't trigger an immediate reconnect on the next one.
         self.last_data_received_ms.store(0, Ordering::Relaxed);

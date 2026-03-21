@@ -496,7 +496,10 @@ impl Client {
         // Acquire global processing permit. During offline sync (1 permit), this serializes
         // ALL message processing globally, matching WA Web's allChatQueue pattern.
         // After offline sync completes, permits are increased for parallel processing.
-        let semaphore = self.message_processing_semaphore.lock().unwrap().clone();
+        let semaphore = match self.message_processing_semaphore.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
         let _global_permit = semaphore.acquire_arc().await;
 
         log::debug!(

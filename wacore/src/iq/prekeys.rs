@@ -60,7 +60,7 @@ fn extract_content_bytes(node: Option<&Node>) -> Vec<u8> {
 }
 
 /// Extract binary content from an optional node as a big-endian unsigned integer.
-fn extract_content_uint(node: Option<&Node>, _max_bytes: usize) -> u32 {
+fn extract_content_uint(node: Option<&Node>) -> u32 {
     node.and_then(|n| match &n.content {
         Some(NodeContent::Bytes(b)) => {
             let mut buf = [0u8; 4];
@@ -237,7 +237,7 @@ impl IqSpec for DigestKeyBundleSpec {
 
         // Required fields — error if missing node or empty content
         let reg_node = required_child(digest_node, "registration")?;
-        let reg_id = extract_content_uint(Some(reg_node), 4);
+        let reg_id = extract_content_uint(Some(reg_node));
 
         let identity_node = required_child(digest_node, "identity")?;
         let identity = match &identity_node.content {
@@ -248,7 +248,7 @@ impl IqSpec for DigestKeyBundleSpec {
         let skey_node = digest_node.get_optional_child("skey");
         let (skey_id, skey_pubkey, skey_signature) = if let Some(skey) = skey_node {
             (
-                extract_content_uint(skey.get_optional_child("id"), 4),
+                extract_content_uint(skey.get_optional_child("id")),
                 extract_content_bytes(skey.get_optional_child("value")),
                 extract_content_bytes(skey.get_optional_child("signature")),
             )
@@ -264,7 +264,7 @@ impl IqSpec for DigestKeyBundleSpec {
                 children
                     .iter()
                     .filter(|child| child.tag == "key")
-                    .map(|child| extract_content_uint(Some(child), 4))
+                    .map(|child| extract_content_uint(Some(child)))
                     .collect()
             })
             .unwrap_or_default();
