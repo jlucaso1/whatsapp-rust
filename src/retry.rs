@@ -152,6 +152,18 @@ impl Client {
             }
         };
 
+        // Re-add for groups/status so other participants can also retry.
+        // take_recent_message consumed it; without this a second participant's
+        // retry would silently fail with "not found in cache".
+        if is_group_or_status {
+            self.add_recent_message(
+                receipt.source.chat.clone(),
+                message_id.clone(),
+                &original_msg,
+            )
+            .await;
+        }
+
         // Reuse the participant string extracted earlier (same source: node's
         // `participant` attribute for groups/status, receipt.source.sender for DMs).
         let participant_jid = participant_str
@@ -177,10 +189,10 @@ impl Client {
             .as_ref()
             .is_some_and(|our_pn| participant_jid.user == our_pn.user);
 
-        // Process the key bundle from the retry receipt to establish a fresh session.
-        // The requester includes their new prekeys so we can encrypt to them.
-        // This is only done for DMs; group messages and status broadcasts use sender keys instead.
-        if !is_group_or_status {
+        // Process key bundle to establish a pairwise session for the retry.
+        // Needed for both DMs and groups (group retries use pairwise, not sender key).
+        // Status broadcasts skip this — they can't resend and only mark for next send.
+        if !receipt.source.chat.is_status_broadcast() {
             // Try to process key bundle if present
             let key_bundle_result = self
                 .process_retry_key_bundle(node, &participant_jid, is_peer)
@@ -231,30 +243,25 @@ impl Client {
             }
         }
 
+        // Cache group info once — used for both SKDM rotation check and addressing_mode
+        let cached_group_info = if receipt.source.chat.is_group() {
+            self.get_group_cache().await.get(&receipt.source.chat).await
+        } else {
+            None
+        };
+
         if is_group_or_status {
-            // For groups and status broadcasts, mark participant as needing fresh SKDM.
-            // WhatsApp Web uses `markForgetSenderKey` which lazily marks participants for
-            // SKDM redistribution on the next send, rather than immediately deleting
-            // the sender key.
             let group_jid = receipt.source.chat.to_string();
             let participant_str = participant_jid.to_string();
 
-            // WA Web rotateKey check: if the requesting device is NOT in the group's
-            // participant list and is NOT a LID device, force full sender key rotation
-            // by clearing all SKDM recipients. This ensures unknown devices (new phone,
-            // re-registration) trigger SKDM redistribution to ALL participants.
+            // WA Web rotateKey: unknown device (not in participant list, not LID) →
+            // force full sender key rotation by clearing all SKDM recipients.
             if !participant_jid.is_lid() && !receipt.source.chat.is_status_broadcast() {
-                let is_known_participant = if let Some(group_info) =
-                    self.get_group_cache().await.get(&receipt.source.chat).await
-                {
-                    group_info
-                        .participants
+                let is_known_participant = cached_group_info.as_ref().is_none_or(|g| {
+                    g.participants
                         .iter()
                         .any(|p| p.user == participant_jid.user)
-                } else {
-                    // No cached group info — assume known to avoid false rotations
-                    true
-                };
+                });
 
                 if !is_known_participant {
                     log::warn!(
@@ -382,18 +389,9 @@ impl Client {
             info!("Deleted session for {signal_address} due to retry receipt");
         }
 
-        // Status broadcasts cannot be resent through send_message_impl (it requires
-        // the full recipient list via send_status_message). The participant has already
-        // been marked for fresh SKDM above, so the next status send will include them.
-        // Re-add the message to cache so subsequent retries from other devices can
-        // still find it (take_recent_message consumed it above).
+        // Status broadcasts can't resend (requires explicit recipient list).
+        // Participant already marked for fresh SKDM above; next status send includes them.
         if receipt.source.chat.is_status_broadcast() {
-            self.add_recent_message(
-                receipt.source.chat.clone(),
-                message_id.clone(),
-                &original_msg,
-            )
-            .await;
             info!(
                 "Status broadcast retry for {} — participant marked for fresh SKDM, \
                  will be included in next status send",
@@ -407,16 +405,53 @@ impl Client {
             message_id, receipt.source.chat, retry_count
         );
 
-        self.send_message_impl(
-            receipt.source.chat.clone(),
-            &original_msg,
-            Some(message_id),
-            false,
-            true, // is_retry: includes fresh SKDM for groups
-            None,
-            vec![], // Extra nodes not preserved on retry - caller must resend with options if needed
-        )
-        .await?;
+        if receipt.source.chat.is_group() {
+            // Group retry: pairwise encrypt to failing device only (RetryMsgJob.js:71).
+            // Using sender-key broadcast would resend to ALL participants → duplicates.
+            let encryption_jid = self.resolve_encryption_jid(&participant_jid).await;
+            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+
+            let is_lid_addressing = cached_group_info
+                .as_ref()
+                .is_some_and(|g| g.addressing_mode == crate::types::message::AddressingMode::Lid);
+
+            let device_store_arc = self.persistence_manager.get_device_arc().await;
+            let mut store_adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
+                device_store_arc,
+                self.signal_cache.clone(),
+            );
+
+            let stanza = wacore::send::prepare_group_retry_stanza(
+                &mut store_adapter.session_store,
+                &mut store_adapter.identity_store,
+                receipt.source.chat.clone(),
+                participant_jid,
+                encryption_jid,
+                &original_msg,
+                message_id,
+                retry_count,
+                device_snapshot.account.as_ref(),
+                is_lid_addressing,
+            )
+            .await?;
+
+            self.send_node(stanza).await?;
+            self.flush_signal_cache().await.unwrap_or_else(|e| {
+                log::warn!("Failed to flush signal cache after group retry: {e}");
+            });
+        } else {
+            // DM retry: re-encrypt via normal send path (already targets single recipient)
+            self.send_message_impl(
+                receipt.source.chat.clone(),
+                &original_msg,
+                Some(message_id),
+                false,
+                true,
+                None,
+                vec![],
+            )
+            .await?;
+        }
 
         Ok(())
     }

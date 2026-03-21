@@ -21,6 +21,15 @@ use wacore_libsignal::crypto::aes_256_cbc_encrypt_into;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 
+/// Wire-format constants (MsgCreateDeviceStanza.js).
+pub(crate) mod stanza {
+    pub const ENC_VERSION: &str = "2";
+    pub const MSG_TYPE_TEXT: &str = "text";
+    pub const ENC_TYPE_MSG: &str = "msg";
+    pub const ENC_TYPE_PKMSG: &str = "pkmsg";
+    pub const ENC_TYPE_SKMSG: &str = "skmsg";
+}
+
 pub async fn encrypt_group_message<S, R>(
     sender_key_store: &mut S,
     group_jid: &Jid,
@@ -337,14 +346,16 @@ where
                 let (enc_type, serialized_bytes) = match encrypted_payload {
                     CiphertextMessage::PreKeySignalMessage(msg) => {
                         includes_prekey_message = true;
-                        ("pkmsg", msg.serialized().to_vec())
+                        (stanza::ENC_TYPE_PKMSG, msg.serialized().to_vec())
                     }
-                    CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
+                    CiphertextMessage::SignalMessage(msg) => {
+                        (stanza::ENC_TYPE_MSG, msg.serialized().to_vec())
+                    }
                     _ => continue,
                 };
 
                 let mut enc_builder = NodeBuilder::new("enc")
-                    .attr("v", "2")
+                    .attr("v", stanza::ENC_VERSION)
                     .attr("type", enc_type);
                 if hide_decrypt_fail {
                     enc_builder = enc_builder.attr("decrypt-fail", "hide");
@@ -494,7 +505,7 @@ pub async fn prepare_dm_stanza<
     let mut stanza_builder = NodeBuilder::new("message")
         .attr("to", to_jid)
         .attr("id", request_id)
-        .attr("type", "text");
+        .attr("type", stanza::MSG_TYPE_TEXT);
 
     if let Some(edit_attr) = edit
         && edit_attr != crate::types::message::EditAttribute::Empty
@@ -526,8 +537,10 @@ where
         message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
 
     let (enc_type, serialized_bytes) = match encrypted_message {
-        CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
-        CiphertextMessage::PreKeySignalMessage(msg) => ("pkmsg", msg.serialized().to_vec()),
+        CiphertextMessage::SignalMessage(msg) => (stanza::ENC_TYPE_MSG, msg.serialized().to_vec()),
+        CiphertextMessage::PreKeySignalMessage(msg) => {
+            (stanza::ENC_TYPE_PKMSG, msg.serialized().to_vec())
+        }
         _ => return Err(anyhow!("Unexpected peer encryption message type")),
     };
 
@@ -539,12 +552,83 @@ where
     let stanza = NodeBuilder::new("message")
         .attr("to", transport_jid)
         .attr("id", request_id)
-        .attr("type", "text")
+        .attr("type", stanza::MSG_TYPE_TEXT)
         .attr("category", "peer")
         .children([enc_node])
         .build();
 
     Ok(stanza)
+}
+
+/// Pairwise-encrypted retry stanza for a single group participant.
+/// WA Web sends retries to the failing device only (RetryMsgJob.js:71),
+/// NOT as a sender-key broadcast to all participants.
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_group_retry_stanza<S, I>(
+    session_store: &mut S,
+    identity_store: &mut I,
+    group_jid: Jid,
+    participant_jid: Jid,
+    encryption_jid: Jid,
+    message: &wa::Message,
+    message_id: String,
+    retry_count: u8,
+    account: Option<&wa::AdvSignedDeviceIdentity>,
+    is_lid_addressing: bool,
+) -> Result<Node>
+where
+    S: crate::libsignal::protocol::SessionStore,
+    I: crate::libsignal::protocol::IdentityKeyStore,
+{
+    let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+    let signal_address = encryption_jid.to_protocol_address();
+
+    let encrypted =
+        message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
+
+    let (enc_type, is_prekey, serialized) = match encrypted {
+        CiphertextMessage::SignalMessage(msg) => {
+            (stanza::ENC_TYPE_MSG, false, msg.serialized().to_vec())
+        }
+        CiphertextMessage::PreKeySignalMessage(msg) => {
+            (stanza::ENC_TYPE_PKMSG, true, msg.serialized().to_vec())
+        }
+        _ => {
+            return Err(anyhow!(
+                "Unexpected encryption message type for group retry"
+            ));
+        }
+    };
+
+    // count="N" distinguishes retries from normal sends (MsgCreateDeviceStanza.js:150-153)
+    let enc_node = NodeBuilder::new("enc")
+        .attr("v", stanza::ENC_VERSION)
+        .attr("type", enc_type)
+        .attr("count", retry_count.to_string())
+        .bytes(serialized)
+        .build();
+
+    let mut children = vec![enc_node];
+
+    if is_prekey && let Some(acc) = account {
+        children.push(
+            NodeBuilder::new("device-identity")
+                .bytes(acc.encode_to_vec())
+                .build(),
+        );
+    }
+
+    let mut stanza_builder = NodeBuilder::new("message")
+        .attr("to", group_jid)
+        .attr("participant", participant_jid)
+        .attr("id", message_id)
+        .attr("type", stanza::MSG_TYPE_TEXT);
+
+    if is_lid_addressing {
+        stanza_builder = stanza_builder.attr("addressing_mode", "lid");
+    }
+
+    Ok(stanza_builder.children(children).build())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -780,8 +864,8 @@ pub async fn prepare_group_stanza<
     // Add decrypt-fail="hide" for edited group messages, but NOT for admin revokes
     // WhatsApp Web does not include decrypt-fail="hide" for admin revoke messages
     let mut enc_builder = NodeBuilder::new("enc")
-        .attr("v", "2")
-        .attr("type", "skmsg")
+        .attr("v", stanza::ENC_VERSION)
+        .attr("type", stanza::ENC_TYPE_SKMSG)
         .bytes(skmsg_ciphertext);
     if let Some(edit_attr) = &edit
         && *edit_attr != crate::types::message::EditAttribute::Empty
@@ -794,7 +878,7 @@ pub async fn prepare_group_stanza<
     let mut stanza_builder = NodeBuilder::new("message")
         .attr("to", to_jid.clone())
         .attr("id", request_id)
-        .attr("type", "text");
+        .attr("type", stanza::MSG_TYPE_TEXT);
 
     // Add addressing_mode attribute for LID groups (matches WhatsApp Web behavior)
     if group_info.addressing_mode == crate::types::message::AddressingMode::Lid {
@@ -1766,5 +1850,243 @@ mod tests {
         );
 
         println!("✅ LID Prekey Lookup Normalization passed");
+    }
+
+    mod group_retry {
+        use super::*;
+        use crate::libsignal::protocol::{
+            Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, KeyPair,
+            PreKeyBundle, ProtocolAddress, SessionStore, process_prekey_bundle,
+        };
+        use std::collections::HashMap;
+        use wacore_binary::node::NodeContent;
+
+        struct MemSessionStore(HashMap<ProtocolAddress, Vec<u8>>);
+        impl MemSessionStore {
+            fn new() -> Self {
+                Self(HashMap::new())
+            }
+        }
+        #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+        impl SessionStore for MemSessionStore {
+            async fn load_session(
+                &self,
+                a: &ProtocolAddress,
+            ) -> crate::libsignal::protocol::error::Result<
+                Option<crate::libsignal::protocol::SessionRecord>,
+            > {
+                Ok(self
+                    .0
+                    .get(a)
+                    .and_then(|b| crate::libsignal::protocol::SessionRecord::deserialize(b).ok()))
+            }
+            async fn store_session(
+                &mut self,
+                a: &ProtocolAddress,
+                r: &crate::libsignal::protocol::SessionRecord,
+            ) -> crate::libsignal::protocol::error::Result<()> {
+                self.0.insert(a.clone(), r.serialize()?);
+                Ok(())
+            }
+        }
+
+        struct MemIdentityStore {
+            pair: IdentityKeyPair,
+            reg_id: u32,
+            known: HashMap<ProtocolAddress, IdentityKey>,
+        }
+        #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+        impl IdentityKeyStore for MemIdentityStore {
+            async fn get_identity_key_pair(
+                &self,
+            ) -> crate::libsignal::protocol::error::Result<IdentityKeyPair> {
+                Ok(self.pair.clone())
+            }
+            async fn get_local_registration_id(
+                &self,
+            ) -> crate::libsignal::protocol::error::Result<u32> {
+                Ok(self.reg_id)
+            }
+            async fn save_identity(
+                &mut self,
+                a: &ProtocolAddress,
+                id: &IdentityKey,
+            ) -> crate::libsignal::protocol::error::Result<IdentityChange> {
+                self.known.insert(a.clone(), *id);
+                Ok(IdentityChange::from_changed(false))
+            }
+            async fn is_trusted_identity(
+                &self,
+                _: &ProtocolAddress,
+                _: &IdentityKey,
+                _: Direction,
+            ) -> crate::libsignal::protocol::error::Result<bool> {
+                Ok(true)
+            }
+            async fn get_identity(
+                &self,
+                a: &ProtocolAddress,
+            ) -> crate::libsignal::protocol::error::Result<Option<IdentityKey>> {
+                Ok(self.known.get(a).copied())
+            }
+        }
+
+        async fn setup_session() -> (MemSessionStore, MemIdentityStore, Jid) {
+            let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+            let sender = IdentityKeyPair::generate(&mut rng);
+            let receiver = IdentityKeyPair::generate(&mut rng);
+            let spk = KeyPair::generate(&mut rng);
+            let opk = KeyPair::generate(&mut rng);
+            let sig = receiver
+                .private_key()
+                .calculate_signature(&spk.public_key.serialize(), &mut rng)
+                .unwrap();
+            let bundle = PreKeyBundle::new(
+                1,
+                1u32.into(),
+                Some((1u32.into(), opk.public_key)),
+                1u32.into(),
+                spk.public_key,
+                sig.to_vec(),
+                *receiver.identity_key(),
+            )
+            .unwrap();
+            let jid: Jid = "559911112222@s.whatsapp.net".parse().unwrap();
+            let addr = jid.to_protocol_address();
+            let mut ss = MemSessionStore::new();
+            let mut is = MemIdentityStore {
+                pair: sender,
+                reg_id: 42,
+                known: HashMap::new(),
+            };
+            process_prekey_bundle(
+                &addr,
+                &mut ss,
+                &mut is,
+                &bundle,
+                &mut rand::make_rng::<rand::rngs::StdRng>(),
+                crate::libsignal::protocol::UsePQRatchet::No,
+            )
+            .await
+            .unwrap();
+            (ss, is, jid)
+        }
+
+        #[tokio::test]
+        async fn pkmsg_no_account() {
+            let (mut ss, mut is, jid) = setup_session().await;
+            let group: Jid = "120363001234567890@g.us".parse().unwrap();
+            let p: Jid = jid.to_string().parse().unwrap();
+            let n = prepare_group_retry_stanza(
+                &mut ss,
+                &mut is,
+                group.clone(),
+                p.clone(),
+                p.clone(),
+                &wa::Message::default(),
+                "3EB0ABC".into(),
+                1,
+                None,
+                false,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(n.tag, "message");
+            let mut a = n.attrs();
+            assert_eq!(a.optional_string("to").unwrap().as_ref(), group.to_string());
+            assert_eq!(
+                a.optional_string("participant").unwrap().as_ref(),
+                p.to_string()
+            );
+            assert_eq!(
+                a.optional_string("type").unwrap().as_ref(),
+                stanza::MSG_TYPE_TEXT
+            );
+            assert!(a.optional_string("category").is_none());
+            assert!(a.optional_string("addressing_mode").is_none());
+            let enc = n.get_optional_child("enc").unwrap();
+            let mut ea = enc.attrs();
+            assert_eq!(
+                ea.optional_string("v").unwrap().as_ref(),
+                stanza::ENC_VERSION
+            );
+            assert_eq!(
+                ea.optional_string("type").unwrap().as_ref(),
+                stanza::ENC_TYPE_PKMSG
+            );
+            assert_eq!(ea.optional_string("count").unwrap().as_ref(), "1");
+            assert!(matches!(&enc.content, Some(NodeContent::Bytes(_))));
+            assert!(n.get_optional_child("device-identity").is_none());
+        }
+
+        #[tokio::test]
+        async fn pkmsg_with_account_has_device_identity() {
+            let (mut ss, mut is, jid) = setup_session().await;
+            let group: Jid = "120363001234567890@g.us".parse().unwrap();
+            let p: Jid = jid.to_string().parse().unwrap();
+            let acc = wa::AdvSignedDeviceIdentity {
+                details: Some(b"t".to_vec()),
+                ..Default::default()
+            };
+            let n = prepare_group_retry_stanza(
+                &mut ss,
+                &mut is,
+                group,
+                p.clone(),
+                p,
+                &wa::Message::default(),
+                "id2".into(),
+                2,
+                Some(&acc),
+                false,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                n.get_optional_child("enc")
+                    .unwrap()
+                    .attrs()
+                    .optional_string("type")
+                    .unwrap()
+                    .as_ref(),
+                stanza::ENC_TYPE_PKMSG
+            );
+            assert!(n.get_optional_child("device-identity").is_some());
+        }
+
+        #[tokio::test]
+        async fn lid_addressing_mode() {
+            let (mut ss, mut is, jid) = setup_session().await;
+            let group: Jid = "120363001234567890@g.us".parse().unwrap();
+            let p: Jid = jid.to_string().parse().unwrap();
+            // Fresh session → pkmsg (pre-key), with LID addressing
+            let n = prepare_group_retry_stanza(
+                &mut ss,
+                &mut is,
+                group,
+                p.clone(),
+                p,
+                &wa::Message::default(),
+                "m2".into(),
+                3,
+                Some(&wa::AdvSignedDeviceIdentity::default()),
+                true,
+            )
+            .await
+            .unwrap();
+            let mut ea = n.get_optional_child("enc").unwrap().attrs();
+            assert_eq!(ea.optional_string("count").unwrap().as_ref(), "3");
+            // Verify LID addressing_mode is set
+            assert_eq!(
+                n.attrs()
+                    .optional_string("addressing_mode")
+                    .unwrap()
+                    .as_ref(),
+                "lid"
+            );
+        }
     }
 }
