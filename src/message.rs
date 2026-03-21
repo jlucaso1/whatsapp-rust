@@ -494,22 +494,22 @@ impl Client {
         }
 
         // Acquire global processing permit (1 during offline sync, N after).
-        // Generation check rejects stale Arc clones from a previous connection.
-        let generation = self
-            .message_semaphore_generation
-            .load(std::sync::atomic::Ordering::SeqCst);
-        let semaphore = match self.message_processing_semaphore.lock() {
-            Ok(guard) => guard.clone(),
-            Err(poisoned) => poisoned.into_inner().clone(),
+        // Read generation + clone Arc under the same mutex so the pair is consistent.
+        let (generation, semaphore) = match self.message_processing_semaphore.lock() {
+            Ok(guard) => (
+                self.message_semaphore_generation
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                guard.clone(),
+            ),
+            Err(poisoned) => {
+                let guard = poisoned.into_inner();
+                (
+                    self.message_semaphore_generation
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    guard.clone(),
+                )
+            }
         };
-        if generation
-            != self
-                .message_semaphore_generation
-                .load(std::sync::atomic::Ordering::SeqCst)
-        {
-            log::debug!("Stale semaphore generation, skipping message batch");
-            return;
-        }
         let _global_permit = semaphore.acquire_arc().await;
         // Post-acquire recheck: generation could have changed during the .await
         if generation

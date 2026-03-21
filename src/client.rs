@@ -433,6 +433,21 @@ pub struct Client {
 }
 
 impl Client {
+    /// Replace the message processing semaphore and bump the generation counter.
+    ///
+    /// Both operations happen under the same mutex hold so readers always see
+    /// a consistent (generation, Arc) pair. Must be called from a non-async
+    /// context or inside a scoped block (MutexGuard is !Send).
+    pub(crate) fn swap_message_semaphore(&self, permits: usize) {
+        let mut guard = match self.message_processing_semaphore.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = Arc::new(async_lock::Semaphore::new(permits));
+        self.message_semaphore_generation
+            .fetch_add(1, Ordering::SeqCst);
+    }
+
     fn should_downgrade_sync_error(&self, err: &anyhow::Error) -> bool {
         if self.is_shutting_down() {
             return true;
@@ -1014,16 +1029,7 @@ impl Client {
         // Clear signal cache so stale state doesn't leak across connections
         self.signal_cache.clear().await;
         // Reset semaphore to 1 permit for next offline sync.
-        // Generation bump invalidates stale Arc clones. Block scopes the !Send MutexGuard.
-        {
-            self.message_semaphore_generation
-                .fetch_add(1, Ordering::SeqCst);
-            let mut guard = match self.message_processing_semaphore.lock() {
-                Ok(g) => g,
-                Err(poisoned) => poisoned.into_inner(),
-            };
-            *guard = Arc::new(async_lock::Semaphore::new(1));
-        }
+        self.swap_message_semaphore(1);
         // Reset dead-socket timestamps so stale values from the previous
         // connection don't trigger an immediate reconnect on the next one.
         self.last_data_received_ms.store(0, Ordering::Relaxed);

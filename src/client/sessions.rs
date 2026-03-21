@@ -37,15 +37,7 @@ impl Client {
             // During offline sync, permits=1 serialized all message processing.
             // Replace with a new semaphore with 64 permits for concurrent processing.
             // Old workers holding the previous semaphore Arc will finish normally.
-            {
-                self.message_semaphore_generation
-                    .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                let mut guard = match self.message_processing_semaphore.lock() {
-                    Ok(g) => g,
-                    Err(poisoned) => poisoned.into_inner(),
-                };
-                *guard = std::sync::Arc::new(async_lock::Semaphore::new(64));
-            }
+            self.swap_message_semaphore(64);
 
             self.offline_sync_notifier.notify(usize::MAX);
 
