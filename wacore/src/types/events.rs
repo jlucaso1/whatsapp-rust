@@ -831,3 +831,136 @@ pub struct MarkChatAsReadUpdate {
     pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
     pub from_full_sync: bool,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
+    use waproto::whatsapp as wa;
+
+    /// Build a Conversation proto with an id and N dummy messages, encode it.
+    fn make_conversation_bytes(id: &str, num_messages: usize) -> Vec<u8> {
+        let messages: Vec<wa::HistorySyncMsg> = (0..num_messages)
+            .map(|i| wa::HistorySyncMsg {
+                message: Some(wa::WebMessageInfo {
+                    key: wa::MessageKey {
+                        id: Some(format!("msg-{i}")),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                msg_order_id: Some(i as u64),
+            })
+            .collect();
+
+        let conv = wa::Conversation {
+            id: id.to_string(),
+            messages,
+            ..Default::default()
+        };
+        conv.encode_to_vec()
+    }
+
+    #[test]
+    fn get_strips_messages() {
+        let bytes = make_conversation_bytes("chat@s.whatsapp.net", 5);
+        let lazy = LazyConversation::new(bytes);
+
+        let conv = lazy.get().expect("should parse");
+        assert_eq!(conv.id, "chat@s.whatsapp.net");
+        assert!(conv.messages.is_empty(), "get() must strip messages");
+    }
+
+    #[test]
+    fn conversation_strips_messages() {
+        let bytes = make_conversation_bytes("chat@s.whatsapp.net", 3);
+        let lazy = LazyConversation::new(bytes);
+
+        let conv = lazy.conversation();
+        assert_eq!(conv.id, "chat@s.whatsapp.net");
+        assert!(
+            conv.messages.is_empty(),
+            "conversation() must strip messages"
+        );
+    }
+
+    #[test]
+    fn raw_bytes_returns_original_proto() {
+        let bytes = make_conversation_bytes("chat@s.whatsapp.net", 4);
+        let lazy = LazyConversation::new(bytes.clone());
+
+        assert_eq!(lazy.raw_bytes(), &bytes[..]);
+
+        // Users can decode the full conversation from raw_bytes
+        let full = wa::Conversation::decode(lazy.raw_bytes()).expect("should decode");
+        assert_eq!(full.id, "chat@s.whatsapp.net");
+        assert_eq!(full.messages.len(), 4);
+    }
+
+    #[test]
+    fn get_with_messages_preserves_messages() {
+        let bytes = make_conversation_bytes("chat@s.whatsapp.net", 7);
+        let lazy = LazyConversation::new(bytes);
+
+        let full = lazy.get_with_messages().expect("should decode");
+        assert_eq!(full.id, "chat@s.whatsapp.net");
+        assert_eq!(full.messages.len(), 7);
+        assert_eq!(
+            full.messages[0].message.as_ref().unwrap().key.id.as_deref(),
+            Some("msg-0")
+        );
+    }
+
+    #[test]
+    fn get_with_messages_independent_of_cached_parse() {
+        let bytes = make_conversation_bytes("chat@s.whatsapp.net", 3);
+        let lazy = LazyConversation::new(bytes);
+
+        // Trigger the cached parse first (strips messages)
+        let stripped = lazy.get().expect("should parse");
+        assert!(stripped.messages.is_empty());
+
+        // get_with_messages should still return full messages
+        let full = lazy.get_with_messages().expect("should decode");
+        assert_eq!(full.messages.len(), 3);
+    }
+
+    #[test]
+    fn get_returns_none_for_empty_id() {
+        let conv = wa::Conversation {
+            id: String::new(),
+            ..Default::default()
+        };
+        let lazy = LazyConversation::new(conv.encode_to_vec());
+        assert!(lazy.get().is_none());
+    }
+
+    #[test]
+    fn get_with_messages_returns_none_for_empty_id() {
+        let conv = wa::Conversation {
+            id: String::new(),
+            ..Default::default()
+        };
+        let lazy = LazyConversation::new(conv.encode_to_vec());
+        assert!(lazy.get_with_messages().is_none());
+    }
+
+    #[test]
+    fn get_with_messages_returns_none_for_invalid_bytes() {
+        let lazy = LazyConversation::new(vec![0xFF, 0xFF, 0xFF]);
+        assert!(lazy.get_with_messages().is_none());
+    }
+
+    #[test]
+    fn from_bytes_works_same_as_new() {
+        let bytes = make_conversation_bytes("test@s.whatsapp.net", 2);
+        let lazy = LazyConversation::from_bytes(Bytes::from(bytes));
+
+        let full = lazy.get_with_messages().expect("should decode");
+        assert_eq!(full.id, "test@s.whatsapp.net");
+        assert_eq!(full.messages.len(), 2);
+
+        let stripped = lazy.get().expect("should parse");
+        assert!(stripped.messages.is_empty());
+    }
+}
