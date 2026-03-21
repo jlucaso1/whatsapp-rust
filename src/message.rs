@@ -511,6 +511,15 @@ impl Client {
             return;
         }
         let _global_permit = semaphore.acquire_arc().await;
+        // Post-acquire recheck: generation could have changed during the .await
+        if generation
+            != self
+                .message_semaphore_generation
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            log::debug!("Semaphore generation changed during acquire, dropping stale permit");
+            return;
+        }
 
         log::debug!(
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
