@@ -1855,6 +1855,7 @@ mod tests {
             Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, KeyPair,
             PreKeyBundle, ProtocolAddress, SessionStore, process_prekey_bundle,
         };
+        use crate::types::message::AddressingMode;
         use std::collections::HashMap;
         use wacore_binary::node::NodeContent;
 
@@ -1986,7 +1987,7 @@ mod tests {
                 "3EB0ABC".into(),
                 1,
                 None,
-                crate::types::message::AddressingMode::Pn,
+                AddressingMode::Pn,
             )
             .await
             .unwrap();
@@ -2003,7 +2004,6 @@ mod tests {
                 stanza::MSG_TYPE_TEXT
             );
             assert!(a.optional_string("category").is_none());
-            // WA Web always includes addressing_mode for groups
             assert_eq!(a.optional_string("addressing_mode").unwrap().as_ref(), "pn");
             let enc = n.get_optional_child("enc").unwrap();
             let mut ea = enc.attrs();
@@ -2039,7 +2039,7 @@ mod tests {
                 "id2".into(),
                 2,
                 Some(&acc),
-                crate::types::message::AddressingMode::Pn,
+                AddressingMode::Pn,
             )
             .await
             .unwrap();
@@ -2053,7 +2053,6 @@ mod tests {
                 stanza::ENC_TYPE_PKMSG
             );
             assert!(n.get_optional_child("device-identity").is_some());
-            // PN addressing mode always present
             assert_eq!(
                 n.attrs()
                     .optional_string("addressing_mode")
@@ -2079,7 +2078,7 @@ mod tests {
                 "m2".into(),
                 3,
                 Some(&wa::AdvSignedDeviceIdentity::default()),
-                crate::types::message::AddressingMode::Lid,
+                AddressingMode::Lid,
             )
             .await
             .unwrap();
