@@ -82,12 +82,36 @@ impl LazyConversation {
         }
     }
 
+    /// Access the raw protobuf bytes for full decoding (including messages).
+    ///
+    /// Since [`get()`](Self::get) and [`conversation()`](Self::conversation)
+    /// strip messages to save memory, consumers that need message history
+    /// should decode from these bytes directly via
+    /// `wa::Conversation::decode(lazy_conv.raw_bytes())`.
+    pub fn raw_bytes(&self) -> &[u8] {
+        &self.raw_bytes
+    }
+
+    /// Decode the full conversation including messages.
+    ///
+    /// Unlike [`get()`](Self::get) which strips messages to save memory,
+    /// this decodes a fresh copy from the raw bytes every time and keeps
+    /// the full `WebMessageInfo` array intact. Returns `None` if decoding
+    /// fails or the conversation id is empty.
+    ///
+    /// The result is not cached — call this only when you actually need
+    /// the messages, and prefer [`get()`](Self::get) for metadata-only access.
+    pub fn get_with_messages(&self) -> Option<wa::Conversation> {
+        let conv = wa::Conversation::decode(&self.raw_bytes[..]).ok()?;
+        if conv.id.is_empty() { None } else { Some(conv) }
+    }
+
     /// Get the parsed conversation, parsing on first access.
     /// Returns None if parsing fails (empty id indicates invalid conversation).
     ///
     /// Messages are always stripped on first parse to reduce memory —
     /// history sync conversations embed full `WebMessageInfo` arrays that
-    /// can be very large. Use the raw protobuf bytes if you need messages.
+    /// can be very large. Use [`raw_bytes()`](Self::raw_bytes) if you need messages.
     pub fn get(&self) -> Option<&wa::Conversation> {
         let conv = self.parsed.get_or_init(|| {
             let mut conv = wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default();
