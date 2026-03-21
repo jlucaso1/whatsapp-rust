@@ -215,13 +215,16 @@ impl Client {
         }
     }
 
-    /// Validate server key bundle digest and re-upload if mismatched.
+    /// Validate server key bundle digest, re-uploading only when the server has no record.
     ///
     /// Matches WA Web's `WAWebDigestKeyJob.digestKey()`:
     /// 1. Queries server for key bundle digest (identity + signed prekey + prekey IDs + SHA-1 hash)
-    /// 2. Loads local keys and computes SHA-1 over the same material
-    /// 3. If hash mismatch or server returns 404: triggers `upload_pre_keys_with_retry()`
-    /// 4. If server returns 406/503/other: logs and does nothing
+    /// 2. If server returns 404 (no record): triggers `upload_pre_keys_with_retry()`
+    /// 3. If server returns 406/503/other error: logs and does nothing
+    /// 4. On success: loads local keys and computes SHA-1 over the same material
+    /// 5. If validation fails (regId mismatch, missing prekey, hash mismatch): logs warning,
+    ///    does NOT re-upload — WA Web catches all `validateLocalKeyBundle` exceptions without
+    ///    re-uploading; the normal `RotateKeyJob` will eventually refresh keys
     pub(crate) async fn validate_digest_key(&self) -> Result<(), anyhow::Error> {
         let response = match self.execute(DigestKeyBundleSpec::new()).await {
             Ok(resp) => resp,
@@ -237,21 +240,28 @@ impl Client {
                 log::warn!("digestKey: service unavailable");
                 return Ok(());
             }
+            Err(crate::request::IqError::ParseError(e)) => {
+                // WA Web catches parse failures without re-uploading
+                log::debug!("digestKey: unparseable digest response ({e}), skipping");
+                return Ok(());
+            }
             Err(e) => {
                 log::warn!("digestKey: server error: {:?}", e);
                 return Ok(());
             }
         };
 
-        // Validate registration ID matches local
+        // WA Web's validateLocalKeyBundle validates but catches ALL exceptions without
+        // re-uploading. The catch block in digestKey() sets a=false for any throw from y(),
+        // meaning only 404 triggers re-upload. We match that: log warnings, return Ok(()).
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         if response.reg_id != device_snapshot.registration_id {
             log::warn!(
-                "digestKey: registration ID mismatch (server={}, local={}), re-uploading",
+                "digestKey: registration ID mismatch (server={}, local={}), skipping",
                 response.reg_id,
                 device_snapshot.registration_id
             );
-            return self.upload_pre_keys_with_retry(true).await;
+            return Ok(());
         }
 
         // Compute local SHA-1 digest over the same material as WA Web's validateLocalKeyBundle:
@@ -279,36 +289,33 @@ impl Client {
                                 prekey_pubkeys.push(pk);
                             } else {
                                 log::warn!(
-                                    "digestKey: prekey {} has no public key, re-uploading",
+                                    "digestKey: prekey {} has no public key, skipping",
                                     prekey_id
                                 );
-                                return self.upload_pre_keys_with_retry(true).await;
+                                return Ok(());
                             }
                         }
                         Err(e) => {
                             log::warn!(
-                                "digestKey: failed to decode prekey {}: {}, re-uploading",
+                                "digestKey: failed to decode prekey {}: {}, skipping",
                                 prekey_id,
                                 e
                             );
-                            return self.upload_pre_keys_with_retry(true).await;
+                            return Ok(());
                         }
                     }
                 }
                 Ok(None) => {
-                    log::warn!(
-                        "digestKey: missing local prekey {}, re-uploading",
-                        prekey_id
-                    );
-                    return self.upload_pre_keys_with_retry(true).await;
+                    log::warn!("digestKey: missing local prekey {}, skipping", prekey_id);
+                    return Ok(());
                 }
                 Err(e) => {
                     log::warn!(
-                        "digestKey: failed to load prekey {}: {:?}, re-uploading",
+                        "digestKey: failed to load prekey {}: {:?}, skipping",
                         prekey_id,
                         e
                     );
-                    return self.upload_pre_keys_with_retry(true).await;
+                    return Ok(());
                 }
             }
         }
@@ -323,11 +330,11 @@ impl Client {
 
         if local_hash.as_slice() != response.hash.as_slice() {
             log::warn!(
-                "digestKey: hash mismatch (server={}, local={}), re-uploading",
+                "digestKey: hash mismatch (server={}, local={}), skipping",
                 hex::encode(&response.hash),
                 hex::encode(local_hash)
             );
-            return self.upload_pre_keys_with_retry(true).await;
+            return Ok(());
         }
 
         log::debug!("digestKey: key bundle validation successful");

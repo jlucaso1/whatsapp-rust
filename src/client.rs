@@ -1752,7 +1752,7 @@ impl Client {
                 let binding = bg_client.blocking();
                 let blocklist_fut = binding.get_blocklist();
                 let privacy_fut = bg_client.fetch_privacy_settings();
-                let digest_fut = bg_client.send_digest_key_bundle();
+                let digest_fut = bg_client.validate_digest_key();
 
                 let (r_props, r_block, r_priv, r_digest) =
                     futures::join!(props_fut, blocklist_fut, privacy_fut, digest_fut);
@@ -1767,7 +1767,7 @@ impl Client {
                     warn!("Background init: Failed to fetch privacy settings: {e:?}");
                 }
                 if let Err(e) = r_digest {
-                    warn!("Background init: Failed to send digest: {e:?}");
+                    warn!("Background init: Failed to validate digest key: {e:?}");
                 }
 
                 // Prune expired tcTokens on connect (matches WhatsApp Web's PrivacyTokenJob)
