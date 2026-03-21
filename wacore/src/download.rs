@@ -319,9 +319,7 @@ impl DownloadUtils {
         writer: &mut W,
     ) -> Result<u64> {
         use aes::Aes256;
-        #[allow(deprecated)]
-        use aes::cipher::generic_array::GenericArray;
-        use aes::cipher::{BlockDecrypt, KeyInit};
+        use aes::cipher::{Block, BlockDecrypt, KeyInit};
 
         const MAC_SIZE: usize = 10;
         const BLOCK: usize = 16;
@@ -355,18 +353,18 @@ impl DownloadUtils {
                 if processable_len >= BLOCK {
                     hmac.update(&tail[..processable_len]);
                     for cblock in tail[..processable_len].chunks_exact(BLOCK) {
-                        #[allow(deprecated)]
-                        let mut block = GenericArray::clone_from_slice(cblock);
+                        let cblock_arr: [u8; BLOCK] = cblock
+                            .try_into()
+                            .expect("chunks_exact guarantees BLOCK-byte slices");
+                        let mut block: Block<Aes256> = cblock_arr.into();
                         cipher.decrypt_block(&mut block);
-                        for (b, p) in block.iter_mut().zip(prev_block.iter()) {
-                            *b ^= *p;
+                        let mut decrypted: [u8; BLOCK] = block.into();
+                        for (b, &p) in decrypted.iter_mut().zip(prev_block.iter()) {
+                            *b ^= p;
                         }
-                        writer.write_all(&block)?;
+                        writer.write_all(&decrypted)?;
                         bytes_written += BLOCK as u64;
-                        prev_block = match <[u8; BLOCK]>::try_from(cblock) {
-                            Ok(arr) => arr,
-                            Err(_) => return Err(anyhow!("Failed to convert block to array")),
-                        };
+                        prev_block = cblock_arr;
                     }
                     // Drain processed bytes, reusing the Vec's existing allocation
                     tail.drain(..processable_len);
@@ -388,13 +386,17 @@ impl DownloadUtils {
 
         let mut final_plain = Vec::with_capacity(final_ciphertext.len());
         for cblock in final_ciphertext.chunks_exact(BLOCK) {
-            #[allow(deprecated)]
-            let mut block = GenericArray::clone_from_slice(cblock);
+            let cblock_arr: [u8; BLOCK] = cblock
+                .try_into()
+                .expect("chunks_exact guarantees BLOCK-byte slices");
+            let mut block: Block<Aes256> = cblock_arr.into();
             cipher.decrypt_block(&mut block);
-            for (b, p) in block.iter_mut().zip(prev_block.iter()) {
-                *b ^= *p;
+            let mut decrypted: [u8; BLOCK] = block.into();
+            for (b, &p) in decrypted.iter_mut().zip(prev_block.iter()) {
+                *b ^= p;
             }
-            final_plain.extend_from_slice(&block);
+            final_plain.extend_from_slice(&decrypted);
+            prev_block = cblock_arr;
         }
         if final_plain.is_empty() {
             return Err(anyhow!("Empty plaintext after decrypt"));
@@ -438,7 +440,7 @@ impl DownloadUtils {
         app_info: MediaType,
     ) -> Result<([u8; 16], [u8; 32], [u8; 32])> {
         let hk = Hkdf::<Sha256>::new(None, media_key);
-        let mut expanded = vec![0u8; 112];
+        let mut expanded = [0u8; 112];
         hk.expand(app_info.app_info().as_bytes(), &mut expanded)
             .map_err(|e| anyhow!("HKDF expand failed: {e}"))?;
         let iv: [u8; 16] = expanded[0..16]

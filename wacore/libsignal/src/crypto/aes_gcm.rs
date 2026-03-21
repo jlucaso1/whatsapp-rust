@@ -4,9 +4,7 @@
 //
 
 use aes::Aes256;
-#[allow(deprecated)]
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockEncrypt, KeyInit};
+use aes::cipher::{Block, BlockEncrypt, KeyInit};
 use ghash::GHash;
 use ghash::universal_hash::UniversalHash;
 use subtle::ConstantTimeEq;
@@ -53,11 +51,8 @@ impl GcmGhash {
             self.msg_len += taking;
 
             if self.msg_buf_offset == TAG_SIZE {
-                #[allow(deprecated)]
-                self.ghash
-                    .update(std::slice::from_ref(ghash::Block::from_slice(
-                        &self.msg_buf,
-                    )));
+                let block: ghash::Block = self.msg_buf.into();
+                self.ghash.update(std::slice::from_ref(&block));
                 self.msg_buf_offset = 0;
                 return self.update(&msg[taking..]);
             } else {
@@ -74,9 +69,8 @@ impl GcmGhash {
 
         let (chunks, _) = msg[..16 * full_blocks].as_chunks::<16>();
         for chunk in chunks {
-            #[allow(deprecated)]
-            self.ghash
-                .update(std::slice::from_ref(ghash::Block::from_slice(chunk)));
+            let block: ghash::Block = (*chunk).into();
+            self.ghash.update(std::slice::from_ref(&block));
         }
 
         self.msg_buf[0..leftover].copy_from_slice(&msg[full_blocks * 16..]);
@@ -115,9 +109,9 @@ fn setup_gcm(key: &[u8], nonce: &[u8], associated_data: &[u8]) -> Result<(Aes256
     }
 
     let aes256 = Aes256::new_from_slice(key).map_err(|_| Error::InvalidKeySize)?;
-    let mut h = [0u8; TAG_SIZE];
-    #[allow(deprecated)]
-    aes256.encrypt_block(GenericArray::from_mut_slice(&mut h));
+    let mut h: Block<Aes256> = [0u8; TAG_SIZE].into();
+    aes256.encrypt_block(&mut h);
+    let h: [u8; TAG_SIZE] = h.into();
 
     let mut ctr = Aes256Ctr32::new(aes256, nonce, 1)?;
 
