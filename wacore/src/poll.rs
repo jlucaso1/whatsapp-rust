@@ -64,7 +64,7 @@ pub fn encrypt_poll_vote(
     voter_jid: &str,
 ) -> Result<(Vec<u8>, [u8; GCM_IV_SIZE])> {
     use prost::Message;
-    use rand::RngExt;
+    use rand::Rng;
 
     let vote_msg = waproto::whatsapp::message::PollVoteMessage {
         selected_options: selected_option_hashes.to_vec(),
@@ -74,7 +74,7 @@ pub fn encrypt_poll_vote(
     vote_msg.encode(&mut plaintext)?;
 
     let mut iv = [0u8; GCM_IV_SIZE];
-    rand::make_rng::<rand::rngs::StdRng>().fill(&mut iv);
+    rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut iv);
 
     let aad = build_vote_aad(stanza_id, voter_jid);
 

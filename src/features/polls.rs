@@ -1,5 +1,7 @@
 //! Poll creation, voting, and vote decryption.
 
+use std::collections::HashMap;
+
 use anyhow::{Result, anyhow};
 use wacore::poll;
 use wacore_binary::jid::{Jid, JidExt};
@@ -35,6 +37,20 @@ impl<'a> Polls<'a> {
         }
         if options.len() > 12 {
             return Err(anyhow!("Polls can have a maximum of 12 options"));
+        }
+        if selectable_count < 1 || selectable_count > options.len() as u32 {
+            return Err(anyhow!(
+                "selectable_count must be between 1 and {} (got {selectable_count})",
+                options.len()
+            ));
+        }
+
+        // Duplicate names would produce identical SHA-256 hashes, making votes indistinguishable
+        let mut seen = std::collections::HashSet::new();
+        for opt in options {
+            if !seen.insert(opt) {
+                return Err(anyhow!("Duplicate option name: {opt}"));
+            }
         }
 
         let poll_options: Vec<wa::message::poll_creation_message::Option> = options
@@ -148,45 +164,40 @@ impl<'a> Polls<'a> {
     }
 
     /// Returns the selected option hashes (each 32 bytes).
+    /// JIDs are normalized (AD suffix stripped) to match the key derivation in `vote()`.
     pub fn decrypt_vote(
         enc_payload: &[u8],
         enc_iv: &[u8],
         message_secret: &[u8],
         poll_msg_id: &str,
-        poll_creator_jid: &str,
-        voter_jid: &str,
+        poll_creator_jid: &Jid,
+        voter_jid: &Jid,
     ) -> Result<Vec<Vec<u8>>> {
-        let key = poll::derive_vote_encryption_key(
-            message_secret,
-            poll_msg_id,
-            poll_creator_jid,
-            voter_jid,
-        )?;
-        poll::decrypt_poll_vote(enc_payload, enc_iv, &key, poll_msg_id, voter_jid)
+        let creator = poll_creator_jid.to_non_ad().to_string();
+        let voter = voter_jid.to_non_ad().to_string();
+        let key = poll::derive_vote_encryption_key(message_secret, poll_msg_id, &creator, &voter)?;
+        poll::decrypt_poll_vote(enc_payload, enc_iv, &key, poll_msg_id, &voter)
     }
 
-    /// Decrypts each vote and tallies per-option results with voter lists.
+    /// Decrypts each vote and tallies per-option results.
+    /// Later votes from the same voter replace earlier ones (last-vote-wins).
+    /// `votes` should be ordered oldest-first.
     pub fn aggregate_votes(
         poll_options: &[String],
-        votes: &[(String, &[u8], &[u8])], // (voter_jid, enc_payload, enc_iv)
+        votes: &[(&Jid, &[u8], &[u8])], // (voter_jid, enc_payload, enc_iv)
         message_secret: &[u8],
         poll_msg_id: &str,
-        poll_creator_jid: &str,
+        poll_creator_jid: &Jid,
     ) -> Result<Vec<PollOptionResult>> {
-        let option_map: Vec<([u8; 32], &str)> = poll_options
+        let option_hashes: Vec<([u8; 32], &str)> = poll_options
             .iter()
             .map(|name| (poll::compute_option_hash(name), name.as_str()))
             .collect();
 
-        let mut results: Vec<PollOptionResult> = poll_options
-            .iter()
-            .map(|name| PollOptionResult {
-                name: name.clone(),
-                voters: Vec::new(),
-            })
-            .collect();
-
+        // Last-vote-wins: each new vote from the same voter replaces the previous
+        let mut latest_votes: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
         for (voter_jid, enc_payload, enc_iv) in votes {
+            let voter_key = voter_jid.to_non_ad().to_string();
             match Self::decrypt_vote(
                 enc_payload,
                 enc_iv,
@@ -196,16 +207,33 @@ impl<'a> Polls<'a> {
                 voter_jid,
             ) {
                 Ok(selected_hashes) => {
-                    for hash in &selected_hashes {
-                        if let Ok(hash_arr) = <[u8; 32]>::try_from(hash.as_slice())
-                            && let Some(idx) = option_map.iter().position(|(h, _)| *h == hash_arr)
-                        {
-                            results[idx].voters.push(voter_jid.clone());
-                        }
+                    if selected_hashes.is_empty() {
+                        // Empty selection = voter cleared their vote
+                        latest_votes.remove(&voter_key);
+                    } else {
+                        latest_votes.insert(voter_key, selected_hashes);
                     }
                 }
                 Err(e) => {
                     log::warn!("Failed to decrypt vote from {voter_jid}: {e}");
+                }
+            }
+        }
+
+        let mut results: Vec<PollOptionResult> = poll_options
+            .iter()
+            .map(|name| PollOptionResult {
+                name: name.clone(),
+                voters: Vec::new(),
+            })
+            .collect();
+
+        for (voter_jid, selected_hashes) in &latest_votes {
+            for hash in selected_hashes {
+                if let Ok(hash_arr) = <[u8; 32]>::try_from(hash.as_slice())
+                    && let Some(idx) = option_hashes.iter().position(|(h, _)| *h == hash_arr)
+                {
+                    results[idx].voters.push(voter_jid.clone());
                 }
             }
         }
