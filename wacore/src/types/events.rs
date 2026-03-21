@@ -837,6 +837,8 @@ pub struct MarkChatAsReadUpdate {
 #[derive(Debug, Clone, Serialize)]
 pub struct DeleteChatUpdate {
     pub jid: Jid,
+    /// From the index, not the proto — DeleteChatAction only has messageRange.
+    pub delete_media: bool,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::DeleteChatAction>,
     pub from_full_sync: bool,

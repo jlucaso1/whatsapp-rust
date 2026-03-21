@@ -195,8 +195,11 @@ pub(crate) fn dispatch_chat_mutation(
             if let Some(val) = &m.action_value
                 && let Some(act) = &val.delete_chat_action
             {
+                // delete_media is in index[2], not in the proto (which only has messageRange)
+                let delete_media = m.index.get(2).is_none_or(|v| v != "0");
                 event_bus.dispatch(&Event::DeleteChatUpdate(DeleteChatUpdate {
                     jid,
+                    delete_media,
                     timestamp: time,
                     action: Box::new(act.clone()),
                     from_full_sync: full_sync,
@@ -230,6 +233,10 @@ pub(crate) fn dispatch_chat_mutation(
 /// Returns `None` (with a warning log) if the index is too short or participant is malformed.
 fn parse_message_key_fields(kind: &str, index: &[String]) -> Option<(String, bool, Option<Jid>)> {
     if index.len() < 5 {
+        log::warn!(
+            "Skipping {kind} mutation: expected 5 index elements, got {}",
+            index.len()
+        );
         return None;
     }
     let message_id = index[2].clone();
