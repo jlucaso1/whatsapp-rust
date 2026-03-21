@@ -1,18 +1,8 @@
-//! Chat management actions: archive, pin, mute, and starred messages.
-//!
-//! These features work through WhatsApp's app state sync mechanism (syncd).
-//! Each action is encoded as a mutation and sent to the appropriate collection.
+//! Chat management via app state sync (syncd).
 //!
 //! ## Collections (from WhatsApp Web JS)
-//! - Archive: `regular_low` (WAWebArchiveChatSync)
-//! - Pin: `regular_low` (WAWebPinChatSync)
-//! - Mute: `regular_high` (WAWebMuteChatSync)
-//! - Star: `regular_high` (WAWebStarMessageSync)
-//!
-//! ## Wire format (app state mutation)
-//! - Index: JSON array, e.g. `["pin_v1", "jid@s.whatsapp.net"]`
-//! - Value: protobuf `SyncActionValue` with the corresponding action field
-//! - Operation: `SET`
+//! - `regular_low`: archive, pin, markChatAsRead
+//! - `regular_high`: mute, star, deleteChat, deleteMessageForMe
 
 use crate::appstate_sync::Mutation;
 use crate::client::Client;
@@ -21,20 +11,52 @@ use chrono::DateTime;
 use log::debug;
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::types::events::{
-    ArchiveUpdate, ContactUpdate, Event, MarkChatAsReadUpdate, MuteUpdate, PinUpdate, StarUpdate,
+    ArchiveUpdate, ContactUpdate, DeleteChatUpdate, DeleteMessageForMeUpdate, Event,
+    MarkChatAsReadUpdate, MuteUpdate, PinUpdate, StarUpdate,
 };
 use wacore_binary::jid::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
-/// Mute end timestamp value for indefinite mute (matches WhatsApp Web's `-1` sentinel).
+/// WA Web uses `-1` for indefinite mute.
 const MUTE_INDEFINITE: i64 = -1;
 
-// ── Event dispatch from incoming app state mutations ─────────────────
+pub type SyncActionMessageRange = wa::sync_action_value::SyncActionMessageRange;
 
-/// Dispatch events for chat-related app state mutations.
-///
-/// Handles: mute, pin, pin_v1, archive, star, contact, mark_chat_as_read.
-/// Returns `true` if the mutation was handled, `false` if unknown.
+/// Enables multi-device conflict resolution. `None` is safe (matches whatsmeow/Baileys).
+/// Only WA Web (with a full message DB) populates this.
+pub fn message_range(
+    last_message_timestamp: i64,
+    last_system_message_timestamp: Option<i64>,
+    messages: Vec<(wa::MessageKey, i64)>,
+) -> SyncActionMessageRange {
+    SyncActionMessageRange {
+        last_message_timestamp: Some(last_message_timestamp),
+        last_system_message_timestamp,
+        messages: messages
+            .into_iter()
+            .map(|(key, ts)| wa::sync_action_value::SyncActionMessage {
+                key: Some(key),
+                timestamp: Some(ts),
+            })
+            .collect(),
+    }
+}
+
+pub fn message_key(
+    id: impl Into<String>,
+    remote_jid: &Jid,
+    from_me: bool,
+    participant: Option<&Jid>,
+) -> wa::MessageKey {
+    wa::MessageKey {
+        id: Some(id.into()),
+        remote_jid: Some(remote_jid.to_string()),
+        from_me: Some(from_me),
+        participant: participant.map(|j| j.to_string()),
+    }
+}
+
+/// Returns `true` if handled, `false` if unknown (so other handlers can try).
 pub(crate) fn dispatch_chat_mutation(
     event_bus: &wacore::types::events::CoreEventBus,
     m: &Mutation,
@@ -46,8 +68,6 @@ pub(crate) fn dispatch_chat_mutation(
 
     let kind = &m.index[0];
 
-    // Only handle known chat mutation types. Return false for unknown kinds
-    // so other handlers (e.g. setting_pushName) can process them.
     if !matches!(
         kind.as_str(),
         "mute"
@@ -58,6 +78,8 @@ pub(crate) fn dispatch_chat_mutation(
             | "contact"
             | "mark_chat_as_read"
             | "markChatAsRead"
+            | "deleteChat"
+            | "deleteMessageForMe"
     ) {
         return false;
     }
@@ -77,7 +99,7 @@ pub(crate) fn dispatch_chat_mutation(
                     kind,
                     m.index[1]
                 );
-                return true; // consumed but not dispatched
+                return true;
             }
         }
     } else {
@@ -126,8 +148,6 @@ pub(crate) fn dispatch_chat_mutation(
             true
         }
         "star" => {
-            // Star index: ["star", chatJid, messageId, fromMe, participant]
-            // See WAWebSyncdUtils.constructMsgKeySegmentsFromMsgKey
             if let Some(val) = &m.action_value
                 && let Some(act) = &val.star_action
                 && m.index.len() >= 5
@@ -144,8 +164,6 @@ pub(crate) fn dispatch_chat_mutation(
                 };
                 let message_id = m.index[2].clone();
                 let from_me = m.index[3] == "1";
-                // Participant is the actual sender for group messages from others.
-                // "0" means self-authored or 1-on-1 → None.
                 let participant_jid: Option<Jid> = if m.index[4] != "0" {
                     match m.index[4].parse() {
                         Ok(j) => Some(j),
@@ -199,14 +217,75 @@ pub(crate) fn dispatch_chat_mutation(
             }
             true
         }
+        "deleteChat" => {
+            if let Some(val) = &m.action_value
+                && let Some(act) = &val.delete_chat_action
+            {
+                event_bus.dispatch(&Event::DeleteChatUpdate(DeleteChatUpdate {
+                    jid,
+                    timestamp: time,
+                    action: Box::new(act.clone()),
+                    from_full_sync: full_sync,
+                }));
+            }
+            true
+        }
+        "deleteMessageForMe" => {
+            if let Some(val) = &m.action_value
+                && let Some(act) = &val.delete_message_for_me_action
+                && m.index.len() >= 5
+            {
+                let message_id = m.index[2].clone();
+                let from_me = m.index[3] == "1";
+                let participant_jid: Option<Jid> = if m.index[4] != "0" {
+                    m.index[4].parse().ok()
+                } else {
+                    None
+                };
+
+                event_bus.dispatch(&Event::DeleteMessageForMeUpdate(DeleteMessageForMeUpdate {
+                    chat_jid: jid,
+                    participant_jid,
+                    message_id,
+                    from_me,
+                    timestamp: time,
+                    action: Box::new(*act),
+                    from_full_sync: full_sync,
+                }));
+            }
+            true
+        }
         _ => false,
     }
 }
 
-// ── Public API ───────────────────────────────────────────────────────
+/// Mirrors WAWebSyncdActionUtils.buildMessageKey.
+fn build_message_key_index(
+    action: &str,
+    chat_jid: &Jid,
+    participant_jid: Option<&Jid>,
+    message_id: &str,
+    from_me: bool,
+) -> Result<Vec<u8>> {
+    // syncKeyToMsgKey rejects group non-fromMe without valid participant
+    if chat_jid.is_group() && !from_me && participant_jid.is_none() {
+        anyhow::bail!(
+            "participant_jid is required for group messages not sent by us (action: {action})"
+        );
+    }
+    let from_me_str = if from_me { "1" } else { "0" };
+    let participant = participant_jid
+        .map(|j| j.to_string())
+        .unwrap_or_else(|| "0".to_string());
+    Ok(serde_json::to_vec(&[
+        action,
+        &chat_jid.to_string(),
+        message_id,
+        from_me_str,
+        &participant,
+    ])?)
+}
 
-/// Feature handle for chat management actions.
-///
 /// Access via `client.chat_actions()`.
 pub struct ChatActions<'a> {
     client: &'a Client,
@@ -217,46 +296,40 @@ impl<'a> ChatActions<'a> {
         Self { client }
     }
 
-    // ── Archive ──────────────────────────────────────────────────────
-
-    /// Archive a chat.
-    pub async fn archive_chat(&self, jid: &Jid) -> Result<()> {
+    pub async fn archive_chat(
+        &self,
+        jid: &Jid,
+        message_range: Option<SyncActionMessageRange>,
+    ) -> Result<()> {
         debug!("Archiving chat {jid}");
-        self.send_archive_mutation(jid, true).await
+        self.send_archive_mutation(jid, true, message_range).await
     }
 
-    /// Unarchive a chat.
-    pub async fn unarchive_chat(&self, jid: &Jid) -> Result<()> {
+    pub async fn unarchive_chat(
+        &self,
+        jid: &Jid,
+        message_range: Option<SyncActionMessageRange>,
+    ) -> Result<()> {
         debug!("Unarchiving chat {jid}");
-        self.send_archive_mutation(jid, false).await
+        self.send_archive_mutation(jid, false, message_range).await
     }
 
-    // ── Pin ──────────────────────────────────────────────────────────
-
-    /// Pin a chat.
     pub async fn pin_chat(&self, jid: &Jid) -> Result<()> {
         debug!("Pinning chat {jid}");
         self.send_pin_mutation(jid, true).await
     }
 
-    /// Unpin a chat.
     pub async fn unpin_chat(&self, jid: &Jid) -> Result<()> {
         debug!("Unpinning chat {jid}");
         self.send_pin_mutation(jid, false).await
     }
 
-    // ── Mute ─────────────────────────────────────────────────────────
-
-    /// Mute a chat indefinitely.
     pub async fn mute_chat(&self, jid: &Jid) -> Result<()> {
         debug!("Muting chat {jid} indefinitely");
         self.send_mute_mutation(jid, true, MUTE_INDEFINITE).await
     }
 
-    /// Mute a chat until a specific timestamp (Unix milliseconds).
-    ///
-    /// The timestamp must be in the future. Use [`mute_chat`](Self::mute_chat)
-    /// for indefinite muting.
+    /// Must be in the future. Use [`mute_chat`](Self::mute_chat) for indefinite.
     pub async fn mute_chat_until(&self, jid: &Jid, mute_end_timestamp_ms: i64) -> Result<()> {
         if mute_end_timestamp_ms <= 0 {
             anyhow::bail!(
@@ -274,21 +347,12 @@ impl<'a> ChatActions<'a> {
             .await
     }
 
-    /// Unmute a chat.
     pub async fn unmute_chat(&self, jid: &Jid) -> Result<()> {
         debug!("Unmuting chat {jid}");
         self.send_mute_mutation(jid, false, 0).await
     }
 
-    // ── Star ─────────────────────────────────────────────────────────
-
-    /// Star a message.
-    ///
-    /// - `chat_jid`: The chat containing the message.
-    /// - `participant_jid`: For group messages from others, pass `Some(&sender_jid)`.
-    ///   For 1-on-1 or own messages, pass `None` (the protocol uses `"0"`).
-    /// - `message_id`: The message ID to star.
-    /// - `from_me`: Whether the message was sent by us.
+    /// `participant_jid`: required for group messages from others, `None` otherwise.
     pub async fn star_message(
         &self,
         chat_jid: &Jid,
@@ -301,9 +365,6 @@ impl<'a> ChatActions<'a> {
             .await
     }
 
-    /// Unstar a message.
-    ///
-    /// Parameters are the same as [`star_message`](Self::star_message).
     pub async fn unstar_message(
         &self,
         chat_jid: &Jid,
@@ -316,14 +377,90 @@ impl<'a> ChatActions<'a> {
             .await
     }
 
-    // ── Internal helpers ─────────────────────────────────────────────
+    /// Distinct from `readMessages` IQ receipts — this syncs state across linked devices.
+    pub async fn mark_chat_as_read(
+        &self,
+        jid: &Jid,
+        read: bool,
+        message_range: Option<SyncActionMessageRange>,
+    ) -> Result<()> {
+        debug!(
+            "Marking chat {jid} as {}",
+            if read { "read" } else { "unread" }
+        );
+        let index = serde_json::to_vec(&["markChatAsRead", &jid.to_string()])?;
+        let value = wa::SyncActionValue {
+            mark_chat_as_read_action: Some(wa::sync_action_value::MarkChatAsReadAction {
+                read: Some(read),
+                message_range,
+            }),
+            timestamp: Some(wacore::time::now_millis()),
+            ..Default::default()
+        };
+        self.send_mutation(WAPatchName::RegularLow, &index, &value)
+            .await
+    }
 
-    async fn send_archive_mutation(&self, jid: &Jid, archived: bool) -> Result<()> {
+    pub async fn delete_chat(
+        &self,
+        jid: &Jid,
+        delete_media: bool,
+        message_range: Option<SyncActionMessageRange>,
+    ) -> Result<()> {
+        debug!("Deleting chat {jid}");
+        let delete_media_str = if delete_media { "1" } else { "0" };
+        let index = serde_json::to_vec(&["deleteChat", &jid.to_string(), delete_media_str])?;
+        let value = wa::SyncActionValue {
+            delete_chat_action: Some(wa::sync_action_value::DeleteChatAction { message_range }),
+            timestamp: Some(wacore::time::now_millis()),
+            ..Default::default()
+        };
+        self.send_mutation(WAPatchName::RegularHigh, &index, &value)
+            .await
+    }
+
+    /// Deletes locally only (not for everyone).
+    /// `participant_jid`: required for group messages from others, `None` otherwise.
+    pub async fn delete_message_for_me(
+        &self,
+        chat_jid: &Jid,
+        participant_jid: Option<&Jid>,
+        message_id: &str,
+        from_me: bool,
+        delete_media: bool,
+        message_timestamp: Option<i64>,
+    ) -> Result<()> {
+        debug!("Deleting message {message_id} for me in {chat_jid}");
+        let index = build_message_key_index(
+            "deleteMessageForMe",
+            chat_jid,
+            participant_jid,
+            message_id,
+            from_me,
+        )?;
+        let value = wa::SyncActionValue {
+            delete_message_for_me_action: Some(wa::sync_action_value::DeleteMessageForMeAction {
+                delete_media: Some(delete_media),
+                message_timestamp,
+            }),
+            timestamp: Some(wacore::time::now_millis()),
+            ..Default::default()
+        };
+        self.send_mutation(WAPatchName::RegularHigh, &index, &value)
+            .await
+    }
+
+    async fn send_archive_mutation(
+        &self,
+        jid: &Jid,
+        archived: bool,
+        message_range: Option<SyncActionMessageRange>,
+    ) -> Result<()> {
         let index = serde_json::to_vec(&["archive", &jid.to_string()])?;
         let value = wa::SyncActionValue {
             archive_chat_action: Some(wa::sync_action_value::ArchiveChatAction {
                 archived: Some(archived),
-                message_range: None,
+                message_range,
             }),
             timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
@@ -352,8 +489,7 @@ impl<'a> ChatActions<'a> {
         mute_end_timestamp_ms: i64,
     ) -> Result<()> {
         let index = serde_json::to_vec(&["mute", &jid.to_string()])?;
-        // WhatsApp Web requires muteEndTimestamp to always be present when muted=true.
-        // -1 means indefinite, 0 means unmuted, positive means expiry in milliseconds.
+        // -1 = indefinite, 0 = unmuted, positive = expiry ms
         let mute_end = if muted {
             Some(mute_end_timestamp_ms)
         } else {
@@ -380,25 +516,8 @@ impl<'a> ChatActions<'a> {
         from_me: bool,
         starred: bool,
     ) -> Result<()> {
-        if chat_jid.is_group() && !from_me && participant_jid.is_none() {
-            anyhow::bail!(
-                "participant_jid is required when starring a group message not sent by us"
-            );
-        }
-        // WhatsApp Web star index order: ["star", chatJid, messageId, fromMe, participant]
-        // participant = sender JID for group messages from others, "0" otherwise.
-        // See WAWebSyncdUtils.constructMsgKeySegmentsFromMsgKey + extractParticipantForSync
-        let from_me_str = if from_me { "1" } else { "0" };
-        let participant = participant_jid
-            .map(|j| j.to_string())
-            .unwrap_or_else(|| "0".to_string());
-        let index = serde_json::to_vec(&[
-            "star",
-            &chat_jid.to_string(),
-            message_id,
-            from_me_str,
-            &participant,
-        ])?;
+        let index =
+            build_message_key_index("star", chat_jid, participant_jid, message_id, from_me)?;
         let value = wa::SyncActionValue {
             star_action: Some(wa::sync_action_value::StarAction {
                 starred: Some(starred),
@@ -410,7 +529,6 @@ impl<'a> ChatActions<'a> {
             .await
     }
 
-    /// Encode and send an app state mutation to the given collection.
     async fn send_mutation(
         &self,
         collection: WAPatchName,
@@ -448,7 +566,6 @@ impl<'a> ChatActions<'a> {
 }
 
 impl Client {
-    /// Access chat management actions (archive, pin, mute, star).
     pub fn chat_actions(&self) -> ChatActions<'_> {
         ChatActions::new(self)
     }

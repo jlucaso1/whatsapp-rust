@@ -24,7 +24,11 @@ async fn test_archive_chat() -> anyhow::Result<()> {
 
     client_a.wait_for_app_state_sync().await?;
 
-    client_a.client.chat_actions().archive_chat(&jid_b).await?;
+    client_a
+        .client
+        .chat_actions()
+        .archive_chat(&jid_b, None)
+        .await?;
     info!("Successfully archived chat with {jid_b}");
 
     client_a.disconnect().await;
@@ -49,13 +53,17 @@ async fn test_unarchive_chat() -> anyhow::Result<()> {
     client_a.wait_for_app_state_sync().await?;
 
     // Archive then unarchive
-    client_a.client.chat_actions().archive_chat(&jid_b).await?;
+    client_a
+        .client
+        .chat_actions()
+        .archive_chat(&jid_b, None)
+        .await?;
     info!("Archived chat with {jid_b}");
 
     client_a
         .client
         .chat_actions()
-        .unarchive_chat(&jid_b)
+        .unarchive_chat(&jid_b, None)
         .await?;
     info!("Successfully unarchived chat with {jid_b}");
 
@@ -319,13 +327,17 @@ async fn test_multiple_chat_actions() -> anyhow::Result<()> {
     info!("Unmuted chat");
 
     // Archive and unarchive
-    client_a.client.chat_actions().archive_chat(&jid_b).await?;
+    client_a
+        .client
+        .chat_actions()
+        .archive_chat(&jid_b, None)
+        .await?;
     info!("Archived chat");
 
     client_a
         .client
         .chat_actions()
-        .unarchive_chat(&jid_b)
+        .unarchive_chat(&jid_b, None)
         .await?;
     info!("Unarchived chat");
 

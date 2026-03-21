@@ -392,6 +392,8 @@ pub enum Event {
     ArchiveUpdate(ArchiveUpdate),
     StarUpdate(StarUpdate),
     MarkChatAsReadUpdate(MarkChatAsReadUpdate),
+    DeleteChatUpdate(DeleteChatUpdate),
+    DeleteMessageForMeUpdate(DeleteMessageForMeUpdate),
 
     HistorySync(HistorySync),
     OfflineSyncPreview(OfflineSyncPreview),
@@ -829,6 +831,25 @@ pub struct MarkChatAsReadUpdate {
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
+    pub from_full_sync: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteChatUpdate {
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::DeleteChatAction>,
+    pub from_full_sync: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteMessageForMeUpdate {
+    pub chat_jid: Jid,
+    pub participant_jid: Option<Jid>,
+    pub message_id: String,
+    pub from_me: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::DeleteMessageForMeAction>,
     pub from_full_sync: bool,
 }
 
