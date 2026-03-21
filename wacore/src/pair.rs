@@ -131,7 +131,7 @@ impl PairUtils {
                 text: "internal-error",
                 source: anyhow::anyhow!("HMAC container missing details"),
             })?;
-        let _hmac_bytes = hmac_container
+        let hmac_bytes = hmac_container
             .hmac
             .as_deref()
             .ok_or_else(|| PairCryptoError {
@@ -144,9 +144,13 @@ impl PairUtils {
             mac.update(ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE);
         }
         mac.update(details_bytes);
-        // TODO(security): HMAC verification disabled — adv_secret_key rotation
-        // isn't persisted yet. Needs a DeviceCommand variant + pair_code.rs:321.
-        // ED25519 signature verification below is the primary auth gate.
+        if mac.verify_slice(hmac_bytes).is_err() {
+            return Err(PairCryptoError {
+                code: 401,
+                text: "hmac-mismatch",
+                source: anyhow::anyhow!("HMAC mismatch"),
+            });
+        }
 
         // 2. Unmarshal inner container and verify account signature
         let mut signed_identity =
