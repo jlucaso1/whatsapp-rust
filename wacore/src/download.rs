@@ -329,18 +329,18 @@ impl DownloadUtils {
             cblock: &[u8],
             cipher: &Aes256,
             prev_block: &[u8; BLOCK],
-        ) -> ([u8; BLOCK], [u8; BLOCK]) {
+        ) -> Result<([u8; BLOCK], [u8; BLOCK])> {
             use aes::cipher::{Block, BlockDecrypt};
             let cblock_arr: [u8; BLOCK] = cblock
                 .try_into()
-                .expect("chunks_exact guarantees BLOCK-byte slices");
+                .map_err(|_| anyhow!("Invalid block size"))?;
             let mut block: Block<Aes256> = cblock_arr.into();
             cipher.decrypt_block(&mut block);
             let mut decrypted: [u8; BLOCK] = block.into();
             for (b, &p) in decrypted.iter_mut().zip(prev_block.iter()) {
                 *b ^= p;
             }
-            (decrypted, cblock_arr)
+            Ok((decrypted, cblock_arr))
         }
 
         let (iv, cipher_key, mac_key) = Self::get_media_keys(media_key, app_info)?;
@@ -372,7 +372,7 @@ impl DownloadUtils {
                     hmac.update(&tail[..processable_len]);
                     for cblock in tail[..processable_len].chunks_exact(BLOCK) {
                         let (decrypted, cblock_arr) =
-                            decrypt_cbc_block(cblock, &cipher, &prev_block);
+                            decrypt_cbc_block(cblock, &cipher, &prev_block)?;
                         writer.write_all(&decrypted)?;
                         bytes_written += BLOCK as u64;
                         prev_block = cblock_arr;
@@ -397,7 +397,7 @@ impl DownloadUtils {
 
         let mut final_plain = Vec::with_capacity(final_ciphertext.len());
         for cblock in final_ciphertext.chunks_exact(BLOCK) {
-            let (decrypted, cblock_arr) = decrypt_cbc_block(cblock, &cipher, &prev_block);
+            let (decrypted, cblock_arr) = decrypt_cbc_block(cblock, &cipher, &prev_block)?;
             final_plain.extend_from_slice(&decrypted);
             prev_block = cblock_arr;
         }

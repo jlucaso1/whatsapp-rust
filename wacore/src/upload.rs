@@ -66,7 +66,7 @@ pub fn encrypt_media_streaming<R: Read, W: Write>(
         let mut encrypt_cbc_block = |block_data: &[u8]| -> Result<()> {
             let mut data: [u8; BLOCK] = block_data
                 .try_into()
-                .expect("chunks_exact guarantees BLOCK-byte slices");
+                .map_err(|_| anyhow::anyhow!("Invalid block size"))?;
             for (b, &p) in data.iter_mut().zip(prev_block.iter()) {
                 *b ^= p;
             }
