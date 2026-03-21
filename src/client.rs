@@ -295,11 +295,11 @@ pub struct Client {
     /// and DB writes are deferred to flush() after each message is processed.
     pub(crate) signal_cache: Arc<crate::store::signal_cache::SignalStoreCache>,
 
-    /// Global semaphore that limits message processing concurrency.
-    /// During offline sync: permits=1 (sequential, like WA Web's allChatQueue)
-    /// After offline sync: permits=N (parallel per-chat processing)
-    /// Wrapped in std::sync::Mutex to allow replacing on reconnect.
+    /// Limits message processing concurrency (1 permit during offline sync, N after).
+    /// Wrapped in Mutex to allow replacing on reconnect.
     pub(crate) message_processing_semaphore: std::sync::Mutex<Arc<async_lock::Semaphore>>,
+    /// Bumped on every semaphore swap so stale Arc clones are rejected.
+    pub(crate) message_semaphore_generation: Arc<AtomicU64>,
 
     /// Per-device session locks for Signal protocol operations.
     /// Prevents race conditions when multiple messages from the same sender
@@ -557,6 +557,7 @@ impl Client {
             message_processing_semaphore: std::sync::Mutex::new(Arc::new(
                 async_lock::Semaphore::new(1),
             )),
+            message_semaphore_generation: Arc::new(AtomicU64::new(0)),
             // Coordination caches: capacity-only eviction, no TTL/TTI.
             // These hold live mutexes and channel senders; time-based eviction
             // while tasks hold references would silently break serialisation.
@@ -1012,11 +1013,11 @@ impl Client {
         self.retried_group_messages.invalidate_all();
         // Clear signal cache so stale state doesn't leak across connections
         self.signal_cache.clear().await;
-        // Reset message processing semaphore to 1 permit (sequential mode for next offline sync).
-        // Old workers holding the previous semaphore Arc will finish normally.
-        // Scoped block ensures MutexGuard is dropped before any .await (MutexGuard is !Send).
-        // Handles poison gracefully — the semaphore is still safe to replace.
+        // Reset semaphore to 1 permit for next offline sync.
+        // Generation bump invalidates stale Arc clones. Block scopes the !Send MutexGuard.
         {
+            self.message_semaphore_generation
+                .fetch_add(1, Ordering::SeqCst);
             let mut guard = match self.message_processing_semaphore.lock() {
                 Ok(g) => g,
                 Err(poisoned) => poisoned.into_inner(),
