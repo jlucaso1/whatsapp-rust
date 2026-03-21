@@ -41,7 +41,6 @@ impl Client {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
     use wacore_binary::jid::Jid;

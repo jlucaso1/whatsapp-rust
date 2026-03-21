@@ -4,9 +4,7 @@
 //
 
 use aes::Aes256;
-#[allow(deprecated)]
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockEncrypt, KeyInit};
+use aes::cipher::{Block, BlockEncrypt, KeyInit};
 use ghash::GHash;
 use ghash::universal_hash::UniversalHash;
 use subtle::ConstantTimeEq;
@@ -53,11 +51,8 @@ impl GcmGhash {
             self.msg_len += taking;
 
             if self.msg_buf_offset == TAG_SIZE {
-                #[allow(deprecated)]
-                self.ghash
-                    .update(std::slice::from_ref(ghash::Block::from_slice(
-                        &self.msg_buf,
-                    )));
+                let block: ghash::Block = self.msg_buf.into();
+                self.ghash.update(std::slice::from_ref(&block));
                 self.msg_buf_offset = 0;
                 return self.update(&msg[taking..]);
             } else {
@@ -74,9 +69,8 @@ impl GcmGhash {
 
         let (chunks, _) = msg[..16 * full_blocks].as_chunks::<16>();
         for chunk in chunks {
-            #[allow(deprecated)]
-            self.ghash
-                .update(std::slice::from_ref(ghash::Block::from_slice(chunk)));
+            let block: ghash::Block = (*chunk).into();
+            self.ghash.update(std::slice::from_ref(&block));
         }
 
         self.msg_buf[0..leftover].copy_from_slice(&msg[full_blocks * 16..]);
@@ -115,9 +109,9 @@ fn setup_gcm(key: &[u8], nonce: &[u8], associated_data: &[u8]) -> Result<(Aes256
     }
 
     let aes256 = Aes256::new_from_slice(key).map_err(|_| Error::InvalidKeySize)?;
-    let mut h = [0u8; TAG_SIZE];
-    #[allow(deprecated)]
-    aes256.encrypt_block(GenericArray::from_mut_slice(&mut h));
+    let mut h: Block<Aes256> = [0u8; TAG_SIZE].into();
+    aes256.encrypt_block(&mut h);
+    let h: [u8; TAG_SIZE] = h.into();
 
     let mut ctr = Aes256Ctr32::new(aes256, nonce, 1)?;
 
@@ -429,5 +423,89 @@ mod tests {
         dec.verify_tag(&tag).unwrap();
 
         assert_eq!(&combined_ct[..], plaintext);
+    }
+
+    /// NIST SP 800-38D Test Case 14: AES-256-GCM, all-zero key/nonce, 128-bit plaintext
+    /// Pins ciphertext + tag against an external reference to catch GHASH/H derivation regressions.
+    #[test]
+    fn test_aes_gcm_nist_vector_tc14() {
+        let key = [0u8; 32];
+        let nonce = [0u8; NONCE_SIZE];
+        let plaintext = [0u8; 16];
+
+        let expected_ct: [u8; 16] = [
+            0xce, 0xa7, 0x40, 0x3d, 0x4d, 0x60, 0x6b, 0x6e, 0x07, 0x4e, 0xc5, 0xd3, 0xba, 0xf3,
+            0x9d, 0x18,
+        ];
+        let expected_tag: [u8; TAG_SIZE] = [
+            0xd0, 0xd1, 0xc8, 0xa7, 0x99, 0x99, 0x6b, 0xf0, 0x26, 0x5b, 0x98, 0xb5, 0xd4, 0x8a,
+            0xb9, 0x19,
+        ];
+
+        let mut ciphertext = plaintext.to_vec();
+        let mut enc = Aes256GcmEncryption::new(&key, &nonce, b"").unwrap();
+        enc.encrypt(&mut ciphertext);
+        let tag = enc.compute_tag();
+
+        assert_eq!(ciphertext, expected_ct, "NIST TC14 ciphertext mismatch");
+        assert_eq!(tag, expected_tag, "NIST TC14 tag mismatch");
+
+        // Verify decryption roundtrip against the known vector
+        let mut decrypted = ciphertext;
+        let mut dec = Aes256GcmDecryption::new(&key, &nonce, b"").unwrap();
+        dec.decrypt(&mut decrypted);
+        dec.verify_tag(&expected_tag).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    /// NIST SP 800-38D Test Case 16: AES-256-GCM with AAD, exercises GHASH block feeding
+    /// for both ciphertext and associated data paths.
+    #[test]
+    fn test_aes_gcm_nist_vector_tc16() {
+        let key: [u8; 32] = [
+            0xfe, 0xff, 0xe9, 0x92, 0x86, 0x65, 0x73, 0x1c, 0x6d, 0x6a, 0x8f, 0x94, 0x67, 0x30,
+            0x83, 0x08, 0xfe, 0xff, 0xe9, 0x92, 0x86, 0x65, 0x73, 0x1c, 0x6d, 0x6a, 0x8f, 0x94,
+            0x67, 0x30, 0x83, 0x08,
+        ];
+        let nonce: [u8; NONCE_SIZE] = [
+            0xca, 0xfe, 0xba, 0xbe, 0xfa, 0xce, 0xdb, 0xad, 0xde, 0xca, 0xf8, 0x88,
+        ];
+        let aad: [u8; 20] = [
+            0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad, 0xbe, 0xef, 0xfe, 0xed, 0xfa, 0xce, 0xde, 0xad,
+            0xbe, 0xef, 0xab, 0xad, 0xda, 0xd2,
+        ];
+        let plaintext: [u8; 60] = [
+            0xd9, 0x31, 0x32, 0x25, 0xf8, 0x84, 0x06, 0xe5, 0xa5, 0x59, 0x09, 0xc5, 0xaf, 0xf5,
+            0x26, 0x9a, 0x86, 0xa7, 0xa9, 0x53, 0x15, 0x34, 0xf7, 0xda, 0x2e, 0x4c, 0x30, 0x3d,
+            0x8a, 0x31, 0x8a, 0x72, 0x1c, 0x3c, 0x0c, 0x95, 0x95, 0x68, 0x09, 0x53, 0x2f, 0xcf,
+            0x0e, 0x24, 0x49, 0xa6, 0xb5, 0x25, 0xb1, 0x6a, 0xed, 0xf5, 0xaa, 0x0d, 0xe6, 0x57,
+            0xba, 0x63, 0x7b, 0x39,
+        ];
+        let expected_ct: [u8; 60] = [
+            0x52, 0x2d, 0xc1, 0xf0, 0x99, 0x56, 0x7d, 0x07, 0xf4, 0x7f, 0x37, 0xa3, 0x2a, 0x84,
+            0x42, 0x7d, 0x64, 0x3a, 0x8c, 0xdc, 0xbf, 0xe5, 0xc0, 0xc9, 0x75, 0x98, 0xa2, 0xbd,
+            0x25, 0x55, 0xd1, 0xaa, 0x8c, 0xb0, 0x8e, 0x48, 0x59, 0x0d, 0xbb, 0x3d, 0xa7, 0xb0,
+            0x8b, 0x10, 0x56, 0x82, 0x88, 0x38, 0xc5, 0xf6, 0x1e, 0x63, 0x93, 0xba, 0x7a, 0x0a,
+            0xbc, 0xc9, 0xf6, 0x62,
+        ];
+        let expected_tag: [u8; TAG_SIZE] = [
+            0x76, 0xfc, 0x6e, 0xce, 0x0f, 0x4e, 0x17, 0x68, 0xcd, 0xdf, 0x88, 0x53, 0xbb, 0x2d,
+            0x55, 0x1b,
+        ];
+
+        let mut ciphertext = plaintext.to_vec();
+        let mut enc = Aes256GcmEncryption::new(&key, &nonce, &aad).unwrap();
+        enc.encrypt(&mut ciphertext);
+        let tag = enc.compute_tag();
+
+        assert_eq!(ciphertext, expected_ct, "NIST TC16 ciphertext mismatch");
+        assert_eq!(tag, expected_tag, "NIST TC16 tag mismatch");
+
+        // Verify decryption roundtrip
+        let mut decrypted = ciphertext;
+        let mut dec = Aes256GcmDecryption::new(&key, &nonce, &aad).unwrap();
+        dec.decrypt(&mut decrypted);
+        dec.verify_tag(&expected_tag).unwrap();
+        assert_eq!(decrypted, plaintext);
     }
 }

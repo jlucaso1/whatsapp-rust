@@ -124,7 +124,6 @@ pub fn build_spam_list_node(request: &SpamReportRequest) -> Node {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
 

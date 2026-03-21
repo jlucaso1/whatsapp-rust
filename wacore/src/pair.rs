@@ -319,14 +319,13 @@ impl PairUtils {
         };
         let cipher = Aes256Gcm::new_from_slice(&encryption_key)
             .map_err(|_| anyhow::anyhow!("Invalid key size for AES-GCM"))?;
-        #[allow(deprecated)]
-        let nonce = aes_gcm::Nonce::from_slice(&[0; 12]);
+        let nonce: aes_gcm::Nonce<_> = [0u8; 12].into();
         let payload = Payload {
             msg: &final_message,
             aad: pairing_ref.as_bytes(),
         };
         let encrypted = cipher
-            .encrypt(nonce, payload)
+            .encrypt(&nonce, payload)
             .map_err(|_| anyhow::anyhow!("AES-GCM encryption failed"))?;
 
         Ok(encrypted)
