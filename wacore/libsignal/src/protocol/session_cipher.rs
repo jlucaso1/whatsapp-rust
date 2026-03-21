@@ -154,6 +154,12 @@ pub async fn message_encrypt(
         )?)
     };
 
+    // Clear prekey items after first use — subsequent sends should use regular SignalMessage.
+    // (Items are also cleared on the receiver side in message_decrypt.)
+    if matches!(&message, CiphertextMessage::PreKeySignalMessage(_)) {
+        session_state.clear_unacknowledged_pre_key_message();
+    }
+
     session_state.set_sender_chain_key(&next_chain_key);
 
     // XXX why is this check after everything else?!!
