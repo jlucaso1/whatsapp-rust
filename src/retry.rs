@@ -411,9 +411,10 @@ impl Client {
             let encryption_jid = self.resolve_encryption_jid(&participant_jid).await;
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
-            let is_lid_addressing = cached_group_info
+            let addressing_mode = cached_group_info
                 .as_ref()
-                .is_some_and(|g| g.addressing_mode == crate::types::message::AddressingMode::Lid);
+                .map(|g| g.addressing_mode)
+                .unwrap_or_default();
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
@@ -431,7 +432,7 @@ impl Client {
                 message_id,
                 retry_count,
                 device_snapshot.account.as_ref(),
-                is_lid_addressing,
+                addressing_mode,
             )
             .await?;
 
