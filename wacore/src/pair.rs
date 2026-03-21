@@ -144,13 +144,11 @@ impl PairUtils {
             mac.update(ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE);
         }
         mac.update(details_bytes);
-        // if mac.verify_slice(hmac_bytes).is_err() {
-        //     return Err(PairCryptoError {
-        //         code: 401,
-        //         text: "hmac-mismatch",
-        //         source: anyhow::anyhow!("HMAC mismatch"),
-        //     });
-        // }
+        // TODO(security): HMAC verification skipped — adv_secret_key is only
+        // rotated in the pair-code flow (see handle_pair_code_notification() in
+        // pair_code.rs, via DeviceCommand::SetAdvSecretKey). QR pairing uses
+        // the initial random key from Device::new() which won't match.
+        // Re-enable once both pairing paths persist the correct key.
 
         // 2. Unmarshal inner container and verify account signature
         let mut signed_identity =

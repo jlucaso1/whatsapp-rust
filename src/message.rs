@@ -493,11 +493,33 @@ impl Client {
             );
         }
 
-        // Acquire global processing permit. During offline sync (1 permit), this serializes
-        // ALL message processing globally, matching WA Web's allChatQueue pattern.
-        // After offline sync completes, permits are increased for parallel processing.
-        let semaphore = self.message_processing_semaphore.lock().unwrap().clone();
+        // Acquire global processing permit (1 during offline sync, N after).
+        // Read generation + clone Arc under the same mutex so the pair is consistent.
+        let (generation, semaphore) = match self.message_processing_semaphore.lock() {
+            Ok(guard) => (
+                self.message_semaphore_generation
+                    .load(std::sync::atomic::Ordering::SeqCst),
+                guard.clone(),
+            ),
+            Err(poisoned) => {
+                let guard = poisoned.into_inner();
+                (
+                    self.message_semaphore_generation
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    guard.clone(),
+                )
+            }
+        };
         let _global_permit = semaphore.acquire_arc().await;
+        // Post-acquire recheck: generation could have changed during the .await
+        if generation
+            != self
+                .message_semaphore_generation
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            log::debug!("Semaphore generation changed during acquire, dropping stale permit");
+            return;
+        }
 
         log::debug!(
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",

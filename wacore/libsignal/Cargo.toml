@@ -22,7 +22,6 @@ ghash = "0.6.0"
 hex = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }
-itertools = { version = "0.14.0", default-features = false, features = ["use_alloc"] }
 log = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
@@ -31,12 +30,12 @@ sha1 = { workspace = true }
 sha2 = { workspace = true }
 subtle = "2.6.1"
 thiserror = { workspace = true }
-uuid = { version = "1.18.1", default-features = false }
+uuid = { workspace = true }
 waproto = { workspace = true }
 x25519-dalek = { version = "2.0.1", features = ["static_secrets"] }
 
 [dev-dependencies]
-futures = { version = "0.3", default-features = false, features = ["executor"] }
+futures = { workspace = true, features = ["executor"] }
 iai-callgrind = { workspace = true }
 
 [[bench]]

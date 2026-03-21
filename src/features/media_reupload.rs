@@ -9,7 +9,6 @@
 use crate::client::{Client, ClientError, NodeFilter};
 use anyhow::Result;
 use log::debug;
-use std::sync::Arc;
 use std::time::Duration;
 pub use wacore::media_retry::MediaRetryResult;
 use wacore::media_retry::{
@@ -34,11 +33,11 @@ pub struct MediaReuploadRequest<'a> {
 }
 
 pub struct MediaReupload<'a> {
-    client: &'a Arc<Client>,
+    client: &'a Client,
 }
 
 impl<'a> MediaReupload<'a> {
-    pub(crate) fn new(client: &'a Arc<Client>) -> Self {
+    pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
     }
 
@@ -115,7 +114,7 @@ impl<'a> MediaReupload<'a> {
 
 impl Client {
     /// Access media reupload operations.
-    pub fn media_reupload(self: &Arc<Self>) -> MediaReupload<'_> {
+    pub fn media_reupload(&self) -> MediaReupload<'_> {
         MediaReupload::new(self)
     }
 }

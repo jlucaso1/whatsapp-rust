@@ -2,12 +2,6 @@
 pub use wacore::appstate::Mutation;
 pub use wacore::appstate_sync::{AppStateProcessor, AppStateSyncDriver, AppStateSyncError};
 
-// The following re-exports are used by the test module
-#[allow(unused_imports)]
-use wacore::appstate::hash::HashState;
-#[allow(unused_imports)]
-use wacore::appstate::patch_decode::{PatchList, WAPatchName};
-
 #[cfg(test)]
 mod tests {
     use super::*;

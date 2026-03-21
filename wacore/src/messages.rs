@@ -44,7 +44,7 @@ impl MessageUtils {
         ))
     }
 
-    pub fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8], anyhow::Error> {
+    pub fn unpad_message_ref(plaintext: &[u8], version: u8) -> Result<&[u8]> {
         if version == 3 {
             return Ok(plaintext);
         }
@@ -70,10 +70,7 @@ impl MessageUtils {
 /// Unpads the plaintext (using the given padding version) and decodes the
 /// protobuf bytes into a WhatsApp Message. This is the pure,
 /// runtime-independent portion of `handle_decrypted_plaintext`.
-pub fn decode_plaintext(
-    padded_plaintext: &[u8],
-    padding_version: u8,
-) -> Result<wa::Message, anyhow::Error> {
+pub fn decode_plaintext(padded_plaintext: &[u8], padding_version: u8) -> Result<wa::Message> {
     let plaintext_slice = MessageUtils::unpad_message_ref(padded_plaintext, padding_version)?;
     wa::Message::decode(plaintext_slice)
         .map_err(|e| anyhow::anyhow!("Failed to decode decrypted plaintext: {e}"))
@@ -133,7 +130,7 @@ pub fn parse_message_info(
     node: &wacore_binary::node::Node,
     own_jid: &wacore_binary::jid::Jid,
     own_lid: Option<&wacore_binary::jid::Jid>,
-) -> Result<crate::types::message::MessageInfo, anyhow::Error> {
+) -> Result<crate::types::message::MessageInfo> {
     use crate::types::message::{AddressingMode, EditAttribute, MessageInfo, MessageSource};
     use wacore_binary::jid::{self, JidExt as _};
 

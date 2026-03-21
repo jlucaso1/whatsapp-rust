@@ -317,11 +317,8 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Get device keys
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
 
-    // Prepare encrypted key bundle
-    // TODO: Store `new_adv_secret` via DeviceCommand::SetAdvSecretKey to enable HMAC
-    // verification in pair-success. Currently the HMAC check in do_pair_crypto is
-    // commented out, so pairing works without it. See wacore/src/pair.rs:147-153.
-    let (wrapped_bundle, _new_adv_secret) = match PairCodeUtils::prepare_key_bundle(
+    // Prepare encrypted key bundle (includes rotated adv_secret_key)
+    let (wrapped_bundle, new_adv_secret) = match PairCodeUtils::prepare_key_bundle(
         &ephemeral_keypair,
         &primary_ephemeral_pub,
         &primary_identity_pub,
@@ -333,6 +330,14 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
             return false;
         }
     };
+
+    // Persist rotated adv_secret_key so HMAC verification works in pair-success.
+    client
+        .persistence_manager
+        .process_command(crate::store::commands::DeviceCommand::SetAdvSecretKey(
+            new_adv_secret,
+        ))
+        .await;
 
     // Build and send stage 2 IQ
     let req_id = client.generate_request_id();
