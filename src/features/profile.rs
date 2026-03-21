@@ -6,7 +6,6 @@ use crate::client::Client;
 use crate::store::commands::DeviceCommand;
 use anyhow::Result;
 use log::{debug, warn};
-use std::sync::Arc;
 use wacore::iq::contacts::SetProfilePictureSpec;
 use wacore::iq::profile::SetStatusTextSpec;
 use wacore_binary::builder::NodeBuilder;
@@ -15,11 +14,11 @@ pub use wacore::iq::contacts::SetProfilePictureResponse;
 
 /// Feature handle for profile operations.
 pub struct Profile<'a> {
-    client: &'a Arc<Client>,
+    client: &'a Client,
 }
 
 impl<'a> Profile<'a> {
-    pub(crate) fn new(client: &'a Arc<Client>) -> Self {
+    pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
     }
 
@@ -163,8 +162,8 @@ impl<'a> Profile<'a> {
 }
 
 impl Client {
-    /// Access profile operations (requires Arc<Client>).
-    pub fn profile(self: &Arc<Self>) -> Profile<'_> {
+    /// Access profile operations.
+    pub fn profile(&self) -> Profile<'_> {
         Profile::new(self)
     }
 }

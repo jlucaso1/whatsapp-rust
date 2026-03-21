@@ -144,13 +144,11 @@ impl PairUtils {
             mac.update(ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE);
         }
         mac.update(details_bytes);
-        // if mac.verify_slice(hmac_bytes).is_err() {
-        //     return Err(PairCryptoError {
-        //         code: 401,
-        //         text: "hmac-mismatch",
-        //         source: anyhow::anyhow!("HMAC mismatch"),
-        //     });
-        // }
+        // TODO(security): HMAC verification disabled — requires persisting the rotated
+        // adv_secret_key via DeviceCommand::SetAdvSecretKey first.
+        // The ED25519 account signature verification below still provides primary
+        // authentication. See also: src/pair_code.rs TODO for the persistence step.
+        // Tracked in: pair.rs:147 + pair_code.rs:321
 
         // 2. Unmarshal inner container and verify account signature
         let mut signed_identity =

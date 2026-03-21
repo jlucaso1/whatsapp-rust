@@ -19,7 +19,6 @@ use crate::client::Client;
 use anyhow::Result;
 use chrono::DateTime;
 use log::debug;
-use std::sync::Arc;
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::types::events::{
     ArchiveUpdate, ContactUpdate, Event, MarkChatAsReadUpdate, MuteUpdate, PinUpdate, StarUpdate,
@@ -208,13 +207,13 @@ pub(crate) fn dispatch_chat_mutation(
 
 /// Feature handle for chat management actions.
 ///
-/// Access via `client.chat_actions()` (requires `Arc<Client>`).
+/// Access via `client.chat_actions()`.
 pub struct ChatActions<'a> {
-    client: &'a Arc<Client>,
+    client: &'a Client,
 }
 
 impl<'a> ChatActions<'a> {
-    pub(crate) fn new(client: &'a Arc<Client>) -> Self {
+    pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
     }
 
@@ -451,8 +450,8 @@ impl<'a> ChatActions<'a> {
 impl Client {
     /// Access chat management actions (archive, pin, mute, star).
     ///
-    /// Requires `Arc<Client>` because app state mutations need key access.
-    pub fn chat_actions(self: &Arc<Self>) -> ChatActions<'_> {
+    /// Access chat management actions (archive, pin, mute, star).
+    pub fn chat_actions(&self) -> ChatActions<'_> {
         ChatActions::new(self)
     }
 }
