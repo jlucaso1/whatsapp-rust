@@ -449,8 +449,6 @@ impl<'a> ChatActions<'a> {
 
 impl Client {
     /// Access chat management actions (archive, pin, mute, star).
-    ///
-    /// Access chat management actions (archive, pin, mute, star).
     pub fn chat_actions(&self) -> ChatActions<'_> {
         ChatActions::new(self)
     }

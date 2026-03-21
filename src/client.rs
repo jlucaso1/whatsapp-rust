@@ -3790,11 +3790,10 @@ mod tests {
 
         let elapsed = start.elapsed();
         // Count available permits by trying to acquire non-blockingly
-        let semaphore = client
-            .message_processing_semaphore
-            .lock()
-            .expect("message_processing_semaphore poisoned")
-            .clone();
+        let semaphore = match client.message_processing_semaphore.lock() {
+            Ok(guard) => guard.clone(),
+            Err(poisoned) => poisoned.into_inner().clone(),
+        };
         let mut guards = Vec::new();
         while let Some(guard) = semaphore.try_acquire() {
             guards.push(guard);

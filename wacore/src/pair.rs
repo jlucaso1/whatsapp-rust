@@ -144,11 +144,12 @@ impl PairUtils {
             mac.update(ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE);
         }
         mac.update(details_bytes);
-        // TODO(security): HMAC verification disabled — requires persisting the rotated
-        // adv_secret_key via DeviceCommand::SetAdvSecretKey first.
+        // TODO(security): HMAC verification disabled — requires implementing a new
+        // DeviceCommand variant to persist the rotated adv_secret_key after pairing.
+        // This variant does not exist yet; see src/pair_code.rs:321 for the
+        // persistence step that must be built first.
         // The ED25519 account signature verification below still provides primary
-        // authentication. See also: src/pair_code.rs TODO for the persistence step.
-        // Tracked in: pair.rs:147 + pair_code.rs:321
+        // authentication (defense-in-depth once HMAC is re-enabled).
 
         // 2. Unmarshal inner container and verify account signature
         let mut signed_identity =
