@@ -243,9 +243,16 @@ impl Client {
             }
         }
 
-        // Cache group info once — used for both SKDM rotation check and addressing_mode
+        // Fetch group info (cache-first, server on miss) — used for SKDM rotation + addressing_mode.
+        // Without this, a cold cache would silently default to PN semantics for LID groups.
         let cached_group_info = if receipt.source.chat.is_group() {
-            self.get_group_cache().await.get(&receipt.source.chat).await
+            match self.groups().query_info(&receipt.source.chat).await {
+                Ok(info) => Some(info),
+                Err(e) => {
+                    log::warn!("Failed to fetch group info for retry: {e}");
+                    None
+                }
+            }
         } else {
             None
         };
