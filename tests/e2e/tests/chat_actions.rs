@@ -347,3 +347,101 @@ async fn test_multiple_chat_actions() -> anyhow::Result<()> {
     client_b.disconnect().await;
     Ok(())
 }
+
+#[tokio::test]
+async fn test_mark_chat_as_read() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut client_a = TestClient::connect("e2e_mark_read_a").await?;
+    let client_b = TestClient::connect("e2e_mark_read_b").await?;
+
+    let jid_b = client_b
+        .client
+        .get_pn()
+        .await
+        .expect("B should have JID")
+        .to_non_ad();
+
+    client_a.wait_for_app_state_sync().await?;
+
+    client_a
+        .client
+        .chat_actions()
+        .mark_chat_as_read(&jid_b, true, None)
+        .await?;
+    info!("Marked chat as read");
+
+    client_a
+        .client
+        .chat_actions()
+        .mark_chat_as_read(&jid_b, false, None)
+        .await?;
+    info!("Marked chat as unread");
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_chat() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut client_a = TestClient::connect("e2e_delete_chat_a").await?;
+    let client_b = TestClient::connect("e2e_delete_chat_b").await?;
+
+    let jid_b = client_b
+        .client
+        .get_pn()
+        .await
+        .expect("B should have JID")
+        .to_non_ad();
+
+    client_a.wait_for_app_state_sync().await?;
+
+    client_a
+        .client
+        .chat_actions()
+        .delete_chat(&jid_b, true, None)
+        .await?;
+    info!("Deleted chat with media");
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_delete_message_for_me() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut client_a = TestClient::connect("e2e_del_msg_me_a").await?;
+    let client_b = TestClient::connect("e2e_del_msg_me_b").await?;
+
+    let jid_b = client_b
+        .client
+        .get_pn()
+        .await
+        .expect("B should have JID")
+        .to_non_ad();
+
+    client_a.wait_for_app_state_sync().await?;
+
+    let msg = wa::Message {
+        conversation: Some("Delete me locally".to_string()),
+        ..Default::default()
+    };
+    let msg_id = client_a.client.send_message(jid_b.clone(), msg).await?;
+    info!("Sent message {msg_id}");
+
+    client_a
+        .client
+        .chat_actions()
+        .delete_message_for_me(&jid_b, None, &msg_id, true, true, None)
+        .await?;
+    info!("Deleted message {msg_id} for me");
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
+    Ok(())
+}

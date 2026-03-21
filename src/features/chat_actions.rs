@@ -150,37 +150,11 @@ pub(crate) fn dispatch_chat_mutation(
         "star" => {
             if let Some(val) = &m.action_value
                 && let Some(act) = &val.star_action
-                && m.index.len() >= 5
+                && let Some((message_id, from_me, participant_jid)) =
+                    parse_message_key_fields(kind, &m.index)
             {
-                let chat_jid: Jid = match m.index[1].parse() {
-                    Ok(j) => j,
-                    Err(_) => {
-                        log::warn!(
-                            "Skipping star mutation: malformed chat JID '{}'",
-                            m.index[1]
-                        );
-                        return true;
-                    }
-                };
-                let message_id = m.index[2].clone();
-                let from_me = m.index[3] == "1";
-                let participant_jid: Option<Jid> = if m.index[4] != "0" {
-                    match m.index[4].parse() {
-                        Ok(j) => Some(j),
-                        Err(_) => {
-                            log::warn!(
-                                "Skipping star mutation: malformed participant JID '{}'",
-                                m.index[4]
-                            );
-                            return true;
-                        }
-                    }
-                } else {
-                    None
-                };
-
                 event_bus.dispatch(&Event::StarUpdate(StarUpdate {
-                    chat_jid,
+                    chat_jid: jid,
                     participant_jid,
                     message_id,
                     from_me,
@@ -233,16 +207,9 @@ pub(crate) fn dispatch_chat_mutation(
         "deleteMessageForMe" => {
             if let Some(val) = &m.action_value
                 && let Some(act) = &val.delete_message_for_me_action
-                && m.index.len() >= 5
+                && let Some((message_id, from_me, participant_jid)) =
+                    parse_message_key_fields(kind, &m.index)
             {
-                let message_id = m.index[2].clone();
-                let from_me = m.index[3] == "1";
-                let participant_jid: Option<Jid> = if m.index[4] != "0" {
-                    m.index[4].parse().ok()
-                } else {
-                    None
-                };
-
                 event_bus.dispatch(&Event::DeleteMessageForMeUpdate(DeleteMessageForMeUpdate {
                     chat_jid: jid,
                     participant_jid,
@@ -257,6 +224,31 @@ pub(crate) fn dispatch_chat_mutation(
         }
         _ => false,
     }
+}
+
+/// Parse message-key fields (messageId, fromMe, participant) from index positions 2-4.
+/// Returns `None` (with a warning log) if the index is too short or participant is malformed.
+fn parse_message_key_fields(kind: &str, index: &[String]) -> Option<(String, bool, Option<Jid>)> {
+    if index.len() < 5 {
+        return None;
+    }
+    let message_id = index[2].clone();
+    let from_me = index[3] == "1";
+    let participant_jid = if index[4] != "0" {
+        match index[4].parse() {
+            Ok(j) => Some(j),
+            Err(_) => {
+                log::warn!(
+                    "Skipping {kind} mutation: malformed participant JID '{}'",
+                    index[4]
+                );
+                return None;
+            }
+        }
+    } else {
+        None
+    };
+    Some((message_id, from_me, participant_jid))
 }
 
 /// Mirrors WAWebSyncdActionUtils.buildMessageKey.
