@@ -56,6 +56,7 @@ waproto = { workspace = true }
 
 [dev-dependencies]
 iai-callgrind = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [[bench]]
 name = "reporting_token_benchmark"
