@@ -145,10 +145,10 @@ impl PairUtils {
         }
         mac.update(details_bytes);
         // TODO(security): HMAC verification skipped — adv_secret_key is only
-        // rotated in the pair-code flow (SetAdvSecretKey). QR pairing uses the
-        // initial random key from Device::new() which won't match the server's
-        // HMAC. Re-enable once both pairing paths persist the correct key.
-        // ED25519 signature verification below is the primary auth gate.
+        // rotated in the pair-code flow (see handle_pair_code_notification() in
+        // pair_code.rs, via DeviceCommand::SetAdvSecretKey). QR pairing uses
+        // the initial random key from Device::new() which won't match.
+        // Re-enable once both pairing paths persist the correct key.
 
         // 2. Unmarshal inner container and verify account signature
         let mut signed_identity =
