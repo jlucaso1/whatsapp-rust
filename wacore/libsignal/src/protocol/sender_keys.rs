@@ -5,7 +5,6 @@
 
 use std::collections::VecDeque;
 
-use itertools::Itertools;
 use prost::Message;
 
 use hmac::{Hmac, Mac};
@@ -384,7 +383,7 @@ impl SenderKeyRecord {
     ///
     /// Skips any bad protobufs.
     fn remove_state(&mut self, chain_id: u32, signature_key: PublicKey) -> Option<SenderKeyState> {
-        let (index, _state) = self.states.iter().find_position(|state| {
+        let (index, _state) = self.states.iter().enumerate().find(|(_, state)| {
             state.chain_id() == chain_id && state.signing_key_public().ok() == Some(signature_key)
         })?;
 

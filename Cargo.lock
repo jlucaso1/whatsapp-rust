@@ -2469,7 +2469,6 @@ dependencies = [
  "hkdf",
  "hmac",
  "iai-callgrind",
- "itertools",
  "log",
  "prost",
  "rand",
