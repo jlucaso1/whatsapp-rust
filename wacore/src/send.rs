@@ -590,7 +590,9 @@ where
         CiphertextMessage::SignalMessage(msg) => {
             (stanza::ENC_TYPE_MSG, false, msg.serialized().to_vec())
         }
-        CiphertextMessage::PreKeySignalMessage(msg) => ("pkmsg", true, msg.serialized().to_vec()),
+        CiphertextMessage::PreKeySignalMessage(msg) => {
+            (stanza::ENC_TYPE_PKMSG, true, msg.serialized().to_vec())
+        }
         _ => {
             return Err(anyhow!(
                 "Unexpected encryption message type for group retry"
