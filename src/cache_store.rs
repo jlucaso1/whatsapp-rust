@@ -164,8 +164,9 @@ where
     ///
     /// For the moka backend this is synchronous (matching moka's API).
     /// For the custom backend this spawns a fire-and-forget task via
-    /// [`tokio::runtime::Handle::try_current`] to avoid panicking if
-    /// called outside a Tokio runtime.
+    /// [`tokio::runtime::Handle::try_current`] (requires `tokio-runtime`
+    /// feature) to avoid panicking if called outside a Tokio runtime.
+    /// Without `tokio-runtime`, the clear is skipped with a warning.
     pub fn invalidate_all(&self) {
         match &self.inner {
             Inner::Moka(cache) => cache.invalidate_all(),
@@ -174,7 +175,7 @@ where
             } => {
                 let _store = store.clone();
                 let _ns = *namespace;
-                #[cfg(not(target_arch = "wasm32"))]
+                #[cfg(all(not(target_arch = "wasm32"), feature = "tokio-runtime"))]
                 match tokio::runtime::Handle::try_current() {
                     Ok(handle) => {
                         handle.spawn(async move {
@@ -187,6 +188,8 @@ where
                         log::warn!("TypedCache[{_ns}]: clear() skipped: no runtime");
                     }
                 }
+                #[cfg(all(not(target_arch = "wasm32"), not(feature = "tokio-runtime")))]
+                log::warn!("TypedCache[{_ns}]: clear() skipped: tokio-runtime feature not enabled");
             }
         }
     }
