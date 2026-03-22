@@ -175,25 +175,7 @@ impl Bot {
                             break;
                         };
 
-                        match task {
-                            crate::sync_task::MajorSyncTask::HistorySync {
-                                message_id,
-                                notification,
-                            } => {
-                                worker_client
-                                    .process_history_sync_task(message_id, *notification)
-                                    .await;
-                                worker_client.finish_history_sync_task();
-                            }
-                            crate::sync_task::MajorSyncTask::AppStateSync { name, full_sync } => {
-                                if let Err(e) = worker_client
-                                    .process_app_state_sync_task(name, full_sync)
-                                    .await
-                                {
-                                    warn!("App state sync task for {:?} failed: {}", name, e);
-                                }
-                            }
-                        }
+                        worker_client.process_sync_task(task).await;
                     }
                     info!("Sync worker shutting down.");
                 }))

@@ -382,6 +382,12 @@ impl<'a> Groups<'a> {
         expiration: i64,
         admin_jid: &Jid,
     ) -> Result<JoinGroupResult, anyhow::Error> {
+        if expiration > 0 {
+            let now = wacore::time::now_millis() / 1000;
+            if expiration < now {
+                anyhow::bail!("V4 invite has expired (expiration={expiration}, now={now})");
+            }
+        }
         Ok(self
             .client
             .execute(AcceptGroupInviteV4Iq::new(
