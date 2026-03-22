@@ -3,6 +3,7 @@ pub mod business;
 pub mod chatstate;
 pub mod community;
 pub mod contacts;
+pub mod devices;
 pub mod dirty;
 pub mod groups;
 pub mod keepalive;
