@@ -2221,4 +2221,70 @@ mod tests {
             );
         }
     }
+
+    mod decrypt_fail {
+        use super::*;
+
+        #[test]
+        fn regular_message() {
+            let msg = wa::Message {
+                conversation: Some("hi".into()),
+                ..Default::default()
+            };
+            assert!(!should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn reaction() {
+            let msg = wa::Message {
+                reaction_message: Some(Default::default()),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn pin() {
+            let msg = wa::Message {
+                pin_in_chat_message: Some(Default::default()),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn poll_vote() {
+            let msg = wa::Message {
+                poll_update_message: Some(wa::message::PollUpdateMessage {
+                    vote: Some(Default::default()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn poll_update_without_vote() {
+            let msg = wa::Message {
+                poll_update_message: Some(Default::default()),
+                ..Default::default()
+            };
+            assert!(!should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn reaction_inside_ephemeral_wrapper() {
+            let msg = wa::Message {
+                ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
+                    message: Some(Box::new(wa::Message {
+                        reaction_message: Some(Default::default()),
+                        ..Default::default()
+                    })),
+                })),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+    }
 }
