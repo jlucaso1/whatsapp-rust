@@ -227,6 +227,11 @@ where
 }
 
 impl Client {
+    /// Downloads and decrypts media from WhatsApp's CDN into memory.
+    ///
+    /// Only needed when you need the plaintext bytes (processing, transcoding,
+    /// re-upload). To forward existing media unchanged, reuse the original
+    /// message's CDN fields directly, no round-trip required.
     pub async fn download(&self, downloadable: &dyn Downloadable) -> Result<Vec<u8>> {
         download_media_with_retry(
             |force| self.prepare_requests(downloadable, force),
