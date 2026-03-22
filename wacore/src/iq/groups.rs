@@ -1798,8 +1798,27 @@ impl JoinGroupResult {
     }
 }
 
-/// Join a group using an invite code.
-///
+/// Shared response parser for group join IQs (both code-based and V4 invite).
+fn parse_join_group_response(response: &Node) -> Result<JoinGroupResult> {
+    if let Some(group_node) = response.get_optional_child("group") {
+        let jid_str = required_attr(group_node, "jid")?;
+        let jid: Jid = jid_str
+            .parse()
+            .map_err(|e| anyhow!("invalid group jid: {e}"))?;
+        return Ok(JoinGroupResult::Joined(jid));
+    }
+    if let Some(approval_node) = response.get_optional_child("membership_approval_request") {
+        let jid_str = required_attr(approval_node, "jid")?;
+        let jid: Jid = jid_str
+            .parse()
+            .map_err(|e| anyhow!("invalid group jid: {e}"))?;
+        return Ok(JoinGroupResult::PendingApproval(jid));
+    }
+    Err(anyhow!(
+        "expected <group> or <membership_approval_request> in join response"
+    ))
+}
+
 /// ```xml
 /// <iq type="set" xmlns="w:g2" to="@g.us">
 ///   <invite code="{code}"/>
@@ -1831,23 +1850,53 @@ impl IqSpec for AcceptGroupInviteIq {
     }
 
     fn parse_response(&self, response: &Node) -> Result<Self::Response> {
-        if let Some(group_node) = response.get_optional_child("group") {
-            let jid_str = required_attr(group_node, "jid")?;
-            let jid: Jid = jid_str
-                .parse()
-                .map_err(|e| anyhow!("invalid group jid: {e}"))?;
-            return Ok(JoinGroupResult::Joined(jid));
+        parse_join_group_response(response)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Accept group invite V4 (via invite message)
+// ---------------------------------------------------------------------------
+
+/// Accepts a V4 invite (sent as a GroupInviteMessage, not a link).
+/// Sends `<accept>` to the group JID with code, expiration, and admin.
+pub struct AcceptGroupInviteV4Iq {
+    pub group_jid: Jid,
+    pub code: String,
+    pub expiration: i64,
+    pub admin_jid: Jid,
+}
+
+impl AcceptGroupInviteV4Iq {
+    pub fn new(group_jid: Jid, code: String, expiration: i64, admin_jid: Jid) -> Self {
+        Self {
+            group_jid,
+            code,
+            expiration,
+            admin_jid,
         }
-        if let Some(approval_node) = response.get_optional_child("membership_approval_request") {
-            let jid_str = required_attr(approval_node, "jid")?;
-            let jid: Jid = jid_str
-                .parse()
-                .map_err(|e| anyhow!("invalid group jid: {e}"))?;
-            return Ok(JoinGroupResult::PendingApproval(jid));
-        }
-        Err(anyhow!(
-            "expected <group> or <membership_approval_request> child in invite response"
-        ))
+    }
+}
+
+impl IqSpec for AcceptGroupInviteV4Iq {
+    type Response = JoinGroupResult;
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        InfoQuery::set_ref(
+            GROUP_IQ_NAMESPACE,
+            &self.group_jid,
+            Some(NodeContent::Nodes(vec![
+                NodeBuilder::new("accept")
+                    .attr("code", &self.code)
+                    .attr("expiration", self.expiration.to_string())
+                    .attr("admin", self.admin_jid.to_string())
+                    .build(),
+            ])),
+        )
+    }
+
+    fn parse_response(&self, response: &Node) -> Result<Self::Response> {
+        parse_join_group_response(response)
     }
 }
 
