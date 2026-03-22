@@ -662,11 +662,11 @@ impl Client {
         // multiple messages from the same sender are processed concurrently.
         // Use the full Signal protocol address string as the lock key so it matches
         // the SignalProtocolStoreAdapter's per-session locks (prevents ratchet counter races).
-        let signal_addr_str = sender_encryption_jid.to_protocol_address_string();
+        let signal_address = sender_encryption_jid.to_protocol_address();
 
         let session_mutex = self
             .session_locks
-            .get_with_by_ref(&signal_addr_str, async {
+            .get_with_by_ref(signal_address.as_str(), async {
                 std::sync::Arc::new(async_lock::Mutex::new(()))
             })
             .await;
@@ -715,8 +715,6 @@ impl Client {
                     }
                 }
             };
-
-            let signal_address = sender_encryption_jid.to_protocol_address();
 
             if enc_type.as_ref() == "pkmsg" {
                 // FLAGGED FOR DEBUGGING: "Bad Mac" Reproducibility
