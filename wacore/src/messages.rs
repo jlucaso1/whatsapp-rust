@@ -112,31 +112,25 @@ pub fn is_sender_key_distribution_only(msg: &wa::Message) -> bool {
         return false;
     }
 
-    // Check that no user-visible content exists beyond SKDM + protocol metadata.
-    msg.conversation.is_none()
-        && msg.extended_text_message.is_none()
-        && msg.image_message.is_none()
-        && msg.video_message.is_none()
-        && msg.audio_message.is_none()
-        && msg.document_message.is_none()
-        && msg.sticker_message.is_none()
-        && msg.contact_message.is_none()
-        && msg.contacts_array_message.is_none()
-        && msg.location_message.is_none()
-        && msg.live_location_message.is_none()
-        && msg.reaction_message.is_none()
-        && msg.poll_creation_message.is_none()
-        && msg.poll_update_message.is_none()
-        && msg.protocol_message.is_none()
-        && msg.ephemeral_message.is_none()
-        && msg.view_once_message.is_none()
-        && msg.group_invite_message.is_none()
-        && msg.template_message.is_none()
-        && msg.list_message.is_none()
-        && msg.product_message.is_none()
-        && msg.interactive_message.is_none()
-        && msg.event_message.is_none()
-        && msg.ptv_message.is_none()
+    // Fast path: most common user-visible fields (avoids clone for the typical case).
+    if msg.conversation.is_some()
+        || msg.extended_text_message.is_some()
+        || msg.image_message.is_some()
+        || msg.video_message.is_some()
+        || msg.audio_message.is_some()
+        || msg.document_message.is_some()
+        || msg.reaction_message.is_some()
+        || msg.protocol_message.is_some()
+    {
+        return false;
+    }
+
+    // Slow path: clone and compare to default to catch all current and future fields.
+    let mut stripped = msg.clone();
+    stripped.sender_key_distribution_message = None;
+    stripped.fast_ratchet_key_sender_key_distribution_message = None;
+    stripped.message_context_info = None;
+    stripped == wa::Message::default()
 }
 
 /// Parse a message stanza into a `MessageInfo` struct.

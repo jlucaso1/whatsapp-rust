@@ -69,7 +69,21 @@ impl ReceiptType {
 
 impl From<String> for ReceiptType {
     fn from(s: String) -> Self {
-        Self::parse(&s)
+        match s.as_str() {
+            "" | "delivery" => Self::Delivered,
+            "sender" => Self::Sender,
+            "retry" => Self::Retry,
+            "enc_rekey_retry" => Self::EncRekeyRetry,
+            "read" => Self::Read,
+            "read-self" => Self::ReadSelf,
+            "played" => Self::Played,
+            "played-self" => Self::PlayedSelf,
+            "server-error" => Self::ServerError,
+            "inactive" => Self::Inactive,
+            "peer_msg" => Self::PeerMsg,
+            "hist_sync" => Self::HistorySync,
+            _ => Self::Other(s),
+        }
     }
 }
 
