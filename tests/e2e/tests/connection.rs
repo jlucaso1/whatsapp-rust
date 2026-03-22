@@ -17,7 +17,7 @@ async fn test_connect_and_pair() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_reconnect_after_disconnect() -> anyhow::Result<()> {
+async fn test_disconnect_cleans_session() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
     let tc = TestClient::connect("e2e_reconnect").await?;

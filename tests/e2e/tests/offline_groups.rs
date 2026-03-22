@@ -33,9 +33,10 @@ async fn test_offline_group_notification() -> anyhow::Result<()> {
         .gid;
     info!("Group created: {group_jid}");
 
-    // Confirms group is set up
+    // Drain create notifications before testing offline delivery
     client_b.wait_for_group_notification(10).await?;
-    info!("B received group create notification");
+    client_c.wait_for_group_notification(10).await?;
+    info!("B and C received group create notification");
 
     client_c.client.reconnect().await;
     info!("C disconnected (will auto-reconnect)");
