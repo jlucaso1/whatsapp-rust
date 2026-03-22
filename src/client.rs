@@ -330,6 +330,9 @@ pub struct Client {
 
     pub(crate) retried_group_messages: Cache<String, ()>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
+    /// Set by `reconnect()` to suppress the "Message loop exited with an error" warning.
+    /// Unlike `expected_disconnect`, this does NOT skip the reconnect backoff.
+    pub(crate) intentional_reconnect: AtomicBool,
 
     /// Connection generation counter - incremented on each new connection.
     /// Used to detect stale post-login tasks from previous connections.
@@ -613,6 +616,7 @@ impl Client {
             retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
+            intentional_reconnect: AtomicBool::new(false),
             connection_generation: Arc::new(AtomicU64::new(0)),
 
             recent_messages: cache_config.recent_messages.build_with_ttl(),
@@ -854,9 +858,17 @@ impl Client {
                 error!("Failed to connect: {connect_err:#}. Will retry...");
             } else {
                 if self.read_messages_loop().await.is_err() {
-                    warn!(
-                        "Message loop exited with an error. Will attempt to reconnect if enabled."
-                    );
+                    // Check intentional_reconnect AFTER read loop exits — reconnect()
+                    // sets this flag while the loop is running, so it must be read here.
+                    if self.expected_disconnect.load(Ordering::Relaxed)
+                        || self.intentional_reconnect.swap(false, Ordering::Relaxed)
+                    {
+                        debug!("Message loop exited during expected disconnect.");
+                    } else {
+                        warn!(
+                            "Message loop exited with an error. Will attempt to reconnect if enabled."
+                        );
+                    }
                 } else if self.expected_disconnect.load(Ordering::Relaxed) {
                     debug!("Message loop exited gracefully (expected disconnect).");
                 } else {
@@ -1010,6 +1022,7 @@ impl Client {
     /// - Testing offline message delivery
     pub async fn reconnect(self: &Arc<Self>) {
         info!("Reconnecting: dropping transport for auto-reconnect.");
+        self.intentional_reconnect.store(true, Ordering::Relaxed);
         self.auto_reconnect_errors
             .store(Self::RECONNECT_BACKOFF_STEP, Ordering::Relaxed);
         if let Some(transport) = self.transport.lock().await.as_ref() {
@@ -1735,7 +1748,13 @@ impl Client {
             // === Passive Tasks (mimics WhatsApp Web's PassiveTaskManager) ===
             // WhatsApp Web executes passive tasks (like PreKey upload) BEFORE sending the active IQ.
             check_generation!();
-            if let Err(e) = client_clone.upload_pre_keys(false).await {
+            if !client_clone.is_connected() {
+                debug!("Skipping passive tasks: connection closed");
+                return;
+            }
+            if let Err(e) = client_clone.upload_pre_keys(false).await
+                && !client_clone.is_shutting_down()
+            {
                 warn!("Failed to upload pre-keys during startup: {e:?}");
             }
 
@@ -1743,7 +1762,13 @@ impl Client {
             // The server sends <ib><offline count="X"/></ib> AFTER we exit passive mode.
             // This matches WhatsApp Web's behavior: executePassiveTasks() -> sendPassiveModeProtocol("active")
             check_generation!();
-            if let Err(e) = client_clone.set_passive(false).await {
+            if !client_clone.is_connected() {
+                debug!("Skipping active IQ: connection closed");
+                return;
+            }
+            if let Err(e) = client_clone.set_passive(false).await
+                && !client_clone.is_shutting_down()
+            {
                 warn!("Failed to send post-connect active IQ: {e:?}");
             }
 
@@ -1788,21 +1813,26 @@ impl Client {
                 let (r_props, r_block, r_priv, r_digest) =
                     futures::join!(props_fut, blocklist_fut, privacy_fut, digest_fut);
 
-                if let Err(e) = r_props {
-                    warn!("Background init: Failed to fetch props: {e:?}");
-                }
-                if let Err(e) = r_block {
-                    warn!("Background init: Failed to fetch blocklist: {e:?}");
-                }
-                if let Err(e) = r_priv {
-                    warn!("Background init: Failed to fetch privacy settings: {e:?}");
-                }
-                if let Err(e) = r_digest {
-                    warn!("Background init: Failed to validate digest key: {e:?}");
+                // Suppress warnings if connection closed while queries were in-flight
+                if !bg_client.is_shutting_down() {
+                    if let Err(e) = r_props {
+                        warn!("Background init: Failed to fetch props: {e:?}");
+                    }
+                    if let Err(e) = r_block {
+                        warn!("Background init: Failed to fetch blocklist: {e:?}");
+                    }
+                    if let Err(e) = r_priv {
+                        warn!("Background init: Failed to fetch privacy settings: {e:?}");
+                    }
+                    if let Err(e) = r_digest {
+                        warn!("Background init: Failed to validate digest key: {e:?}");
+                    }
                 }
 
                 // Prune expired tcTokens on connect (matches WhatsApp Web's PrivacyTokenJob)
-                if let Err(e) = bg_client.tc_token().prune_expired().await {
+                if let Err(e) = bg_client.tc_token().prune_expired().await
+                    && !bg_client.is_shutting_down()
+                {
                     warn!("Background init: Failed to prune expired tc_tokens: {e:?}");
                 }
             })).detach();

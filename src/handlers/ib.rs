@@ -60,9 +60,14 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                         if dirty_type == "groups" || dirty_type == "newsletter_metadata" {
                             client_clone.wait_for_offline_delivery_end().await;
                         }
+                        if client_clone.is_shutting_down() {
+                            debug!("Skipping clean dirty bits: client is shutting down");
+                            return;
+                        }
                         if let Err(e) = client_clone
                             .clean_dirty_bits(&dirty_type, timestamp.as_deref())
                             .await
+                            && !client_clone.is_shutting_down()
                         {
                             warn!("Failed to send clean dirty bits IQ: {e:?}");
                         }
@@ -70,7 +75,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                         // Re-sync app state collections when notified they are stale.
                         // Real WA Web re-syncs all collections on syncd_app_state dirty.
                         // See WAWebHandleDirtyBits → WAWebSyncdCollectionsStateMachine.
-                        if dirty_type == "syncd_app_state" {
+                        if dirty_type == "syncd_app_state" && !client_clone.is_shutting_down() {
                             info!("syncd_app_state dirty — re-syncing all app state collections");
                             if let Err(e) = client_clone
                                 .sync_collections_batched(vec![
@@ -81,6 +86,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                                     WAPatchName::Regular,
                                 ])
                                 .await
+                                && !client_clone.is_shutting_down()
                             {
                                 warn!("App state re-sync after dirty notification failed: {e:?}");
                             }

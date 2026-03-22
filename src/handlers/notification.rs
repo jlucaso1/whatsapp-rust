@@ -136,13 +136,19 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                         to_sync.push(name);
                     }
 
-                    if !to_sync.is_empty()
-                        && let Err(e) = client_clone.sync_collections_batched(to_sync).await
-                    {
-                        warn!(
-                            target: "Client/AppState",
-                            "Failed to batch sync app state from server_sync: {e}"
-                        );
+                    if !to_sync.is_empty() {
+                        if client_clone.is_shutting_down() {
+                            log::debug!(target: "Client/AppState", "Skipping server_sync: client is shutting down");
+                            return;
+                        }
+                        if let Err(e) = client_clone.sync_collections_batched(to_sync).await
+                            && !client_clone.is_shutting_down()
+                        {
+                            warn!(
+                                target: "Client/AppState",
+                                "Failed to batch sync app state from server_sync: {e}"
+                            );
+                        }
                     }
                 })).detach();
             }

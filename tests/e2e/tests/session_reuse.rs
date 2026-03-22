@@ -1,20 +1,9 @@
 //! Signal session management e2e tests.
-//!
-//! Validates the full lifecycle of Signal protocol sessions: establishment,
-//! message delivery, session reuse after roundtrip, persistence to DB, and
-//! survival across reconnects.
-//!
-//! Key Signal protocol behaviors verified:
-//! - `pending_pre_key` stays set until the remote device REPLIES (standard Signal / WA Web)
-//! - After bidirectional exchange, the active (LID) session clears `pending_pre_key`
-//! - Sessions are flushed to SQLite backend after both sends and receives
-//! - Orphaned PN sessions (from pre-LID-migration sends) don't affect correctness
 
-use e2e_tests::TestClient;
+use e2e_tests::{TestClient, send_and_expect_text};
 use log::info;
 use wacore::libsignal::protocol::SessionRecord;
 use wacore::types::events::Event;
-use whatsapp_rust::waproto::whatsapp as wa;
 
 /// Scan backend for sessions matching a user across device IDs 0..=5.
 /// Returns Vec<(address, has_pending_pre_key)> for all found sessions.
@@ -44,49 +33,7 @@ async fn scan_sessions(
     Ok(results)
 }
 
-/// Helper to send a text message and wait for delivery, returning the message ID.
-async fn send_and_expect(
-    sender: &whatsapp_rust::client::Client,
-    receiver: &mut TestClient,
-    to: whatsapp_rust::Jid,
-    text: &str,
-) -> anyhow::Result<String> {
-    let msg_id = sender
-        .send_message(
-            to,
-            wa::Message {
-                conversation: Some(text.to_string()),
-                ..Default::default()
-            },
-        )
-        .await?;
-
-    let event = receiver
-        .wait_for_event(
-            30,
-            |e| matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text)),
-        )
-        .await?;
-
-    if let Event::Message(msg, info) = event {
-        assert_eq!(msg.conversation.as_deref(), Some(text));
-        assert!(!info.id.is_empty(), "Message ID should not be empty");
-        assert!(
-            !info.source.sender.user.is_empty(),
-            "Sender JID should not be empty"
-        );
-    } else {
-        panic!("Expected Message event for text: {text}");
-    }
-
-    Ok(msg_id)
-}
-
-/// Multiple sequential sends to the same recipient should all be delivered,
-/// even without the recipient replying in between.
-///
-/// Per Signal protocol, every send before the first reply uses pkmsg because
-/// `pending_pre_key` is only cleared on receiving a message from the remote.
+/// Multiple sequential sends without a reply should all be delivered.
 #[tokio::test]
 async fn test_one_way_multiple_sends() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -94,17 +41,13 @@ async fn test_one_way_multiple_sends() -> anyhow::Result<()> {
     let client_a = TestClient::connect("e2e_sig_oneway_a").await?;
     let mut client_b = TestClient::connect("e2e_sig_oneway_b").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B should have a JID")
-        .to_non_ad();
+    let jid_b = client_b.jid().await;
 
     let mut sent_ids = Vec::new();
     for i in 1..=5 {
         let text = format!("One-way message {i}");
-        let msg_id = send_and_expect(&client_a.client, &mut client_b, jid_b.clone(), &text).await?;
+        let msg_id =
+            send_and_expect_text(&client_a.client, &mut client_b, &jid_b, &text, 30).await?;
         assert!(
             !sent_ids.contains(&msg_id),
             "Message IDs must be unique, got duplicate: {msg_id}"
@@ -121,8 +64,6 @@ async fn test_one_way_multiple_sends() -> anyhow::Result<()> {
 }
 
 /// Bidirectional messaging: alternating sends between A and B.
-/// Verifies both directions establish sessions and messages are delivered
-/// with correct sender information.
 #[tokio::test]
 async fn test_bidirectional_exchange() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -130,49 +71,37 @@ async fn test_bidirectional_exchange() -> anyhow::Result<()> {
     let mut client_a = TestClient::connect("e2e_sig_bidir_a").await?;
     let mut client_b = TestClient::connect("e2e_sig_bidir_b").await?;
 
-    let jid_a = client_a
-        .client
-        .get_pn()
-        .await
-        .expect("Client A should have a JID")
-        .to_non_ad();
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B should have a JID")
-        .to_non_ad();
+    let jid_a = client_a.jid().await;
+    let jid_b = client_b.jid().await;
 
-    // A→B (first contact — pkmsg)
-    send_and_expect(&client_a.client, &mut client_b, jid_b.clone(), "A1→B").await?;
+    send_and_expect_text(&client_a.client, &mut client_b, &jid_b, "A1→B", 30).await?;
     info!("A→B delivered");
 
-    // B→A (first contact from B — pkmsg, clears pending_pre_key on A's LID session for B)
-    send_and_expect(&client_b.client, &mut client_a, jid_a.clone(), "B1→A").await?;
+    send_and_expect_text(&client_b.client, &mut client_a, &jid_a, "B1→A", 30).await?;
     info!("B→A delivered");
 
-    // A→B again (should use established session for device that replied)
-    send_and_expect(&client_a.client, &mut client_b, jid_b.clone(), "A2→B").await?;
+    send_and_expect_text(&client_a.client, &mut client_b, &jid_b, "A2→B", 30).await?;
     info!("A→B (round 2) delivered");
 
-    // B→A again
-    send_and_expect(&client_b.client, &mut client_a, jid_a.clone(), "B2→A").await?;
+    send_and_expect_text(&client_b.client, &mut client_a, &jid_a, "B2→A", 30).await?;
     info!("B→A (round 2) delivered");
 
     // Rapid alternating
     for i in 3..=5 {
-        send_and_expect(
+        send_and_expect_text(
             &client_a.client,
             &mut client_b,
-            jid_b.clone(),
+            &jid_b,
             &format!("A{i}→B"),
+            30,
         )
         .await?;
-        send_and_expect(
+        send_and_expect_text(
             &client_b.client,
             &mut client_a,
-            jid_a.clone(),
+            &jid_a,
             &format!("B{i}→A"),
+            30,
         )
         .await?;
     }
@@ -183,12 +112,8 @@ async fn test_bidirectional_exchange() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// After a bidirectional exchange (A→B→A), the active (LID) session
-/// should have `pending_pre_key` cleared. This is the core Signal protocol
-/// guarantee: after a roundtrip, subsequent sends use the established session.
-///
-/// PN sessions from before LID migration may retain stale `pending_pre_key`
-/// — this is expected since `encrypt_for_devices()` prefers LID sessions.
+/// After a roundtrip (A->B->A), the active LID session should have
+/// `pending_pre_key` cleared.
 #[tokio::test]
 async fn test_session_state_after_roundtrip() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -196,42 +121,28 @@ async fn test_session_state_after_roundtrip() -> anyhow::Result<()> {
     let mut client_a = TestClient::connect("e2e_sig_state_a").await?;
     let mut client_b = TestClient::connect("e2e_sig_state_b").await?;
 
-    let jid_a = client_a
-        .client
-        .get_pn()
-        .await
-        .expect("Client A should have a JID")
-        .to_non_ad();
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B should have a JID")
-        .to_non_ad();
+    let jid_a = client_a.jid().await;
+    let jid_b = client_b.jid().await;
 
     // Roundtrip: A→B, B→A
-    send_and_expect(
+    send_and_expect_text(
         &client_a.client,
         &mut client_b,
-        jid_b.clone(),
+        &jid_b,
         "Establishing session",
+        30,
     )
     .await?;
-    send_and_expect(
-        &client_b.client,
-        &mut client_a,
-        jid_a.clone(),
-        "Session reply",
-    )
-    .await?;
+    send_and_expect_text(&client_b.client, &mut client_a, &jid_a, "Session reply", 30).await?;
     info!("Roundtrip complete");
 
-    // Force cache flush by sending another message (send_message_impl calls flush_signal_cache)
-    send_and_expect(
+    // Force cache flush by sending another message
+    send_and_expect_text(
         &client_a.client,
         &mut client_b,
-        jid_b.clone(),
+        &jid_b,
         "Post-roundtrip flush",
+        30,
     )
     .await?;
 
@@ -274,11 +185,12 @@ async fn test_session_state_after_roundtrip() -> anyhow::Result<()> {
 
     // Verify continued delivery works after session inspection
     for i in 1..=3 {
-        send_and_expect(
+        send_and_expect_text(
             &client_a.client,
             &mut client_b,
-            jid_b.clone(),
+            &jid_b,
             &format!("Post-inspection {i}"),
+            30,
         )
         .await?;
     }
@@ -290,7 +202,6 @@ async fn test_session_state_after_roundtrip() -> anyhow::Result<()> {
 }
 
 /// Sessions must be persisted to the SQLite backend after sending.
-/// Verifies that `flush_signal_cache()` runs and writes to the DB.
 #[tokio::test]
 async fn test_session_persistence() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -298,12 +209,7 @@ async fn test_session_persistence() -> anyhow::Result<()> {
     let client_a = TestClient::connect("e2e_sig_persist_a").await?;
     let mut client_b = TestClient::connect("e2e_sig_persist_b").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B should have a JID")
-        .to_non_ad();
+    let jid_b = client_b.jid().await;
 
     let backend = client_a.client.persistence_manager().backend();
 
@@ -315,11 +221,12 @@ async fn test_session_persistence() -> anyhow::Result<()> {
     );
 
     // First send creates and persists session
-    let msg_id_1 = send_and_expect(
+    let msg_id_1 = send_and_expect_text(
         &client_a.client,
         &mut client_b,
-        jid_b.clone(),
+        &jid_b,
         "Persist test 1",
+        30,
     )
     .await?;
     info!("First message sent: {msg_id_1}");
@@ -342,12 +249,13 @@ async fn test_session_persistence() -> anyhow::Result<()> {
         post_send.len()
     );
 
-    // Second send reuses sessions (no new session creation needed)
-    let msg_id_2 = send_and_expect(
+    // Second send reuses sessions
+    let msg_id_2 = send_and_expect_text(
         &client_a.client,
         &mut client_b,
-        jid_b.clone(),
+        &jid_b,
         "Persist test 2",
+        30,
     )
     .await?;
     assert_ne!(
@@ -361,8 +269,7 @@ async fn test_session_persistence() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Sessions must survive a reconnect. The in-memory signal cache is cleared
-/// on reconnect, so sessions must be loaded from the SQLite backend.
+/// Sessions must survive a reconnect (loaded from SQLite after cache clear).
 #[tokio::test]
 async fn test_session_survives_reconnect() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -370,32 +277,24 @@ async fn test_session_survives_reconnect() -> anyhow::Result<()> {
     let mut client_a = TestClient::connect("e2e_sig_reconnect_a").await?;
     let mut client_b = TestClient::connect("e2e_sig_reconnect_b").await?;
 
-    let jid_a = client_a
-        .client
-        .get_pn()
-        .await
-        .expect("Client A should have a JID")
-        .to_non_ad();
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B should have a JID")
-        .to_non_ad();
+    let jid_a = client_a.jid().await;
+    let jid_b = client_b.jid().await;
 
     // Establish sessions with a full roundtrip
-    send_and_expect(
+    send_and_expect_text(
         &client_a.client,
         &mut client_b,
-        jid_b.clone(),
+        &jid_b,
         "Pre-reconnect A→B",
+        30,
     )
     .await?;
-    send_and_expect(
+    send_and_expect_text(
         &client_b.client,
         &mut client_a,
-        jid_a.clone(),
+        &jid_a,
         "Pre-reconnect B→A",
+        30,
     )
     .await?;
     info!("Sessions established");
@@ -405,33 +304,36 @@ async fn test_session_survives_reconnect() -> anyhow::Result<()> {
     info!("Client A reconnected (cache cleared)");
 
     // Send after reconnect — must load session from DB
-    send_and_expect(
+    send_and_expect_text(
         &client_a.client,
         &mut client_b,
-        jid_b.clone(),
+        &jid_b,
         "Post-reconnect 1",
+        30,
     )
     .await?;
     info!("Post-reconnect message delivered");
 
     // Multiple messages to confirm session is stable after reload
     for i in 2..=4 {
-        send_and_expect(
+        send_and_expect_text(
             &client_a.client,
             &mut client_b,
-            jid_b.clone(),
+            &jid_b,
             &format!("Post-reconnect {i}"),
+            30,
         )
         .await?;
     }
     info!("All post-reconnect messages delivered");
 
     // Also verify B→A still works after A's reconnect
-    send_and_expect(
+    send_and_expect_text(
         &client_b.client,
         &mut client_a,
-        jid_a.clone(),
+        &jid_a,
         "B→A after reconnect",
+        30,
     )
     .await?;
     info!("B→A after A's reconnect delivered");
@@ -449,38 +351,17 @@ async fn test_message_info_fields() -> anyhow::Result<()> {
     let mut client_a = TestClient::connect("e2e_sig_info_a").await?;
     let mut client_b = TestClient::connect("e2e_sig_info_b").await?;
 
-    let jid_a = client_a
-        .client
-        .get_pn()
-        .await
-        .expect("Client A should have a JID")
-        .to_non_ad();
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B should have a JID")
-        .to_non_ad();
+    let jid_a = client_a.jid().await;
+    let jid_b = client_b.jid().await;
 
     // A→B: verify B's MessageInfo
     let text_ab = "Info check A→B";
     client_a
         .client
-        .send_message(
-            jid_b.clone(),
-            wa::Message {
-                conversation: Some(text_ab.to_string()),
-                ..Default::default()
-            },
-        )
+        .send_message(jid_b.clone(), e2e_tests::text_msg(text_ab))
         .await?;
 
-    let event = client_b
-        .wait_for_event(
-            30,
-            |e| matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text_ab)),
-        )
-        .await?;
+    let event = client_b.wait_for_text(text_ab, 30).await?;
 
     if let Event::Message(msg, info) = event {
         assert_eq!(msg.conversation.as_deref(), Some(text_ab));
@@ -495,7 +376,6 @@ async fn test_message_info_fields() -> anyhow::Result<()> {
             "B should see A's message as not from_me"
         );
         assert!(!info.source.is_group, "DM should not be marked as group");
-        // Sender should be A (the user part should match A's phone)
         assert_eq!(
             info.source.sender.user, jid_a.user,
             "Sender user should match A's JID user"
@@ -514,21 +394,10 @@ async fn test_message_info_fields() -> anyhow::Result<()> {
     let text_ba = "Info check B→A";
     client_b
         .client
-        .send_message(
-            jid_a.clone(),
-            wa::Message {
-                conversation: Some(text_ba.to_string()),
-                ..Default::default()
-            },
-        )
+        .send_message(jid_a.clone(), e2e_tests::text_msg(text_ba))
         .await?;
 
-    let event = client_a
-        .wait_for_event(
-            30,
-            |e| matches!(e, Event::Message(msg, _) if msg.conversation.as_deref() == Some(text_ba)),
-        )
-        .await?;
+    let event = client_a.wait_for_text(text_ba, 30).await?;
 
     if let Event::Message(_, info) = event {
         assert!(!info.source.is_from_me);
