@@ -1,10 +1,12 @@
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
+use crate::types::message::EditAttribute;
 use anyhow::anyhow;
 use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
 use wacore::types::message::AddressingMode;
+use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{DeviceKey, Jid, JidExt as _};
 use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
@@ -49,6 +51,37 @@ pub enum RevokeType {
     Admin { original_sender: Jid },
 }
 
+/// Derive stanza-level metadata that WA Web / the server expects for certain message types.
+fn infer_stanza_metadata(msg: &wa::Message) -> (Option<EditAttribute>, Option<Node>) {
+    if msg.pin_in_chat_message.is_some() {
+        return (Some(EditAttribute::PinInChat), None);
+    }
+    if msg.poll_creation_message.is_some()
+        || msg.poll_creation_message_v2.is_some()
+        || msg.poll_creation_message_v3.is_some()
+    {
+        return (
+            None,
+            Some(
+                NodeBuilder::new("meta")
+                    .attr("polltype", "creation")
+                    .build(),
+            ),
+        );
+    }
+    if msg.event_message.is_some() {
+        return (
+            None,
+            Some(
+                NodeBuilder::new("meta")
+                    .attr("event_type", "creation")
+                    .build(),
+            ),
+        );
+    }
+    (None, None)
+}
+
 impl Client {
     /// Send an end-to-end encrypted message to a user or group.
     ///
@@ -75,14 +108,23 @@ impl Client {
             None => self.generate_message_id().await,
         };
         let returned_id = request_id.clone();
+        let (edit, inferred_node) = infer_stanza_metadata(&message);
+        let extra_nodes = match inferred_node {
+            Some(node) => {
+                let mut nodes = vec![node];
+                nodes.extend(options.extra_stanza_nodes);
+                nodes
+            }
+            None => options.extra_stanza_nodes,
+        };
         self.send_message_impl(
             to,
             &message,
             Some(request_id),
             false,
             false,
-            None,
-            options.extra_stanza_nodes,
+            edit,
+            extra_nodes,
         )
         .await?;
         Ok(returned_id)
