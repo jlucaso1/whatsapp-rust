@@ -2367,7 +2367,7 @@ checksum = "051eb1abcf10076295e815102942cc58f9d5e3b4560e46e53c21e8ff6f3af7b1"
 
 [[package]]
 name = "wacore"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2411,7 +2411,7 @@ dependencies = [
 
 [[package]]
 name = "wacore-appstate"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2431,7 +2431,7 @@ dependencies = [
 
 [[package]]
 name = "wacore-binary"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "flate2",
  "iai-callgrind",
@@ -2443,7 +2443,7 @@ dependencies = [
 
 [[package]]
 name = "wacore-derive"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -2452,7 +2452,7 @@ dependencies = [
 
 [[package]]
 name = "wacore-libsignal"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "aes",
  "aes-gcm",
@@ -2485,7 +2485,7 @@ dependencies = [
 
 [[package]]
 name = "wacore-noise"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2503,7 +2503,7 @@ dependencies = [
 
 [[package]]
 name = "waproto"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "prost",
  "prost-build",
@@ -2624,7 +2624,7 @@ dependencies = [
 
 [[package]]
 name = "whatsapp-rust"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -2657,7 +2657,7 @@ dependencies = [
 
 [[package]]
 name = "whatsapp-rust-sqlite-storage"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "async-trait",
  "bincode 2.0.1",
@@ -2675,7 +2675,7 @@ dependencies = [
 
 [[package]]
 name = "whatsapp-rust-tokio-transport"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -2694,7 +2694,7 @@ dependencies = [
 
 [[package]]
 name = "whatsapp-rust-ureq-http-client"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "async-trait",

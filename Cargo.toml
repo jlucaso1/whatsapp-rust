@@ -1,7 +1,7 @@
 
 [package]
 name = "whatsapp-rust"
-version = "0.4.2"
+version = "0.4.3"
 edition = "2024"
 authors = ["João Lucas <jlucaso@hotmail.com>"]
 license = "MIT"
@@ -73,13 +73,13 @@ tokio = { version = "1.48.0", default-features = false }
 uuid = { version = "1", default-features = false }
 
 # Internal workspace crates
-wacore = { path = "./wacore", default-features = false, version = "0.4.2" }
-wacore-appstate = { path = "./wacore/appstate", default-features = false, version = "0.4.2" }
-wacore-binary = { path = "./wacore/binary", default-features = false, version = "0.4.2" }
-wacore-derive = { path = "./wacore/derive", version = "0.4.2" }
-wacore-libsignal = { path = "./wacore/libsignal", version = "0.4.2" }
-wacore-noise = { path = "./wacore/noise", version = "0.4.2" }
-waproto = { path = "./waproto", version = "0.4.2" }
+wacore = { path = "./wacore", default-features = false, version = "0.4.3" }
+wacore-appstate = { path = "./wacore/appstate", default-features = false, version = "0.4.3" }
+wacore-binary = { path = "./wacore/binary", default-features = false, version = "0.4.3" }
+wacore-derive = { path = "./wacore/derive", version = "0.4.3" }
+wacore-libsignal = { path = "./wacore/libsignal", version = "0.4.3" }
+wacore-noise = { path = "./wacore/noise", version = "0.4.3" }
+waproto = { path = "./waproto", version = "0.4.3" }
 
 [features]
 debug-diagnostics = ["wacore/debug-diagnostics"]
@@ -128,9 +128,9 @@ tokio = { workspace = true, features = ["macros", "rt", "sync", "time"], optiona
 wacore = { workspace = true }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
-whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.4.2", optional = true }
-whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.4.2", optional = true }
-whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.4.2", optional = true }
+whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.4.3", optional = true }
+whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.4.3", optional = true }
+whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.4.3", optional = true }
 
 [dev-dependencies]
 uuid = { workspace = true, features = ["v4"] }
