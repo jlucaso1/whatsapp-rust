@@ -36,7 +36,7 @@ pub mod runtime_impl;
 pub use runtime_impl::TokioRuntime;
 pub use wacore::runtime::Runtime;
 pub mod send;
-pub use send::{RevokeType, SendOptions};
+pub use send::{PinDuration, RevokeType, SendOptions};
 pub mod session;
 pub mod socket;
 pub mod store;

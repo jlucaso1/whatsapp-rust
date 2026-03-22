@@ -19,6 +19,25 @@ pub struct SendOptions {
     pub extra_stanza_nodes: Vec<Node>,
 }
 
+/// Duration for pinned messages. Default is 7 days (matches WA Web).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PinDuration {
+    Hours24,
+    #[default]
+    Days7,
+    Days30,
+}
+
+impl PinDuration {
+    fn as_secs(self) -> u32 {
+        match self {
+            Self::Hours24 => 86_400,
+            Self::Days7 => 604_800,
+            Self::Days30 => 2_592_000,
+        }
+    }
+}
+
 /// Specifies who is revoking (deleting) the message.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum RevokeType {
@@ -494,6 +513,65 @@ impl Client {
             false,
             force_skdm,
             Some(edit_attr),
+            vec![],
+        )
+        .await
+    }
+
+    /// Pin a message in a chat for all participants.
+    pub async fn pin_message(
+        &self,
+        chat: Jid,
+        key: wa::MessageKey,
+        duration: PinDuration,
+    ) -> Result<(), anyhow::Error> {
+        self.send_pin(
+            chat,
+            key,
+            wa::message::pin_in_chat_message::Type::PinForAll,
+            duration.as_secs(),
+        )
+        .await
+    }
+
+    /// Unpin a previously pinned message.
+    pub async fn unpin_message(&self, chat: Jid, key: wa::MessageKey) -> Result<(), anyhow::Error> {
+        self.send_pin(
+            chat,
+            key,
+            wa::message::pin_in_chat_message::Type::UnpinForAll,
+            0,
+        )
+        .await
+    }
+
+    async fn send_pin(
+        &self,
+        chat: Jid,
+        key: wa::MessageKey,
+        pin_type: wa::message::pin_in_chat_message::Type,
+        duration_secs: u32,
+    ) -> Result<(), anyhow::Error> {
+        let message = wa::Message {
+            pin_in_chat_message: Some(wa::message::PinInChatMessage {
+                key: Some(key),
+                r#type: Some(pin_type as i32),
+                sender_timestamp_ms: Some(wacore::time::now_millis()),
+            }),
+            message_context_info: Some(wa::MessageContextInfo {
+                message_add_on_duration_in_secs: Some(duration_secs),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        self.send_message_impl(
+            chat,
+            &message,
+            None,
+            false,
+            false,
+            Some(crate::types::message::EditAttribute::PinInChat),
             vec![],
         )
         .await
