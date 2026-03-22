@@ -34,8 +34,8 @@ pub enum MediaType {
     Sticker,
     StickerPack,
     LinkThumbnail,
-    /// Product catalog image — uses same encryption keys as Image
-    /// but uploads to `/product/image` instead of `/mms/image`.
+    /// Product catalog image — unencrypted, uploads to `/product/image`.
+    /// WA Web: CreateMediaKeys.js throws for this type (no encryption).
     ProductCatalogImage,
 }
 
@@ -51,10 +51,13 @@ impl MediaType {
             MediaType::Sticker => "WhatsApp Image Keys",
             MediaType::StickerPack => "WhatsApp Sticker Pack Keys",
             MediaType::LinkThumbnail => "WhatsApp Link Thumbnail Keys",
+            // Unencrypted: app_info unused, but keep a value for the type system.
             MediaType::ProductCatalogImage => "WhatsApp Image Keys",
         }
     }
 
+    /// Media type string for MMS path construction.
+    /// Matches WAWebMmsMediaTypes and ClientFormatHashUrl.js path mapping.
     pub fn mms_type(&self) -> &'static str {
         match self {
             MediaType::Image | MediaType::Sticker => "image",
@@ -65,8 +68,23 @@ impl MediaType {
             MediaType::AppState => "md-app-state",
             MediaType::StickerPack => "sticker-pack",
             MediaType::LinkThumbnail => "thumbnail-link",
-            MediaType::ProductCatalogImage => "product/image",
+            MediaType::ProductCatalogImage => "product-catalog-image",
         }
+    }
+
+    /// URL path prefix for upload/download.
+    /// Most types use `/mms/{type}`, but product catalog images use `/product/image`.
+    pub fn upload_path(&self) -> String {
+        match self {
+            MediaType::ProductCatalogImage => "/product/image".to_string(),
+            other => format!("/mms/{}", other.mms_type()),
+        }
+    }
+
+    /// Whether this media type is encrypted (E2E).
+    /// Product catalog images are unencrypted per WA Web (CreateMediaKeys.js:75-76).
+    pub fn is_encrypted(&self) -> bool {
+        !matches!(self, MediaType::ProductCatalogImage)
     }
 }
 
