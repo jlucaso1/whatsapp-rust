@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_lock::Mutex;
 
-use crate::libsignal::protocol::{ProtocolAddress, SessionRecord};
+use crate::libsignal::protocol::{ProtocolAddress, SenderKeyRecord, SessionRecord};
 use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::store::traits::SignalStore;
 
@@ -20,7 +20,7 @@ use crate::store::traits::SignalStore;
 pub struct SignalStoreCache {
     sessions: Mutex<SessionStoreState>,
     identities: Mutex<ByteStoreState>,
-    sender_keys: Mutex<ByteStoreState>,
+    sender_keys: Mutex<SenderKeyStoreState>,
 }
 
 // === Session object cache (no per-message serialize/deserialize) ===
@@ -71,7 +71,41 @@ impl SessionStoreState {
     }
 }
 
-// === Byte cache for identities and sender keys ===
+// === Sender key object cache (same pattern as sessions) ===
+
+struct SenderKeyStoreState {
+    cache: HashMap<Arc<str>, Option<SenderKeyRecord>>,
+    dirty: HashSet<Arc<str>>,
+}
+
+impl SenderKeyStoreState {
+    fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+            dirty: HashSet::new(),
+        }
+    }
+
+    fn key_for(&self, address: &str) -> Arc<str> {
+        match self.cache.get_key_value(address) {
+            Some((existing, _)) => existing.clone(),
+            None => Arc::from(address),
+        }
+    }
+
+    fn put(&mut self, address: &str, record: SenderKeyRecord) {
+        let addr = self.key_for(address);
+        self.cache.insert(addr.clone(), Some(record));
+        self.dirty.insert(addr.clone());
+    }
+
+    fn clear(&mut self) {
+        self.cache.clear();
+        self.dirty.clear();
+    }
+}
+
+// === Byte cache for identities ===
 
 struct ByteStoreState {
     /// Cached entries. `None` value = known-absent (negative cache).
@@ -143,7 +177,7 @@ impl SignalStoreCache {
         Self {
             sessions: Mutex::new(SessionStoreState::new()),
             identities: Mutex::new(ByteStoreState::new()),
-            sender_keys: Mutex::new(ByteStoreState::new()),
+            sender_keys: Mutex::new(SenderKeyStoreState::new()),
         }
     }
 
@@ -229,20 +263,22 @@ impl SignalStoreCache {
         &self,
         name: &SenderKeyName,
         backend: &dyn SignalStore,
-    ) -> Result<Option<Arc<[u8]>>> {
+    ) -> Result<Option<SenderKeyRecord>> {
         let key = name.cache_key();
         let mut state = self.sender_keys.lock().await;
         if let Some(cached) = state.cache.get(key) {
             return Ok(cached.clone());
         }
-        let data = backend.get_sender_key(key).await?;
-        let arc_data = data.map(Arc::from);
-        state.cache.insert(Arc::from(key), arc_data.clone());
-        Ok(arc_data)
+        let record = match backend.get_sender_key(key).await? {
+            Some(bytes) => Some(SenderKeyRecord::deserialize(&bytes)?),
+            None => None,
+        };
+        state.cache.insert(Arc::from(key), record.clone());
+        Ok(record)
     }
 
-    pub async fn put_sender_key(&self, name: &SenderKeyName, data: &[u8]) {
-        self.sender_keys.lock().await.put(name.cache_key(), data);
+    pub async fn put_sender_key(&self, name: &SenderKeyName, record: SenderKeyRecord) {
+        self.sender_keys.lock().await.put(name.cache_key(), record);
     }
 
     // === Flush ===
@@ -293,8 +329,11 @@ impl SignalStoreCache {
         }
 
         for name in &sender_key_dirty {
-            if let Some(Some(data)) = sender_keys.cache.get(name.as_ref()) {
-                backend.put_sender_key(name, data).await?;
+            if let Some(Some(record)) = sender_keys.cache.get(name.as_ref()) {
+                let bytes = record
+                    .serialize()
+                    .map_err(|e| anyhow::anyhow!("sender key serialize for {name}: {e}"))?;
+                backend.put_sender_key(name, &bytes).await?;
             }
         }
 

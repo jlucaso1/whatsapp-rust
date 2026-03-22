@@ -666,7 +666,7 @@ impl Client {
 
         let session_mutex = self
             .session_locks
-            .get_with(signal_addr_str.clone(), async {
+            .get_with_by_ref(&signal_addr_str, async {
                 std::sync::Arc::new(async_lock::Mutex::new(()))
             })
             .await;

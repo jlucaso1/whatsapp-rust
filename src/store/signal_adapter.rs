@@ -223,10 +223,9 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     async fn store_sender_key(
         &mut self,
         sender_key_name: &SenderKeyName,
-        record: &wacore::libsignal::protocol::SenderKeyRecord,
+        record: wacore::libsignal::protocol::SenderKeyRecord,
     ) -> wacore::libsignal::protocol::error::Result<()> {
-        let data = record.serialize()?;
-        self.0.cache.put_sender_key(sender_key_name, &data).await;
+        self.0.cache.put_sender_key(sender_key_name, record).await;
         Ok(())
     }
 
@@ -237,8 +236,7 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
         Option<wacore::libsignal::protocol::SenderKeyRecord>,
     > {
         let device = self.0.device.read().await;
-        match self
-            .0
+        self.0
             .cache
             .get_sender_key(sender_key_name, &*device.backend)
             .await
@@ -247,11 +245,6 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
                     "backend",
                     e.to_string(),
                 )
-            })? {
-            Some(data) => Ok(Some(
-                wacore::libsignal::protocol::SenderKeyRecord::deserialize(&data)?,
-            )),
-            None => Ok(None),
-        }
+            })
     }
 }

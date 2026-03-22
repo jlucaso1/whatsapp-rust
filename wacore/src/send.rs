@@ -95,7 +95,7 @@ where
     sender_key_state.set_sender_chain_key(sender_chain_key.next()?);
 
     sender_key_store
-        .store_sender_key(&sender_key_name, &record)
+        .store_sender_key(&sender_key_name, record)
         .await?;
 
     Ok(skm)
@@ -931,7 +931,7 @@ pub async fn create_sender_key_distribution_message_for_group(
         .await?
         .unwrap_or_else(SenderKeyRecord::new_empty);
 
-    if record.sender_key_state().is_err() {
+    let needs_store = if record.sender_key_state().is_err() {
         log::info!(
             "No sender key found for self in group {}. Creating a new sender key state.",
             group_jid
@@ -950,9 +950,12 @@ pub async fn create_sender_key_distribution_message_for_group(
             signing_key.public_key,
             Some(signing_key.private_key),
         );
-        store.store_sender_key(&sender_key_name, &record).await?;
-    }
+        true
+    } else {
+        false
+    };
 
+    // Build SKDM before store so we can move ownership
     let state = record
         .sender_key_state()
         .map_err(|e| anyhow!("Invalid SK state: {:?}", e))?;
@@ -973,6 +976,10 @@ pub async fn create_sender_key_distribution_message_for_group(
             .signing_key_public()
             .map_err(|e| anyhow!("Missing pub key: {:?}", e))?,
     )?;
+
+    if needs_store {
+        store.store_sender_key(&sender_key_name, record).await?;
+    }
 
     Ok(skdm.serialized().to_vec())
 }

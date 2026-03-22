@@ -582,10 +582,9 @@ impl Client {
 
         // Acquire per-sender session lock to prevent race with concurrent message decryption.
         // This matches the session_locks pattern used in process_session_enc_batch.
-        let signal_addr_str = signal_address.to_string();
         let session_mutex = self
             .session_locks
-            .get_with(signal_addr_str.clone(), async {
+            .get_with_by_ref(signal_address.as_str(), async {
                 std::sync::Arc::new(async_lock::Mutex::new(()))
             })
             .await;

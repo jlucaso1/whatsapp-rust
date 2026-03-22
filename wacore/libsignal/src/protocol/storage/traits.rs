@@ -149,7 +149,7 @@ pub trait SenderKeyStore: ThreadSafe {
     async fn store_sender_key(
         &mut self,
         sender_key_name: &SenderKeyName,
-        record: &SenderKeyRecord,
+        record: SenderKeyRecord,
     ) -> Result<()>;
 
     /// Look up the entry corresponding to `(sender, distribution_id)`.
