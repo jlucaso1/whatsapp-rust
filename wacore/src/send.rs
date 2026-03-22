@@ -1882,7 +1882,7 @@ mod tests {
             async fn store_session(
                 &mut self,
                 a: &ProtocolAddress,
-                r: &crate::libsignal::protocol::SessionRecord,
+                r: crate::libsignal::protocol::SessionRecord,
             ) -> crate::libsignal::protocol::error::Result<()> {
                 self.0.insert(a.clone(), r.serialize()?);
                 Ok(())

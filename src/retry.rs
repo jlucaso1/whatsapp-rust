@@ -214,7 +214,7 @@ impl Client {
                     let device_guard = device_store.read().await;
 
                     // Read session through cache to get consistent state
-                    let session_data = self
+                    let session = self
                         .signal_cache
                         .get_session(&addr_str, &*device_guard.backend)
                         .await
@@ -222,9 +222,7 @@ impl Client {
                         .flatten();
                     drop(device_guard);
 
-                    if let Some(data) = session_data
-                        && let Ok(session) =
-                            wacore::libsignal::protocol::SessionRecord::deserialize(&data)
+                    if let Some(session) = session
                         && let Ok(stored_reg_id) = session.remote_registration_id()
                         && stored_reg_id != 0
                         && stored_reg_id != received_reg_id
@@ -321,16 +319,14 @@ impl Client {
             // Read session through cache for consistent state.
             {
                 let device_guard = device_store.read().await;
-                let session_data = self
+                let session = self
                     .signal_cache
                     .get_session(&address_str, &*device_guard.backend)
                     .await
                     .ok()
                     .flatten();
 
-                if let Some(data) = session_data
-                    && let Ok(session) =
-                        wacore::libsignal::protocol::SessionRecord::deserialize(&data)
+                if let Some(session) = session
                     && let Ok(current_base_key) = session.alice_base_key()
                 {
                     if retry_count == MIN_RETRY_FOR_BASE_KEY_CHECK {
@@ -513,7 +509,7 @@ impl Client {
         {
             let device_store = self.persistence_manager.get_device_arc().await;
             let device_guard = device_store.read().await;
-            let session_data = self
+            let session = self
                 .signal_cache
                 .get_session(&addr_str, &*device_guard.backend)
                 .await
@@ -521,9 +517,7 @@ impl Client {
                 .flatten();
             drop(device_guard);
 
-            if let Some(data) = session_data
-                && let Ok(session) = wacore::libsignal::protocol::SessionRecord::deserialize(&data)
-            {
+            if let Some(session) = session {
                 let existing_reg_id = session.remote_registration_id()?;
                 if existing_reg_id != 0 && existing_reg_id != registration_id {
                     // WhatsApp Web throws an error for peer device registration ID changes.

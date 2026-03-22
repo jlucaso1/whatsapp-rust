@@ -177,7 +177,7 @@ pub async fn message_encrypt(
         .await?;
 
     session_store
-        .store_session(remote_address, &session_record)
+        .store_session(remote_address, session_record)
         .await?;
     Ok(message)
 }
@@ -279,7 +279,7 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
         .await?;
 
     session_store
-        .store_session(remote_address, &session_record)
+        .store_session(remote_address, session_record)
         .await?;
 
     if let Some(pre_key_id) = pre_key_used.pre_key_id {
@@ -356,7 +356,7 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
     }
 
     session_store
-        .store_session(remote_address, &session_record)
+        .store_session(remote_address, session_record)
         .await?;
 
     Ok(decrypt_result.plaintext)

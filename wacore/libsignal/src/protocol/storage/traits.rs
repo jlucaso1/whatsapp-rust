@@ -137,7 +137,7 @@ pub trait SessionStore: ThreadSafe {
     async fn store_session(
         &mut self,
         address: &ProtocolAddress,
-        record: &SessionRecord,
+        record: SessionRecord,
     ) -> Result<()>;
 }
 

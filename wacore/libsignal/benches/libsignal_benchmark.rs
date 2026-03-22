@@ -179,9 +179,9 @@ impl SessionStore for InMemorySessionStore {
     async fn store_session(
         &mut self,
         address: &ProtocolAddress,
-        record: &SessionRecord,
+        record: SessionRecord,
     ) -> wacore_libsignal::protocol::error::Result<()> {
-        self.sessions.insert(address.clone(), record.clone());
+        self.sessions.insert(address.clone(), record);
         Ok(())
     }
 }

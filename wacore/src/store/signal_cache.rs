@@ -4,39 +4,95 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_lock::Mutex;
 
+use crate::libsignal::protocol::SessionRecord;
 use crate::store::traits::SignalStore;
 
 /// In-memory cache for Signal protocol state, matching WhatsApp Web's SignalStoreCache.
 ///
-/// All crypto operations read/write this cache. DB writes are deferred to `flush()`.
-/// Each store type has its own mutex for independent locking.
+/// Sessions are cached as `SessionRecord` objects (not bytes), matching WA Web's pattern
+/// where the JS object IS the cache. Serialization only happens during `flush()`.
 ///
-/// Values are stored as `Arc<[u8]>` so cache reads are O(1) clones (reference count bump)
-/// instead of O(n) byte copies.
+/// Identity and sender key stores use `Arc<[u8]>` byte caches with dedup checks.
 ///
 /// Keys use `Arc<str>` so that cloning a key (needed for both cache and dirty/deleted sets)
 /// is an O(1) refcount bump instead of an O(n) heap allocation.
 pub struct SignalStoreCache {
-    sessions: Mutex<StoreState>,
-    identities: Mutex<StoreState>,
-    sender_keys: Mutex<StoreState>,
+    sessions: Mutex<SessionStoreState>,
+    identities: Mutex<ByteStoreState>,
+    sender_keys: Mutex<ByteStoreState>,
 }
 
-struct StoreState {
+// === Session object cache (no per-message serialize/deserialize) ===
+
+struct SessionStoreState {
     /// Cached entries. `None` value = known-absent (negative cache).
-    cache: HashMap<Arc<str>, Option<Arc<[u8]>>>,
-    /// Keys that have been modified and need flushing to the backend.
+    cache: HashMap<Arc<str>, Option<SessionRecord>>,
     dirty: HashSet<Arc<str>>,
-    /// Keys that have been deleted and need flushing to the backend.
     deleted: HashSet<Arc<str>>,
 }
 
-impl StoreState {
+impl SessionStoreState {
     fn new() -> Self {
         Self {
             cache: HashMap::new(),
             dirty: HashSet::new(),
             deleted: HashSet::new(),
+        }
+    }
+
+    /// Reuse the existing Arc<str> key if the address is already in the cache,
+    /// avoiding a heap allocation on every call (hot path: key always exists).
+    fn key_for(&self, address: &str) -> Arc<str> {
+        match self.cache.get_key_value(address) {
+            Some((existing, _)) => existing.clone(),
+            None => Arc::from(address),
+        }
+    }
+
+    fn put(&mut self, address: &str, record: SessionRecord) {
+        let addr = self.key_for(address);
+        self.cache.insert(addr.clone(), Some(record));
+        self.dirty.insert(addr.clone());
+        self.deleted.remove(&addr);
+    }
+
+    fn delete(&mut self, address: &str) {
+        let addr = self.key_for(address);
+        self.cache.insert(addr.clone(), None);
+        self.deleted.insert(addr.clone());
+        self.dirty.remove(&addr);
+    }
+
+    fn clear(&mut self) {
+        self.cache.clear();
+        self.dirty.clear();
+        self.deleted.clear();
+    }
+}
+
+// === Byte cache for identities and sender keys ===
+
+struct ByteStoreState {
+    /// Cached entries. `None` value = known-absent (negative cache).
+    cache: HashMap<Arc<str>, Option<Arc<[u8]>>>,
+    dirty: HashSet<Arc<str>>,
+    deleted: HashSet<Arc<str>>,
+}
+
+impl ByteStoreState {
+    fn new() -> Self {
+        Self {
+            cache: HashMap::new(),
+            dirty: HashSet::new(),
+            deleted: HashSet::new(),
+        }
+    }
+
+    /// Reuse the existing Arc<str> key if the address is already in the cache.
+    fn key_for(&self, address: &str) -> Arc<str> {
+        match self.cache.get_key_value(address) {
+            Some((existing, _)) => existing.clone(),
+            None => Arc::from(address),
         }
     }
 
@@ -47,7 +103,7 @@ impl StoreState {
         {
             return;
         }
-        let addr: Arc<str> = Arc::from(address);
+        let addr = self.key_for(address);
         self.cache.insert(addr.clone(), Some(Arc::from(data)));
         self.dirty.insert(addr.clone());
         self.deleted.remove(&addr);
@@ -55,13 +111,12 @@ impl StoreState {
 
     /// Mark an entry as deleted (negative-cached).
     fn delete(&mut self, address: &str) {
-        let addr: Arc<str> = Arc::from(address);
+        let addr = self.key_for(address);
         self.cache.insert(addr.clone(), None);
         self.deleted.insert(addr.clone());
         self.dirty.remove(&addr);
     }
 
-    /// Clear all cached state, retaining allocated capacity for reuse.
     fn clear(&mut self) {
         self.cache.clear();
         self.dirty.clear();
@@ -78,31 +133,34 @@ impl Default for SignalStoreCache {
 impl SignalStoreCache {
     pub fn new() -> Self {
         Self {
-            sessions: Mutex::new(StoreState::new()),
-            identities: Mutex::new(StoreState::new()),
-            sender_keys: Mutex::new(StoreState::new()),
+            sessions: Mutex::new(SessionStoreState::new()),
+            identities: Mutex::new(ByteStoreState::new()),
+            sender_keys: Mutex::new(ByteStoreState::new()),
         }
     }
 
-    // === Sessions ===
+    // === Sessions (object cache — serialize only during flush) ===
 
     pub async fn get_session(
         &self,
         address: &str,
         backend: &dyn SignalStore,
-    ) -> Result<Option<Arc<[u8]>>> {
+    ) -> Result<Option<SessionRecord>> {
         let mut state = self.sessions.lock().await;
         if let Some(cached) = state.cache.get(address) {
             return Ok(cached.clone());
         }
-        let data = backend.get_session(address).await?;
-        let arc_data = data.map(Arc::from);
-        state.cache.insert(Arc::from(address), arc_data.clone());
-        Ok(arc_data)
+        // Cold load: deserialize from backend bytes, cache the object
+        let record = match backend.get_session(address).await? {
+            Some(bytes) => Some(SessionRecord::deserialize(&bytes)?),
+            None => None,
+        };
+        state.cache.insert(Arc::from(address), record.clone());
+        Ok(record)
     }
 
-    pub async fn put_session(&self, address: &str, data: &[u8]) {
-        self.sessions.lock().await.put(address, data);
+    pub async fn put_session(&self, address: &str, record: SessionRecord) {
+        self.sessions.lock().await.put(address, record);
     }
 
     pub async fn delete_session(&self, address: &str) {
@@ -110,7 +168,18 @@ impl SignalStoreCache {
     }
 
     pub async fn has_session(&self, address: &str, backend: &dyn SignalStore) -> Result<bool> {
-        Ok(self.get_session(address, backend).await?.is_some())
+        let mut state = self.sessions.lock().await;
+        if let Some(cached) = state.cache.get(address) {
+            return Ok(cached.is_some());
+        }
+        // Cold load: deserialize and cache so subsequent get_session is a hit
+        let record = match backend.get_session(address).await? {
+            Some(bytes) => Some(SessionRecord::deserialize(&bytes)?),
+            None => None,
+        };
+        let exists = record.is_some();
+        state.cache.insert(Arc::from(address), record);
+        Ok(exists)
     }
 
     // === Identities ===
@@ -164,9 +233,8 @@ impl SignalStoreCache {
     /// Flush all dirty state to the backend in a single batch.
     /// Acquires all 3 mutexes to ensure consistency (matches WhatsApp Web's pattern).
     ///
-    /// Dirty sets are only cleared after ALL writes succeed. If any write fails,
-    /// dirty tracking is preserved so the next flush retries everything.
-    /// This matches WA Web's `clearDirty()` which runs only after successful persist.
+    /// Sessions are serialized here (not on every store_session call).
+    /// Dirty sets are only cleared after ALL writes succeed.
     pub async fn flush(&self, backend: &dyn SignalStore) -> Result<()> {
         let mut sessions = self.sessions.lock().await;
         let mut identities = self.identities.lock().await;
@@ -179,10 +247,13 @@ impl SignalStoreCache {
         let identity_deleted: Vec<_> = identities.deleted.iter().cloned().collect();
         let sender_key_dirty: Vec<_> = sender_keys.dirty.iter().cloned().collect();
 
-        // Persist all dirty state
+        // Persist dirty sessions — serialize only here, not on every store_session
         for address in &session_dirty {
-            if let Some(Some(data)) = sessions.cache.get(address.as_ref()) {
-                backend.put_session(address, data).await?;
+            if let Some(Some(record)) = sessions.cache.get(address.as_ref()) {
+                let bytes = record
+                    .serialize()
+                    .map_err(|e| anyhow::anyhow!("session serialize for {address}: {e}"))?;
+                backend.put_session(address, &bytes).await?;
             }
         }
         for address in &session_deleted {
