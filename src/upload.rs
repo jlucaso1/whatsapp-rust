@@ -245,6 +245,10 @@ struct RawUploadResponse {
 }
 
 impl Client {
+    /// Encrypts and uploads media to WhatsApp's CDN with a fresh key.
+    ///
+    /// Only needed for new or modified media. To forward existing media unchanged,
+    /// reuse the original message's CDN fields directly, no round-trip required.
     pub async fn upload(&self, data: Vec<u8>, media_type: MediaType) -> Result<UploadResponse> {
         let enc = wacore::runtime::blocking(&*self.runtime, {
             let data = data.clone();
