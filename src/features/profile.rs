@@ -146,7 +146,7 @@ impl<'a> Profile<'a> {
         let mut iv = [0u8; 16];
         rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut iv);
 
-        let (mutation, value_mac) = encode_record(
+        let (mutation, _) = encode_record(
             wa::syncd_mutation::SyncdOperation::Set,
             &index,
             &value,
@@ -156,7 +156,10 @@ impl<'a> Profile<'a> {
         );
 
         self.client
-            .send_app_state_patch("critical_block", vec![(mutation, value_mac.to_vec())])
+            .send_app_state_patch(
+                wacore::appstate::patch_decode::WAPatchName::CriticalBlock.as_str(),
+                vec![mutation],
+            )
             .await
     }
 }

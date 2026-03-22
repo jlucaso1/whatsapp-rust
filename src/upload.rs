@@ -145,7 +145,7 @@ where
             if enc.data_to_upload.len() >= RESUMABLE_UPLOAD_THRESHOLD {
                 let check_req = build_resume_check_request(
                     &host.hostname,
-                    &upload_path,
+                    upload_path,
                     &media_conn.auth,
                     &token,
                 );
@@ -176,7 +176,7 @@ where
 
             let request = build_upload_request(
                 &host.hostname,
-                &upload_path,
+                upload_path,
                 &media_conn.auth,
                 &token,
                 upload_data,

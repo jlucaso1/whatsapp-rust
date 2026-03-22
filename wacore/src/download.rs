@@ -73,11 +73,17 @@ impl MediaType {
     }
 
     /// URL path prefix for upload/download.
-    /// Most types use `/mms/{type}`, but product catalog images use `/product/image`.
-    pub fn upload_path(&self) -> String {
+    pub fn upload_path(&self) -> &'static str {
         match self {
-            MediaType::ProductCatalogImage => "/product/image".to_string(),
-            other => format!("/mms/{}", other.mms_type()),
+            MediaType::Image | MediaType::Sticker => "/mms/image",
+            MediaType::Video => "/mms/video",
+            MediaType::Audio => "/mms/audio",
+            MediaType::Document => "/mms/document",
+            MediaType::History => "/mms/md-msg-hist",
+            MediaType::AppState => "/mms/md-app-state",
+            MediaType::StickerPack => "/mms/sticker-pack",
+            MediaType::LinkThumbnail => "/mms/thumbnail-link",
+            MediaType::ProductCatalogImage => "/product/image",
         }
     }
 

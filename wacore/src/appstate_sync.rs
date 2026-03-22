@@ -376,7 +376,7 @@ impl AppStateProcessor {
     pub async fn build_patch(
         &self,
         collection_name: &str,
-        mutations: Vec<(wa::SyncdMutation, Vec<u8>)>, // (mutation, value_mac)
+        mutations: Vec<wa::SyncdMutation>,
     ) -> Result<(Vec<u8>, u64)> {
         use crate::appstate::hash::generate_patch_mac;
 
@@ -392,14 +392,10 @@ impl AppStateProcessor {
         let mut state = self.backend.get_version(collection_name).await?;
         let base_version = state.version;
 
-        // Collect the SyncdMutation list
-        let syncd_mutations: Vec<wa::SyncdMutation> =
-            mutations.iter().map(|(m, _)| m.clone()).collect();
-
         // Pre-fetch previous value MACs for all index MACs in the mutations
         let mut db_prev: std::collections::HashMap<Vec<u8>, Vec<u8>> =
             std::collections::HashMap::new();
-        for (m, _) in &mutations {
+        for m in &mutations {
             if let Some(rec) = &m.record
                 && let Some(ind) = &rec.index
                 && let Some(index_mac) = &ind.blob
@@ -413,7 +409,7 @@ impl AppStateProcessor {
         }
 
         // Update hash state
-        let (_, hash_result) = state.update_hash(&syncd_mutations, |index_mac, _| {
+        let (_, hash_result) = state.update_hash(&mutations, |index_mac, _| {
             Ok(db_prev.get(index_mac).cloned())
         });
         hash_result?;
@@ -429,7 +425,7 @@ impl AppStateProcessor {
             key_id: Some(wa::KeyId {
                 id: Some(key_id.clone()),
             }),
-            mutations: syncd_mutations,
+            mutations,
             ..Default::default()
         };
 
