@@ -364,7 +364,12 @@ where
         guard.map.retain(|_, entry| !self.is_expired(entry, now_ms));
 
         // Rebuild insertion_order to only contain live keys.
-        guard.insertion_order.retain(|k| guard.map.contains_key(k));
+        // Borrow fields separately to satisfy the borrow checker.
+        let CacheInner {
+            map,
+            insertion_order,
+        } = &mut *guard;
+        insertion_order.retain(|k| map.contains_key(k));
 
         drop(guard);
 
