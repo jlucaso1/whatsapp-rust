@@ -2,9 +2,9 @@ use crate::client::Client;
 use std::collections::HashMap;
 use wacore::client::context::GroupInfo;
 use wacore::iq::groups::{
-    AcceptGroupInviteIq, AddParticipantsIq, DemoteParticipantsIq, GetGroupInviteInfoIq,
-    GetGroupInviteLinkIq, GetMembershipRequestsIq, GroupCreateIq, GroupInfoResponse,
-    GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq, LeaveGroupIq,
+    AcceptGroupInviteIq, AcceptGroupInviteV4Iq, AddParticipantsIq, DemoteParticipantsIq,
+    GetGroupInviteInfoIq, GetGroupInviteLinkIq, GetMembershipRequestsIq, GroupCreateIq,
+    GroupInfoResponse, GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq, LeaveGroupIq,
     MembershipRequestActionIq, PromoteParticipantsIq, RemoveParticipantsIq, SetGroupAnnouncementIq,
     SetGroupDescriptionIq, SetGroupEphemeralIq, SetGroupLockedIq, SetGroupMembershipApprovalIq,
     SetGroupSubjectIq, SetMemberAddModeIq, normalize_participants,
@@ -372,6 +372,25 @@ impl<'a> Groups<'a> {
     ) -> Result<JoinGroupResult, anyhow::Error> {
         let code = strip_invite_url(code);
         Ok(self.client.execute(AcceptGroupInviteIq::new(code)).await?)
+    }
+
+    /// Accept a V4 invite (received as a GroupInviteMessage, not a link).
+    pub async fn join_with_invite_v4(
+        &self,
+        group_jid: &Jid,
+        code: &str,
+        expiration: i64,
+        admin_jid: &Jid,
+    ) -> Result<JoinGroupResult, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(AcceptGroupInviteV4Iq::new(
+                group_jid.clone(),
+                code.to_string(),
+                expiration,
+                admin_jid.clone(),
+            ))
+            .await?)
     }
 
     /// Get group metadata from an invite code without joining.

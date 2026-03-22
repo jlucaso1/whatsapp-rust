@@ -495,6 +495,25 @@ impl Client {
         self.skip_history_sync.store(enabled, Ordering::Relaxed);
     }
 
+    /// Public entry point for processing [`MajorSyncTask`] from the sync channel.
+    pub async fn process_sync_task(self: &Arc<Self>, task: crate::sync_task::MajorSyncTask) {
+        match task {
+            crate::sync_task::MajorSyncTask::HistorySync {
+                message_id,
+                notification,
+            } => {
+                self.process_history_sync_task(message_id, *notification)
+                    .await;
+                self.finish_history_sync_task();
+            }
+            crate::sync_task::MajorSyncTask::AppStateSync { name, full_sync } => {
+                if let Err(e) = self.process_app_state_sync_task(name, full_sync).await {
+                    log::warn!("App state sync task for {name:?} failed: {e}");
+                }
+            }
+        }
+    }
+
     /// Returns `true` if history sync notifications are currently being skipped.
     pub fn skip_history_sync_enabled(&self) -> bool {
         self.skip_history_sync.load(Ordering::Relaxed)
