@@ -51,35 +51,40 @@ pub enum RevokeType {
     Admin { original_sender: Jid },
 }
 
-/// Derive stanza-level metadata that WA Web / the server expects for certain message types.
+/// Derive stanza-level edit attribute and meta node from message content.
 fn infer_stanza_metadata(msg: &wa::Message) -> (Option<EditAttribute>, Option<Node>) {
     if msg.pin_in_chat_message.is_some() {
         return (Some(EditAttribute::PinInChat), None);
     }
+
+    // Poll messages
     if msg.poll_creation_message.is_some()
         || msg.poll_creation_message_v2.is_some()
         || msg.poll_creation_message_v3.is_some()
     {
-        return (
-            None,
-            Some(
-                NodeBuilder::new("meta")
-                    .attr("polltype", "creation")
-                    .build(),
-            ),
-        );
+        return (None, Some(meta_node("polltype", "creation")));
     }
+    if let Some(ref poll_update) = msg.poll_update_message
+        && poll_update.vote.is_some()
+    {
+        return (None, Some(meta_node("polltype", "vote")));
+    }
+    // TODO: polltype="result_snapshot" for poll_result_snapshot_message (gated behind AB flag)
+
+    // Event messages
     if msg.event_message.is_some() {
-        return (
-            None,
-            Some(
-                NodeBuilder::new("meta")
-                    .attr("event_type", "creation")
-                    .build(),
-            ),
-        );
+        return (None, Some(meta_node("event_type", "creation")));
     }
+    if msg.enc_event_response_message.is_some() {
+        return (None, Some(meta_node("event_type", "response")));
+    }
+    // TODO: event_type="edit" for secret_encrypted_message with SecretEncType::EVENT_EDIT
+
     (None, None)
+}
+
+fn meta_node(key: &'static str, value: &'static str) -> Node {
+    NodeBuilder::new("meta").attr(key, value).build()
 }
 
 impl Client {
@@ -1556,6 +1561,88 @@ mod tests {
         #[test]
         fn empty_message_returns_none() {
             let (edit, node) = infer_stanza_metadata(&wa::Message::default());
+            assert!(edit.is_none());
+            assert!(node.is_none());
+        }
+
+        #[test]
+        fn poll_creation_v1_returns_meta_node() {
+            let msg = wa::Message {
+                poll_creation_message: Some(Box::default()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert!(edit.is_none());
+            let node = node.expect("should have meta node");
+            assert_eq!(node.tag, "meta");
+            let mut attrs = node.attrs();
+            assert_eq!(
+                attrs.optional_string("polltype").unwrap().as_ref(),
+                "creation"
+            );
+        }
+
+        #[test]
+        fn poll_creation_v2_returns_meta_node() {
+            let msg = wa::Message {
+                poll_creation_message_v2: Some(Box::default()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert!(edit.is_none());
+            let node = node.expect("should have meta node");
+            assert_eq!(node.tag, "meta");
+            let mut attrs = node.attrs();
+            assert_eq!(
+                attrs.optional_string("polltype").unwrap().as_ref(),
+                "creation"
+            );
+        }
+
+        #[test]
+        fn poll_vote_returns_meta_node() {
+            let msg = wa::Message {
+                poll_update_message: Some(wa::message::PollUpdateMessage {
+                    vote: Some(wa::message::PollEncValue::default()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert!(edit.is_none());
+            let node = node.expect("should have meta node");
+            assert_eq!(node.tag, "meta");
+            let mut attrs = node.attrs();
+            assert_eq!(attrs.optional_string("polltype").unwrap().as_ref(), "vote");
+        }
+
+        #[test]
+        fn event_response_returns_meta_node() {
+            let msg = wa::Message {
+                enc_event_response_message: Some(Default::default()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert!(edit.is_none());
+            let node = node.expect("should have meta node");
+            assert_eq!(node.tag, "meta");
+            let mut attrs = node.attrs();
+            assert_eq!(
+                attrs.optional_string("event_type").unwrap().as_ref(),
+                "response"
+            );
+        }
+
+        #[test]
+        fn poll_update_without_vote_returns_none() {
+            let msg = wa::Message {
+                poll_update_message: Some(wa::message::PollUpdateMessage {
+                    vote: None,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
             assert!(edit.is_none());
             assert!(node.is_none());
         }

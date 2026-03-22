@@ -161,6 +161,26 @@ fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
     None
 }
 
+/// Infrastructure messages get decrypt-fail="hide" so recipients don't see
+/// "waiting for this message" placeholders for things like reactions or pin changes.
+pub fn should_hide_decrypt_fail(msg: &wa::Message) -> bool {
+    let msg = unwrap_message(msg);
+
+    msg.reaction_message.is_some()
+        || msg.enc_reaction_message.is_some()
+        || msg.pin_in_chat_message.is_some()
+        || msg.edited_message.is_some()
+        || msg.keep_in_chat_message.is_some()
+        || msg.enc_event_response_message.is_some()
+        || msg
+            .poll_update_message
+            .as_ref()
+            .is_some_and(|p| p.vote.is_some())
+    // TODO: messageHistoryNotice, secretEncryptedMessage (EVENT_EDIT/POLL_EDIT),
+    //       botInvokeMessage (REQUEST_WELCOME_MESSAGE),
+    //       protocolMessage (EPHEMERAL_SYNC_RESPONSE, GROUP_MEMBER_LABEL_CHANGE)
+}
+
 pub async fn encrypt_group_message<S, R>(
     sender_key_store: &mut S,
     group_jid: &Jid,
@@ -581,10 +601,10 @@ pub async fn prepare_dm_stanza<
     let mut participant_nodes = Vec::with_capacity(all_devices.len());
     let mut includes_prekey_message = false;
 
-    // If this is an edit-like message, set decrypt-fail="hide" on enc nodes
     let hide_decrypt_fail = edit
         .as_ref()
-        .is_some_and(|e| *e != crate::types::message::EditAttribute::Empty);
+        .is_some_and(|e| *e != crate::types::message::EditAttribute::Empty)
+        || should_hide_decrypt_fail(message);
 
     let mediatype = media_type_from_message(message);
 
@@ -964,13 +984,13 @@ pub async fn prepare_group_stanza<
         let skdm_plaintext_to_encrypt =
             MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
 
-        // SKDM distribution never sets decrypt-fail or mediatype
+        // WA Web always sets decrypt-fail="hide" on SKDM stanzas
         let (participant_nodes, inc) = encrypt_for_devices(
             stores,
             resolver,
             distribution_list,
             &skdm_plaintext_to_encrypt,
-            false,
+            true,
             None,
         )
         .await?;
@@ -1003,9 +1023,12 @@ pub async fn prepare_group_stanza<
 
     let skmsg_ciphertext = skmsg.serialized().to_vec();
 
-    // Add decrypt-fail="hide" for edited group messages, but NOT for admin revokes
-    // WhatsApp Web does not include decrypt-fail="hide" for admin revoke messages
     let mediatype = media_type_from_message(message);
+    let hide_decrypt_fail = (edit.as_ref().is_some_and(|e| {
+        *e != crate::types::message::EditAttribute::Empty
+            && *e != crate::types::message::EditAttribute::AdminRevoke
+    })) || should_hide_decrypt_fail(message);
+
     let mut enc_builder = NodeBuilder::new("enc")
         .attr("v", stanza::ENC_VERSION)
         .attr("type", stanza::ENC_TYPE_SKMSG);
@@ -1013,10 +1036,7 @@ pub async fn prepare_group_stanza<
         enc_builder = enc_builder.attr("mediatype", mt);
     }
     enc_builder = enc_builder.bytes(skmsg_ciphertext);
-    if let Some(edit_attr) = &edit
-        && *edit_attr != crate::types::message::EditAttribute::Empty
-        && *edit_attr != crate::types::message::EditAttribute::AdminRevoke
-    {
+    if hide_decrypt_fail {
         enc_builder = enc_builder.attr("decrypt-fail", "hide");
     }
     let content_node = enc_builder.build();
@@ -2199,6 +2219,72 @@ mod tests {
                     .as_ref(),
                 "lid"
             );
+        }
+    }
+
+    mod decrypt_fail {
+        use super::*;
+
+        #[test]
+        fn regular_message() {
+            let msg = wa::Message {
+                conversation: Some("hi".into()),
+                ..Default::default()
+            };
+            assert!(!should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn reaction() {
+            let msg = wa::Message {
+                reaction_message: Some(Default::default()),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn pin() {
+            let msg = wa::Message {
+                pin_in_chat_message: Some(Default::default()),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn poll_vote() {
+            let msg = wa::Message {
+                poll_update_message: Some(wa::message::PollUpdateMessage {
+                    vote: Some(Default::default()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn poll_update_without_vote() {
+            let msg = wa::Message {
+                poll_update_message: Some(Default::default()),
+                ..Default::default()
+            };
+            assert!(!should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn reaction_inside_ephemeral_wrapper() {
+            let msg = wa::Message {
+                ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
+                    message: Some(Box::new(wa::Message {
+                        reaction_message: Some(Default::default()),
+                        ..Default::default()
+                    })),
+                })),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
         }
     }
 }
