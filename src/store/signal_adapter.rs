@@ -84,49 +84,7 @@ impl SessionStore for SessionAdapter {
     ) -> Result<(), SignalProtocolError> {
         let addr_str = address.to_string();
         let record_bytes = record.serialize()?;
-
-        // Check for base key changes using cache (not DB) for logging
-        let device = self.0.device.read().await;
-        let existing_data = self
-            .0
-            .cache
-            .get_session(&addr_str, &*device.backend)
-            .await
-            .ok()
-            .flatten();
-        drop(device);
-
-        let existing_session = existing_data.and_then(|d| SessionRecord::deserialize(&d).ok());
-
-        if let (Some(existing), Some(new_state)) = (&existing_session, record.session_state()) {
-            if let Some(existing_state) = existing.session_state() {
-                let old_base_key = existing_state.alice_base_key();
-                let new_base_key = new_state.alice_base_key();
-
-                if old_base_key != new_base_key {
-                    log::debug!(
-                        target: "signal_session_store",
-                        "Session base key changed for {} (old_version={:?}, new_version={:?}, prev_sessions: {} -> {})",
-                        addr_str,
-                        existing_state.session_version(),
-                        new_state.session_version(),
-                        existing.previous_session_count(),
-                        record.previous_session_count(),
-                    );
-                }
-            }
-        } else if let (None, Some(state)) = (&existing_session, record.session_state()) {
-            log::debug!(
-                target: "signal_session_store",
-                "Creating new session for {}: base_key={}",
-                addr_str,
-                hex::encode(&state.alice_base_key()[..8.min(state.alice_base_key().len())])
-            );
-        }
-
-        // Write to cache only (deferred flush to DB)
         self.0.cache.put_session(&addr_str, &record_bytes).await;
-
         Ok(())
     }
 }

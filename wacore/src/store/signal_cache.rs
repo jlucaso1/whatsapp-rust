@@ -40,6 +40,27 @@ impl StoreState {
         }
     }
 
+    /// Insert data, skipping if bytes are identical (avoids redundant dirty marks).
+    fn put(&mut self, address: &str, data: &[u8]) {
+        if let Some(Some(existing)) = self.cache.get(address)
+            && existing.as_ref() == data
+        {
+            return;
+        }
+        let addr: Arc<str> = Arc::from(address);
+        self.cache.insert(addr.clone(), Some(Arc::from(data)));
+        self.dirty.insert(addr.clone());
+        self.deleted.remove(&addr);
+    }
+
+    /// Mark an entry as deleted (negative-cached).
+    fn delete(&mut self, address: &str) {
+        let addr: Arc<str> = Arc::from(address);
+        self.cache.insert(addr.clone(), None);
+        self.deleted.insert(addr.clone());
+        self.dirty.remove(&addr);
+    }
+
     /// Clear all cached state, retaining allocated capacity for reuse.
     fn clear(&mut self) {
         self.cache.clear();
@@ -81,19 +102,11 @@ impl SignalStoreCache {
     }
 
     pub async fn put_session(&self, address: &str, data: &[u8]) {
-        let mut state = self.sessions.lock().await;
-        let addr: Arc<str> = Arc::from(address);
-        state.cache.insert(addr.clone(), Some(Arc::from(data)));
-        state.dirty.insert(addr.clone());
-        state.deleted.remove(&addr);
+        self.sessions.lock().await.put(address, data);
     }
 
     pub async fn delete_session(&self, address: &str) {
-        let mut state = self.sessions.lock().await;
-        let addr: Arc<str> = Arc::from(address);
-        state.cache.insert(addr.clone(), None);
-        state.deleted.insert(addr.clone());
-        state.dirty.remove(&addr);
+        self.sessions.lock().await.delete(address);
     }
 
     pub async fn has_session(&self, address: &str, backend: &dyn SignalStore) -> Result<bool> {
@@ -118,19 +131,11 @@ impl SignalStoreCache {
     }
 
     pub async fn put_identity(&self, address: &str, data: &[u8]) {
-        let mut state = self.identities.lock().await;
-        let addr: Arc<str> = Arc::from(address);
-        state.cache.insert(addr.clone(), Some(Arc::from(data)));
-        state.dirty.insert(addr.clone());
-        state.deleted.remove(&addr);
+        self.identities.lock().await.put(address, data);
     }
 
     pub async fn delete_identity(&self, address: &str) {
-        let mut state = self.identities.lock().await;
-        let addr: Arc<str> = Arc::from(address);
-        state.cache.insert(addr.clone(), None);
-        state.deleted.insert(addr.clone());
-        state.dirty.remove(&addr);
+        self.identities.lock().await.delete(address);
     }
 
     // === Sender Keys ===
@@ -151,11 +156,7 @@ impl SignalStoreCache {
     }
 
     pub async fn put_sender_key(&self, address: &str, data: &[u8]) {
-        let mut state = self.sender_keys.lock().await;
-        let addr: Arc<str> = Arc::from(address);
-        state.cache.insert(addr.clone(), Some(Arc::from(data)));
-        state.dirty.insert(addr.clone());
-        state.deleted.remove(&addr);
+        self.sender_keys.lock().await.put(address, data);
     }
 
     // === Flush ===
