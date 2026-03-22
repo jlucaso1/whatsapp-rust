@@ -29,6 +29,12 @@ pub trait Runtime: Send + Sync + 'static {
     /// Returning `None` avoids any allocation or async overhead, making
     /// the call zero-cost on runtimes that don't need cooperative yielding.
     fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
+
+    /// How often to yield in tight loops (every N items). Defaults to 10.
+    /// Single-threaded runtimes should return 1 to avoid starving the event loop.
+    fn yield_frequency(&self) -> u32 {
+        10
+    }
 }
 
 /// WASM variant — `Send` bounds removed since WASM is single-threaded.
@@ -45,6 +51,12 @@ pub trait Runtime: Send + Sync + 'static {
     /// Returns `None` if yielding is unnecessary, or `Some(future)` that
     /// the caller must `.await` to actually yield.
     fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()>>>>;
+
+    /// How often to yield in tight loops (every N items). Defaults to 10.
+    /// Single-threaded runtimes should return 1 to avoid starving the event loop.
+    fn yield_frequency(&self) -> u32 {
+        10
+    }
 }
 
 /// Handle returned by [`Runtime::spawn`]. Aborts the spawned task when dropped.
