@@ -1,6 +1,6 @@
 [package]
 name = "whatsapp-rust-sqlite-storage"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 authors = ["João Lucas <jlucaso@hotmail.com>"]
 license = "MIT"
