@@ -2576,7 +2576,7 @@ impl Client {
     pub(crate) async fn send_app_state_patch(
         &self,
         collection_name: &str,
-        mutations: Vec<(wa::SyncdMutation, Vec<u8>)>,
+        mutations: Vec<wa::SyncdMutation>,
     ) -> Result<()> {
         let proc = self.get_app_state_processor().await;
         let (patch_bytes, base_version) = proc.build_patch(collection_name, mutations).await?;

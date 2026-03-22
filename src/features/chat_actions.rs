@@ -549,7 +549,7 @@ impl<'a> ChatActions<'a> {
         let mut iv = [0u8; 16];
         rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut iv);
 
-        let (mutation, value_mac) = encode_record(
+        let (mutation, _) = encode_record(
             wa::syncd_mutation::SyncdOperation::Set,
             index,
             value,
@@ -559,7 +559,7 @@ impl<'a> ChatActions<'a> {
         );
 
         self.client
-            .send_app_state_patch(collection.as_str(), vec![(mutation, value_mac)])
+            .send_app_state_patch(collection.as_str(), vec![mutation])
             .await
     }
 }

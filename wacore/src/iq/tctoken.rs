@@ -45,8 +45,7 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
-/// IQ namespace for privacy tokens (shared with privacy settings).
-pub const PRIVACY_NAMESPACE: &str = "privacy";
+use super::privacy::PRIVACY_NAMESPACE;
 
 /// 7 days in seconds — matches WA Web AB prop `tctoken_duration`.
 pub const TC_TOKEN_BUCKET_DURATION: i64 = 604_800;

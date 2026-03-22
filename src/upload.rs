@@ -61,13 +61,13 @@ fn parse_upload_progress(resp: &HttpResponse, total_size: u64) -> UploadExistsRe
 
 fn build_upload_request(
     hostname: &str,
-    mms_type: &str,
+    upload_path: &str,
     auth: &str,
     token: &str,
     body: &[u8],
     file_offset: Option<u64>,
 ) -> HttpRequest {
-    let mut url = format!("https://{hostname}/mms/{mms_type}/{token}?auth={auth}&token={token}");
+    let mut url = format!("https://{hostname}{upload_path}/{token}?auth={auth}&token={token}");
     if let Some(offset) = file_offset {
         url.push_str(&format!("&file_offset={offset}"));
     }
@@ -80,12 +80,11 @@ fn build_upload_request(
 
 fn build_resume_check_request(
     hostname: &str,
-    mms_type: &str,
+    upload_path: &str,
     auth: &str,
     token: &str,
 ) -> HttpRequest {
-    let url =
-        format!("https://{hostname}/mms/{mms_type}/{token}?auth={auth}&token={token}&resume=1");
+    let url = format!("https://{hostname}{upload_path}/{token}?auth={auth}&token={token}&resume=1");
     HttpRequest::post(url).with_header("Origin", "https://web.whatsapp.com")
 }
 
@@ -125,7 +124,7 @@ where
     ExecuteRequestFut: std::future::Future<Output = Result<HttpResponse>>,
 {
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(enc.file_enc_sha256);
-    let mms_type = media_type.mms_type();
+    let upload_path = media_type.upload_path();
     let mut force_refresh = false;
     let mut last_error: Option<anyhow::Error> = None;
 
@@ -144,8 +143,12 @@ where
             let mut file_offset: Option<u64> = None;
 
             if enc.data_to_upload.len() >= RESUMABLE_UPLOAD_THRESHOLD {
-                let check_req =
-                    build_resume_check_request(&host.hostname, mms_type, &media_conn.auth, &token);
+                let check_req = build_resume_check_request(
+                    &host.hostname,
+                    upload_path,
+                    &media_conn.auth,
+                    &token,
+                );
                 if let Ok(check_resp) = execute_request(check_req).await {
                     let total = enc.data_to_upload.len() as u64;
                     match parse_upload_progress(&check_resp, total) {
@@ -173,7 +176,7 @@ where
 
             let request = build_upload_request(
                 &host.hostname,
-                mms_type,
+                upload_path,
                 &media_conn.auth,
                 &token,
                 upload_data,

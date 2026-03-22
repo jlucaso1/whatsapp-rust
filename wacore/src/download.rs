@@ -34,6 +34,9 @@ pub enum MediaType {
     Sticker,
     StickerPack,
     LinkThumbnail,
+    /// Product catalog image — unencrypted, uploads to `/product/image`.
+    /// WA Web: CreateMediaKeys.js throws for this type (no encryption).
+    ProductCatalogImage,
 }
 
 impl MediaType {
@@ -48,9 +51,13 @@ impl MediaType {
             MediaType::Sticker => "WhatsApp Image Keys",
             MediaType::StickerPack => "WhatsApp Sticker Pack Keys",
             MediaType::LinkThumbnail => "WhatsApp Link Thumbnail Keys",
+            // Unencrypted: app_info unused, but keep a value for the type system.
+            MediaType::ProductCatalogImage => "WhatsApp Image Keys",
         }
     }
 
+    /// Media type string for MMS path construction.
+    /// Matches WAWebMmsMediaTypes and ClientFormatHashUrl.js path mapping.
     pub fn mms_type(&self) -> &'static str {
         match self {
             MediaType::Image | MediaType::Sticker => "image",
@@ -61,7 +68,29 @@ impl MediaType {
             MediaType::AppState => "md-app-state",
             MediaType::StickerPack => "sticker-pack",
             MediaType::LinkThumbnail => "thumbnail-link",
+            MediaType::ProductCatalogImage => "product-catalog-image",
         }
+    }
+
+    /// URL path prefix for upload/download.
+    pub fn upload_path(&self) -> &'static str {
+        match self {
+            MediaType::Image | MediaType::Sticker => "/mms/image",
+            MediaType::Video => "/mms/video",
+            MediaType::Audio => "/mms/audio",
+            MediaType::Document => "/mms/document",
+            MediaType::History => "/mms/md-msg-hist",
+            MediaType::AppState => "/mms/md-app-state",
+            MediaType::StickerPack => "/mms/sticker-pack",
+            MediaType::LinkThumbnail => "/mms/thumbnail-link",
+            MediaType::ProductCatalogImage => "/product/image",
+        }
+    }
+
+    /// Whether this media type is encrypted (E2E).
+    /// Product catalog images are unencrypted per WA Web (CreateMediaKeys.js:75-76).
+    pub fn is_encrypted(&self) -> bool {
+        !matches!(self, MediaType::ProductCatalogImage)
     }
 }
 
@@ -353,7 +382,7 @@ impl DownloadUtils {
             Aes256::new_from_slice(&cipher_key).map_err(|_| anyhow!("Bad AES key length"))?;
 
         let mut bytes_written: u64 = 0;
-        let mut tail: Vec<u8> = Vec::with_capacity(BLOCK + MAC_SIZE);
+        let mut tail: Vec<u8> = Vec::with_capacity(CHUNK + BLOCK + MAC_SIZE);
         let mut prev_block = iv;
 
         let mut read_buf = [0u8; CHUNK];
@@ -400,9 +429,6 @@ impl DownloadUtils {
             let (decrypted, cblock_arr) = decrypt_cbc_block(cblock, &cipher, &prev_block)?;
             final_plain.extend_from_slice(&decrypted);
             prev_block = cblock_arr;
-        }
-        if final_plain.is_empty() {
-            return Err(anyhow!("Empty plaintext after decrypt"));
         }
         let pad_len = match final_plain.last() {
             Some(&v) => v as usize,

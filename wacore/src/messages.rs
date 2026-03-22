@@ -104,16 +104,28 @@ pub fn unwrap_device_sent(mut msg: wa::Message) -> wa::Message {
 /// `pkmsg` enc node.  We must process it (store the sender key) but should
 /// not surface it as a user event.
 pub fn is_sender_key_distribution_only(msg: &wa::Message) -> bool {
-    let has_skdm = msg.sender_key_distribution_message.is_some()
-        || msg
+    if msg.sender_key_distribution_message.is_none()
+        && msg
             .fast_ratchet_key_sender_key_distribution_message
-            .is_some();
-
-    if !has_skdm {
+            .is_none()
+    {
         return false;
     }
 
-    // Strip protocol-only fields and check if anything user-visible remains.
+    // Fast path: most common user-visible fields (avoids clone for the typical case).
+    if msg.conversation.is_some()
+        || msg.extended_text_message.is_some()
+        || msg.image_message.is_some()
+        || msg.video_message.is_some()
+        || msg.audio_message.is_some()
+        || msg.document_message.is_some()
+        || msg.reaction_message.is_some()
+        || msg.protocol_message.is_some()
+    {
+        return false;
+    }
+
+    // Slow path: clone and compare to default to catch all current and future fields.
     let mut stripped = msg.clone();
     stripped.sender_key_distribution_message = None;
     stripped.fast_ratchet_key_sender_key_distribution_message = None;

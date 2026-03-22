@@ -40,17 +40,12 @@ impl Client {
         let receipt_type_str = receipt_type_cow.as_deref().unwrap_or("delivery");
         let participant = attrs.optional_jid("participant");
 
-        let receipt_type = ReceiptType::from(receipt_type_str.to_string());
+        let receipt_type = ReceiptType::parse(receipt_type_str);
 
         debug!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
 
-        let from_clone = from.clone();
         let sender = if from.is_group() {
-            if let Some(participant) = participant {
-                participant
-            } else {
-                from_clone
-            }
+            participant.unwrap_or_else(|| from.clone())
         } else {
             from.clone()
         };
