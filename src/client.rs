@@ -330,6 +330,9 @@ pub struct Client {
 
     pub(crate) retried_group_messages: Cache<String, ()>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
+    /// Set by `reconnect()` to suppress the "Message loop exited with an error" warning.
+    /// Unlike `expected_disconnect`, this does NOT skip the reconnect backoff.
+    pub(crate) intentional_reconnect: AtomicBool,
 
     /// Connection generation counter - incremented on each new connection.
     /// Used to detect stale post-login tasks from previous connections.
@@ -613,6 +616,7 @@ impl Client {
             retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
+            intentional_reconnect: AtomicBool::new(false),
             connection_generation: Arc::new(AtomicU64::new(0)),
 
             recent_messages: cache_config.recent_messages.build_with_ttl(),
@@ -849,12 +853,15 @@ impl Client {
         }
         while self.is_running.load(Ordering::Relaxed) {
             self.expected_disconnect.store(false, Ordering::Relaxed);
+            let was_intentional_reconnect =
+                self.intentional_reconnect.swap(false, Ordering::Relaxed);
 
             if let Err(connect_err) = self.connect().await {
                 error!("Failed to connect: {connect_err:#}. Will retry...");
             } else {
                 if self.read_messages_loop().await.is_err() {
-                    if self.expected_disconnect.load(Ordering::Relaxed) {
+                    if self.expected_disconnect.load(Ordering::Relaxed) || was_intentional_reconnect
+                    {
                         debug!("Message loop exited during expected disconnect.");
                     } else {
                         warn!(
@@ -1014,6 +1021,7 @@ impl Client {
     /// - Testing offline message delivery
     pub async fn reconnect(self: &Arc<Self>) {
         info!("Reconnecting: dropping transport for auto-reconnect.");
+        self.intentional_reconnect.store(true, Ordering::Relaxed);
         self.auto_reconnect_errors
             .store(Self::RECONNECT_BACKOFF_STEP, Ordering::Relaxed);
         if let Some(transport) = self.transport.lock().await.as_ref() {
@@ -1804,21 +1812,26 @@ impl Client {
                 let (r_props, r_block, r_priv, r_digest) =
                     futures::join!(props_fut, blocklist_fut, privacy_fut, digest_fut);
 
-                if let Err(e) = r_props {
-                    warn!("Background init: Failed to fetch props: {e:?}");
-                }
-                if let Err(e) = r_block {
-                    warn!("Background init: Failed to fetch blocklist: {e:?}");
-                }
-                if let Err(e) = r_priv {
-                    warn!("Background init: Failed to fetch privacy settings: {e:?}");
-                }
-                if let Err(e) = r_digest {
-                    warn!("Background init: Failed to validate digest key: {e:?}");
+                // Suppress warnings if connection closed while queries were in-flight
+                if !bg_client.is_shutting_down() {
+                    if let Err(e) = r_props {
+                        warn!("Background init: Failed to fetch props: {e:?}");
+                    }
+                    if let Err(e) = r_block {
+                        warn!("Background init: Failed to fetch blocklist: {e:?}");
+                    }
+                    if let Err(e) = r_priv {
+                        warn!("Background init: Failed to fetch privacy settings: {e:?}");
+                    }
+                    if let Err(e) = r_digest {
+                        warn!("Background init: Failed to validate digest key: {e:?}");
+                    }
                 }
 
                 // Prune expired tcTokens on connect (matches WhatsApp Web's PrivacyTokenJob)
-                if let Err(e) = bg_client.tc_token().prune_expired().await {
+                if let Err(e) = bg_client.tc_token().prune_expired().await
+                    && !bg_client.is_shutting_down()
+                {
                     warn!("Background init: Failed to prune expired tc_tokens: {e:?}");
                 }
             })).detach();

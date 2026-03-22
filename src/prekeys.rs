@@ -246,7 +246,9 @@ impl Client {
                 return Ok(());
             }
             Err(e) => {
-                log::warn!("digestKey: server error: {:?}", e);
+                if !self.is_shutting_down() {
+                    log::warn!("digestKey: server error: {:?}", e);
+                }
                 return Ok(());
             }
         };
