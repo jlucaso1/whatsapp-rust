@@ -418,44 +418,22 @@ pub fn build_quote_context(
     }
 }
 
-/// Builds a quote context with proper participant resolution for special message types.
+/// Builds a quote ContextInfo matching WA Web's EProtoGenerator + getQuotedParticipantForContextInfo.
 ///
-/// This matches WhatsApp Web's `getQuotedParticipantForContextInfo` (3JJWKHeu5-P.js:144304-144311)
-/// which resolves the participant based on message type:
-/// - Newsletter messages: uses the chat JID (the newsletter itself)
-/// - Group status messages: uses the sender (author field not available here)
-/// - Normal messages: uses the sender JID
-///
-/// # Arguments
-/// * `message_id` - The ID of the message being quoted
-/// * `sender_jid` - The JID of the sender of the message being quoted
-/// * `chat_jid` - The JID of the chat where the message was sent
-/// * `quoted_message` - The message being quoted
-///
-/// # Example
-///
-/// ```ignore
-/// use wacore::proto_helpers::{build_quote_context_with_info, MessageExt};
-///
-/// let context = build_quote_context_with_info(
-///     "3EB0123456789",
-///     &sender_jid,
-///     &chat_jid,
-///     &original_message,
-/// );
-/// ```
+/// Sets `remote_jid` (required by iOS to scope the quote) and resolves `participant`
+/// based on chat type (newsletter → channel JID, otherwise → sender JID).
 pub fn build_quote_context_with_info(
     message_id: impl Into<String>,
     sender_jid: &Jid,
     chat_jid: &Jid,
     quoted_message: &wa::Message,
 ) -> wa::ContextInfo {
-    // Match WhatsApp Web's participant resolution.
+    // WA Web always sets remoteJid to the chat JID (EProtoGenerator.js:108).
+    let remote_jid = chat_jid.to_string();
+
+    // Newsletter quotes use the channel JID as participant; others use the sender.
     let participant = if chat_jid.is_newsletter() {
-        chat_jid.to_string()
-    } else if chat_jid.is_status_broadcast() {
-        // Author isn't available here; fall back to sender.
-        sender_jid.to_string()
+        remote_jid.clone()
     } else {
         sender_jid.to_string()
     };
@@ -463,6 +441,7 @@ pub fn build_quote_context_with_info(
     wa::ContextInfo {
         stanza_id: Some(message_id.into()),
         participant: Some(participant),
+        remote_jid: Some(remote_jid),
         quoted_message: Some(quoted_message.prepare_for_quote()),
         ..Default::default()
     }
@@ -1454,5 +1433,82 @@ mod tests {
             2,
             "should keep inner thread_id when non-empty"
         );
+    }
+
+    #[test]
+    fn quote_context_sets_remote_jid_for_group() {
+        let sender: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
+        let group: Jid = "120363001234567890@g.us".parse().unwrap();
+        let msg = wa::Message {
+            conversation: Some("hello".into()),
+            ..Default::default()
+        };
+
+        let ctx = build_quote_context_with_info("msg-id-123", &sender, &group, &msg);
+
+        assert_eq!(ctx.stanza_id.as_deref(), Some("msg-id-123"));
+        assert_eq!(
+            ctx.participant.as_deref(),
+            Some("559984726662@s.whatsapp.net")
+        );
+        assert_eq!(ctx.remote_jid.as_deref(), Some("120363001234567890@g.us"));
+        assert!(ctx.quoted_message.is_some());
+        assert!(ctx.mentioned_jid.is_empty());
+    }
+
+    #[test]
+    fn quote_context_sets_remote_jid_for_dm() {
+        let sender: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
+        let chat: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
+        let msg = wa::Message {
+            conversation: Some("ping".into()),
+            ..Default::default()
+        };
+
+        let ctx = build_quote_context_with_info("msg-id-456", &sender, &chat, &msg);
+
+        assert_eq!(
+            ctx.remote_jid.as_deref(),
+            Some("559984726662@s.whatsapp.net")
+        );
+        assert_eq!(
+            ctx.participant.as_deref(),
+            Some("559984726662@s.whatsapp.net")
+        );
+    }
+
+    #[test]
+    fn quote_context_newsletter_uses_channel_as_participant() {
+        let sender: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
+        let newsletter: Jid = "120363099999999999@newsletter".parse().unwrap();
+        let msg = wa::Message::default();
+
+        let ctx = build_quote_context_with_info("msg-id-789", &sender, &newsletter, &msg);
+
+        assert_eq!(
+            ctx.participant.as_deref(),
+            Some("120363099999999999@newsletter")
+        );
+        assert_eq!(
+            ctx.remote_jid.as_deref(),
+            Some("120363099999999999@newsletter")
+        );
+    }
+
+    #[test]
+    fn quote_context_strips_mentions_from_quoted_message() {
+        let sender: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
+        let group: Jid = "120363001234567890@g.us".parse().unwrap();
+        let msg = create_message_with_mentions();
+
+        let ctx = build_quote_context_with_info("msg-id", &sender, &group, &msg);
+
+        // The quoted message's nested context_info should have mentions stripped
+        let quoted = ctx.quoted_message.unwrap();
+        let inner_ctx = quoted.extended_text_message.unwrap().context_info.unwrap();
+        assert!(inner_ctx.mentioned_jid.is_empty());
+        assert!(inner_ctx.group_mentions.is_empty());
+        // The outer context should have no mentions
+        assert!(ctx.mentioned_jid.is_empty());
     }
 }
