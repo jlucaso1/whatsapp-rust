@@ -1,10 +1,12 @@
 use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
+use crate::types::message::EditAttribute;
 use anyhow::anyhow;
 use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
 use wacore::types::message::AddressingMode;
+use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{DeviceKey, Jid, JidExt as _};
 use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
@@ -49,6 +51,37 @@ pub enum RevokeType {
     Admin { original_sender: Jid },
 }
 
+/// Derive stanza-level metadata that WA Web / the server expects for certain message types.
+fn infer_stanza_metadata(msg: &wa::Message) -> (Option<EditAttribute>, Option<Node>) {
+    if msg.pin_in_chat_message.is_some() {
+        return (Some(EditAttribute::PinInChat), None);
+    }
+    if msg.poll_creation_message.is_some()
+        || msg.poll_creation_message_v2.is_some()
+        || msg.poll_creation_message_v3.is_some()
+    {
+        return (
+            None,
+            Some(
+                NodeBuilder::new("meta")
+                    .attr("polltype", "creation")
+                    .build(),
+            ),
+        );
+    }
+    if msg.event_message.is_some() {
+        return (
+            None,
+            Some(
+                NodeBuilder::new("meta")
+                    .attr("event_type", "creation")
+                    .build(),
+            ),
+        );
+    }
+    (None, None)
+}
+
 impl Client {
     /// Send an end-to-end encrypted message to a user or group.
     ///
@@ -75,14 +108,23 @@ impl Client {
             None => self.generate_message_id().await,
         };
         let returned_id = request_id.clone();
+        let (edit, inferred_node) = infer_stanza_metadata(&message);
+        let extra_nodes = match inferred_node {
+            Some(node) => {
+                let mut nodes = vec![node];
+                nodes.extend(options.extra_stanza_nodes);
+                nodes
+            }
+            None => options.extra_stanza_nodes,
+        };
         self.send_message_impl(
             to,
             &message,
             Some(request_id),
             false,
             false,
-            None,
-            options.extra_stanza_nodes,
+            edit,
+            extra_nodes,
         )
         .await?;
         Ok(returned_id)
@@ -1450,5 +1492,72 @@ mod tests {
             .collect();
 
         assert_eq!(new_devices.len(), 10);
+    }
+
+    mod infer_stanza {
+        use super::*;
+
+        #[test]
+        fn regular_message_returns_none() {
+            let msg = wa::Message {
+                conversation: Some("hello".into()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert!(edit.is_none());
+            assert!(node.is_none());
+        }
+
+        #[test]
+        fn pin_returns_edit_attribute() {
+            let msg = wa::Message {
+                pin_in_chat_message: Some(wa::message::PinInChatMessage::default()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert_eq!(edit, Some(EditAttribute::PinInChat));
+            assert!(node.is_none());
+        }
+
+        #[test]
+        fn poll_creation_v3_returns_meta_node() {
+            let msg = wa::Message {
+                poll_creation_message_v3: Some(Box::default()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert!(edit.is_none());
+            let node = node.expect("should have meta node");
+            assert_eq!(node.tag, "meta");
+            let mut attrs = node.attrs();
+            assert_eq!(
+                attrs.optional_string("polltype").unwrap().as_ref(),
+                "creation"
+            );
+        }
+
+        #[test]
+        fn event_returns_meta_node() {
+            let msg = wa::Message {
+                event_message: Some(Box::default()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert!(edit.is_none());
+            let node = node.expect("should have meta node");
+            assert_eq!(node.tag, "meta");
+            let mut attrs = node.attrs();
+            assert_eq!(
+                attrs.optional_string("event_type").unwrap().as_ref(),
+                "creation"
+            );
+        }
+
+        #[test]
+        fn empty_message_returns_none() {
+            let (edit, node) = infer_stanza_metadata(&wa::Message::default());
+            assert!(edit.is_none());
+            assert!(node.is_none());
+        }
     }
 }
