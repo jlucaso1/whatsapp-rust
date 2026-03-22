@@ -853,14 +853,15 @@ impl Client {
         }
         while self.is_running.load(Ordering::Relaxed) {
             self.expected_disconnect.store(false, Ordering::Relaxed);
-            let was_intentional_reconnect =
-                self.intentional_reconnect.swap(false, Ordering::Relaxed);
 
             if let Err(connect_err) = self.connect().await {
                 error!("Failed to connect: {connect_err:#}. Will retry...");
             } else {
                 if self.read_messages_loop().await.is_err() {
-                    if self.expected_disconnect.load(Ordering::Relaxed) || was_intentional_reconnect
+                    // Check intentional_reconnect AFTER read loop exits — reconnect()
+                    // sets this flag while the loop is running, so it must be read here.
+                    if self.expected_disconnect.load(Ordering::Relaxed)
+                        || self.intentional_reconnect.swap(false, Ordering::Relaxed)
                     {
                         debug!("Message loop exited during expected disconnect.");
                     } else {
