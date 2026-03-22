@@ -4,7 +4,7 @@ use crate::protocol::ProtocolAddress;
 pub struct SenderKeyName {
     group_id: String,
     sender_id: String,
-    /// Pre-computed `"{group_id}:{sender_id}"` cache key — avoids allocation on every load/store.
+    /// Pre-computed `"{group_id}:{sender_id}"` cache key.
     cache_key: String,
 }
 

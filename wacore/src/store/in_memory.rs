@@ -29,8 +29,6 @@ struct SentMessageEntry {
 /// Key for pre-keys: `id`.
 struct PreKeyEntry {
     record: Vec<u8>,
-    #[allow(dead_code)]
-    uploaded: bool,
 }
 
 /// Key for base-key collision detection: `(address, message_id)`.
@@ -145,12 +143,11 @@ impl SignalStore for InMemoryBackend {
         Ok(())
     }
 
-    async fn store_prekey(&self, id: u32, record: &[u8], uploaded: bool) -> Result<()> {
+    async fn store_prekey(&self, id: u32, record: &[u8], _uploaded: bool) -> Result<()> {
         self.state.lock().await.prekeys.insert(
             id,
             PreKeyEntry {
                 record: record.to_vec(),
-                uploaded,
             },
         );
         Ok(())

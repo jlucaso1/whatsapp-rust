@@ -20,6 +20,19 @@ use waproto::whatsapp as wa;
 // Re-export Mutation from appstate for convenience
 pub use crate::appstate::Mutation;
 
+fn lookup_app_state_key(
+    keys_map: &HashMap<String, Arc<ExpandedAppStateKeys>>,
+    key_id: &[u8],
+) -> Result<ExpandedAppStateKeys, crate::appstate::AppStateError> {
+    use base64::Engine;
+    use base64::engine::general_purpose::STANDARD_NO_PAD;
+    let id_b64 = STANDARD_NO_PAD.encode(key_id);
+    keys_map
+        .get(&id_b64)
+        .map(|arc| (**arc).clone())
+        .ok_or(crate::appstate::AppStateError::KeyNotFound)
+}
+
 #[derive(Debug, Error)]
 pub enum AppStateSyncError {
     #[error("app state key not found: {0}")]
@@ -227,24 +240,11 @@ impl AppStateProcessor {
 
             // Offload CPU-intensive snapshot processing to a blocking thread
             let result = crate::runtime::blocking(&*self.runtime, move || {
-                let get_keys = |key_id: &[u8]| -> Result<
-                    ExpandedAppStateKeys,
-                    crate::appstate::AppStateError,
-                > {
-                    use base64::Engine;
-                    use base64::engine::general_purpose::STANDARD_NO_PAD;
-                    let id_b64 = STANDARD_NO_PAD.encode(key_id);
-                    keys_map
-                        .get(&id_b64)
-                        .map(|arc| (**arc).clone())
-                        .ok_or(crate::appstate::AppStateError::KeyNotFound)
-                };
-
                 let mut snapshot_state = HashState::default();
                 let result = process_snapshot(
                     &snapshot_clone,
                     &mut snapshot_state,
-                    get_keys,
+                    |key_id| lookup_app_state_key(&keys_map, key_id),
                     validate_macs,
                     &collection_name_owned,
                 )?;
@@ -312,18 +312,6 @@ impl AppStateProcessor {
 
             // Offload CPU-intensive patch processing to a blocking thread
             let result = crate::runtime::blocking(&*self.runtime, move || {
-                let get_keys = |key_id: &[u8]| -> Result<
-                    ExpandedAppStateKeys,
-                    crate::appstate::AppStateError,
-                > {
-                    use base64::Engine;
-                    use base64::engine::general_purpose::STANDARD_NO_PAD;
-                    let id_b64 = STANDARD_NO_PAD.encode(key_id);
-                    keys.get(&id_b64)
-                        .map(|arc| (**arc).clone())
-                        .ok_or(crate::appstate::AppStateError::KeyNotFound)
-                };
-
                 let get_prev_value_mac = |index_mac: &[u8]| -> Result<
                     Option<Vec<u8>>,
                     crate::appstate::AppStateError,
@@ -333,7 +321,7 @@ impl AppStateProcessor {
                 process_patch(
                     &patch_clone,
                     &mut state,
-                    get_keys,
+                    |key_id| lookup_app_state_key(&keys, key_id),
                     get_prev_value_mac,
                     validate_macs,
                     &coll,

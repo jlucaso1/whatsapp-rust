@@ -250,16 +250,16 @@ impl Client {
     /// Only needed for new or modified media. To forward existing media unchanged,
     /// reuse the original message's CDN fields directly, no round-trip required.
     pub async fn upload(&self, data: Vec<u8>, media_type: MediaType) -> Result<UploadResponse> {
-        let enc = wacore::runtime::blocking(&*self.runtime, {
-            let data = data.clone();
-            move || wacore::upload::encrypt_media(&data, media_type)
+        let file_length = data.len() as u64;
+        let enc = wacore::runtime::blocking(&*self.runtime, move || {
+            wacore::upload::encrypt_media(&data, media_type)
         })
         .await?;
 
         upload_media_with_retry(
             &enc,
             media_type,
-            data.len() as u64,
+            file_length,
             wacore::time::now_secs(),
             |force| async move { self.refresh_media_conn(force).await.map_err(Into::into) },
             || async { self.invalidate_media_conn().await },

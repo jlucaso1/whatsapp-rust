@@ -3200,6 +3200,10 @@ impl Client {
         snapshot.lid.clone()
     }
 
+    pub(crate) async fn require_pn(&self) -> Result<Jid> {
+        self.get_pn().await.ok_or(ClientError::NotLoggedIn.into())
+    }
+
     /// Resolve our own JID for a group, respecting its addressing mode.
     ///
     /// Returns LID for LID-addressing groups, PN otherwise.
