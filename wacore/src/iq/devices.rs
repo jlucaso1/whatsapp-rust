@@ -12,8 +12,8 @@ pub struct RemoveCompanionDeviceSpec {
 }
 
 impl RemoveCompanionDeviceSpec {
-    pub fn new(jid: Jid) -> Self {
-        Self { jid }
+    pub fn new(jid: &Jid) -> Self {
+        Self { jid: jid.clone() }
     }
 }
 
@@ -45,7 +45,7 @@ mod tests {
     #[test]
     fn iq_structure() {
         let jid: Jid = "551199887766:87@s.whatsapp.net".parse().unwrap();
-        let spec = RemoveCompanionDeviceSpec::new(jid);
+        let spec = RemoveCompanionDeviceSpec::new(&jid);
         let iq = spec.build_iq();
 
         assert_eq!(iq.namespace, "md");
@@ -58,6 +58,10 @@ mod tests {
         assert_eq!(children[0].tag, "remove-companion-device");
 
         let mut attrs = children[0].attrs();
+        assert_eq!(
+            attrs.optional_string("jid").unwrap().as_ref(),
+            "551199887766:87@s.whatsapp.net"
+        );
         assert_eq!(
             attrs.optional_string("reason").unwrap().as_ref(),
             "user_initiated"

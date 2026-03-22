@@ -992,7 +992,7 @@ impl Client {
 
         if self.is_connected()
             && let Ok(jid) = self.require_pn().await
-            && let Err(e) = self.execute(RemoveCompanionDeviceSpec::new(jid)).await
+            && let Err(e) = self.execute(RemoveCompanionDeviceSpec::new(&jid)).await
         {
             warn!("Failed to send logout IQ: {e}");
         }
