@@ -34,6 +34,9 @@ pub enum MediaType {
     Sticker,
     StickerPack,
     LinkThumbnail,
+    /// Product catalog image — uses same encryption keys as Image
+    /// but uploads to `/product/image` instead of `/mms/image`.
+    ProductCatalogImage,
 }
 
 impl MediaType {
@@ -48,6 +51,7 @@ impl MediaType {
             MediaType::Sticker => "WhatsApp Image Keys",
             MediaType::StickerPack => "WhatsApp Sticker Pack Keys",
             MediaType::LinkThumbnail => "WhatsApp Link Thumbnail Keys",
+            MediaType::ProductCatalogImage => "WhatsApp Image Keys",
         }
     }
 
@@ -61,6 +65,7 @@ impl MediaType {
             MediaType::AppState => "md-app-state",
             MediaType::StickerPack => "sticker-pack",
             MediaType::LinkThumbnail => "thumbnail-link",
+            MediaType::ProductCatalogImage => "product/image",
         }
     }
 }
@@ -353,7 +358,7 @@ impl DownloadUtils {
             Aes256::new_from_slice(&cipher_key).map_err(|_| anyhow!("Bad AES key length"))?;
 
         let mut bytes_written: u64 = 0;
-        let mut tail: Vec<u8> = Vec::with_capacity(BLOCK + MAC_SIZE);
+        let mut tail: Vec<u8> = Vec::with_capacity(CHUNK + BLOCK + MAC_SIZE);
         let mut prev_block = iv;
 
         let mut read_buf = [0u8; CHUNK];
@@ -400,9 +405,6 @@ impl DownloadUtils {
             let (decrypted, cblock_arr) = decrypt_cbc_block(cblock, &cipher, &prev_block)?;
             final_plain.extend_from_slice(&decrypted);
             prev_block = cblock_arr;
-        }
-        if final_plain.is_empty() {
-            return Err(anyhow!("Empty plaintext after decrypt"));
         }
         let pad_len = match final_plain.last() {
             Some(&v) => v as usize,

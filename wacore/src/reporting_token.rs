@@ -268,7 +268,8 @@ pub fn generate_message_secret() -> [u8; MESSAGE_SECRET_SIZE] {
 /// The info is constructed as: stanza_id || sender_jid || remote_jid || "Report Token"
 /// This matches WhatsApp Web's Binary.build(stanzaId, senderJid, remoteJid, REPORT_TOKEN)
 fn build_hkdf_info(stanza_id: &str, sender_jid: &str, remote_jid: &str) -> Vec<u8> {
-    let mut info = Vec::new();
+    let cap = stanza_id.len() + sender_jid.len() + remote_jid.len() + USE_CASE_REPORT_TOKEN.len();
+    let mut info = Vec::with_capacity(cap);
     info.extend_from_slice(stanza_id.as_bytes());
     info.extend_from_slice(sender_jid.as_bytes());
     info.extend_from_slice(remote_jid.as_bytes());

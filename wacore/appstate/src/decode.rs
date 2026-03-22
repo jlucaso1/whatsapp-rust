@@ -89,7 +89,7 @@ pub fn decode_record(
     }
 
     Ok(Mutation {
-        action_value: action.value.clone(),
+        action_value: action.value,
         index_mac: record
             .index
             .as_ref()

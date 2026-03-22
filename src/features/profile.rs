@@ -156,7 +156,7 @@ impl<'a> Profile<'a> {
         );
 
         self.client
-            .send_app_state_patch("critical_block", vec![(mutation, value_mac)])
+            .send_app_state_patch("critical_block", vec![(mutation, value_mac.to_vec())])
             .await
     }
 }

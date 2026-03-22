@@ -143,19 +143,21 @@ pub fn generate_content_mac(
     data: &[u8],
     key_id: &[u8],
     key: &[u8],
-) -> Vec<u8> {
+) -> [u8; 32] {
     let op_byte = [operation as u8 + 1];
     let key_data_length = u64_to_be((key_id.len() + 1) as u64);
-    let mac_full = {
-        let mut mac =
-            CryptographicMac::new("HmacSha512", key).expect("HmacSha512 is a valid algorithm");
-        mac.update(&op_byte);
-        mac.update(key_id);
-        mac.update(data);
-        mac.update(&key_data_length);
-        mac.finalize()
-    };
-    mac_full[..32].to_vec()
+    let mut mac =
+        CryptographicMac::new("HmacSha512", key).expect("HmacSha512 is a valid algorithm");
+    mac.update(&op_byte);
+    mac.update(key_id);
+    mac.update(data);
+    mac.update(&key_data_length);
+    let mut out = [0u8; 64];
+    mac.finalize_into(&mut out)
+        .expect("64 bytes is enough for HmacSha512");
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&out[..32]);
+    result
 }
 
 fn u64_to_be(val: u64) -> [u8; 8] {

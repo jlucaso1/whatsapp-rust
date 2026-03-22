@@ -559,7 +559,7 @@ impl<'a> ChatActions<'a> {
         );
 
         self.client
-            .send_app_state_patch(collection.as_str(), vec![(mutation, value_mac)])
+            .send_app_state_patch(collection.as_str(), vec![(mutation, value_mac.to_vec())])
             .await
     }
 }

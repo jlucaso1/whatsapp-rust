@@ -19,7 +19,7 @@ pub fn encode_record(
     keys: &ExpandedAppStateKeys,
     key_id: &[u8],
     iv: &[u8; 16],
-) -> (wa::SyncdMutation, Vec<u8>) {
+) -> (wa::SyncdMutation, [u8; 32]) {
     // 1. Build SyncActionData
     let action_data = wa::SyncActionData {
         index: Some(index.to_vec()),

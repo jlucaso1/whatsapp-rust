@@ -100,11 +100,7 @@ fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool
 }
 
 fn hkdf_sha256(key: &[u8], salt: Option<&[u8]>, info: &[u8], length: u8) -> Vec<u8> {
-    let hk = if let Some(s) = salt {
-        Hkdf::<Sha256>::new(Some(s), key)
-    } else {
-        Hkdf::<Sha256>::new(None, key)
-    };
+    let hk = Hkdf::<Sha256>::new(salt, key);
     let mut okm = vec![0u8; length as usize];
     hk.expand(info, &mut okm).expect("hkdf expand");
     okm

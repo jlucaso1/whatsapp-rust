@@ -6,8 +6,6 @@ pub enum AppStateError {
     MissingPreviousSetValueOperation,
     #[error("mismatching LTHash")]
     MismatchingLTHash,
-    #[error("mismatching patch MAC")]
-    MismatchingPatchMAC,
     #[error("mismatching content MAC")]
     MismatchingContentMAC,
     #[error("mismatching index MAC")]

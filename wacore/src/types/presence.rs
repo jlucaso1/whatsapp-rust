@@ -47,9 +47,9 @@ pub enum ReceiptType {
     Other(String),
 }
 
-impl From<String> for ReceiptType {
-    fn from(s: String) -> Self {
-        match s.as_str() {
+impl ReceiptType {
+    pub fn parse(s: &str) -> Self {
+        match s {
             "" | "delivery" => Self::Delivered,
             "sender" => Self::Sender,
             "retry" => Self::Retry,
@@ -62,8 +62,14 @@ impl From<String> for ReceiptType {
             "inactive" => Self::Inactive,
             "peer_msg" => Self::PeerMsg,
             "hist_sync" => Self::HistorySync,
-            _ => Self::Other(s),
+            other => Self::Other(other.to_string()),
         }
+    }
+}
+
+impl From<String> for ReceiptType {
+    fn from(s: String) -> Self {
+        Self::parse(&s)
     }
 }
 
