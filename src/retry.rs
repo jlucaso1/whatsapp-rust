@@ -209,14 +209,13 @@ impl Client {
                 // This handles the case where the requester reinstalled but didn't include keys.
                 if let Some(received_reg_id) = extract_registration_id_from_node(node) {
                     let signal_address = participant_jid.to_protocol_address();
-                    let addr_str = signal_address.to_string();
                     let device_store = self.persistence_manager.get_device_arc().await;
                     let device_guard = device_store.read().await;
 
                     // Read session through cache to get consistent state
                     let session = self
                         .signal_cache
-                        .get_session(&addr_str, &*device_guard.backend)
+                        .get_session(&signal_address, &*device_guard.backend)
                         .await
                         .ok()
                         .flatten();
@@ -232,7 +231,7 @@ impl Client {
                              Deleting session since no key bundle provided.",
                             signal_address, stored_reg_id, received_reg_id
                         );
-                        self.signal_cache.delete_session(&addr_str).await;
+                        self.signal_cache.delete_session(&signal_address).await;
                         self.flush_signal_cache().await.unwrap_or_else(|e| {
                             log::warn!("Failed to flush session deletion for reg ID mismatch: {e}");
                         });
@@ -312,7 +311,6 @@ impl Client {
             // This detects when we haven't regenerated our session despite receiving retry receipts,
             // which can cause infinite retry loops where both sides are stuck with stale keys.
             let signal_address = participant_jid.to_protocol_address();
-            let address_str = signal_address.to_string();
             let device_store = self.persistence_manager.get_device_arc().await;
 
             // Check for base key collision before deleting the session.
@@ -321,7 +319,7 @@ impl Client {
                 let device_guard = device_store.read().await;
                 let session = self
                     .signal_cache
-                    .get_session(&address_str, &*device_guard.backend)
+                    .get_session(&signal_address, &*device_guard.backend)
                     .await
                     .ok()
                     .flatten();
@@ -329,25 +327,26 @@ impl Client {
                 if let Some(session) = session
                     && let Ok(current_base_key) = session.alice_base_key()
                 {
+                    let addr_str = signal_address.as_str();
                     if retry_count == MIN_RETRY_FOR_BASE_KEY_CHECK {
                         // On retry 2: Save the base key for later comparison
                         if let Err(e) = device_guard
                             .backend
-                            .save_base_key(&address_str, &message_id, current_base_key)
+                            .save_base_key(addr_str, &message_id, current_base_key)
                             .await
                         {
-                            warn!("Failed to save base key for {}: {}", address_str, e);
+                            warn!("Failed to save base key for {}: {}", signal_address, e);
                         } else {
                             info!(
                                 "Saved base key for {} at retry #{} for collision detection",
-                                address_str, retry_count
+                                signal_address, retry_count
                             );
                         }
                     } else if retry_count > MIN_RETRY_FOR_BASE_KEY_CHECK {
                         // On retry > 2: Check if base key is the same (collision detection)
                         match device_guard
                             .backend
-                            .has_same_base_key(&address_str, &message_id, current_base_key)
+                            .has_same_base_key(addr_str, &message_id, current_base_key)
                             .await
                         {
                             Ok(true) => {
@@ -355,28 +354,28 @@ impl Client {
                                 warn!(
                                     "Base key collision detected for {} at retry #{}. \
                                      Session hasn't been regenerated. Forcing fresh session.",
-                                    address_str, retry_count
+                                    signal_address, retry_count
                                 );
                                 // Clean up base key entry since we're deleting the session
                                 let _ = device_guard
                                     .backend
-                                    .delete_base_key(&address_str, &message_id)
+                                    .delete_base_key(addr_str, &message_id)
                                     .await;
                             }
                             Ok(false) => {
                                 // Base key changed, session was regenerated - good!
                                 info!(
                                     "Base key changed for {} at retry #{} - session regenerated",
-                                    address_str, retry_count
+                                    signal_address, retry_count
                                 );
                                 // Clean up old base key entry
                                 let _ = device_guard
                                     .backend
-                                    .delete_base_key(&address_str, &message_id)
+                                    .delete_base_key(addr_str, &message_id)
                                     .await;
                             }
                             Err(e) => {
-                                warn!("Failed to check base key for {}: {}", address_str, e);
+                                warn!("Failed to check base key for {}: {}", signal_address, e);
                             }
                         }
                     }
@@ -385,7 +384,7 @@ impl Client {
 
             // Delete the old session through the signal cache so encryption uses a fresh session.
             // IMPORTANT: Must go through cache, not backend, to avoid stale cached sessions.
-            self.signal_cache.delete_session(&address_str).await;
+            self.signal_cache.delete_session(&signal_address).await;
             self.flush_signal_cache().await.unwrap_or_else(|e| {
                 log::warn!("Failed to flush signal cache after session delete: {e}");
             });
@@ -505,13 +504,12 @@ impl Client {
 
         // Check if the registration ID changed (indicates device reinstall).
         // Read session through cache for consistent state.
-        let addr_str = signal_address.to_string();
         {
             let device_store = self.persistence_manager.get_device_arc().await;
             let device_guard = device_store.read().await;
             let session = self
                 .signal_cache
-                .get_session(&addr_str, &*device_guard.backend)
+                .get_session(&signal_address, &*device_guard.backend)
                 .await
                 .ok()
                 .flatten();

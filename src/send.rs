@@ -154,16 +154,11 @@ impl Client {
             use wacore::libsignal::store::sender_key_name::SenderKeyName;
             let sender_address = own_jid.to_protocol_address();
             let sender_key_name = SenderKeyName::new(to_str.clone(), sender_address.to_string());
-            let cache_key = format!(
-                "{}:{}",
-                sender_key_name.group_id(),
-                sender_key_name.sender_id()
-            );
 
             let device_guard = device_store_arc.read().await;
             let key_exists = self
                 .signal_cache
-                .get_sender_key(&cache_key, &*device_guard.backend)
+                .get_sender_key(&sender_key_name, &*device_guard.backend)
                 .await?
                 .is_some();
 

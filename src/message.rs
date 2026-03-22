@@ -805,8 +805,7 @@ impl Client {
                         // NOTE: We intentionally do NOT delete the session here. The session will be
                         // archived (not deleted) when the new PreKeySignalMessage is processed,
                         // allowing decryption of any in-flight messages encrypted with the old session.
-                        let address_str = address.to_string();
-                        self.signal_cache.delete_identity(&address_str).await;
+                        self.signal_cache.delete_identity(address).await;
                         // Flush immediately so the backend is updated BEFORE the retry decrypt below.
                         // Device::is_trusted_identity reads from backend, not cache.
                         if let Err(e) = self.flush_signal_cache().await {
@@ -949,8 +948,7 @@ impl Client {
                         // IMPORTANT: Must go through the cache, not directly to the backend!
                         // Going to the backend directly leaves the stale session in the cache,
                         // which causes retry messages to also fail (they'd load the stale session).
-                        let address_str = signal_address.to_string();
-                        self.signal_cache.delete_session(&address_str).await;
+                        self.signal_cache.delete_session(&signal_address).await;
                         log::info!(
                             "Deleted stale session for {} from cache to allow re-establishment",
                             signal_address

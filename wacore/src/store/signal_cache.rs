@@ -4,7 +4,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use async_lock::Mutex;
 
-use crate::libsignal::protocol::SessionRecord;
+use crate::libsignal::protocol::{ProtocolAddress, SessionRecord};
+use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::store::traits::SignalStore;
 
 /// In-memory cache for Signal protocol state, matching WhatsApp Web's SignalStoreCache.
@@ -150,42 +151,46 @@ impl SignalStoreCache {
 
     pub async fn get_session(
         &self,
-        address: &str,
+        address: &ProtocolAddress,
         backend: &dyn SignalStore,
     ) -> Result<Option<SessionRecord>> {
+        let key = address.as_str();
         let mut state = self.sessions.lock().await;
-        if let Some(cached) = state.cache.get(address) {
+        if let Some(cached) = state.cache.get(key) {
             return Ok(cached.clone());
         }
-        // Cold load: deserialize from backend bytes, cache the object
-        let record = match backend.get_session(address).await? {
+        let record = match backend.get_session(key).await? {
             Some(bytes) => Some(SessionRecord::deserialize(&bytes)?),
             None => None,
         };
-        state.cache.insert(Arc::from(address), record.clone());
+        state.cache.insert(Arc::from(key), record.clone());
         Ok(record)
     }
 
-    pub async fn put_session(&self, address: &str, record: SessionRecord) {
-        self.sessions.lock().await.put(address, record);
+    pub async fn put_session(&self, address: &ProtocolAddress, record: SessionRecord) {
+        self.sessions.lock().await.put(address.as_str(), record);
     }
 
-    pub async fn delete_session(&self, address: &str) {
-        self.sessions.lock().await.delete(address);
+    pub async fn delete_session(&self, address: &ProtocolAddress) {
+        self.sessions.lock().await.delete(address.as_str());
     }
 
-    pub async fn has_session(&self, address: &str, backend: &dyn SignalStore) -> Result<bool> {
+    pub async fn has_session(
+        &self,
+        address: &ProtocolAddress,
+        backend: &dyn SignalStore,
+    ) -> Result<bool> {
+        let key = address.as_str();
         let mut state = self.sessions.lock().await;
-        if let Some(cached) = state.cache.get(address) {
+        if let Some(cached) = state.cache.get(key) {
             return Ok(cached.is_some());
         }
-        // Cold load: deserialize and cache so subsequent get_session is a hit
-        let record = match backend.get_session(address).await? {
+        let record = match backend.get_session(key).await? {
             Some(bytes) => Some(SessionRecord::deserialize(&bytes)?),
             None => None,
         };
         let exists = record.is_some();
-        state.cache.insert(Arc::from(address), record);
+        state.cache.insert(Arc::from(key), record);
         Ok(exists)
     }
 
@@ -193,46 +198,51 @@ impl SignalStoreCache {
 
     pub async fn get_identity(
         &self,
-        address: &str,
+        address: &ProtocolAddress,
         backend: &dyn SignalStore,
     ) -> Result<Option<Arc<[u8]>>> {
+        let key = address.as_str();
         let mut state = self.identities.lock().await;
-        if let Some(cached) = state.cache.get(address) {
+        if let Some(cached) = state.cache.get(key) {
             return Ok(cached.clone());
         }
-        let data = backend.load_identity(address).await?;
+        let data = backend.load_identity(key).await?;
         let arc_data = data.map(Arc::from);
-        state.cache.insert(Arc::from(address), arc_data.clone());
+        state.cache.insert(Arc::from(key), arc_data.clone());
         Ok(arc_data)
     }
 
-    pub async fn put_identity(&self, address: &str, data: &[u8]) {
-        self.identities.lock().await.put_dedup(address, data);
+    pub async fn put_identity(&self, address: &ProtocolAddress, data: &[u8]) {
+        self.identities
+            .lock()
+            .await
+            .put_dedup(address.as_str(), data);
     }
 
-    pub async fn delete_identity(&self, address: &str) {
-        self.identities.lock().await.delete(address);
+    pub async fn delete_identity(&self, address: &ProtocolAddress) {
+        self.identities.lock().await.delete(address.as_str());
     }
 
     // === Sender Keys ===
 
     pub async fn get_sender_key(
         &self,
-        address: &str,
+        name: &SenderKeyName,
         backend: &dyn SignalStore,
     ) -> Result<Option<Arc<[u8]>>> {
+        let key = name.cache_key();
         let mut state = self.sender_keys.lock().await;
-        if let Some(cached) = state.cache.get(address) {
+        if let Some(cached) = state.cache.get(key) {
             return Ok(cached.clone());
         }
-        let data = backend.get_sender_key(address).await?;
+        let data = backend.get_sender_key(key).await?;
         let arc_data = data.map(Arc::from);
-        state.cache.insert(Arc::from(address), arc_data.clone());
+        state.cache.insert(Arc::from(key), arc_data.clone());
         Ok(arc_data)
     }
 
-    pub async fn put_sender_key(&self, address: &str, data: &[u8]) {
-        self.sender_keys.lock().await.put(address, data);
+    pub async fn put_sender_key(&self, name: &SenderKeyName, data: &[u8]) {
+        self.sender_keys.lock().await.put(name.cache_key(), data);
     }
 
     // === Flush ===

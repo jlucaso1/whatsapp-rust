@@ -160,11 +160,10 @@ impl Client {
             let device_guard = device_store.read().await;
             for jid in resolved_jids {
                 let signal_addr = jid.to_protocol_address();
-                let addr_str = signal_addr.to_string();
                 // Check cache first (includes unflushed sessions), fall back to backend
                 match self
                     .signal_cache
-                    .has_session(&addr_str, &*device_guard.backend)
+                    .has_session(&signal_addr, &*device_guard.backend)
                     .await
                 {
                     Ok(true) => {}
