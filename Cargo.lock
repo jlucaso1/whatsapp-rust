@@ -2665,12 +2665,10 @@ dependencies = [
  "diesel_migrations",
  "libsqlite3-sys",
  "log",
- "prost",
  "serde_json",
  "tokio",
  "wacore",
  "wacore-binary",
- "waproto",
 ]
 
 [[package]]

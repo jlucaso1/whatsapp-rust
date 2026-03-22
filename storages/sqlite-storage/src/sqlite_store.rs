@@ -8,7 +8,6 @@ use diesel::sqlite::SqliteConnection;
 use diesel::upsert::excluded;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use log::warn;
-use prost::Message;
 use std::sync::Arc;
 use wacore::appstate::hash::HashState;
 use wacore::appstate::processor::AppStateMutationMAC;
@@ -17,7 +16,6 @@ use wacore::store::Device as CoreDevice;
 use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::*;
 use wacore_binary::jid::Jid;
-use waproto::whatsapp as wa;
 
 /// Internal error type that preserves the Diesel error for structured matching
 /// before converting to `StoreError`. Used in retry loops where we need to
@@ -301,7 +299,7 @@ impl SqliteStore {
         let account_data = device_data
             .account
             .as_ref()
-            .map(|account| account.encode_to_vec());
+            .map(wacore::store::device::account_serde::to_bytes);
         let registration_id = device_data.registration_id as i32;
         let signed_pre_key_id = device_data.signed_pre_key_id as i32;
         let signed_pre_key_signature: Vec<u8> = device_data.signed_pre_key_signature.to_vec();
@@ -545,7 +543,7 @@ impl SqliteStore {
 
             let account = account_data
                 .map(|data| {
-                    wa::AdvSignedDeviceIdentity::decode(&data[..])
+                    wacore::store::device::account_serde::from_bytes(&data)
                         .map_err(|e| StoreError::Serialization(e.to_string()))
                 })
                 .transpose()?;

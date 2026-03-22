@@ -6,6 +6,40 @@ use serde_big_array::BigArray;
 use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
+/// Protobuf-bytes serde for `AdvSignedDeviceIdentity` (prost types lack `Deserialize`).
+pub mod account_serde {
+    use prost::Message;
+    use waproto::whatsapp as wa;
+
+    pub fn to_bytes(account: &wa::AdvSignedDeviceIdentity) -> Vec<u8> {
+        account.encode_to_vec()
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<wa::AdvSignedDeviceIdentity, prost::DecodeError> {
+        wa::AdvSignedDeviceIdentity::decode(bytes)
+    }
+
+    pub fn serialize<S: serde::Serializer>(
+        val: &Option<wa::AdvSignedDeviceIdentity>,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        match val {
+            Some(v) => s.serialize_some(&to_bytes(v)),
+            None => s.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D: serde::Deserializer<'de>>(
+        d: D,
+    ) -> Result<Option<wa::AdvSignedDeviceIdentity>, D::Error> {
+        let bytes: Option<Vec<u8>> = serde::Deserialize::deserialize(d)?;
+        match bytes {
+            Some(b) => from_bytes(&b).map(Some).map_err(serde::de::Error::custom),
+            None => Ok(None),
+        }
+    }
+}
+
 pub mod key_pair_serde {
     use super::KeyPair;
     use crate::libsignal::protocol::{PrivateKey, PublicKey};
@@ -102,7 +136,7 @@ pub struct Device {
     #[serde(with = "BigArray")]
     pub signed_pre_key_signature: [u8; 64],
     pub adv_secret_key: [u8; 32],
-    #[serde(skip, default)]
+    #[serde(with = "account_serde", default)]
     pub account: Option<wa::AdvSignedDeviceIdentity>,
     pub push_name: String,
     pub app_version_primary: u32,
@@ -316,5 +350,51 @@ mod tests {
             device.identity_key.public_key.public_key_bytes(),
             restored.identity_key.public_key.public_key_bytes()
         );
+    }
+
+    /// Regression: #403
+    #[test]
+    fn test_device_serde_preserves_account() {
+        let mut device = Device::new();
+        device.account = Some(wa::AdvSignedDeviceIdentity {
+            details: Some(b"test-details".to_vec()),
+            account_signature_key: Some(vec![1; 32]),
+            account_signature: Some(vec![2; 64]),
+            device_signature: Some(vec![3; 64]),
+        });
+
+        let json = serde_json::to_string(&device).expect("serialize should succeed");
+        let restored: Device = serde_json::from_str(&json).expect("deserialize should succeed");
+
+        assert!(
+            restored.account.is_some(),
+            "account must survive serde roundtrip"
+        );
+        let acc = restored.account.unwrap();
+        assert_eq!(acc.details.as_deref(), Some(b"test-details".as_slice()));
+        assert_eq!(
+            acc.account_signature_key.as_deref(),
+            Some([1u8; 32].as_slice())
+        );
+        assert_eq!(acc.account_signature.as_deref(), Some([2u8; 64].as_slice()));
+        assert_eq!(acc.device_signature.as_deref(), Some([3u8; 64].as_slice()));
+    }
+
+    /// Backward compat: missing `account` field deserializes as `None`.
+    #[test]
+    fn test_device_serde_account_none_and_missing() {
+        // None roundtrip
+        let device = Device::new();
+        assert!(device.account.is_none());
+        let json = serde_json::to_string(&device).expect("serialize should succeed");
+        let restored: Device = serde_json::from_str(&json).expect("deserialize should succeed");
+        assert!(restored.account.is_none());
+
+        // Missing field in JSON (backward compat with old data)
+        let mut val: serde_json::Value = serde_json::from_str(&json).expect("parse as Value");
+        val.as_object_mut().unwrap().remove("account");
+        let restored: Device =
+            serde_json::from_value(val).expect("deserialize without account field");
+        assert!(restored.account.is_none());
     }
 }
