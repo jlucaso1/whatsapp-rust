@@ -854,9 +854,13 @@ impl Client {
                 error!("Failed to connect: {connect_err:#}. Will retry...");
             } else {
                 if self.read_messages_loop().await.is_err() {
-                    warn!(
-                        "Message loop exited with an error. Will attempt to reconnect if enabled."
-                    );
+                    if self.expected_disconnect.load(Ordering::Relaxed) {
+                        debug!("Message loop exited during expected disconnect.");
+                    } else {
+                        warn!(
+                            "Message loop exited with an error. Will attempt to reconnect if enabled."
+                        );
+                    }
                 } else if self.expected_disconnect.load(Ordering::Relaxed) {
                     debug!("Message loop exited gracefully (expected disconnect).");
                 } else {
@@ -1735,7 +1739,13 @@ impl Client {
             // === Passive Tasks (mimics WhatsApp Web's PassiveTaskManager) ===
             // WhatsApp Web executes passive tasks (like PreKey upload) BEFORE sending the active IQ.
             check_generation!();
-            if let Err(e) = client_clone.upload_pre_keys(false).await {
+            if !client_clone.is_connected() {
+                debug!("Skipping passive tasks: connection closed");
+                return;
+            }
+            if let Err(e) = client_clone.upload_pre_keys(false).await
+                && !client_clone.is_shutting_down()
+            {
                 warn!("Failed to upload pre-keys during startup: {e:?}");
             }
 
@@ -1743,7 +1753,13 @@ impl Client {
             // The server sends <ib><offline count="X"/></ib> AFTER we exit passive mode.
             // This matches WhatsApp Web's behavior: executePassiveTasks() -> sendPassiveModeProtocol("active")
             check_generation!();
-            if let Err(e) = client_clone.set_passive(false).await {
+            if !client_clone.is_connected() {
+                debug!("Skipping active IQ: connection closed");
+                return;
+            }
+            if let Err(e) = client_clone.set_passive(false).await
+                && !client_clone.is_shutting_down()
+            {
                 warn!("Failed to send post-connect active IQ: {e:?}");
             }
 

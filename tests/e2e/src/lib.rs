@@ -1,8 +1,10 @@
 use std::sync::Arc;
 
 use wacore::types::events::{Event, EventHandler};
+use whatsapp_rust::Jid;
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::traits::Backend;
+use whatsapp_rust::waproto::whatsapp as wa;
 use whatsapp_rust_sqlite_storage::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
@@ -158,6 +160,19 @@ impl TestClient {
         })
     }
 
+    // ── JID helpers ─────────────────────────────────────────────────────────
+
+    /// Get this client's phone number JID (non-AD format).
+    pub async fn jid(&self) -> Jid {
+        self.client
+            .get_pn()
+            .await
+            .expect("Client should have a JID after connect")
+            .to_non_ad()
+    }
+
+    // ── Event waiting ───────────────────────────────────────────────────────
+
     /// Wait for an event matching the predicate, with a timeout in seconds.
     pub async fn wait_for_event<F>(
         &mut self,
@@ -175,7 +190,6 @@ impl TestClient {
                     Ok(_) => continue,
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         eprintln!("WARN: Event channel lagged, {} messages dropped", n);
-                        // Continue receiving — the event may still arrive
                         continue;
                     }
                     Err(e) => return Err(anyhow::anyhow!("Event channel error: {e}")),
@@ -186,29 +200,89 @@ impl TestClient {
         .map_err(|_| anyhow::anyhow!("Timed out waiting for event"))?
     }
 
+    /// Wait for a text message with specific content.
+    pub async fn wait_for_text(&mut self, text: &str, timeout_secs: u64) -> anyhow::Result<Event> {
+        let text = text.to_string();
+        self.wait_for_event(timeout_secs, move |e| {
+            matches!(
+                e,
+                Event::Message(msg, _)
+                if msg.conversation.as_deref() == Some(text.as_str())
+            )
+        })
+        .await
+    }
+
+    /// Wait for a text message on a specific group.
+    pub async fn wait_for_group_text(
+        &mut self,
+        group_jid: &Jid,
+        text: &str,
+        timeout_secs: u64,
+    ) -> anyhow::Result<Event> {
+        let gid = group_jid.clone();
+        let text = text.to_string();
+        self.wait_for_event(timeout_secs, move |e| {
+            matches!(
+                e,
+                Event::Message(msg, info)
+                if info.source.chat == gid
+                    && msg.conversation.as_deref() == Some(text.as_str())
+            )
+        })
+        .await
+    }
+
+    /// Wait for a w:gp2 group notification.
+    pub async fn wait_for_group_notification(
+        &mut self,
+        timeout_secs: u64,
+    ) -> anyhow::Result<Event> {
+        self.wait_for_event(timeout_secs, |e| {
+            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
+        })
+        .await
+    }
+
+    /// Assert that NO event matching the predicate arrives within the timeout.
+    /// Returns Ok(()) if the wait times out (expected), panics if an event arrives.
+    pub async fn assert_no_event<F>(
+        &mut self,
+        timeout_secs: u64,
+        predicate: F,
+        context: &str,
+    ) -> anyhow::Result<()>
+    where
+        F: FnMut(&Event) -> bool,
+    {
+        let result = self.wait_for_event(timeout_secs, predicate).await;
+        match result {
+            Ok(event) => panic!("{context}: expected no event but got: {event:?}"),
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("Timed out"),
+                    "{context}: expected timeout error, got: {msg}"
+                );
+                Ok(())
+            }
+        }
+    }
+
     /// Wait for initial app state sync to complete (keys become available).
-    ///
-    /// The `SelfPushNameUpdated` event fires during critical_block sync, which
-    /// completes before `Connected` is dispatched. Since `connect()` waits for
-    /// `Connected`, the push name is already set when this method is called.
-    /// We verify this by checking the push name state directly.
     pub async fn wait_for_app_state_sync(&mut self) -> anyhow::Result<()> {
-        // Push name is set during critical_block sync, which completes before
-        // Connected (which connect() already waited for). Check state directly.
         let push_name = self.client.get_push_name().await;
         if !push_name.is_empty() {
             return Ok(());
         }
-        // Fallback: wait for the event if push name isn't set yet
         self.wait_for_event(10, |e| matches!(e, Event::SelfPushNameUpdated(_)))
             .await?;
         Ok(())
     }
 
-    /// Reconnect and wait for the Connected event (replaces sleep-based waiting).
-    ///
-    /// Drains any stale Connected events from the broadcast channel before
-    /// triggering reconnect, so only the new Connected event is matched.
+    // ── Connection lifecycle ────────────────────────────────────────────────
+
+    /// Reconnect and wait for the Connected event.
     pub async fn reconnect_and_wait(&mut self) -> anyhow::Result<()> {
         // Drain any buffered Connected events from prior connections
         while let Ok(event) = self.event_rx.try_recv() {
@@ -222,7 +296,7 @@ impl TestClient {
         Ok(())
     }
 
-    /// Disconnect and drop the run handle (which aborts the task).
+    /// Disconnect and wait for the run task to complete cleanly.
     pub async fn disconnect(self) {
         self.client.disconnect().await;
         let run_handle = self.run_handle;
@@ -235,4 +309,27 @@ impl TestClient {
             }
         }
     }
+}
+
+// ── Free-standing test helpers ──────────────────────────────────────────────
+
+/// Build a simple text message.
+pub fn text_msg(text: &str) -> wa::Message {
+    wa::Message {
+        conversation: Some(text.to_string()),
+        ..Default::default()
+    }
+}
+
+/// Send a text message and wait for the receiver to get it. Returns the message ID.
+pub async fn send_and_expect_text(
+    sender: &whatsapp_rust::client::Client,
+    receiver: &mut TestClient,
+    to: &Jid,
+    text: &str,
+    timeout_secs: u64,
+) -> anyhow::Result<String> {
+    let msg_id = sender.send_message(to.clone(), text_msg(text)).await?;
+    receiver.wait_for_text(text, timeout_secs).await?;
+    Ok(msg_id)
 }

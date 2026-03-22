@@ -108,8 +108,11 @@ impl Client {
             inline_payload
         } else {
             log::info!("Downloading external history sync blob...");
-            if self.is_shutting_down() {
-                log::debug!("Aborting history sync {} before blob download", message_id);
+            if self.is_shutting_down() || !self.is_connected() {
+                log::debug!(
+                    "Aborting history sync {} before blob download: client disconnected",
+                    message_id
+                );
                 return;
             }
             // Stream-decrypt: reads encrypted chunks (8KB) from the network and
@@ -124,7 +127,14 @@ impl Client {
                     cursor.into_inner()
                 }
                 Err(e) => {
-                    log::error!("Failed to download history sync blob: {:?}", e);
+                    if self.is_shutting_down() {
+                        log::debug!(
+                            "History sync blob download aborted during shutdown: {:?}",
+                            e
+                        );
+                    } else {
+                        log::error!("Failed to download history sync blob: {:?}", e);
+                    }
                     return;
                 }
             }

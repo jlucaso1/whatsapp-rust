@@ -1,4 +1,4 @@
-use e2e_tests::TestClient;
+use e2e_tests::{TestClient, text_msg};
 use log::info;
 use wacore::types::events::Event;
 use whatsapp_rust::Jid;
@@ -6,86 +6,21 @@ use whatsapp_rust::NodeFilter;
 use whatsapp_rust::features::{
     GroupCreateOptions, GroupParticipantOptions, MembershipApprovalMode,
 };
-use whatsapp_rust::waproto::whatsapp as wa;
-
-/// Wait for a group message with specific text on a specific group.
-async fn wait_for_group_message(
-    client: &mut TestClient,
-    group_jid: &Jid,
-    expected_text: &str,
-    timeout_secs: u64,
-) -> anyhow::Result<Event> {
-    let gid = group_jid.clone();
-    let text = expected_text.to_string();
-    client
-        .wait_for_event(timeout_secs, move |e| {
-            matches!(
-                e,
-                Event::Message(msg, info)
-                if info.source.chat == gid
-                    && msg.conversation.as_deref() == Some(text.as_str())
-            )
-        })
-        .await
-}
-
-/// Wait for a w:gp2 notification on the given client.
-async fn wait_for_group_notification(
-    client: &mut TestClient,
-    timeout_secs: u64,
-) -> anyhow::Result<Event> {
-    client
-        .wait_for_event(timeout_secs, |e| {
-            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
-        })
-        .await
-}
-
-/// Assert that waiting for an event correctly times out (not some other error).
-fn assert_timeout_error(result: Result<Event, anyhow::Error>, context: &str) {
-    match result {
-        Ok(event) => panic!("{context}, but got event: {event:?}"),
-        Err(e) => {
-            let msg = e.to_string();
-            assert!(
-                msg.contains("Timed out"),
-                "{context}: expected timeout error, got: {msg}"
-            );
-        }
-    }
-}
 
 #[tokio::test]
 async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    // Connect three clients
     let mut client_a = TestClient::connect("e2e_group_a").await?;
     let mut client_b = TestClient::connect("e2e_group_b").await?;
     let mut client_c = TestClient::connect("e2e_group_c").await?;
 
-    let jid_a = client_a
-        .client
-        .get_pn()
-        .await
-        .expect("Client A should have a JID")
-        .to_non_ad();
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B should have a JID")
-        .to_non_ad();
-    let jid_c = client_c
-        .client
-        .get_pn()
-        .await
-        .expect("Client C should have a JID")
-        .to_non_ad();
+    let jid_a = client_a.jid().await;
+    let jid_b = client_b.jid().await;
+    let jid_c = client_c.jid().await;
 
     info!("A={jid_a}, B={jid_b}, C={jid_c}");
 
-    // Step 1: Client A creates a group with only B
     let create_result = client_a
         .client
         .groups()
@@ -99,42 +34,16 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
     let group_jid = create_result.gid;
     info!("Group created: {group_jid}");
 
-    // Step 2: Client A sends a message to the group
     let text_1 = "Hello group from A!";
     let msg_id = client_a
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_1.to_string()),
-                ..Default::default()
-            },
-        )
+        .send_message(group_jid.clone(), text_msg(text_1))
         .await?;
     info!("A sent group message: {msg_id}");
 
-    // Step 3: Client B should receive the group message
-    let event = wait_for_group_message(&mut client_b, &group_jid, text_1, 30).await?;
-    if let Event::Message(msg, msg_info) = event {
-        info!("B received group message from {:?}", msg_info.source);
-        assert_eq!(
-            msg.conversation.as_deref(),
-            Some(text_1),
-            "B should receive the correct message text"
-        );
-        assert!(
-            msg_info.source.is_group,
-            "Message should be marked as group message"
-        );
-        assert_eq!(
-            msg_info.source.chat, group_jid,
-            "Message chat should be the group JID"
-        );
-    } else {
-        panic!("Expected Message event, got: {:?}", event);
-    }
+    client_b.wait_for_group_text(&group_jid, text_1, 30).await?;
+    info!("B received group message");
 
-    // Step 4: Client A adds Client C to the group
     let add_result = client_a
         .client
         .groups()
@@ -151,93 +60,32 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
         "Add participant should succeed with status 200"
     );
 
-    // Wait for w:gp2 add notification to propagate to B (invalidates B's cache)
-    wait_for_group_notification(&mut client_b, 10).await?;
+    // w:gp2 add notification invalidates B's sender key cache
+    client_b.wait_for_group_notification(10).await?;
     info!("B received w:gp2 notification for add");
 
-    // Step 5: Client A sends a message after adding C
     let text_2 = "Welcome C to the group!";
     let msg_id_2 = client_a
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_2.to_string()),
-                ..Default::default()
-            },
-        )
+        .send_message(group_jid.clone(), text_msg(text_2))
         .await?;
     info!("A sent second group message: {msg_id_2}");
 
-    // Step 6: Both B and C should receive the second message
-    let event_b = wait_for_group_message(&mut client_b, &group_jid, text_2, 30).await?;
-    if let Event::Message(msg, _) = event_b {
-        assert_eq!(
-            msg.conversation.as_deref(),
-            Some(text_2),
-            "B should receive the second group message"
-        );
-    } else {
-        panic!("Expected Message event for B, got: {:?}", event_b);
-    }
+    client_b.wait_for_group_text(&group_jid, text_2, 30).await?;
+    client_c.wait_for_group_text(&group_jid, text_2, 30).await?;
+    info!("Both B and C received the second message");
 
-    let event_c = wait_for_group_message(&mut client_c, &group_jid, text_2, 30).await?;
-    if let Event::Message(msg, msg_info) = event_c {
-        info!("C received group message from {:?}", msg_info.source);
-        assert_eq!(
-            msg.conversation.as_deref(),
-            Some(text_2),
-            "C should receive the second group message"
-        );
-        assert!(
-            msg_info.source.is_group,
-            "C's message should be marked as group message"
-        );
-        assert_eq!(
-            msg_info.source.chat, group_jid,
-            "C's message chat should be the group JID"
-        );
-    } else {
-        panic!("Expected Message event for C, got: {:?}", event_c);
-    }
-
-    // Step 7: Client B sends a message — all participants (A and C) should receive it
     let text_3 = "B says hi to everyone!";
     client_b
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_3.to_string()),
-                ..Default::default()
-            },
-        )
+        .send_message(group_jid.clone(), text_msg(text_3))
         .await?;
     info!("B sent group message");
 
-    let event_a = wait_for_group_message(&mut client_a, &group_jid, text_3, 30).await?;
-    if let Event::Message(msg, _) = event_a {
-        assert_eq!(
-            msg.conversation.as_deref(),
-            Some(text_3),
-            "A should receive B's group message"
-        );
-    } else {
-        panic!("Expected Message event for A, got: {:?}", event_a);
-    }
+    client_a.wait_for_group_text(&group_jid, text_3, 30).await?;
+    client_c.wait_for_group_text(&group_jid, text_3, 30).await?;
+    info!("Both A and C received B's message");
 
-    let event_c2 = wait_for_group_message(&mut client_c, &group_jid, text_3, 30).await?;
-    if let Event::Message(msg, _) = event_c2 {
-        assert_eq!(
-            msg.conversation.as_deref(),
-            Some(text_3),
-            "C should receive B's group message"
-        );
-    } else {
-        panic!("Expected Message event for C, got: {:?}", event_c2);
-    }
-
-    // Cleanup
     client_a.disconnect().await;
     client_b.disconnect().await;
     client_c.disconnect().await;
@@ -249,28 +97,16 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
 async fn test_group_remove_member() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    // Connect three clients
     let mut client_a = TestClient::connect("e2e_grp_rm_a").await?;
     let mut client_b = TestClient::connect("e2e_grp_rm_b").await?;
     let mut client_c = TestClient::connect("e2e_grp_rm_c").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B should have a JID")
-        .to_non_ad();
-    let jid_c = client_c
-        .client
-        .get_pn()
-        .await
-        .expect("Client C should have a JID")
-        .to_non_ad();
+    let jid_b = client_b.jid().await;
+    let jid_c = client_c.jid().await;
 
     info!("B={jid_b}, C={jid_c}");
 
-    // Step 1: A creates a group with B and C
-    let create_result = client_a
+    let group_jid = client_a
         .client
         .groups()
         .create_group(GroupCreateOptions {
@@ -281,41 +117,24 @@ async fn test_group_remove_member() -> anyhow::Result<()> {
             ],
             ..Default::default()
         })
-        .await?;
-
-    let group_jid = create_result.gid;
+        .await?
+        .gid;
     info!("Group created: {group_jid}");
 
-    // Step 2: A sends a message — both B and C should receive it
     let text_before = "Before removal";
     client_a
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_before.to_string()),
-                ..Default::default()
-            },
-        )
+        .send_message(group_jid.clone(), text_msg(text_before))
         .await?;
 
-    let event_b = wait_for_group_message(&mut client_b, &group_jid, text_before, 30).await?;
-    if let Event::Message(msg, _) = event_b {
-        assert_eq!(msg.conversation.as_deref(), Some(text_before));
-    } else {
-        panic!("Expected Message event for B, got: {:?}", event_b);
-    }
-
-    let event_c = wait_for_group_message(&mut client_c, &group_jid, text_before, 30).await?;
-    if let Event::Message(msg, _) = event_c {
-        assert_eq!(msg.conversation.as_deref(), Some(text_before));
-    } else {
-        panic!("Expected Message event for C, got: {:?}", event_c);
-    }
-
+    client_b
+        .wait_for_group_text(&group_jid, text_before, 30)
+        .await?;
+    client_c
+        .wait_for_group_text(&group_jid, text_before, 30)
+        .await?;
     info!("Both B and C received the pre-removal message");
 
-    // Step 3: A removes B from the group
     let remove_result = client_a
         .client
         .groups()
@@ -332,71 +151,44 @@ async fn test_group_remove_member() -> anyhow::Result<()> {
         "Remove participant should succeed with status 200"
     );
 
-    // Wait for w:gp2 remove notification to propagate to C
-    wait_for_group_notification(&mut client_c, 10).await?;
+    client_c.wait_for_group_notification(10).await?;
     info!("C received w:gp2 notification for remove");
 
-    // Step 4: A sends a message after removing B — only C should receive it
     let text_after = "After B was removed";
     client_a
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_after.to_string()),
-                ..Default::default()
-            },
+        .send_message(group_jid.clone(), text_msg(text_after))
+        .await?;
+
+    client_c
+        .wait_for_group_text(&group_jid, text_after, 30)
+        .await?;
+
+    // B was removed, so should not receive anything
+    client_b
+        .assert_no_event(
+            3,
+            |e| matches!(e, Event::Message(_, _)),
+            "B should NOT receive messages after being removed",
         )
         .await?;
 
-    // C should receive the message
-    let event_c2 = wait_for_group_message(&mut client_c, &group_jid, text_after, 30).await?;
-    if let Event::Message(msg, msg_info) = event_c2 {
-        assert_eq!(msg.conversation.as_deref(), Some(text_after));
-        assert!(msg_info.source.is_group);
-        assert_eq!(msg_info.source.chat, group_jid);
-    } else {
-        panic!("Expected Message event for C, got: {:?}", event_c2);
-    }
-
-    // B should NOT receive the message — expect timeout
-    let b_result = client_b
-        .wait_for_event(3, |e| matches!(e, Event::Message(_, _)))
-        .await;
-    assert_timeout_error(
-        b_result,
-        "B should NOT receive messages after being removed from the group",
-    );
-
-    // Step 5: C sends a message — A should receive it, B should NOT
     let text_c = "C says hello after removal";
     client_c
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_c.to_string()),
-                ..Default::default()
-            },
+        .send_message(group_jid.clone(), text_msg(text_c))
+        .await?;
+
+    client_a.wait_for_group_text(&group_jid, text_c, 30).await?;
+
+    client_b
+        .assert_no_event(
+            3,
+            |e| matches!(e, Event::Message(_, _)),
+            "B should NOT receive messages sent by C after being removed",
         )
         .await?;
 
-    let event_a = wait_for_group_message(&mut client_a, &group_jid, text_c, 30).await?;
-    if let Event::Message(msg, _) = event_a {
-        assert_eq!(msg.conversation.as_deref(), Some(text_c));
-    } else {
-        panic!("Expected Message event for A, got: {:?}", event_a);
-    }
-
-    let b_result2 = client_b
-        .wait_for_event(3, |e| matches!(e, Event::Message(_, _)))
-        .await;
-    assert_timeout_error(
-        b_result2,
-        "B should NOT receive messages sent by C after being removed",
-    );
-
-    // Cleanup
     client_a.disconnect().await;
     client_b.disconnect().await;
     client_c.disconnect().await;
@@ -424,20 +216,13 @@ fn find_participant_admin_status(
 async fn test_group_promote_and_demote_admin() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    // Connect two clients
     let client_a = TestClient::connect("e2e_grp_promo_a").await?;
     let client_b = TestClient::connect("e2e_grp_promo_b").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B should have a JID")
-        .to_non_ad();
+    let jid_b = client_b.jid().await;
 
     info!("B={jid_b}");
 
-    // Step 1: A creates a group with B
     let create_result = client_a
         .client
         .groups()
@@ -451,7 +236,7 @@ async fn test_group_promote_and_demote_admin() -> anyhow::Result<()> {
     let group_jid = create_result.gid;
     info!("Group created: {group_jid}");
 
-    // Step 2: Verify B is NOT an admin initially
+    // Verify B is NOT an admin initially
     let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
     let b_is_admin = find_participant_admin_status(&metadata, &jid_b);
     assert_eq!(
@@ -461,7 +246,7 @@ async fn test_group_promote_and_demote_admin() -> anyhow::Result<()> {
     );
     info!("Confirmed B is not admin initially");
 
-    // Step 3: A promotes B to admin
+    // Promote B to admin
     client_a
         .client
         .groups()
@@ -469,7 +254,7 @@ async fn test_group_promote_and_demote_admin() -> anyhow::Result<()> {
         .await?;
     info!("Promoted B to admin");
 
-    // Step 4: Verify B is now an admin via metadata query
+    // Verify B is now an admin
     let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
     let b_is_admin = find_participant_admin_status(&metadata, &jid_b);
     assert_eq!(
@@ -479,7 +264,7 @@ async fn test_group_promote_and_demote_admin() -> anyhow::Result<()> {
     );
     info!("Confirmed B is admin after promotion");
 
-    // Step 5: A demotes B from admin
+    // Demote B from admin
     client_a
         .client
         .groups()
@@ -487,7 +272,7 @@ async fn test_group_promote_and_demote_admin() -> anyhow::Result<()> {
         .await?;
     info!("Demoted B from admin");
 
-    // Step 6: Verify B is no longer an admin
+    // Verify B is no longer an admin
     let metadata = client_a.client.groups().get_metadata(&group_jid).await?;
     let b_is_admin = find_participant_admin_status(&metadata, &jid_b);
     assert_eq!(
@@ -497,7 +282,6 @@ async fn test_group_promote_and_demote_admin() -> anyhow::Result<()> {
     );
     info!("Confirmed B is not admin after demotion");
 
-    // Cleanup
     client_a.disconnect().await;
     client_b.disconnect().await;
 
@@ -512,20 +296,9 @@ async fn test_group_cache_invalidation_on_add() -> anyhow::Result<()> {
     let client_b = TestClient::connect("e2e_grp_cache_b").await?;
     let mut client_c = TestClient::connect("e2e_grp_cache_c").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B JID")
-        .to_non_ad();
-    let jid_c = client_c
-        .client
-        .get_pn()
-        .await
-        .expect("Client C JID")
-        .to_non_ad();
+    let jid_b = client_b.jid().await;
+    let jid_c = client_c.jid().await;
 
-    // Step 1: A creates group with B only
     let group_jid = client_a
         .client
         .groups()
@@ -538,34 +311,22 @@ async fn test_group_cache_invalidation_on_add() -> anyhow::Result<()> {
         .gid;
     info!("Group created: {group_jid}");
 
-    // Step 2: B sends a message to the group — this caches group info for B
+    // B sends a message to prime its group participant cache
     let text_1 = "B's first message";
     client_b
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_1.to_string()),
-                ..Default::default()
-            },
-        )
+        .send_message(group_jid.clone(), text_msg(text_1))
         .await?;
     info!("B sent first message (caching group info)");
 
-    // A receives it
-    let event_a = wait_for_group_message(&mut client_a, &group_jid, text_1, 30).await?;
-    if let Event::Message(msg, _) = event_a {
-        assert_eq!(msg.conversation.as_deref(), Some(text_1));
-    } else {
-        panic!("Expected Message event for A");
-    }
+    client_a.wait_for_group_text(&group_jid, text_1, 30).await?;
 
     // Register a node waiter on B BEFORE the add, so no w:gp2 notification is missed.
     let notification_waiter = client_b
         .client
         .wait_for_node(NodeFilter::tag("notification").attr("type", "w:gp2"));
 
-    // Step 3: A adds C to the group
+    // A adds C — B should get a w:gp2 notification that invalidates its sender key cache
     let add_result = client_a
         .client
         .groups()
@@ -582,44 +343,17 @@ async fn test_group_cache_invalidation_on_add() -> anyhow::Result<()> {
             .map_err(|_| anyhow::anyhow!("Notification waiter channel closed"))?;
     info!("B received w:gp2 notification for add");
 
-    // Step 4: B sends another message — C should receive it
-    // This proves B's group cache was invalidated by the add notification
+    // B sends another message — C should receive it (proves cache was invalidated)
     let text_2 = "B's message after C was added";
     client_b
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_2.to_string()),
-                ..Default::default()
-            },
-        )
+        .send_message(group_jid.clone(), text_msg(text_2))
         .await?;
     info!("B sent second message");
 
-    // C should receive the message
-    let event_c = wait_for_group_message(&mut client_c, &group_jid, text_2, 30).await?;
-    if let Event::Message(msg, msg_info) = event_c {
-        assert_eq!(
-            msg.conversation.as_deref(),
-            Some(text_2),
-            "C should receive B's message after being added"
-        );
-        assert!(msg_info.source.is_group);
-        assert_eq!(msg_info.source.chat, group_jid);
-    } else {
-        panic!("Expected Message event for C");
-    }
+    client_c.wait_for_group_text(&group_jid, text_2, 30).await?;
+    client_a.wait_for_group_text(&group_jid, text_2, 30).await?;
 
-    // A should also receive it
-    let event_a2 = wait_for_group_message(&mut client_a, &group_jid, text_2, 30).await?;
-    if let Event::Message(msg, _) = event_a2 {
-        assert_eq!(msg.conversation.as_deref(), Some(text_2));
-    } else {
-        panic!("Expected Message event for A");
-    }
-
-    // Cleanup
     client_a.disconnect().await;
     client_b.disconnect().await;
     client_c.disconnect().await;
@@ -634,14 +368,8 @@ async fn test_group_settings() -> anyhow::Result<()> {
     let client_a = TestClient::connect("e2e_grp_settings_a").await?;
     let client_b = TestClient::connect("e2e_grp_settings_b").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B JID")
-        .to_non_ad();
+    let jid_b = client_b.jid().await;
 
-    // Create group
     let group_jid = client_a
         .client
         .groups()
@@ -783,7 +511,6 @@ async fn test_group_settings() -> anyhow::Result<()> {
     );
     info!("Membership approval disabled - verified");
 
-    // Cleanup
     client_a.disconnect().await;
     client_b.disconnect().await;
 
@@ -794,28 +521,16 @@ async fn test_group_settings() -> anyhow::Result<()> {
 async fn test_group_leave() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    // Connect three clients
     let mut client_a = TestClient::connect("e2e_grp_leave_a").await?;
     let mut client_b = TestClient::connect("e2e_grp_leave_b").await?;
     let mut client_c = TestClient::connect("e2e_grp_leave_c").await?;
 
-    let jid_b = client_b
-        .client
-        .get_pn()
-        .await
-        .expect("Client B should have a JID")
-        .to_non_ad();
-    let jid_c = client_c
-        .client
-        .get_pn()
-        .await
-        .expect("Client C should have a JID")
-        .to_non_ad();
+    let jid_b = client_b.jid().await;
+    let jid_c = client_c.jid().await;
 
     info!("B={jid_b}, C={jid_c}");
 
-    // Step 1: A creates a group with B and C
-    let create_result = client_a
+    let group_jid = client_a
         .client
         .groups()
         .create_group(GroupCreateOptions {
@@ -826,109 +541,64 @@ async fn test_group_leave() -> anyhow::Result<()> {
             ],
             ..Default::default()
         })
-        .await?;
-
-    let group_jid = create_result.gid;
+        .await?
+        .gid;
     info!("Group created: {group_jid}");
 
-    // Step 2: A sends a message — both B and C should receive it
     let text_before = "Before B leaves";
     client_a
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_before.to_string()),
-                ..Default::default()
-            },
-        )
+        .send_message(group_jid.clone(), text_msg(text_before))
         .await?;
 
-    let event_b = wait_for_group_message(&mut client_b, &group_jid, text_before, 30).await?;
-    if let Event::Message(msg, _) = event_b {
-        assert_eq!(msg.conversation.as_deref(), Some(text_before));
-    } else {
-        panic!("Expected Message event for B, got: {:?}", event_b);
-    }
-
-    let event_c = wait_for_group_message(&mut client_c, &group_jid, text_before, 30).await?;
-    if let Event::Message(msg, _) = event_c {
-        assert_eq!(msg.conversation.as_deref(), Some(text_before));
-    } else {
-        panic!("Expected Message event for C, got: {:?}", event_c);
-    }
-
+    client_b
+        .wait_for_group_text(&group_jid, text_before, 30)
+        .await?;
+    client_c
+        .wait_for_group_text(&group_jid, text_before, 30)
+        .await?;
     info!("Both B and C received the pre-leave message");
 
-    // Step 3: B leaves the group
     client_b.client.groups().leave(&group_jid).await?;
     info!("B left the group");
 
-    // Wait for w:gp2 remove notification to propagate to A
-    wait_for_group_notification(&mut client_a, 10).await?;
+    client_a.wait_for_group_notification(10).await?;
     info!("A received w:gp2 notification for B's leave");
 
-    // Step 4: A sends a message after B left — only C should receive it
     let text_after = "After B left";
     client_a
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_after.to_string()),
-                ..Default::default()
-            },
+        .send_message(group_jid.clone(), text_msg(text_after))
+        .await?;
+
+    client_c
+        .wait_for_group_text(&group_jid, text_after, 30)
+        .await?;
+
+    client_b
+        .assert_no_event(
+            3,
+            |e| matches!(e, Event::Message(_, _)),
+            "B should NOT receive messages after leaving",
         )
         .await?;
 
-    // C should receive the message
-    let event_c2 = wait_for_group_message(&mut client_c, &group_jid, text_after, 30).await?;
-    if let Event::Message(msg, msg_info) = event_c2 {
-        assert_eq!(msg.conversation.as_deref(), Some(text_after));
-        assert!(msg_info.source.is_group);
-        assert_eq!(msg_info.source.chat, group_jid);
-    } else {
-        panic!("Expected Message event for C, got: {:?}", event_c2);
-    }
-
-    // B should NOT receive the message — expect timeout
-    let b_result = client_b
-        .wait_for_event(3, |e| matches!(e, Event::Message(_, _)))
-        .await;
-    assert_timeout_error(
-        b_result,
-        "B should NOT receive messages after leaving the group",
-    );
-
-    // Step 5: C sends a message — A should receive it, B should NOT
     let text_c = "C says hello after B left";
     client_c
         .client
-        .send_message(
-            group_jid.clone(),
-            wa::Message {
-                conversation: Some(text_c.to_string()),
-                ..Default::default()
-            },
+        .send_message(group_jid.clone(), text_msg(text_c))
+        .await?;
+
+    client_a.wait_for_group_text(&group_jid, text_c, 30).await?;
+
+    client_b
+        .assert_no_event(
+            3,
+            |e| matches!(e, Event::Message(_, _)),
+            "B should NOT receive messages sent by C after leaving",
         )
         .await?;
 
-    let event_a = wait_for_group_message(&mut client_a, &group_jid, text_c, 30).await?;
-    if let Event::Message(msg, _) = event_a {
-        assert_eq!(msg.conversation.as_deref(), Some(text_c));
-    } else {
-        panic!("Expected Message event for A, got: {:?}", event_a);
-    }
-
-    let b_result2 = client_b
-        .wait_for_event(3, |e| matches!(e, Event::Message(_, _)))
-        .await;
-    assert_timeout_error(
-        b_result2,
-        "B should NOT receive messages sent by C after leaving",
-    );
-
-    // Cleanup
     client_a.disconnect().await;
     client_b.disconnect().await;
     client_c.disconnect().await;

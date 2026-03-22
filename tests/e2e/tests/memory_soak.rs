@@ -1,24 +1,7 @@
 //! Memory soak tests — aggressive stress tests to detect unbounded memory growth.
 //!
-//! These tests simulate sustained production load: high message volume, multiple
-//! groups, mixed operations (DMs, groups, presence, chatstate, reconnects),
-//! larger payloads, and many peers. They track both internal collection sizes
-//! AND process RSS to catch leaks that escape moka/HashMap tracking.
-//!
-//! Run with:
-//! ```sh
-//! MOCK_SERVER_URL="wss://127.0.0.1:8080/ws/chat" cargo test -p e2e-tests --test memory_soak -- --nocapture
-//! ```
-//!
-//! Run a single test:
-//! ```sh
-//! MOCK_SERVER_URL="wss://127.0.0.1:8080/ws/chat" cargo test -p e2e-tests --test memory_soak test_heavy_mixed_soak -- --nocapture
-//! ```
-//!
-//! For heap profiling with dhat:
-//! ```sh
-//! MOCK_SERVER_URL="wss://127.0.0.1:8080/ws/chat" cargo test -p e2e-tests --test memory_soak --features dhat-heap -- --nocapture --test-threads=1
-//! ```
+//! Track both internal collection sizes and process RSS to catch leaks that
+//! escape moka/HashMap tracking.
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -33,10 +16,6 @@ use whatsapp_rust::client::MemoryDiagnostics;
 use whatsapp_rust::features::{GroupCreateOptions, GroupParticipantOptions};
 use whatsapp_rust::waproto::whatsapp as wa;
 
-// ---------------------------------------------------------------------------
-// Configuration — override with env vars for longer runs
-// ---------------------------------------------------------------------------
-
 /// Read an env var as usize, falling back to the given default.
 fn env_or(var: &str, default: usize) -> usize {
     std::env::var(var)
@@ -44,10 +23,6 @@ fn env_or(var: &str, default: usize) -> usize {
         .and_then(|v| v.parse().ok())
         .unwrap_or(default)
 }
-
-// ---------------------------------------------------------------------------
-// RSS tracking via /proc/self/statm
-// ---------------------------------------------------------------------------
 
 /// Returns current RSS in KiB by parsing /proc/self/status (no page-size assumption).
 fn rss_kib() -> usize {
@@ -66,10 +41,6 @@ fn rss_kib() -> usize {
     }
     0
 }
-
-// ---------------------------------------------------------------------------
-// Snapshot: internal diagnostics + RSS
-// ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone)]
 struct Snapshot {
@@ -110,10 +81,6 @@ async fn snapshot(label: &str, round: usize, client: &whatsapp_rust::client::Cli
         heap_bytes,
     }
 }
-
-// ---------------------------------------------------------------------------
-// Growth analysis
-// ---------------------------------------------------------------------------
 
 /// Analyze snapshot series: check both collection growth AND RSS growth.
 fn analyze_growth(label: &str, snapshots: &[Snapshot]) {
@@ -277,10 +244,6 @@ fn analyze_growth(label: &str, snapshots: &[Snapshot]) {
     info!("  -> No growth issues detected.");
 }
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-
 fn make_text_msg(text: &str) -> wa::Message {
     wa::Message {
         conversation: Some(text.to_string()),
@@ -348,10 +311,6 @@ async fn wait_for_group_msg(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Test 1: High-volume DM soak (200+ rounds, bidirectional, mixed sizes)
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 #[ignore = "stress test — run manually with --ignored"]
 async fn test_heavy_dm_soak() -> anyhow::Result<()> {
@@ -412,10 +371,6 @@ async fn test_heavy_dm_soak() -> anyhow::Result<()> {
     client_b.disconnect().await;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Test 2: Multi-group + multi-peer soak
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 #[ignore = "stress test — run manually with --ignored"]
@@ -557,10 +512,6 @@ async fn test_heavy_group_soak() -> anyhow::Result<()> {
     client_c.disconnect().await;
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Test 3: Mixed operations — DM + group + presence + chatstate + reconnects
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 #[ignore = "stress test — run manually with --ignored"]
@@ -704,10 +655,6 @@ async fn test_heavy_mixed_soak() -> anyhow::Result<()> {
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Test 4: Many-peer DM fan-out (stresses device_cache, session_locks, signal_cache)
-// ---------------------------------------------------------------------------
-
 #[tokio::test]
 #[ignore = "stress test — run manually with --ignored"]
 async fn test_many_peers_soak() -> anyhow::Result<()> {
@@ -778,10 +725,6 @@ async fn test_many_peers_soak() -> anyhow::Result<()> {
     }
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Test 5: Reconnect stress — many rapid reconnects with messaging between
-// ---------------------------------------------------------------------------
 
 #[tokio::test]
 #[ignore = "stress test — run manually with --ignored"]
