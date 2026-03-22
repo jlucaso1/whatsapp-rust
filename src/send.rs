@@ -1493,4 +1493,71 @@ mod tests {
 
         assert_eq!(new_devices.len(), 10);
     }
+
+    mod infer_stanza {
+        use super::*;
+
+        #[test]
+        fn regular_message_returns_none() {
+            let msg = wa::Message {
+                conversation: Some("hello".into()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert!(edit.is_none());
+            assert!(node.is_none());
+        }
+
+        #[test]
+        fn pin_returns_edit_attribute() {
+            let msg = wa::Message {
+                pin_in_chat_message: Some(wa::message::PinInChatMessage::default()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert_eq!(edit, Some(EditAttribute::PinInChat));
+            assert!(node.is_none());
+        }
+
+        #[test]
+        fn poll_creation_v3_returns_meta_node() {
+            let msg = wa::Message {
+                poll_creation_message_v3: Some(Box::default()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert!(edit.is_none());
+            let node = node.expect("should have meta node");
+            assert_eq!(node.tag, "meta");
+            let mut attrs = node.attrs();
+            assert_eq!(
+                attrs.optional_string("polltype").unwrap().as_ref(),
+                "creation"
+            );
+        }
+
+        #[test]
+        fn event_returns_meta_node() {
+            let msg = wa::Message {
+                event_message: Some(Box::default()),
+                ..Default::default()
+            };
+            let (edit, node) = infer_stanza_metadata(&msg);
+            assert!(edit.is_none());
+            let node = node.expect("should have meta node");
+            assert_eq!(node.tag, "meta");
+            let mut attrs = node.attrs();
+            assert_eq!(
+                attrs.optional_string("event_type").unwrap().as_ref(),
+                "creation"
+            );
+        }
+
+        #[test]
+        fn empty_message_returns_none() {
+            let (edit, node) = infer_stanza_metadata(&wa::Message::default());
+            assert!(edit.is_none());
+            assert!(node.is_none());
+        }
+    }
 }
