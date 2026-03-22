@@ -97,12 +97,19 @@ impl ByteStoreState {
     }
 
     /// Insert data, skipping if bytes are identical (avoids redundant dirty marks).
-    fn put(&mut self, address: &str, data: &[u8]) {
+    /// Use for stores where data rarely changes (identities).
+    fn put_dedup(&mut self, address: &str, data: &[u8]) {
         if let Some(Some(existing)) = self.cache.get(address)
             && existing.as_ref() == data
         {
             return;
         }
+        self.put(address, data);
+    }
+
+    /// Insert data unconditionally. Use for stores where data changes every
+    /// message (sender keys) — the byte comparison would always fail.
+    fn put(&mut self, address: &str, data: &[u8]) {
         let addr = self.key_for(address);
         self.cache.insert(addr.clone(), Some(Arc::from(data)));
         self.dirty.insert(addr.clone());
@@ -200,7 +207,7 @@ impl SignalStoreCache {
     }
 
     pub async fn put_identity(&self, address: &str, data: &[u8]) {
-        self.identities.lock().await.put(address, data);
+        self.identities.lock().await.put_dedup(address, data);
     }
 
     pub async fn delete_identity(&self, address: &str) {
