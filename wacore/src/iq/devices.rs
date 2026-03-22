@@ -1,10 +1,15 @@
 //! Device management IQ specs.
 
+use std::time::Duration;
+
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
+
+/// WA Web uses a 3s timeout for the logout IQ (Socket/Model.js).
+const LOGOUT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Deregister this companion device from the WhatsApp account.
 pub struct RemoveCompanionDeviceSpec {
@@ -31,6 +36,7 @@ impl IqSpec for RemoveCompanionDeviceSpec {
             Jid::new("", SERVER_JID),
             Some(NodeContent::Nodes(vec![child])),
         )
+        .with_timeout(LOGOUT_TIMEOUT)
     }
 
     fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
