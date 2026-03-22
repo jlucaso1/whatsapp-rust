@@ -26,7 +26,7 @@ cargo test -p e2e-tests          # requires mock server running
 
 - **State**: Never modify Device state directly. Use `DeviceCommand` + `PersistenceManager::process_command()`. Read via `get_device_snapshot()`.
 - **Async**: All I/O uses Tokio. Wrap blocking I/O (`ureq`) and heavy CPU work in `tokio::task::spawn_blocking`.
-- **Concurrency**: Use `Client::chat_locks` to serialize per-chat operations.
+- **Concurrency**: `session_locks` serializes per-sender Signal encrypt/decrypt. `message_enqueue_locks` serializes per-chat incoming message processing. Outgoing sends are not per-chat locked (matches WA Web).
 - **Errors**: `thiserror` for typed errors, `anyhow` for multi-failure functions. No `.unwrap()` outside tests.
 - **Protocol**: Cross-reference **whatsmeow**, **Baileys**, and captured WhatsApp Web JS (`docs/captured-js/`) to verify implementations.
 - **IQ Requests**: Use `client.execute(Spec::new(&jid)).await?` pattern. IqSpec constructors take `&Jid` not `Jid`.
