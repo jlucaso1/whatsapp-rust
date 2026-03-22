@@ -15,9 +15,7 @@ use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
 const PING_TRIGGER: &str = "🦀ping";
-const MEDIA_PING_TRIGGER: &str = "ping";
 const PONG_TEXT: &str = "🏓 Pong!";
-const MEDIA_PONG_TEXT: &str = "pong";
 const REACTION_EMOJI: &str = "🏓";
 
 // This is a demo of a simple ping-pong bot with every type of media.
@@ -342,13 +340,17 @@ impl MediaPing for wa::message::ImageMessage {
         wa::Message {
             image_message: Some(Box::new(wa::message::ImageMessage {
                 mimetype: self.mimetype.clone(),
-                caption: Some(MEDIA_PONG_TEXT.to_string()),
+                caption: Some(PONG_TEXT.to_string()),
                 url: Some(upload.url),
                 direct_path: Some(upload.direct_path),
                 media_key: Some(upload.media_key),
                 file_enc_sha256: Some(upload.file_enc_sha256),
                 file_sha256: Some(upload.file_sha256),
                 file_length: Some(upload.file_length),
+                media_key_timestamp: Some(upload.media_key_timestamp),
+                jpeg_thumbnail: self.jpeg_thumbnail.clone(),
+                height: self.height,
+                width: self.width,
                 ..Default::default()
             })),
             ..Default::default()
@@ -365,13 +367,15 @@ impl MediaPing for wa::message::VideoMessage {
         wa::Message {
             video_message: Some(Box::new(wa::message::VideoMessage {
                 mimetype: self.mimetype.clone(),
-                caption: Some(MEDIA_PONG_TEXT.to_string()),
+                caption: Some(PONG_TEXT.to_string()),
                 url: Some(upload.url),
                 direct_path: Some(upload.direct_path),
                 media_key: Some(upload.media_key),
                 file_enc_sha256: Some(upload.file_enc_sha256),
                 file_sha256: Some(upload.file_sha256),
                 file_length: Some(upload.file_length),
+                media_key_timestamp: Some(upload.media_key_timestamp),
+                jpeg_thumbnail: self.jpeg_thumbnail.clone(),
                 gif_playback: self.gif_playback,
                 height: self.height,
                 width: self.width,
@@ -388,12 +392,12 @@ fn get_pingable_media<'a>(message: &'a wa::Message) -> Option<&'a (dyn MediaPing
     let base_message = message.get_base_message();
 
     if let Some(msg) = &base_message.image_message
-        && msg.caption.as_deref() == Some(MEDIA_PING_TRIGGER)
+        && msg.caption.as_deref() == Some(PING_TRIGGER)
     {
         return Some(&**msg);
     }
     if let Some(msg) = &base_message.video_message
-        && msg.caption.as_deref() == Some(MEDIA_PING_TRIGGER)
+        && msg.caption.as_deref() == Some(PING_TRIGGER)
     {
         return Some(&**msg);
     }

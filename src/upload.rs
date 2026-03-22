@@ -111,6 +111,7 @@ async fn upload_media_with_retry<
     enc: &wacore::upload::EncryptedMedia,
     media_type: MediaType,
     file_length: u64,
+    media_key_timestamp: i64,
     mut get_media_conn: GetMediaConn,
     mut invalidate_media_conn: InvalidateMediaConn,
     mut execute_request: ExecuteRequest,
@@ -156,6 +157,7 @@ where
                                 file_enc_sha256: enc.file_enc_sha256.to_vec(),
                                 file_sha256: enc.file_sha256.to_vec(),
                                 file_length,
+                                media_key_timestamp,
                             });
                         }
                         UploadExistsResult::Resume { byte_offset } => {
@@ -195,6 +197,7 @@ where
                     file_enc_sha256: enc.file_enc_sha256.to_vec(),
                     file_sha256: enc.file_sha256.to_vec(),
                     file_length,
+                    media_key_timestamp,
                 });
             }
 
@@ -231,6 +234,8 @@ pub struct UploadResponse {
     pub file_enc_sha256: Vec<u8>,
     pub file_sha256: Vec<u8>,
     pub file_length: u64,
+    /// Unix timestamp (seconds) when the media key was generated.
+    pub media_key_timestamp: i64,
 }
 
 #[derive(Deserialize)]
@@ -251,6 +256,7 @@ impl Client {
             &enc,
             media_type,
             data.len() as u64,
+            wacore::time::now_secs(),
             |force| async move { self.refresh_media_conn(force).await.map_err(Into::into) },
             || async { self.invalidate_media_conn().await },
             |request| async move { self.http_client.execute(request).await },
@@ -294,6 +300,7 @@ mod tests {
             &enc,
             MediaType::Image,
             8,
+            0,
             {
                 let refresh_calls = Arc::clone(&refresh_calls);
                 move |force| {
@@ -363,6 +370,7 @@ mod tests {
             &enc,
             MediaType::Image,
             10,
+            0,
             move |_force| {
                 let conn = conn.clone();
                 async move { Ok(conn) }
