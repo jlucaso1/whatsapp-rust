@@ -135,8 +135,8 @@ impl MediaEncryptor {
             }
             // Complete the partial block from remainder + head of plaintext.
             self.remainder.extend_from_slice(&plaintext[..need]);
-            self.encrypt_and_emit(&self.remainder.clone(), &mut emit);
-            self.remainder.clear();
+            let completed = std::mem::take(&mut self.remainder);
+            self.encrypt_and_emit(&completed, &mut emit);
             &plaintext[need..]
         } else {
             plaintext
