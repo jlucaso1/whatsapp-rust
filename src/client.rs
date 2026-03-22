@@ -1227,11 +1227,9 @@ impl Client {
                                         return Ok(());
                                     }
 
-                                    // Cooperative yield: give other tasks a chance to run.
-                                    // The runtime decides whether yielding is needed — returns
-                                    // None (zero-cost) when unnecessary, Some(fut) otherwise.
+                                    // Cooperative yield — frequency and behavior are runtime-defined.
                                     frames_in_batch += 1;
-                                    if frames_in_batch.is_multiple_of(10)
+                                    if frames_in_batch.is_multiple_of(self.runtime.yield_frequency())
                                         && let Some(yield_fut) = self.runtime.yield_now()
                                     {
                                         yield_fut.await;
