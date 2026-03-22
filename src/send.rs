@@ -51,8 +51,7 @@ pub enum RevokeType {
     Admin { original_sender: Jid },
 }
 
-/// Derive stanza-level metadata that WA Web / the server expects for certain message types.
-/// Matches WA Web's editAttribute() (MsgCommonApi.js:82) and genMetaNode() (MsgMetaNode.js:47).
+/// Derive stanza-level edit attribute and meta node from message content.
 fn infer_stanza_metadata(msg: &wa::Message) -> (Option<EditAttribute>, Option<Node>) {
     if msg.pin_in_chat_message.is_some() {
         return (Some(EditAttribute::PinInChat), None);

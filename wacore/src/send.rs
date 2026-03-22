@@ -161,10 +161,8 @@ fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
     None
 }
 
-/// Whether the enc node should carry decrypt-fail="hide".
-/// Matches WA Web's decryptFailAttributeFromProtobuf (EProtoUtils.js:89-123).
-/// Infrastructure messages that users should never see get hidden on decrypt failure
-/// instead of showing a "waiting for this message" placeholder.
+/// Infrastructure messages get decrypt-fail="hide" so recipients don't see
+/// "waiting for this message" placeholders for things like reactions or pin changes.
 pub fn should_hide_decrypt_fail(msg: &wa::Message) -> bool {
     let msg = unwrap_message(msg);
 
@@ -178,9 +176,9 @@ pub fn should_hide_decrypt_fail(msg: &wa::Message) -> bool {
             .poll_update_message
             .as_ref()
             .is_some_and(|p| p.vote.is_some())
-    // TODO: secretEncryptedMessage with EVENT_EDIT or POLL_EDIT
-    // TODO: protocolMessage with EPHEMERAL_SYNC_RESPONSE, REQUEST_WELCOME_MESSAGE,
-    //       editedMessage, or GROUP_MEMBER_LABEL_CHANGE
+    // TODO: messageHistoryNotice, secretEncryptedMessage (EVENT_EDIT/POLL_EDIT),
+    //       botInvokeMessage (REQUEST_WELCOME_MESSAGE),
+    //       protocolMessage (EPHEMERAL_SYNC_RESPONSE, GROUP_MEMBER_LABEL_CHANGE)
 }
 
 pub async fn encrypt_group_message<S, R>(
