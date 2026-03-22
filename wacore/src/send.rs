@@ -564,23 +564,21 @@ pub async fn prepare_dm_stanza<
     let participants = vec![to_jid.clone(), own_jid.clone()];
     let all_devices = resolver.resolve_devices(&participants).await?;
 
-    let mut recipient_devices = Vec::new();
-    let mut own_other_devices = Vec::new();
+    let mut recipient_devices = Vec::with_capacity(all_devices.len());
+    let mut own_other_devices = Vec::with_capacity(4);
     for device_jid in &all_devices {
-        // Skip the current device (sender) to prevent self-encryption loops
         if device_jid.user == own_jid.user && device_jid.device == own_jid.device {
             continue;
         }
 
-        let is_own_device = device_jid.user == own_jid.user;
-        if is_own_device {
+        if device_jid.user == own_jid.user {
             own_other_devices.push(device_jid.clone());
         } else {
             recipient_devices.push(device_jid.clone());
         }
     }
 
-    let mut participant_nodes = Vec::new();
+    let mut participant_nodes = Vec::with_capacity(all_devices.len());
     let mut includes_prekey_message = false;
 
     // If this is an edit-like message, set decrypt-fail="hide" on enc nodes

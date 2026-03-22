@@ -262,14 +262,14 @@ impl Client {
         file_length: u64,
         media_type: MediaType,
     ) -> Result<Vec<u8>> {
-        let params = DownloadParams {
-            direct_path: direct_path.to_string(),
-            media_key: Some(media_key.to_vec()),
-            file_sha256: file_sha256.to_vec(),
-            file_enc_sha256: Some(file_enc_sha256.to_vec()),
+        let params = Self::build_download_params(
+            direct_path,
+            media_key,
+            file_sha256,
+            file_enc_sha256,
             file_length,
             media_type,
-        };
+        );
         self.download(&params).await
     }
 
@@ -363,15 +363,33 @@ impl Client {
         media_type: MediaType,
         writer: W,
     ) -> Result<W> {
-        let params = DownloadParams {
+        let params = Self::build_download_params(
+            direct_path,
+            media_key,
+            file_sha256,
+            file_enc_sha256,
+            file_length,
+            media_type,
+        );
+        self.download_to_writer(&params, writer).await
+    }
+
+    fn build_download_params(
+        direct_path: &str,
+        media_key: &[u8],
+        file_sha256: &[u8],
+        file_enc_sha256: &[u8],
+        file_length: u64,
+        media_type: MediaType,
+    ) -> DownloadParams {
+        DownloadParams {
             direct_path: direct_path.to_string(),
             media_key: Some(media_key.to_vec()),
             file_sha256: file_sha256.to_vec(),
             file_enc_sha256: Some(file_enc_sha256.to_vec()),
             file_length,
             media_type,
-        };
-        self.download_to_writer(&params, writer).await
+        }
     }
 
     /// Internal: stream download + decrypt to a writer in one blocking thread.
