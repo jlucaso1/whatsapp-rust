@@ -353,6 +353,7 @@ async fn wait_for_group_msg(
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "stress test — run manually with --ignored"]
 async fn test_heavy_dm_soak() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     #[cfg(feature = "dhat-heap")]
@@ -417,6 +418,7 @@ async fn test_heavy_dm_soak() -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "stress test — run manually with --ignored"]
 async fn test_heavy_group_soak() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     #[cfg(feature = "dhat-heap")]
@@ -561,6 +563,7 @@ async fn test_heavy_group_soak() -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "stress test — run manually with --ignored"]
 async fn test_heavy_mixed_soak() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     #[cfg(feature = "dhat-heap")]
@@ -706,6 +709,7 @@ async fn test_heavy_mixed_soak() -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "stress test — run manually with --ignored"]
 async fn test_many_peers_soak() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     #[cfg(feature = "dhat-heap")]
@@ -780,6 +784,7 @@ async fn test_many_peers_soak() -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
+#[ignore = "stress test — run manually with --ignored"]
 async fn test_heavy_reconnect_soak() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
     #[cfg(feature = "dhat-heap")]
