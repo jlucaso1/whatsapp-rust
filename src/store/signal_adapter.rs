@@ -63,28 +63,21 @@ impl SessionStore for SessionAdapter {
         address: &ProtocolAddress,
     ) -> Result<Option<SessionRecord>, SignalProtocolError> {
         let addr_str = address.to_string();
-
         let device = self.0.device.read().await;
-        match self
-            .0
+        self.0
             .cache
             .get_session(&addr_str, &*device.backend)
             .await
-            .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))?
-        {
-            Some(data) => Ok(Some(SessionRecord::deserialize(&data)?)),
-            None => Ok(None),
-        }
+            .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))
     }
 
     async fn store_session(
         &mut self,
         address: &ProtocolAddress,
-        record: &SessionRecord,
+        record: SessionRecord,
     ) -> Result<(), SignalProtocolError> {
         let addr_str = address.to_string();
-        let record_bytes = record.serialize()?;
-        self.0.cache.put_session(&addr_str, &record_bytes).await;
+        self.0.cache.put_session(&addr_str, record).await;
         Ok(())
     }
 }
