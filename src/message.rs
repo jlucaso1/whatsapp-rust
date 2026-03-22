@@ -662,11 +662,11 @@ impl Client {
         // multiple messages from the same sender are processed concurrently.
         // Use the full Signal protocol address string as the lock key so it matches
         // the SignalProtocolStoreAdapter's per-session locks (prevents ratchet counter races).
-        let signal_addr_str = sender_encryption_jid.to_protocol_address_string();
+        let signal_address = sender_encryption_jid.to_protocol_address();
 
         let session_mutex = self
             .session_locks
-            .get_with(signal_addr_str.clone(), async {
+            .get_with_by_ref(signal_address.as_str(), async {
                 std::sync::Arc::new(async_lock::Mutex::new(()))
             })
             .await;
@@ -715,8 +715,6 @@ impl Client {
                     }
                 }
             };
-
-            let signal_address = sender_encryption_jid.to_protocol_address();
 
             if enc_type.as_ref() == "pkmsg" {
                 // FLAGGED FOR DEBUGGING: "Bad Mac" Reproducibility
@@ -805,8 +803,7 @@ impl Client {
                         // NOTE: We intentionally do NOT delete the session here. The session will be
                         // archived (not deleted) when the new PreKeySignalMessage is processed,
                         // allowing decryption of any in-flight messages encrypted with the old session.
-                        let address_str = address.to_string();
-                        self.signal_cache.delete_identity(&address_str).await;
+                        self.signal_cache.delete_identity(address).await;
                         // Flush immediately so the backend is updated BEFORE the retry decrypt below.
                         // Device::is_trusted_identity reads from backend, not cache.
                         if let Err(e) = self.flush_signal_cache().await {
@@ -949,8 +946,7 @@ impl Client {
                         // IMPORTANT: Must go through the cache, not directly to the backend!
                         // Going to the backend directly leaves the stale session in the cache,
                         // which causes retry messages to also fail (they'd load the stale session).
-                        let address_str = signal_address.to_string();
-                        self.signal_cache.delete_session(&address_str).await;
+                        self.signal_cache.delete_session(&signal_address).await;
                         log::info!(
                             "Deleted stale session for {} from cache to allow re-establishment",
                             signal_address

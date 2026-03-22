@@ -1,4 +1,5 @@
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use uuid::Uuid;
 
@@ -281,15 +282,22 @@ impl fmt::Display for DeviceId {
     }
 }
 
-#[derive(Clone, Debug, Hash, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Clone, Debug)]
 pub struct ProtocolAddress {
     name: String,
     device_id: DeviceId,
+    /// Pre-computed `"{name}.{device_id}"` — avoids allocation on every `to_string()`.
+    display: String,
 }
 
 impl ProtocolAddress {
     pub fn new(name: String, device_id: DeviceId) -> Self {
-        ProtocolAddress { name, device_id }
+        let display = format!("{name}.{device_id}");
+        ProtocolAddress {
+            name,
+            device_id,
+            display,
+        }
     }
 
     #[inline]
@@ -301,10 +309,42 @@ impl ProtocolAddress {
     pub fn device_id(&self) -> DeviceId {
         self.device_id
     }
+
+    /// Returns the cached `"name.device_id"` string without allocation.
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.display
+    }
+}
+
+impl PartialEq for ProtocolAddress {
+    fn eq(&self, other: &Self) -> bool {
+        self.display == other.display
+    }
+}
+
+impl Eq for ProtocolAddress {}
+
+impl Hash for ProtocolAddress {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.display.hash(state);
+    }
+}
+
+impl PartialOrd for ProtocolAddress {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ProtocolAddress {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.display.cmp(&other.display)
+    }
 }
 
 impl fmt::Display for ProtocolAddress {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}.{}", self.name, self.device_id)
+        f.write_str(&self.display)
     }
 }

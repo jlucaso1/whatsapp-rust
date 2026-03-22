@@ -109,7 +109,7 @@ pub async fn group_encrypt<R: Rng + CryptoRng>(
     sender_key_state.set_sender_chain_key(next_sender_chain_key);
 
     sender_key_store
-        .store_sender_key(sender_key_name, &record)
+        .store_sender_key(sender_key_name, record)
         .await?;
 
     Ok(skm)
@@ -243,7 +243,7 @@ pub async fn group_decrypt(
     })?;
 
     sender_key_store
-        .store_sender_key(sender_key_name, &record)
+        .store_sender_key(sender_key_name, record)
         .await?;
 
     Ok(plaintext)
@@ -275,45 +275,14 @@ pub async fn process_sender_key_distribution_message(
         None,
     );
     sender_key_store
-        .store_sender_key(sender_key_name, &sender_key_record)
+        .store_sender_key(sender_key_name, sender_key_record)
         .await?;
     Ok(())
 }
 
-pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
-    sender_key_name: &SenderKeyName,
-    sender_key_store: &mut dyn SenderKeyStore,
-    csprng: &mut R,
-) -> Result<SenderKeyDistributionMessage> {
-    let sender_key_record = sender_key_store.load_sender_key(sender_key_name).await?;
-
-    let sender_key_record = match sender_key_record {
-        Some(record) => record,
-        None => {
-            // libsignal-protocol-java uses 31-bit integers for sender key chain IDs
-            let chain_id = (csprng.random::<u32>()) >> 1;
-            log::info!("Creating SenderKey with chain ID {chain_id}");
-
-            let iteration = 0;
-            let sender_key: [u8; 32] = csprng.random();
-            let signing_key = KeyPair::generate(csprng);
-            let mut record = SenderKeyRecord::new_empty();
-            record.add_sender_key_state(
-                SENDERKEY_MESSAGE_CURRENT_VERSION,
-                chain_id,
-                iteration,
-                &sender_key,
-                signing_key.public_key,
-                Some(signing_key.private_key),
-            );
-            sender_key_store
-                .store_sender_key(sender_key_name, &record)
-                .await?;
-            record
-        }
-    };
-
-    let state = sender_key_record
+/// Build a `SenderKeyDistributionMessage` from the current state of a record.
+fn build_skdm_from_record(record: &SenderKeyRecord) -> Result<SenderKeyDistributionMessage> {
+    let state = record
         .sender_key_state()
         .map_err(|_| SignalProtocolError::InvalidSenderKeySession)?;
     let sender_chain_key = state
@@ -333,4 +302,40 @@ pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
             .signing_key_public()
             .map_err(|_| SignalProtocolError::InvalidSenderKeySession)?,
     )
+}
+
+pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
+    sender_key_name: &SenderKeyName,
+    sender_key_store: &mut dyn SenderKeyStore,
+    csprng: &mut R,
+) -> Result<SenderKeyDistributionMessage> {
+    let sender_key_record = sender_key_store.load_sender_key(sender_key_name).await?;
+
+    match sender_key_record {
+        Some(record) => build_skdm_from_record(&record),
+        None => {
+            // libsignal-protocol-java uses 31-bit integers for sender key chain IDs
+            let chain_id = (csprng.random::<u32>()) >> 1;
+            log::info!("Creating SenderKey with chain ID {chain_id}");
+
+            let iteration = 0;
+            let sender_key: [u8; 32] = csprng.random();
+            let signing_key = KeyPair::generate(csprng);
+            let mut record = SenderKeyRecord::new_empty();
+            record.add_sender_key_state(
+                SENDERKEY_MESSAGE_CURRENT_VERSION,
+                chain_id,
+                iteration,
+                &sender_key,
+                signing_key.public_key,
+                Some(signing_key.private_key),
+            );
+            // Build SKDM before store so we can move ownership
+            let skdm = build_skdm_from_record(&record)?;
+            sender_key_store
+                .store_sender_key(sender_key_name, record)
+                .await?;
+            Ok(skdm)
+        }
+    }
 }

@@ -62,11 +62,10 @@ impl SessionStore for SessionAdapter {
         &self,
         address: &ProtocolAddress,
     ) -> Result<Option<SessionRecord>, SignalProtocolError> {
-        let addr_str = address.to_string();
         let device = self.0.device.read().await;
         self.0
             .cache
-            .get_session(&addr_str, &*device.backend)
+            .get_session(address, &*device.backend)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("backend", e.to_string()))
     }
@@ -76,8 +75,7 @@ impl SessionStore for SessionAdapter {
         address: &ProtocolAddress,
         record: SessionRecord,
     ) -> Result<(), SignalProtocolError> {
-        let addr_str = address.to_string();
-        self.0.cache.put_session(&addr_str, record).await;
+        self.0.cache.put_session(address, record).await;
         Ok(())
     }
 }
@@ -119,10 +117,9 @@ impl IdentityKeyStore for IdentityAdapter {
         // Device accepted — now write to cache (deferred flush to DB)
         // Store raw 32-byte public key (not 33-byte serialized form with 0x05 prefix),
         // matching what SignalStore::put_identity expects.
-        let addr_str = address.to_string();
         self.0
             .cache
-            .put_identity(&addr_str, identity.public_key().public_key_bytes())
+            .put_identity(address, identity.public_key().public_key_bytes())
             .await;
 
         match existing_identity {
@@ -148,12 +145,11 @@ impl IdentityKeyStore for IdentityAdapter {
         &self,
         address: &ProtocolAddress,
     ) -> Result<Option<IdentityKey>, SignalProtocolError> {
-        let addr_str = address.to_string();
         let device = self.0.device.read().await;
         match self
             .0
             .cache
-            .get_identity(&addr_str, &*device.backend)
+            .get_identity(address, &*device.backend)
             .await
             .map_err(|e| SignalProtocolError::InvalidState("get_identity", e.to_string()))?
         {
@@ -227,15 +223,9 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     async fn store_sender_key(
         &mut self,
         sender_key_name: &SenderKeyName,
-        record: &wacore::libsignal::protocol::SenderKeyRecord,
+        record: wacore::libsignal::protocol::SenderKeyRecord,
     ) -> wacore::libsignal::protocol::error::Result<()> {
-        let key = format!(
-            "{}:{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        );
-        let data = record.serialize()?;
-        self.0.cache.put_sender_key(&key, &data).await;
+        self.0.cache.put_sender_key(sender_key_name, record).await;
         Ok(())
     }
 
@@ -245,27 +235,16 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     ) -> wacore::libsignal::protocol::error::Result<
         Option<wacore::libsignal::protocol::SenderKeyRecord>,
     > {
-        let key = format!(
-            "{}:{}",
-            sender_key_name.group_id(),
-            sender_key_name.sender_id()
-        );
         let device = self.0.device.read().await;
-        match self
-            .0
+        self.0
             .cache
-            .get_sender_key(&key, &*device.backend)
+            .get_sender_key(sender_key_name, &*device.backend)
             .await
             .map_err(|e| {
                 wacore::libsignal::protocol::SignalProtocolError::InvalidState(
                     "backend",
                     e.to_string(),
                 )
-            })? {
-            Some(data) => Ok(Some(
-                wacore::libsignal::protocol::SenderKeyRecord::deserialize(&data)?,
-            )),
-            None => Ok(None),
-        }
+            })
     }
 }

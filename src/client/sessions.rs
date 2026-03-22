@@ -160,11 +160,10 @@ impl Client {
             let device_guard = device_store.read().await;
             for jid in resolved_jids {
                 let signal_addr = jid.to_protocol_address();
-                let addr_str = signal_addr.to_string();
                 // Check cache first (includes unflushed sessions), fall back to backend
                 match self
                     .signal_cache
-                    .has_session(&addr_str, &*device_guard.backend)
+                    .has_session(&signal_addr, &*device_guard.backend)
                     .await
                 {
                     Ok(true) => {}
@@ -212,10 +211,9 @@ impl Client {
                 let signal_addr = jid.to_protocol_address();
 
                 // Acquire per-sender session lock to prevent race with concurrent message decryption.
-                let signal_addr_str = signal_addr.to_string();
                 let session_mutex = self
                     .session_locks
-                    .get_with(signal_addr_str.clone(), async {
+                    .get_with_by_ref(signal_addr.as_str(), async {
                         std::sync::Arc::new(async_lock::Mutex::new(()))
                     })
                     .await;
