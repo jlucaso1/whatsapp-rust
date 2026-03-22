@@ -24,7 +24,7 @@ jobs:
   benchmark:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -43,7 +43,7 @@ jobs:
           prefix-key: ${{ runner.os }}-cargo-bench
           cache-targets: "false"
 
-      - uses: bencherdev/bencher@v0.5.9
+      - uses: bencherdev/bencher@v0.5.10
 
       - name: Run benchmarks
         env:

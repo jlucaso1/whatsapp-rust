@@ -11,11 +11,16 @@ Rust implementation of the WhatsApp protocol, inspired by **whatsmeow** (Go), **
 ## Build & Verify
 
 ```bash
-cargo fmt
-cargo clippy --all-targets
+cargo fmt --all
+cargo clippy --all --tests
 cargo test --all
 cargo test -p e2e-tests          # requires mock server running
 ```
+
+## Rust Style
+
+- **Collapsible if**: Always use let-chains (`if let Some(x) = foo && let Some(y) = x.bar { ... }`) instead of nested `if let` blocks. Clippy's `collapsible_if` lint will reject the nested form.
+- **No real PII in tests**: Use fictitious phone numbers and JIDs in test code. Never commit real user numbers.
 
 ## Critical Conventions
 
