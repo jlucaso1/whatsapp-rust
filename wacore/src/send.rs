@@ -1,8 +1,7 @@
 use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::libsignal::protocol::{
-    CiphertextMessage, SENDERKEY_MESSAGE_CURRENT_VERSION, SenderKeyDistributionMessage,
-    SenderKeyMessage, SenderKeyRecord, SenderKeyStore, SignalProtocolError, UsePQRatchet,
-    message_encrypt, process_prekey_bundle,
+    CiphertextMessage, SENDERKEY_MESSAGE_CURRENT_VERSION, SenderKeyMessage, SenderKeyStore,
+    SignalProtocolError, UsePQRatchet, message_encrypt, process_prekey_bundle,
 };
 use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::messages::MessageUtils;
@@ -12,7 +11,7 @@ use crate::reporting_token::{
 use crate::types::jid::JidExt;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
-use rand::{CryptoRng, Rng, RngExt};
+use rand::{CryptoRng, Rng};
 use std::collections::HashSet;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
@@ -923,63 +922,15 @@ pub async fn create_sender_key_distribution_message_for_group(
     own_sending_jid: &Jid,
 ) -> Result<Vec<u8>> {
     let sender_address = own_sending_jid.to_protocol_address();
-
     let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
-    let mut record = store
-        .load_sender_key(&sender_key_name)
-        .await?
-        .unwrap_or_else(SenderKeyRecord::new_empty);
-
-    let needs_store = if record.sender_key_state().is_err() {
-        log::info!(
-            "No sender key found for self in group {}. Creating a new sender key state.",
-            group_jid
-        );
-
-        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
-        let signing_key = crate::libsignal::protocol::KeyPair::generate(&mut rng);
-
-        let chain_id = (rng.random::<u32>()) >> 1;
-        let sender_key_seed: [u8; 32] = rng.random();
-        record.add_sender_key_state(
-            SENDERKEY_MESSAGE_CURRENT_VERSION,
-            chain_id,
-            0,
-            &sender_key_seed,
-            signing_key.public_key,
-            Some(signing_key.private_key),
-        );
-        true
-    } else {
-        false
-    };
-
-    // Build SKDM before store so we can move ownership
-    let state = record
-        .sender_key_state()
-        .map_err(|e| anyhow!("Invalid SK state: {:?}", e))?;
-    let chain_key = state
-        .sender_chain_key()
-        .ok_or_else(|| anyhow!("Missing chain key"))?;
-
-    let message_version = state
-        .message_version()
-        .try_into()
-        .map_err(|e| anyhow!("Invalid sender key message version: {e}"))?;
-    let skdm = SenderKeyDistributionMessage::new(
-        message_version,
-        state.chain_id(),
-        chain_key.iteration(),
-        *chain_key.seed(),
-        state
-            .signing_key_public()
-            .map_err(|e| anyhow!("Missing pub key: {:?}", e))?,
-    )?;
-
-    if needs_store {
-        store.store_sender_key(&sender_key_name, record).await?;
-    }
+    let skdm = crate::libsignal::protocol::create_sender_key_distribution_message(
+        &sender_key_name,
+        store,
+        &mut rng,
+    )
+    .await?;
 
     Ok(skdm.serialized().to_vec())
 }
