@@ -9,10 +9,13 @@ use wacore_binary::jid::{DeviceKey, Jid, JidExt as _};
 use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 
-/// Options for sending messages with additional customization.
+/// Options for [`Client::send_message_with_options`].
 #[derive(Debug, Clone, Default)]
 pub struct SendOptions {
-    /// Extra XML nodes to add to the message stanza.
+    /// Override the auto-generated message ID.
+    /// Useful for resending a failed message with the same ID or idempotency.
+    pub message_id: Option<String>,
+    /// Extra XML child nodes on the message stanza.
     pub extra_stanza_nodes: Vec<Node>,
 }
 
@@ -48,18 +51,22 @@ impl Client {
         message: wa::Message,
         options: SendOptions,
     ) -> Result<String, anyhow::Error> {
-        let request_id = self.generate_message_id().await;
+        let request_id = match options.message_id {
+            Some(id) => id,
+            None => self.generate_message_id().await,
+        };
+        let returned_id = request_id.clone();
         self.send_message_impl(
             to,
             &message,
-            Some(request_id.clone()),
+            Some(request_id),
             false,
             false,
             None,
             options.extra_stanza_nodes,
         )
         .await?;
-        Ok(request_id)
+        Ok(returned_id)
     }
 
     /// Send a status/story update to the given recipients using sender key encryption.
