@@ -983,6 +983,32 @@ impl Client {
         Ok(())
     }
 
+    /// Deregister this companion device and disconnect.
+    /// Does NOT wipe stored keys. Delete the storage backend to fully clear credentials.
+    pub async fn logout(self: &Arc<Self>) -> Result<()> {
+        use wacore::iq::devices::RemoveCompanionDeviceSpec;
+
+        self.enable_auto_reconnect.store(false, Ordering::Relaxed);
+
+        if self.is_connected()
+            && let Ok(jid) = self.require_pn().await
+            && let Err(e) = self.execute(RemoveCompanionDeviceSpec::new(&jid)).await
+        {
+            warn!("Failed to send logout IQ: {e}");
+        }
+
+        self.disconnect().await;
+
+        self.core
+            .event_bus
+            .dispatch(&Event::LoggedOut(crate::types::events::LoggedOut {
+                on_connect: false,
+                reason: ConnectFailureReason::LoggedOut,
+            }));
+
+        Ok(())
+    }
+
     pub async fn disconnect(self: &Arc<Self>) {
         info!("Disconnecting client intentionally.");
         self.expected_disconnect.store(true, Ordering::Relaxed);
