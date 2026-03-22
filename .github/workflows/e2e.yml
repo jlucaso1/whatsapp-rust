@@ -13,6 +13,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   PROTOC_VERSION: '3.25.3'
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   e2e:
@@ -30,7 +32,7 @@ jobs:
           CHATSTATE_TTL_SECS: "3"
         options: --log-driver none
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dtolnay/rust-toolchain@master
@@ -40,8 +42,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: protoc@${{ env.PROTOC_VERSION }}
-      - name: Cache Rust dependencies
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Cache Rust registry
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "false"
       - name: Wait for mock server
         run: |
           for i in $(seq 1 30); do

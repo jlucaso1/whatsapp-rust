@@ -9,6 +9,8 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   PROTOC_VERSION: '3.25.3'
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 concurrency:
   group: release
@@ -30,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: release
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -44,7 +46,11 @@ jobs:
       - name: Install cargo-release
         run: cargo install cargo-release --locked --version 0.25.20
 
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
       - uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "false"
 
       - name: Publish workspace crates
         env:
@@ -56,7 +62,7 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 

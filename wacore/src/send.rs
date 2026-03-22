@@ -24,9 +24,141 @@ use waproto::whatsapp::message::DeviceSentMessage;
 pub(crate) mod stanza {
     pub const ENC_VERSION: &str = "2";
     pub const MSG_TYPE_TEXT: &str = "text";
+    pub const MSG_TYPE_MEDIA: &str = "media";
+    pub const MSG_TYPE_REACTION: &str = "reaction";
+    pub const MSG_TYPE_POLL: &str = "poll";
     pub const ENC_TYPE_MSG: &str = "msg";
     pub const ENC_TYPE_PKMSG: &str = "pkmsg";
     pub const ENC_TYPE_SKMSG: &str = "skmsg";
+}
+
+/// Unwrap wrapper message types to reach the inner message.
+/// Matches WA Web's getUnwrappedProtobufMessage (EProtoUtils.js:19-35).
+fn unwrap_message(msg: &wa::Message) -> &wa::Message {
+    macro_rules! try_unwrap {
+        ($($field:ident),+ $(,)?) => {
+            $(
+                if let Some(ref w) = msg.$field {
+                    if let Some(ref inner) = w.message {
+                        return unwrap_message(inner);
+                    }
+                }
+            )+
+        };
+    }
+    try_unwrap!(
+        ephemeral_message,
+        view_once_message,
+        view_once_message_v2,
+        view_once_message_v2_extension,
+        document_with_caption_message,
+        group_mentioned_message,
+        bot_invoke_message,
+        associated_child_message,
+        poll_creation_option_image_message,
+    );
+    if let Some(ref dsm) = msg.device_sent_message
+        && let Some(ref inner) = dsm.message
+    {
+        return unwrap_message(inner);
+    }
+    msg
+}
+
+/// Matches WAWebE2EProtoUtils.typeAttributeFromProtobuf.
+fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
+    let msg = unwrap_message(msg);
+
+    if msg.reaction_message.is_some() || msg.enc_reaction_message.is_some() {
+        return stanza::MSG_TYPE_REACTION;
+    }
+    if msg.poll_creation_message.is_some()
+        || msg.poll_creation_message_v2.is_some()
+        || msg.poll_creation_message_v3.is_some()
+        || msg.poll_update_message.is_some()
+    {
+        return stanza::MSG_TYPE_POLL;
+    }
+    if msg.conversation.is_some()
+        || msg.protocol_message.is_some()
+        || msg.keep_in_chat_message.is_some()
+        || msg.edited_message.is_some()
+        || msg.pin_in_chat_message.is_some()
+    {
+        return stanza::MSG_TYPE_TEXT;
+    }
+    if let Some(ref ext) = msg.extended_text_message {
+        if ext
+            .matched_text
+            .as_ref()
+            .is_some_and(|t| !t.trim().is_empty())
+        {
+            return stanza::MSG_TYPE_MEDIA;
+        }
+        return stanza::MSG_TYPE_TEXT;
+    }
+    stanza::MSG_TYPE_MEDIA
+}
+
+/// Matches WAWebBackendJobsCommon.mediaTypeFromProtobuf + encodeMaybeMediaType.
+/// Returns `None` when the attribute should be omitted.
+fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
+    let msg = unwrap_message(msg);
+
+    if msg.image_message.is_some() {
+        return Some("image");
+    }
+    if let Some(ref vid) = msg.video_message {
+        return if vid.gif_playback == Some(true) {
+            Some("gif")
+        } else {
+            Some("video")
+        };
+    }
+    if msg.ptv_message.is_some() {
+        return Some("ptv");
+    }
+    if let Some(ref audio) = msg.audio_message {
+        return if audio.ptt == Some(true) {
+            Some("ptt")
+        } else {
+            Some("audio")
+        };
+    }
+    if msg.document_message.is_some() {
+        return Some("document");
+    }
+    if msg.sticker_message.is_some() {
+        return Some("sticker");
+    }
+    if let Some(ref loc) = msg.location_message {
+        return if loc.is_live == Some(true) {
+            Some("livelocation")
+        } else {
+            Some("location")
+        };
+    }
+    if msg.live_location_message.is_some() {
+        return Some("livelocation");
+    }
+    if msg.contact_message.is_some() {
+        return Some("vcard");
+    }
+    if msg.contacts_array_message.is_some() {
+        return Some("contact_array");
+    }
+    if let Some(ref ext) = msg.extended_text_message
+        && ext
+            .matched_text
+            .as_ref()
+            .is_some_and(|t| !t.trim().is_empty())
+    {
+        return Some("url");
+    }
+    if msg.group_invite_message.is_some() {
+        return Some("url");
+    }
+    None
 }
 
 pub async fn encrypt_group_message<S, R>(
@@ -114,6 +246,7 @@ async fn encrypt_for_devices<'a, S, I, P, SP>(
     devices: &[Jid],
     plaintext_to_encrypt: &[u8],
     hide_decrypt_fail: bool,
+    mediatype: Option<&str>,
 ) -> Result<(Vec<Node>, bool)>
 where
     S: crate::libsignal::protocol::SessionStore + Send + Sync,
@@ -356,6 +489,9 @@ where
                 let mut enc_builder = NodeBuilder::new("enc")
                     .attr("v", stanza::ENC_VERSION)
                     .attr("type", enc_type);
+                if let Some(mt) = mediatype {
+                    enc_builder = enc_builder.attr("mediatype", mt);
+                }
                 if hide_decrypt_fail {
                     enc_builder = enc_builder.attr("decrypt-fail", "hide");
                 }
@@ -452,6 +588,8 @@ pub async fn prepare_dm_stanza<
         .as_ref()
         .is_some_and(|e| *e != crate::types::message::EditAttribute::Empty);
 
+    let mediatype = media_type_from_message(message);
+
     if !recipient_devices.is_empty() {
         let (nodes, inc) = encrypt_for_devices(
             stores,
@@ -459,6 +597,7 @@ pub async fn prepare_dm_stanza<
             &recipient_devices,
             &recipient_plaintext,
             hide_decrypt_fail,
+            mediatype,
         )
         .await?;
         participant_nodes.extend(nodes);
@@ -472,6 +611,7 @@ pub async fn prepare_dm_stanza<
             &own_other_devices,
             &own_devices_plaintext,
             hide_decrypt_fail,
+            mediatype,
         )
         .await?;
         participant_nodes.extend(nodes);
@@ -501,10 +641,12 @@ pub async fn prepare_dm_stanza<
     // Add any extra stanza nodes provided by the caller
     message_content_nodes.extend(extra_stanza_nodes.iter().cloned());
 
+    let stanza_type = stanza_type_from_message(message);
+
     let mut stanza_builder = NodeBuilder::new("message")
         .attr("to", to_jid)
         .attr("id", request_id)
-        .attr("type", stanza::MSG_TYPE_TEXT);
+        .attr("type", stanza_type);
 
     if let Some(edit_attr) = edit
         && edit_attr != crate::types::message::EditAttribute::Empty
@@ -600,12 +742,14 @@ where
     };
 
     // count="N" distinguishes retries from normal sends (MsgCreateDeviceStanza.js:150-153)
-    let enc_node = NodeBuilder::new("enc")
+    let mut enc_builder = NodeBuilder::new("enc")
         .attr("v", stanza::ENC_VERSION)
         .attr("type", enc_type)
-        .attr("count", retry_count.to_string())
-        .bytes(serialized)
-        .build();
+        .attr("count", retry_count.to_string());
+    if let Some(mt) = media_type_from_message(message) {
+        enc_builder = enc_builder.attr("mediatype", mt);
+    }
+    let enc_node = enc_builder.bytes(serialized).build();
 
     let mut children = vec![enc_node];
 
@@ -617,11 +761,12 @@ where
         );
     }
 
+    let stanza_type = stanza_type_from_message(message);
     let mut stanza_builder = NodeBuilder::new("message")
         .attr("to", group_jid)
         .attr("participant", participant_jid)
         .attr("id", message_id)
-        .attr("type", stanza::MSG_TYPE_TEXT);
+        .attr("type", stanza_type);
 
     // WA Web always sets addressing_mode for groups (MsgCreateDeviceStanza.js:131-135)
     stanza_builder = stanza_builder.attr("addressing_mode", addressing_mode.as_str());
@@ -821,13 +966,14 @@ pub async fn prepare_group_stanza<
         let skdm_plaintext_to_encrypt =
             MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
 
-        // SKDM distribution never sets decrypt-fail
+        // SKDM distribution never sets decrypt-fail or mediatype
         let (participant_nodes, inc) = encrypt_for_devices(
             stores,
             resolver,
             distribution_list,
             &skdm_plaintext_to_encrypt,
             false,
+            None,
         )
         .await?;
         includes_prekey_message = includes_prekey_message || inc;
@@ -861,10 +1007,14 @@ pub async fn prepare_group_stanza<
 
     // Add decrypt-fail="hide" for edited group messages, but NOT for admin revokes
     // WhatsApp Web does not include decrypt-fail="hide" for admin revoke messages
+    let mediatype = media_type_from_message(message);
     let mut enc_builder = NodeBuilder::new("enc")
         .attr("v", stanza::ENC_VERSION)
-        .attr("type", stanza::ENC_TYPE_SKMSG)
-        .bytes(skmsg_ciphertext);
+        .attr("type", stanza::ENC_TYPE_SKMSG);
+    if let Some(mt) = mediatype {
+        enc_builder = enc_builder.attr("mediatype", mt);
+    }
+    enc_builder = enc_builder.bytes(skmsg_ciphertext);
     if let Some(edit_attr) = &edit
         && *edit_attr != crate::types::message::EditAttribute::Empty
         && *edit_attr != crate::types::message::EditAttribute::AdminRevoke
@@ -873,10 +1023,11 @@ pub async fn prepare_group_stanza<
     }
     let content_node = enc_builder.build();
 
+    let stanza_type = stanza_type_from_message(message);
     let mut stanza_builder = NodeBuilder::new("message")
         .attr("to", to_jid.clone())
         .attr("id", request_id)
-        .attr("type", stanza::MSG_TYPE_TEXT);
+        .attr("type", stanza_type);
 
     // WA Web always sets addressing_mode for groups (MsgCreateDeviceStanza.js:131-135)
     stanza_builder = stanza_builder.attr("addressing_mode", group_info.addressing_mode.as_str());
@@ -1933,7 +2084,7 @@ mod tests {
         #[tokio::test]
         async fn pkmsg_no_account() {
             let (mut ss, mut is, jid) = setup_session().await;
-            let group: Jid = "120363001234567890@g.us".parse().unwrap();
+            let group: Jid = "120363098765432100@g.us".parse().unwrap();
             let p: Jid = jid.to_string().parse().unwrap();
             let n = prepare_group_retry_stanza(
                 &mut ss,
@@ -1957,9 +2108,10 @@ mod tests {
                 a.optional_string("participant").unwrap().as_ref(),
                 p.to_string()
             );
+            // Default (empty) message falls through to "media" per WA Web's typeAttributeFromProtobuf
             assert_eq!(
                 a.optional_string("type").unwrap().as_ref(),
-                stanza::MSG_TYPE_TEXT
+                stanza::MSG_TYPE_MEDIA
             );
             assert!(a.optional_string("category").is_none());
             assert_eq!(a.optional_string("addressing_mode").unwrap().as_ref(), "pn");
@@ -1981,7 +2133,7 @@ mod tests {
         #[tokio::test]
         async fn pkmsg_with_account_has_device_identity() {
             let (mut ss, mut is, jid) = setup_session().await;
-            let group: Jid = "120363001234567890@g.us".parse().unwrap();
+            let group: Jid = "120363098765432100@g.us".parse().unwrap();
             let p: Jid = jid.to_string().parse().unwrap();
             let acc = wa::AdvSignedDeviceIdentity {
                 details: Some(b"t".to_vec()),
@@ -2023,7 +2175,7 @@ mod tests {
         #[tokio::test]
         async fn lid_addressing_mode() {
             let (mut ss, mut is, jid) = setup_session().await;
-            let group: Jid = "120363001234567890@g.us".parse().unwrap();
+            let group: Jid = "120363098765432100@g.us".parse().unwrap();
             let p: Jid = jid.to_string().parse().unwrap();
             // Fresh session → pkmsg (pre-key), with LID addressing
             let n = prepare_group_retry_stanza(

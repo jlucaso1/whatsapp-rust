@@ -12,13 +12,15 @@ on:
 env:
   CARGO_TERM_COLOR: always
   PROTOC_VERSION: '3.25.3'
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   format:
     name: Format Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-01-30
@@ -29,7 +31,7 @@ jobs:
     name: Clippy Linter
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-01-30
@@ -38,8 +40,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: protoc@${{ env.PROTOC_VERSION }}
-      - name: Cache Rust dependencies
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Cache Rust registry
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "false"
       - name: Run Clippy
         run: cargo clippy --all-targets -- -D warnings
 
@@ -47,7 +53,7 @@ jobs:
     name: Build & Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: nightly-2026-01-30
@@ -55,8 +61,12 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: protoc@${{ env.PROTOC_VERSION }}
-      - name: Cache Rust dependencies
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Cache Rust registry
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "false"
       - name: Build project
         run: cargo build --workspace --exclude e2e-tests --all-targets --verbose
       - name: Run tests
@@ -66,14 +76,18 @@ jobs:
     name: Test Stable (no-simd)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@stable
       - name: Install protoc
         uses: taiki-e/install-action@v2
         with:
           tool: protoc@${{ env.PROTOC_VERSION }}
-      - name: Cache Rust dependencies
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Cache Rust registry
         uses: Swatinem/rust-cache@v2
+        with:
+          cache-targets: "false"
       - name: Build wacore-binary (stable, no SIMD)
         run: cargo build -p wacore-binary --no-default-features --verbose
       - name: Test wacore-binary (stable, no SIMD)

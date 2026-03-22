@@ -17,12 +17,14 @@ env:
   BENCHER_PROJECT: whatsapp-rust
   BENCHER_TESTBED: ubuntu-latest
   BENCHER_ADAPTER: rust_iai_callgrind
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   benchmark:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@master
         with:
@@ -33,12 +35,15 @@ jobs:
         with:
           tool: protoc@${{ env.PROTOC_VERSION }},valgrind,iai-callgrind-runner@0.16.1
 
-      - name: Cache Rust dependencies
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Cache Rust registry
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ${{ runner.os }}-cargo-bench
+          cache-targets: "false"
 
-      - uses: bencherdev/bencher@v0.5.9
+      - uses: bencherdev/bencher@v0.5.10
 
       - name: Run benchmarks
         env:
