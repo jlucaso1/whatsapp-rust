@@ -1437,8 +1437,8 @@ mod tests {
 
     #[test]
     fn quote_context_sets_remote_jid_for_group() {
-        let sender: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
-        let group: Jid = "120363001234567890@g.us".parse().unwrap();
+        let sender: Jid = "551199887766@s.whatsapp.net".parse().unwrap();
+        let group: Jid = "120363098765432100@g.us".parse().unwrap();
         let msg = wa::Message {
             conversation: Some("hello".into()),
             ..Default::default()
@@ -1449,17 +1449,17 @@ mod tests {
         assert_eq!(ctx.stanza_id.as_deref(), Some("msg-id-123"));
         assert_eq!(
             ctx.participant.as_deref(),
-            Some("559984726662@s.whatsapp.net")
+            Some("551199887766@s.whatsapp.net")
         );
-        assert_eq!(ctx.remote_jid.as_deref(), Some("120363001234567890@g.us"));
+        assert_eq!(ctx.remote_jid.as_deref(), Some("120363098765432100@g.us"));
         assert!(ctx.quoted_message.is_some());
         assert!(ctx.mentioned_jid.is_empty());
     }
 
     #[test]
     fn quote_context_sets_remote_jid_for_dm() {
-        let sender: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
-        let chat: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
+        let sender: Jid = "551199887766@s.whatsapp.net".parse().unwrap();
+        let chat: Jid = "551199887766@s.whatsapp.net".parse().unwrap();
         let msg = wa::Message {
             conversation: Some("ping".into()),
             ..Default::default()
@@ -1469,17 +1469,17 @@ mod tests {
 
         assert_eq!(
             ctx.remote_jid.as_deref(),
-            Some("559984726662@s.whatsapp.net")
+            Some("551199887766@s.whatsapp.net")
         );
         assert_eq!(
             ctx.participant.as_deref(),
-            Some("559984726662@s.whatsapp.net")
+            Some("551199887766@s.whatsapp.net")
         );
     }
 
     #[test]
     fn quote_context_newsletter_uses_channel_as_participant() {
-        let sender: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
+        let sender: Jid = "551199887766@s.whatsapp.net".parse().unwrap();
         let newsletter: Jid = "120363099999999999@newsletter".parse().unwrap();
         let msg = wa::Message::default();
 
@@ -1497,8 +1497,8 @@ mod tests {
 
     #[test]
     fn quote_context_strips_mentions_from_quoted_message() {
-        let sender: Jid = "559984726662@s.whatsapp.net".parse().unwrap();
-        let group: Jid = "120363001234567890@g.us".parse().unwrap();
+        let sender: Jid = "551199887766@s.whatsapp.net".parse().unwrap();
+        let group: Jid = "120363098765432100@g.us".parse().unwrap();
         let msg = create_message_with_mentions();
 
         let ctx = build_quote_context_with_info("msg-id", &sender, &group, &msg);

@@ -32,8 +32,43 @@ pub(crate) mod stanza {
     pub const ENC_TYPE_SKMSG: &str = "skmsg";
 }
 
+/// Unwrap wrapper message types to reach the inner message.
+/// Matches WA Web's getUnwrappedProtobufMessage (EProtoUtils.js:19-35).
+fn unwrap_message(msg: &wa::Message) -> &wa::Message {
+    macro_rules! try_unwrap {
+        ($($field:ident),+ $(,)?) => {
+            $(
+                if let Some(ref w) = msg.$field {
+                    if let Some(ref inner) = w.message {
+                        return unwrap_message(inner);
+                    }
+                }
+            )+
+        };
+    }
+    try_unwrap!(
+        ephemeral_message,
+        view_once_message,
+        view_once_message_v2,
+        view_once_message_v2_extension,
+        document_with_caption_message,
+        group_mentioned_message,
+        bot_invoke_message,
+        associated_child_message,
+        poll_creation_option_image_message,
+    );
+    if let Some(ref dsm) = msg.device_sent_message
+        && let Some(ref inner) = dsm.message
+    {
+        return unwrap_message(inner);
+    }
+    msg
+}
+
 /// Matches WAWebE2EProtoUtils.typeAttributeFromProtobuf.
 fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
+    let msg = unwrap_message(msg);
+
     if msg.reaction_message.is_some() || msg.enc_reaction_message.is_some() {
         return stanza::MSG_TYPE_REACTION;
     }
@@ -68,24 +103,7 @@ fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
 /// Matches WAWebBackendJobsCommon.mediaTypeFromProtobuf + encodeMaybeMediaType.
 /// Returns `None` when the attribute should be omitted.
 fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
-    if let Some(ref dsm) = msg.device_sent_message {
-        if let Some(ref inner) = dsm.message {
-            return media_type_from_message(inner);
-        }
-        return None;
-    }
-    if let Some(ref eph) = msg.ephemeral_message {
-        if let Some(ref inner) = eph.message {
-            return media_type_from_message(inner);
-        }
-        return None;
-    }
-    if let Some(ref vonce) = msg.view_once_message {
-        if let Some(ref inner) = vonce.message {
-            return media_type_from_message(inner);
-        }
-        return None;
-    }
+    let msg = unwrap_message(msg);
 
     if msg.image_message.is_some() {
         return Some("image");
@@ -107,14 +125,21 @@ fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
             Some("audio")
         };
     }
-    if msg.document_message.is_some() || msg.document_with_caption_message.is_some() {
+    if msg.document_message.is_some() {
         return Some("document");
     }
     if msg.sticker_message.is_some() {
         return Some("sticker");
     }
-    if msg.location_message.is_some() || msg.live_location_message.is_some() {
-        return Some("location");
+    if let Some(ref loc) = msg.location_message {
+        return if loc.is_live == Some(true) {
+            Some("livelocation")
+        } else {
+            Some("location")
+        };
+    }
+    if msg.live_location_message.is_some() {
+        return Some("livelocation");
     }
     if msg.contact_message.is_some() {
         return Some("vcard");
@@ -2059,7 +2084,7 @@ mod tests {
         #[tokio::test]
         async fn pkmsg_no_account() {
             let (mut ss, mut is, jid) = setup_session().await;
-            let group: Jid = "120363001234567890@g.us".parse().unwrap();
+            let group: Jid = "120363098765432100@g.us".parse().unwrap();
             let p: Jid = jid.to_string().parse().unwrap();
             let n = prepare_group_retry_stanza(
                 &mut ss,
@@ -2108,7 +2133,7 @@ mod tests {
         #[tokio::test]
         async fn pkmsg_with_account_has_device_identity() {
             let (mut ss, mut is, jid) = setup_session().await;
-            let group: Jid = "120363001234567890@g.us".parse().unwrap();
+            let group: Jid = "120363098765432100@g.us".parse().unwrap();
             let p: Jid = jid.to_string().parse().unwrap();
             let acc = wa::AdvSignedDeviceIdentity {
                 details: Some(b"t".to_vec()),
@@ -2150,7 +2175,7 @@ mod tests {
         #[tokio::test]
         async fn lid_addressing_mode() {
             let (mut ss, mut is, jid) = setup_session().await;
-            let group: Jid = "120363001234567890@g.us".parse().unwrap();
+            let group: Jid = "120363098765432100@g.us".parse().unwrap();
             let p: Jid = jid.to_string().parse().unwrap();
             // Fresh session → pkmsg (pre-key), with LID addressing
             let n = prepare_group_retry_stanza(

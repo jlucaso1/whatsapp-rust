@@ -357,6 +357,7 @@ mod tests {
         assert!(seen_urls[1].contains("auth=fresh-auth"));
         assert_eq!(result.direct_path, "/v/t62.7118-24/123");
         assert_eq!(result.url, "https://cdn2.example.com/file");
+        assert_eq!(result.media_key_timestamp, 0);
     }
 
     #[tokio::test]
@@ -405,5 +406,6 @@ mod tests {
         assert!(seen_urls[0].contains("cdn1.example.com"));
         assert!(seen_urls[1].contains("cdn2.example.com"));
         assert_eq!(result.direct_path, "/v/t62.7118-24/456");
+        assert_eq!(result.media_key_timestamp, 0);
     }
 }

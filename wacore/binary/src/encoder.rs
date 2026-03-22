@@ -1342,7 +1342,7 @@ mod tests {
 
     #[test]
     fn test_ad_jid_domain_type_whatsapp() -> TestResult {
-        let pn_jid = Jid::pn_device("559984726662", 33);
+        let pn_jid = Jid::pn_device("551199887766", 33);
         let node = NodeBuilder::new("to").attr("jid", pn_jid).build();
 
         let mut buffer = Vec::new();
@@ -1373,9 +1373,9 @@ mod tests {
 
         let test_cases: Vec<Jid> = vec![
             Jid::lid_device("236395184570386", 39),     // LID with device
-            Jid::pn_device("559984726662", 33),         // PN with device
+            Jid::pn_device("551199887766", 33),         // PN with device
             Jid::lid("236395184570386"),                // LID primary (device 0)
-            Jid::pn("559984726662"),                    // PN primary (device 0)
+            Jid::pn("551199887766"),                    // PN primary (device 0)
             "5511999887766:99@hosted".parse().unwrap(), // HOSTED device
             "100000012345678:99@hosted.lid".parse().unwrap(), // HOSTED_LID device
         ];
