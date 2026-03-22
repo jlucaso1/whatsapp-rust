@@ -574,7 +574,7 @@ pub async fn prepare_group_retry_stanza<S, I>(
     message_id: String,
     retry_count: u8,
     account: Option<&wa::AdvSignedDeviceIdentity>,
-    is_lid_addressing: bool,
+    addressing_mode: crate::types::message::AddressingMode,
 ) -> Result<Node>
 where
     S: crate::libsignal::protocol::SessionStore,
@@ -624,9 +624,8 @@ where
         .attr("id", message_id)
         .attr("type", stanza::MSG_TYPE_TEXT);
 
-    if is_lid_addressing {
-        stanza_builder = stanza_builder.attr("addressing_mode", "lid");
-    }
+    // WA Web always sets addressing_mode for groups (MsgCreateDeviceStanza.js:131-135)
+    stanza_builder = stanza_builder.attr("addressing_mode", addressing_mode.as_str());
 
     Ok(stanza_builder.children(children).build())
 }
@@ -880,10 +879,8 @@ pub async fn prepare_group_stanza<
         .attr("id", request_id)
         .attr("type", stanza::MSG_TYPE_TEXT);
 
-    // Add addressing_mode attribute for LID groups (matches WhatsApp Web behavior)
-    if group_info.addressing_mode == crate::types::message::AddressingMode::Lid {
-        stanza_builder = stanza_builder.attr("addressing_mode", "lid");
-    }
+    // WA Web always sets addressing_mode for groups (MsgCreateDeviceStanza.js:131-135)
+    stanza_builder = stanza_builder.attr("addressing_mode", group_info.addressing_mode.as_str());
 
     if let Some(edit_attr) = &edit
         && *edit_attr != crate::types::message::EditAttribute::Empty
@@ -1858,6 +1855,7 @@ mod tests {
             Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, KeyPair,
             PreKeyBundle, ProtocolAddress, SessionStore, process_prekey_bundle,
         };
+        use crate::types::message::AddressingMode;
         use std::collections::HashMap;
         use wacore_binary::node::NodeContent;
 
@@ -1989,7 +1987,7 @@ mod tests {
                 "3EB0ABC".into(),
                 1,
                 None,
-                false,
+                AddressingMode::Pn,
             )
             .await
             .unwrap();
@@ -2006,7 +2004,7 @@ mod tests {
                 stanza::MSG_TYPE_TEXT
             );
             assert!(a.optional_string("category").is_none());
-            assert!(a.optional_string("addressing_mode").is_none());
+            assert_eq!(a.optional_string("addressing_mode").unwrap().as_ref(), "pn");
             let enc = n.get_optional_child("enc").unwrap();
             let mut ea = enc.attrs();
             assert_eq!(
@@ -2041,7 +2039,7 @@ mod tests {
                 "id2".into(),
                 2,
                 Some(&acc),
-                false,
+                AddressingMode::Pn,
             )
             .await
             .unwrap();
@@ -2055,6 +2053,13 @@ mod tests {
                 stanza::ENC_TYPE_PKMSG
             );
             assert!(n.get_optional_child("device-identity").is_some());
+            assert_eq!(
+                n.attrs()
+                    .optional_string("addressing_mode")
+                    .unwrap()
+                    .as_ref(),
+                "pn"
+            );
         }
 
         #[tokio::test]
@@ -2073,13 +2078,12 @@ mod tests {
                 "m2".into(),
                 3,
                 Some(&wa::AdvSignedDeviceIdentity::default()),
-                true,
+                AddressingMode::Lid,
             )
             .await
             .unwrap();
             let mut ea = n.get_optional_child("enc").unwrap().attrs();
             assert_eq!(ea.optional_string("count").unwrap().as_ref(), "3");
-            // Verify LID addressing_mode is set
             assert_eq!(
                 n.attrs()
                     .optional_string("addressing_mode")
