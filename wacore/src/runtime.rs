@@ -30,7 +30,7 @@ pub trait Runtime: Send + Sync + 'static {
     /// the call zero-cost on runtimes that don't need cooperative yielding.
     fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>>;
 
-    /// How often to yield in tight loops (every N items).
+    /// How often to yield in tight loops (every N items). Defaults to 10.
     /// Single-threaded runtimes should return 1 to avoid starving the event loop.
     fn yield_frequency(&self) -> u32 {
         10
@@ -52,7 +52,7 @@ pub trait Runtime: Send + Sync + 'static {
     /// the caller must `.await` to actually yield.
     fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()>>>>;
 
-    /// How often to yield in tight loops (every N items).
+    /// How often to yield in tight loops (every N items). Defaults to 10.
     /// Single-threaded runtimes should return 1 to avoid starving the event loop.
     fn yield_frequency(&self) -> u32 {
         10
