@@ -326,10 +326,16 @@ impl Client {
             .devices
             .iter()
             .map(|d| {
+                debug_assert!(
+                    d.device_id <= u16::MAX as u32,
+                    "device_id {} overflows u16",
+                    d.device_id
+                );
+                let device = d.device_id as u16;
                 if query_jid.is_lid() {
-                    Jid::lid_device(user.clone(), d.device_id as u16)
+                    Jid::lid_device(user.clone(), device)
                 } else {
-                    Jid::pn_device(user.clone(), d.device_id as u16)
+                    Jid::pn_device(user.clone(), device)
                 }
             })
             .collect()

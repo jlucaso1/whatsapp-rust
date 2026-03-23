@@ -427,7 +427,7 @@ pub struct Client {
     pub(crate) skip_history_sync: AtomicBool,
 
     /// Cache configuration for TTL and capacity of all caches.
-    /// Stored for use by lazily-initialized caches (group_cache, device_cache).
+    /// Stored for use by lazily-initialized caches (group_cache).
     pub(crate) cache_config: CacheConfig,
 }
 
@@ -5235,7 +5235,7 @@ mod tests {
 
         let custom_config = CacheConfig {
             group_cache: CacheEntryConfig::new(Some(Duration::from_secs(60)), 10),
-            device_cache: CacheEntryConfig::new(Some(Duration::from_secs(60)), 10),
+            device_registry_cache: CacheEntryConfig::new(Some(Duration::from_secs(60)), 10),
             ..CacheConfig::default()
         };
 

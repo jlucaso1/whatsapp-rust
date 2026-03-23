@@ -10,7 +10,7 @@ use whatsapp_rust::features::{GroupCreateOptions, GroupParticipantOptions};
 /// DB fallback (cold moka) is covered by unit test
 /// `test_device_registry_db_fallback` in `usync.rs`.
 #[tokio::test]
-async fn test_group_send_uses_db_cache_after_reconnect() -> anyhow::Result<()> {
+async fn test_group_send_uses_registry_cache_after_reconnect() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut client_a = TestClient::connect("e2e_devcache_a").await?;
@@ -40,11 +40,11 @@ async fn test_group_send_uses_db_cache_after_reconnect() -> anyhow::Result<()> {
     client_b.wait_for_group_text(&group_jid, text_1, 30).await?;
     info!("B received pre-reconnect message");
 
-    // Reconnect A — clears in-memory caches, SQLite DB persists
+    // Reconnect A — moka cache stays warm (same Client), SQLite DB also persists
     client_a.reconnect_and_wait().await?;
-    info!("A reconnected (cold cache, warm DB)");
+    info!("A reconnected");
 
-    // Second send — should resolve devices from DB, no usync needed
+    // Second send — exercises registry-based device resolution
     let text_2 = "after reconnect";
     let t = std::time::Instant::now();
     client_a
