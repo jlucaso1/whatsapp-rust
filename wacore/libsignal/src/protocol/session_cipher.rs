@@ -301,6 +301,19 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
         .await?
         .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone()))?;
 
+    // A record with no current state and no previous states is degenerate — treat
+    // it as missing so the caller gets SessionNotFound and sends a proper retry
+    // receipt (with error code 1) instead of attempting decryption that will always
+    // fail with an unhelpful InvalidMessage error.
+    if session_record.session_state().is_none() && session_record.previous_session_count() == 0 {
+        log::warn!(
+            "Session record for {} exists but has no usable state (no current, 0 previous). \
+             Treating as SessionNotFound.",
+            remote_address
+        );
+        return Err(SignalProtocolError::SessionNotFound(remote_address.clone()));
+    }
+
     let decrypt_result = decrypt_message_with_record(
         remote_address,
         &mut session_record,
@@ -544,8 +557,13 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
                                 ciphertext
                             )?
                         );
-                        // Note that we don't propagate `e` here; we always return InvalidMessage,
-                        // as we would for a Whisper message that tried several sessions.
+                        // Preserve BadMac so it maps to WA Web error code 7 in retry receipts.
+                        if errs
+                            .iter()
+                            .any(|e| matches!(e, SignalProtocolError::BadMac(_)))
+                        {
+                            return Err(SignalProtocolError::BadMac(original_message_type));
+                        }
                         return Err(SignalProtocolError::InvalidMessage(
                             original_message_type,
                             "decryption failed",
@@ -641,6 +659,18 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
         "{}",
         create_decryption_failure_log(remote_address, &errs, record, ciphertext)?
     );
+
+    // If any session state produced a BadMac error, propagate it rather than the
+    // generic InvalidMessage. BadMac means at least one state derived a message key
+    // and verified the MAC — it specifically failed, which maps to WA Web error
+    // code 7 (SignalErrorBadMac) vs 4 (SignalErrorInvalidMessage).
+    if errs
+        .iter()
+        .any(|e| matches!(e, SignalProtocolError::BadMac(_)))
+    {
+        return Err(SignalProtocolError::BadMac(original_message_type));
+    }
+
     Err(SignalProtocolError::InvalidMessage(
         original_message_type,
         "decryption failed",
@@ -732,10 +762,7 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
             local_id_fingerprint,
             mac_key_fingerprint
         );
-        return Err(SignalProtocolError::InvalidMessage(
-            original_message_type,
-            "MAC verification failed",
-        ));
+        return Err(SignalProtocolError::BadMac(original_message_type));
     }
 
     let ptext = DECRYPTION_BUFFER.with(|buffer| {
@@ -857,4 +884,399 @@ fn get_or_create_message_key(
     let (result_message_keys, next_chain) = chain_key.step_with_message_keys();
     state.set_receiver_chain_key(their_ephemeral, &next_chain)?;
     Ok(result_message_keys)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::*;
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+
+    // -- In-memory stores for test isolation --
+
+    struct MemSessionStore(HashMap<String, SessionRecord>);
+    impl MemSessionStore {
+        fn new() -> Self {
+            Self(HashMap::new())
+        }
+    }
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+    impl SessionStore for MemSessionStore {
+        async fn load_session(
+            &self,
+            address: &ProtocolAddress,
+        ) -> error::Result<Option<SessionRecord>> {
+            Ok(self.0.get(address.as_str()).cloned())
+        }
+        async fn store_session(
+            &mut self,
+            address: &ProtocolAddress,
+            record: SessionRecord,
+        ) -> error::Result<()> {
+            self.0.insert(address.as_str().to_string(), record);
+            Ok(())
+        }
+    }
+
+    struct MemIdentityStore {
+        pair: IdentityKeyPair,
+        reg_id: u32,
+        known: HashMap<String, IdentityKey>,
+    }
+    impl MemIdentityStore {
+        fn new(pair: IdentityKeyPair, reg_id: u32) -> Self {
+            Self {
+                pair,
+                reg_id,
+                known: HashMap::new(),
+            }
+        }
+    }
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+    impl IdentityKeyStore for MemIdentityStore {
+        async fn get_identity_key_pair(&self) -> error::Result<IdentityKeyPair> {
+            Ok(self.pair.clone())
+        }
+        async fn get_local_registration_id(&self) -> error::Result<u32> {
+            Ok(self.reg_id)
+        }
+        async fn save_identity(
+            &mut self,
+            address: &ProtocolAddress,
+            identity: &IdentityKey,
+        ) -> error::Result<IdentityChange> {
+            let changed = self
+                .known
+                .get(address.as_str())
+                .is_some_and(|k| k != identity);
+            self.known.insert(address.as_str().to_string(), *identity);
+            Ok(IdentityChange::from_changed(changed))
+        }
+        async fn is_trusted_identity(
+            &self,
+            _address: &ProtocolAddress,
+            _identity: &IdentityKey,
+            _direction: Direction,
+        ) -> error::Result<bool> {
+            Ok(true)
+        }
+        async fn get_identity(
+            &self,
+            address: &ProtocolAddress,
+        ) -> error::Result<Option<IdentityKey>> {
+            Ok(self.known.get(address.as_str()).copied())
+        }
+    }
+
+    struct MemPreKeyStore(HashMap<PreKeyId, PreKeyRecord>);
+    impl MemPreKeyStore {
+        fn new() -> Self {
+            Self(HashMap::new())
+        }
+    }
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+    impl PreKeyStore for MemPreKeyStore {
+        async fn get_pre_key(&self, id: PreKeyId) -> error::Result<PreKeyRecord> {
+            self.0
+                .get(&id)
+                .cloned()
+                .ok_or(SignalProtocolError::InvalidPreKeyId)
+        }
+        async fn save_pre_key(&mut self, id: PreKeyId, record: &PreKeyRecord) -> error::Result<()> {
+            self.0.insert(id, record.clone());
+            Ok(())
+        }
+        async fn remove_pre_key(&mut self, id: PreKeyId) -> error::Result<()> {
+            self.0.remove(&id);
+            Ok(())
+        }
+    }
+
+    struct MemSignedPreKeyStore(HashMap<SignedPreKeyId, SignedPreKeyRecord>);
+    impl MemSignedPreKeyStore {
+        fn new() -> Self {
+            Self(HashMap::new())
+        }
+    }
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+    impl SignedPreKeyStore for MemSignedPreKeyStore {
+        async fn get_signed_pre_key(
+            &self,
+            id: SignedPreKeyId,
+        ) -> error::Result<SignedPreKeyRecord> {
+            self.0
+                .get(&id)
+                .cloned()
+                .ok_or(SignalProtocolError::InvalidSignedPreKeyId)
+        }
+        async fn save_signed_pre_key(
+            &mut self,
+            id: SignedPreKeyId,
+            record: &SignedPreKeyRecord,
+        ) -> error::Result<()> {
+            self.0.insert(id, record.clone());
+            Ok(())
+        }
+    }
+
+    struct TestPair {
+        alice_addr: ProtocolAddress,
+        alice_sessions: MemSessionStore,
+        alice_identity: MemIdentityStore,
+        bob_addr: ProtocolAddress,
+        bob_sessions: MemSessionStore,
+        bob_identity: MemIdentityStore,
+    }
+
+    fn setup_established_session() -> TestPair {
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+
+        let alice_addr = ProtocolAddress::new("alice".to_string(), 1.into());
+        let alice_id = IdentityKeyPair::generate(&mut rng);
+        let mut alice_sessions = MemSessionStore::new();
+        let mut alice_identity = MemIdentityStore::new(alice_id, 1);
+
+        let bob_addr = ProtocolAddress::new("bob".to_string(), 1.into());
+        let bob_id = IdentityKeyPair::generate(&mut rng);
+        let bob_identity_key = *bob_id.identity_key();
+
+        let prekey_id: PreKeyId = 1.into();
+        let prekey_pair = KeyPair::generate(&mut rng);
+        let mut bob_prekeys = MemPreKeyStore::new();
+
+        let signed_id: SignedPreKeyId = 1.into();
+        let signed_pair = KeyPair::generate(&mut rng);
+        let signed_sig = bob_id
+            .private_key()
+            .calculate_signature(&signed_pair.public_key.serialize(), &mut rng)
+            .expect("signature");
+
+        let mut bob_sessions = MemSessionStore::new();
+        let mut bob_identity = MemIdentityStore::new(bob_id, 2);
+        let mut bob_signed = MemSignedPreKeyStore::new();
+
+        futures::executor::block_on(async {
+            bob_prekeys
+                .save_pre_key(prekey_id, &PreKeyRecord::new(prekey_id, &prekey_pair))
+                .await
+                .expect("save prekey");
+            bob_signed
+                .save_signed_pre_key(
+                    signed_id,
+                    &SignedPreKeyRecord::new(
+                        signed_id,
+                        Timestamp::from_epoch_millis(0),
+                        &signed_pair,
+                        &signed_sig,
+                    ),
+                )
+                .await
+                .expect("save signed prekey");
+        });
+
+        let bundle = PreKeyBundle::new(
+            2,
+            1.into(),
+            Some((prekey_id, prekey_pair.public_key)),
+            signed_id,
+            signed_pair.public_key,
+            signed_sig.to_vec(),
+            bob_identity_key,
+        )
+        .expect("valid bundle");
+
+        // Alice processes Bob's bundle → establishes session
+        futures::executor::block_on(async {
+            process_prekey_bundle(
+                &bob_addr,
+                &mut alice_sessions,
+                &mut alice_identity,
+                &bundle,
+                &mut rng,
+                UsePQRatchet::No,
+            )
+            .await
+            .expect("process prekey bundle");
+
+            // Alice sends → Bob receives (completes handshake)
+            let ct = message_encrypt(
+                b"hello",
+                &bob_addr,
+                &mut alice_sessions,
+                &mut alice_identity,
+            )
+            .await
+            .expect("encrypt first message");
+
+            let ct_msg = CiphertextMessage::PreKeySignalMessage(
+                PreKeySignalMessage::try_from(ct.serialize())
+                    .expect("parse as PreKeySignalMessage"),
+            );
+            message_decrypt(
+                &ct_msg,
+                &alice_addr,
+                &mut bob_sessions,
+                &mut bob_identity,
+                &mut bob_prekeys,
+                &bob_signed,
+                &mut rng,
+                UsePQRatchet::No,
+            )
+            .await
+            .expect("decrypt first message");
+        });
+
+        TestPair {
+            alice_addr,
+            alice_sessions,
+            alice_identity,
+            bob_addr,
+            bob_sessions,
+            bob_identity,
+        }
+    }
+
+    /// P0: MAC verification failure must return `BadMac`, not `InvalidMessage`.
+    ///
+    /// Establishes a full Alice↔Bob session with a complete round-trip, then
+    /// encrypts a Whisper message, corrupts the MAC, and verifies that decryption
+    /// produces `BadMac` (not `InvalidMessage`).
+    #[test]
+    fn decrypt_corrupted_mac_returns_bad_mac() {
+        let mut tp = setup_established_session();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+
+        futures::executor::block_on(async {
+            // Step 1: Bob replies → creates Bob's sending chain
+            let bob_reply = message_encrypt(
+                b"ack",
+                &tp.alice_addr,
+                &mut tp.bob_sessions,
+                &mut tp.bob_identity,
+            )
+            .await
+            .expect("Bob encrypt reply");
+
+            // Step 2: Alice decrypts Bob's reply.
+            // Bob's reply is a SignalMessage (Bob has no pending prekey).
+            let bob_msg = SignalMessage::try_from(bob_reply.serialize())
+                .expect("Bob's reply should be a SignalMessage");
+            message_decrypt_signal(
+                &bob_msg,
+                &tp.bob_addr,
+                &mut tp.alice_sessions,
+                &mut tp.alice_identity,
+                &mut rng,
+            )
+            .await
+            .expect("Alice should decrypt Bob's reply");
+
+            // Step 3: Alice sends a second message. After receiving Bob's reply,
+            // Alice's pending prekey is cleared, so this is a plain SignalMessage.
+            let ct = message_encrypt(
+                b"secret payload",
+                &tp.bob_addr,
+                &mut tp.alice_sessions,
+                &mut tp.alice_identity,
+            )
+            .await
+            .expect("Alice encrypt second message");
+
+            // Verify it's a SignalMessage, not PreKey
+            assert!(
+                matches!(ct, CiphertextMessage::SignalMessage(_)),
+                "Expected SignalMessage after full round-trip, got {:?}",
+                ct.message_type()
+            );
+
+            // Step 4: Corrupt the MAC (last 8 bytes) without disturbing protobuf
+            let raw = ct.serialize();
+            let mut corrupted_bytes = raw.to_vec();
+            let mac_offset = corrupted_bytes.len() - 4;
+            corrupted_bytes[mac_offset] ^= 0xFF;
+
+            let corrupted = SignalMessage::try_from(corrupted_bytes.as_slice())
+                .expect("protobuf is intact, only MAC region is modified");
+
+            // Bob tries to decrypt the corrupted message
+            let err = message_decrypt_signal(
+                &corrupted,
+                &tp.alice_addr,
+                &mut tp.bob_sessions,
+                &mut tp.bob_identity,
+                &mut rng,
+            )
+            .await
+            .expect_err("decryption should fail due to corrupted MAC");
+
+            // Must be BadMac (error code 7), not InvalidMessage (error code 4)
+            assert!(
+                matches!(err, SignalProtocolError::BadMac(_)),
+                "expected BadMac, got: {err}"
+            );
+        });
+    }
+
+    /// P1: A session record that exists but has no usable state (no current session,
+    /// 0 previous sessions) must return `SessionNotFound`, not `InvalidMessage`.
+    #[test]
+    fn decrypt_with_empty_session_returns_session_not_found() {
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+
+        let alice_addr = ProtocolAddress::new("alice".to_string(), 1.into());
+        let alice_id = IdentityKeyPair::generate(&mut rng);
+        let bob_id = IdentityKeyPair::generate(&mut rng);
+        let alice_identity_key = *alice_id.identity_key();
+        let bob_identity_key = *bob_id.identity_key();
+
+        // Store an empty (degenerate) session record for Alice
+        let mut bob_sessions = MemSessionStore::new();
+        let mut bob_identity = MemIdentityStore::new(bob_id, 2);
+
+        futures::executor::block_on(async {
+            // Store empty session — record exists but has no ratchet state
+            bob_sessions
+                .store_session(&alice_addr, SessionRecord::new_fresh())
+                .await
+                .expect("store empty session");
+
+            // Verify the session "exists" in the store
+            let loaded = bob_sessions
+                .load_session(&alice_addr)
+                .await
+                .expect("load session");
+            assert!(loaded.is_some(), "record should exist");
+
+            // Craft a plausible SignalMessage (it won't actually decrypt, but we
+            // need it to reach the session-check code path)
+            let ratchet_key = KeyPair::generate(&mut rng).public_key;
+            let msg = SignalMessage::new(
+                4,
+                &[0u8; 32],
+                ratchet_key,
+                0,
+                0,
+                b"dummy",
+                &alice_identity_key,
+                &bob_identity_key,
+            )
+            .expect("craft SignalMessage");
+
+            let err = message_decrypt_signal(
+                &msg,
+                &alice_addr,
+                &mut bob_sessions,
+                &mut bob_identity,
+                &mut rng,
+            )
+            .await
+            .expect_err("should fail on empty session");
+
+            assert!(
+                matches!(err, SignalProtocolError::SessionNotFound(_)),
+                "expected SessionNotFound for degenerate session, got: {err}"
+            );
+        });
+    }
 }

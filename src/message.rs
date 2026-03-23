@@ -928,14 +928,20 @@ impl Client {
                             decrypt_fail_mode,
                         );
                         continue;
-                    } else if matches!(e, SignalProtocolError::InvalidMessage(_, _)) {
-                        // InvalidMessage typically means MAC verification failed or session is out of sync.
-                        // This happens when the sender's session state diverged from ours (e.g., they reinstalled).
-                        // We need to:
-                        // 1. Delete the stale session so a new one can be established
-                        // 2. Send a retry receipt so the sender resends with a PreKeySignalMessage
+                    } else if matches!(
+                        e,
+                        SignalProtocolError::BadMac(_) | SignalProtocolError::InvalidMessage(_, _)
+                    ) {
+                        // BadMac: MAC verification specifically failed (WA Web error code 7).
+                        // InvalidMessage: session out of sync or other decryption failure (code 4).
+                        // In both cases we delete the stale session and request re-establishment.
+                        let (reason, label) = if matches!(e, SignalProtocolError::BadMac(_)) {
+                            (RetryReason::BadMac, "BadMac")
+                        } else {
+                            (RetryReason::InvalidMessage, "InvalidMessage")
+                        };
                         log::warn!(
-                            "[msg:{}] Decryption failed for {} message from {} due to InvalidMessage (likely MAC failure). \
+                            "[msg:{}] Decryption failed for {} message from {} due to {label}. \
                              Deleting stale session and sending retry receipt.",
                             info.id,
                             enc_type,
@@ -953,11 +959,8 @@ impl Client {
                         );
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        dispatched_undecryptable = self.handle_decrypt_failure(
-                            info,
-                            RetryReason::InvalidMessage,
-                            decrypt_fail_mode,
-                        );
+                        dispatched_undecryptable =
+                            self.handle_decrypt_failure(info, reason, decrypt_fail_mode);
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidPreKeyId) {
                         // InvalidPreKeyId means the sender is using a PreKey ID that we don't have.
@@ -1564,6 +1567,116 @@ mod tests {
         assert!(
             !success && !had_duplicates && dispatched,
             "process_session_enc_batch should return (false, false, true) when SessionNotFound occurs and dispatches event"
+        );
+    }
+
+    /// P1: An empty session record (exists but no current/previous state) should be
+    /// treated the same as SessionNotFound — the retry receipt gets error code 1 (NoSession)
+    /// and includes keys early, instead of producing an unhelpful InvalidMessage error.
+    #[tokio::test]
+    async fn test_empty_session_record_treated_as_session_not_found() {
+        use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SessionRecord, SignalMessage};
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_empty_session?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
+
+        let sender_jid: Jid = "0000000000000@s.whatsapp.net"
+            .parse()
+            .expect("test JID should be valid");
+        let info = MessageInfo {
+            source: crate::types::message::MessageSource {
+                sender: sender_jid.clone(),
+                chat: sender_jid.clone(),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        // Pre-store an empty (degenerate) session record in the signal cache.
+        // This simulates the bug scenario: record exists but has no usable ratchet state.
+        let signal_address = sender_jid.to_protocol_address();
+        client
+            .signal_cache
+            .put_session(&signal_address, SessionRecord::new_fresh())
+            .await;
+
+        // Craft a SignalMessage to trigger decryption
+        let dummy_key = [0u8; 32];
+        let sender_ratchet =
+            KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>()).public_key;
+        let sender_identity =
+            IdentityKeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
+        let receiver_identity =
+            IdentityKeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
+        let signal_message = SignalMessage::new(
+            4,
+            &dummy_key,
+            sender_ratchet,
+            0,
+            0,
+            b"test",
+            sender_identity.identity_key(),
+            receiver_identity.identity_key(),
+        )
+        .expect("SignalMessage::new should succeed");
+
+        let enc_node = NodeBuilder::new("enc")
+            .attr("type", "msg")
+            .bytes(signal_message.serialized().to_vec())
+            .build();
+        let enc_nodes = vec![&enc_node];
+
+        let (success, had_duplicates, dispatched) = client
+            .clone()
+            .process_session_enc_batch(
+                &enc_nodes,
+                &info,
+                &sender_jid,
+                crate::types::events::DecryptFailMode::Show,
+            )
+            .await;
+
+        // Should behave identically to SessionNotFound: failure, no dupe, event dispatched.
+        assert!(
+            !success && !had_duplicates && dispatched,
+            "Empty session record should be treated as SessionNotFound: \
+             expected (false, false, true), got ({success}, {had_duplicates}, {dispatched})"
+        );
+
+        // Verify we took the SessionNotFound path (error code 1 / NoSession) rather
+        // than the InvalidMessage path (error code 4). The key difference:
+        // - SessionNotFound does NOT delete the session from the cache
+        // - InvalidMessage/BadMac DOES delete it (via signal_cache.delete_session)
+        //
+        // If the session record is still present in the cache, we know the
+        // SessionNotFound branch ran, which sends RetryReason::NoSession (code 1)
+        // and triggers early key inclusion on retry #1 via should_include_keys().
+        let backend = client.persistence_manager.backend();
+        let session_still_exists = client
+            .signal_cache
+            .has_session(&signal_address, &*backend)
+            .await
+            .expect("has_session should not fail");
+        assert!(
+            session_still_exists,
+            "Session should NOT have been deleted — SessionNotFound path preserves it. \
+             If deleted, the InvalidMessage path ran instead (wrong error code)."
         );
     }
 
