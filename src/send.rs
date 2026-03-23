@@ -114,7 +114,8 @@ fn infer_biz_node(msg: &wa::Message) -> Option<Node> {
 }
 
 fn extract_interactive_message(msg: &wa::Message) -> Option<&wa::message::InteractiveMessage> {
-    // WA Web wraps interactive messages in documentWithCaptionMessage for rendering
+    // Only checks documentWithCaptionMessage wrapper (for media headers) and direct field.
+    // Does not use unwrap_message() since we need the InteractiveMessage specifically.
     if let Some(ref doc) = msg.document_with_caption_message
         && let Some(ref inner) = doc.message
         && let Some(ref im) = inner.interactive_message
@@ -1823,6 +1824,30 @@ mod tests {
                 ..Default::default()
             };
             assert!(infer_biz_node(&msg).is_none());
+        }
+
+        #[test]
+        fn direct_interactive_message_without_wrapper() {
+            let msg = wa::Message {
+                interactive_message: Some(Box::new(wa::message::InteractiveMessage {
+                    interactive_message: Some(
+                        interactive_message::InteractiveMessage::NativeFlowMessage(
+                            NativeFlowMessage {
+                                buttons: vec![NativeFlowButton {
+                                    name: Some("cta_url".to_string()),
+                                    button_params_json: None,
+                                }],
+                                message_version: Some(1),
+                                message_params_json: None,
+                            },
+                        ),
+                    ),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            let node = infer_biz_node(&msg).unwrap();
+            assert_biz_node(&node, "cta_url");
         }
     }
 }
