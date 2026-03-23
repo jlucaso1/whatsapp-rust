@@ -126,7 +126,6 @@ const TRANSPORT_CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 pub struct MemoryDiagnostics {
     // -- Moka caches (TTL/capacity-bounded) --
     pub group_cache: u64,
-    pub device_cache: u64,
     pub device_registry_cache: u64,
     pub lid_pn_lid_entries: u64,
     pub lid_pn_pn_entries: u64,
@@ -159,7 +158,6 @@ impl std::fmt::Display for MemoryDiagnostics {
         writeln!(f, "=== Memory Diagnostics ===")?;
         writeln!(f, "--- Moka caches (TTL-bounded) ---")?;
         writeln!(f, "  group_cache:            {}", self.group_cache)?;
-        writeln!(f, "  device_cache:           {}", self.device_cache)?;
         writeln!(
             f,
             "  device_registry_cache:  {}",
@@ -325,8 +323,6 @@ pub struct Client {
     pub(crate) message_enqueue_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
     pub group_cache: async_lock::Mutex<Option<Arc<TypedCache<Jid, GroupInfo>>>>,
-    #[allow(clippy::type_complexity)]
-    pub device_cache: async_lock::Mutex<Option<Arc<TypedCache<Jid, Vec<Jid>>>>>,
 
     pub(crate) retried_group_messages: Cache<String, ()>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
@@ -612,7 +608,6 @@ impl Client {
                 .max_capacity(cache_config.message_enqueue_locks_capacity.max(1))
                 .build(),
             group_cache: async_lock::Mutex::new(None),
-            device_cache: async_lock::Mutex::new(None),
             retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
@@ -704,20 +699,6 @@ impl Client {
                 .group_cache
                 .build_typed_ttl(self.cache_config.cache_stores.group_cache.clone(), "group"),
         );
-        *guard = Some(cache.clone());
-        cache
-    }
-
-    pub(crate) async fn get_device_cache(&self) -> Arc<TypedCache<Jid, Vec<Jid>>> {
-        let mut guard = self.device_cache.lock().await;
-        if let Some(cache) = guard.as_ref() {
-            return cache.clone();
-        }
-        debug!("Initializing Device Cache for the first time.");
-        let cache = Arc::new(self.cache_config.device_cache.build_typed_ttl(
-            self.cache_config.cache_stores.device_cache.clone(),
-            "device",
-        ));
         *guard = Some(cache.clone());
         cache
     }
@@ -1155,12 +1136,6 @@ impl Client {
         MemoryDiagnostics {
             group_cache: self
                 .group_cache
-                .lock()
-                .await
-                .as_ref()
-                .map_or(0, |c| c.entry_count()),
-            device_cache: self
-                .device_cache
                 .lock()
                 .await
                 .as_ref()
