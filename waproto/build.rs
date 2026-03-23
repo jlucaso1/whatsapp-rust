@@ -48,6 +48,14 @@ fn main() -> std::io::Result<()> {
         "#[cfg_attr(feature = \"serde-deserialize\", serde(default))]",
     );
 
+    // Accept snake_case variant names during deserialization so the bridge's
+    // to_snake_case_js conversion works for oneof fields (prost generates PascalCase).
+    // Serialize output is unchanged (PascalCase). No-op for struct fields (already snake_case).
+    config.type_attribute(
+        ".",
+        "#[cfg_attr(feature = \"serde-snake-case\", serde(rename_all(deserialize = \"snake_case\")))]",
+    );
+
     // Use bytes::Bytes instead of Vec<u8> for frequently-serialized cryptographic structures.
     // This enables O(1) cloning (reference-counted) instead of O(n) copying.
     // See: https://docs.rs/prost-build/latest/prost_build/struct.Config.html#method.bytes

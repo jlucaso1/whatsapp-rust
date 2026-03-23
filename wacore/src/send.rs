@@ -27,6 +27,7 @@ pub(crate) mod stanza {
     pub const MSG_TYPE_MEDIA: &str = "media";
     pub const MSG_TYPE_REACTION: &str = "reaction";
     pub const MSG_TYPE_POLL: &str = "poll";
+    pub const MSG_TYPE_EVENT: &str = "event";
     pub const ENC_TYPE_MSG: &str = "msg";
     pub const ENC_TYPE_PKMSG: &str = "pkmsg";
     pub const ENC_TYPE_SKMSG: &str = "skmsg";
@@ -72,6 +73,10 @@ fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
     if msg.reaction_message.is_some() || msg.enc_reaction_message.is_some() {
         return stanza::MSG_TYPE_REACTION;
     }
+    if msg.event_message.is_some() || msg.enc_event_response_message.is_some() {
+        return stanza::MSG_TYPE_EVENT;
+    }
+    // TODO: secretEncryptedMessage with EVENT_EDIT → "event", POLL_EDIT → "poll"
     if msg.poll_creation_message.is_some()
         || msg.poll_creation_message_v2.is_some()
         || msg.poll_creation_message_v3.is_some()
@@ -84,6 +89,13 @@ fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
         || msg.keep_in_chat_message.is_some()
         || msg.edited_message.is_some()
         || msg.pin_in_chat_message.is_some()
+        || msg.interactive_message.is_some()
+        || msg.template_button_reply_message.is_some()
+        || msg.request_phone_number_message.is_some()
+        || msg.enc_comment_message.is_some()
+        || msg.newsletter_admin_invite_message.is_some()
+        || msg.newsletter_follower_invite_message_v2.is_some()
+        || msg.message_history_notice.is_some()
     {
         return stanza::MSG_TYPE_TEXT;
     }
