@@ -87,6 +87,67 @@ fn meta_node(key: &'static str, value: &'static str) -> Node {
     NodeBuilder::new("meta").attr(key, value).build()
 }
 
+/// Derive the `<biz>` stanza child for native-flow interactive messages.
+/// All native flow types use the same nested structure (confirmed via protocol capture).
+fn infer_biz_node(msg: &wa::Message) -> Option<Node> {
+    let interactive = extract_interactive_message(msg)?;
+    let wa::message::interactive_message::InteractiveMessage::NativeFlowMessage(nf) =
+        interactive.interactive_message.as_ref()?
+    else {
+        return None;
+    };
+
+    let first_button_name = nf.buttons.first()?.name.as_deref()?;
+    let flow_name = button_name_to_flow_name(first_button_name);
+
+    Some(
+        NodeBuilder::new("biz")
+            .children([NodeBuilder::new("interactive")
+                .attr("type", "native_flow")
+                .attr("v", "1")
+                .children([NodeBuilder::new("native_flow")
+                    .attr("name", flow_name)
+                    .build()])
+                .build()])
+            .build(),
+    )
+}
+
+fn extract_interactive_message(msg: &wa::Message) -> Option<&wa::message::InteractiveMessage> {
+    // Only checks documentWithCaptionMessage wrapper (for media headers) and direct field.
+    // Does not use unwrap_message() since we need the InteractiveMessage specifically.
+    if let Some(ref doc) = msg.document_with_caption_message
+        && let Some(ref inner) = doc.message
+        && let Some(ref im) = inner.interactive_message
+    {
+        return Some(im);
+    }
+    msg.interactive_message.as_deref()
+}
+
+fn button_name_to_flow_name(button_name: &str) -> &str {
+    match button_name {
+        "review_and_pay" => "order_details",
+        "payment_info" => "payment_info",
+        "review_order" | "order_status" => "order_status",
+        "payment_status" => "payment_status",
+        "payment_method" => "payment_method",
+        "payment_reminder" => "payment_reminder",
+        "open_webview" => "message_with_link",
+        "message_with_link_status" => "message_with_link_status",
+        "cta_url" => "cta_url",
+        "cta_call" => "cta_call",
+        "cta_copy" => "cta_copy",
+        "cta_catalog" => "cta_catalog",
+        "catalog_message" => "catalog_message",
+        "quick_reply" => "quick_reply",
+        "galaxy_message" => "galaxy_message",
+        "booking_confirmation" => "booking_confirmation",
+        "call_permission_request" => "call_permission_request",
+        other => other,
+    }
+}
+
 impl Client {
     /// Send an end-to-end encrypted message to a user or group.
     ///
@@ -113,14 +174,17 @@ impl Client {
             None => self.generate_message_id().await,
         };
         let returned_id = request_id.clone();
-        let (edit, inferred_node) = infer_stanza_metadata(&message);
-        let extra_nodes = match inferred_node {
-            Some(node) => {
-                let mut nodes = vec![node];
-                nodes.extend(options.extra_stanza_nodes);
-                nodes
-            }
-            None => options.extra_stanza_nodes,
+        let (edit, inferred_meta) = infer_stanza_metadata(&message);
+        let inferred_biz = infer_biz_node(&message);
+
+        let extra_nodes = if inferred_meta.is_none() && inferred_biz.is_none() {
+            options.extra_stanza_nodes
+        } else {
+            let mut nodes = Vec::with_capacity(2 + options.extra_stanza_nodes.len());
+            nodes.extend(inferred_meta);
+            nodes.extend(inferred_biz);
+            nodes.extend(options.extra_stanza_nodes);
+            nodes
         };
         self.send_message_impl(
             to,
@@ -1645,6 +1709,145 @@ mod tests {
             let (edit, node) = infer_stanza_metadata(&msg);
             assert!(edit.is_none());
             assert!(node.is_none());
+        }
+    }
+
+    mod infer_biz {
+        use super::*;
+        use wa::message::interactive_message::{
+            self, NativeFlowMessage, native_flow_message::NativeFlowButton,
+        };
+
+        fn msg_with_native_flow(button_name: &str) -> wa::Message {
+            wa::Message {
+                document_with_caption_message: Some(Box::new(wa::message::FutureProofMessage {
+                    message: Some(Box::new(wa::Message {
+                        interactive_message: Some(Box::new(wa::message::InteractiveMessage {
+                            interactive_message: Some(
+                                interactive_message::InteractiveMessage::NativeFlowMessage(
+                                    NativeFlowMessage {
+                                        buttons: vec![NativeFlowButton {
+                                            name: Some(button_name.to_string()),
+                                            button_params_json: None,
+                                        }],
+                                        message_version: Some(1),
+                                        message_params_json: None,
+                                    },
+                                ),
+                            ),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    })),
+                })),
+                ..Default::default()
+            }
+        }
+
+        fn assert_biz_node(node: &Node, expected_flow_name: &str) {
+            assert_eq!(node.tag, "biz");
+            assert!(
+                node.attrs().optional_string("native_flow_name").is_none(),
+                "should NOT use simple attribute form"
+            );
+            let interactive = node.get_optional_child("interactive").unwrap();
+            let mut attrs = interactive.attrs();
+            assert_eq!(
+                attrs.optional_string("type").unwrap().as_ref(),
+                "native_flow"
+            );
+            assert_eq!(attrs.optional_string("v").unwrap().as_ref(), "1");
+            let nf = interactive.get_optional_child("native_flow").unwrap();
+            let mut nf_attrs = nf.attrs();
+            assert_eq!(
+                nf_attrs.optional_string("name").unwrap().as_ref(),
+                expected_flow_name
+            );
+        }
+
+        #[test]
+        fn all_button_types_use_nested_structure() {
+            for (button, expected_flow) in [
+                ("cta_url", "cta_url"),
+                ("payment_info", "payment_info"),
+                ("review_and_pay", "order_details"),
+                ("cta_catalog", "cta_catalog"),
+                ("mpm", "mpm"),
+                ("quick_reply", "quick_reply"),
+            ] {
+                let node = infer_biz_node(&msg_with_native_flow(button))
+                    .unwrap_or_else(|| panic!("{button} should produce biz node"));
+                assert_biz_node(&node, expected_flow);
+            }
+        }
+
+        #[test]
+        fn no_interactive_returns_none() {
+            let msg = wa::Message {
+                conversation: Some("hello".into()),
+                ..Default::default()
+            };
+            assert!(infer_biz_node(&msg).is_none());
+        }
+
+        #[test]
+        fn interactive_without_native_flow_returns_none() {
+            let msg = wa::Message {
+                interactive_message: Some(Box::new(wa::message::InteractiveMessage {
+                    interactive_message: Some(
+                        interactive_message::InteractiveMessage::CollectionMessage(
+                            Default::default(),
+                        ),
+                    ),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(infer_biz_node(&msg).is_none());
+        }
+
+        #[test]
+        fn native_flow_without_buttons_returns_none() {
+            let msg = wa::Message {
+                interactive_message: Some(Box::new(wa::message::InteractiveMessage {
+                    interactive_message: Some(
+                        interactive_message::InteractiveMessage::NativeFlowMessage(
+                            NativeFlowMessage {
+                                buttons: vec![],
+                                message_version: Some(1),
+                                message_params_json: None,
+                            },
+                        ),
+                    ),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(infer_biz_node(&msg).is_none());
+        }
+
+        #[test]
+        fn direct_interactive_message_without_wrapper() {
+            let msg = wa::Message {
+                interactive_message: Some(Box::new(wa::message::InteractiveMessage {
+                    interactive_message: Some(
+                        interactive_message::InteractiveMessage::NativeFlowMessage(
+                            NativeFlowMessage {
+                                buttons: vec![NativeFlowButton {
+                                    name: Some("cta_url".to_string()),
+                                    button_params_json: None,
+                                }],
+                                message_version: Some(1),
+                                message_params_json: None,
+                            },
+                        ),
+                    ),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            let node = infer_biz_node(&msg).unwrap();
+            assert_biz_node(&node, "cta_url");
         }
     }
 }

@@ -3,6 +3,7 @@
 
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvDeviceIdentity {
@@ -19,6 +20,7 @@ pub struct AdvDeviceIdentity {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvKeyIndexList {
@@ -35,6 +37,7 @@ pub struct AdvKeyIndexList {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvSignedDeviceIdentity {
@@ -49,6 +52,7 @@ pub struct AdvSignedDeviceIdentity {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvSignedDeviceIdentityHmac {
@@ -61,6 +65,7 @@ pub struct AdvSignedDeviceIdentityHmac {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AdvSignedKeyIndexList {
@@ -73,6 +78,7 @@ pub struct AdvSignedKeyIndexList {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiHomeState {
@@ -87,6 +93,7 @@ pub struct AiHomeState {
 pub mod ai_home_state {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiHomeOption {
@@ -109,6 +116,7 @@ pub mod ai_home_state {
     pub mod ai_home_option {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum AiHomeActionType {
@@ -145,6 +153,7 @@ pub mod ai_home_state {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiQueryFanout {
@@ -157,6 +166,7 @@ pub struct AiQueryFanout {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiRegenerateMetadata {
@@ -167,6 +177,7 @@ pub struct AiRegenerateMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseCodeMetadata {
@@ -179,6 +190,7 @@ pub struct AiRichResponseCodeMetadata {
 pub mod ai_rich_response_code_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiRichResponseCodeBlock {
@@ -189,6 +201,7 @@ pub mod ai_rich_response_code_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum AiRichResponseCodeHighlightType {
@@ -230,6 +243,7 @@ pub mod ai_rich_response_code_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseContentItemsMetadata {
@@ -242,6 +256,7 @@ pub struct AiRichResponseContentItemsMetadata {
 pub mod ai_rich_response_content_items_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiRichResponseContentItemMetadata {
@@ -252,6 +267,7 @@ pub mod ai_rich_response_content_items_metadata {
     pub mod ai_rich_response_content_item_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
         pub enum AIRichResponseContentItem {
             #[prost(message, tag = "1")]
@@ -260,6 +276,7 @@ pub mod ai_rich_response_content_items_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiRichResponseReelItem {
@@ -274,6 +291,7 @@ pub mod ai_rich_response_content_items_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ContentType {
@@ -303,6 +321,7 @@ pub mod ai_rich_response_content_items_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiRichResponseDynamicMetadata {
@@ -319,6 +338,7 @@ pub struct AiRichResponseDynamicMetadata {
 pub mod ai_rich_response_dynamic_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum AiRichResponseDynamicMetadataType {
@@ -351,6 +371,7 @@ pub mod ai_rich_response_dynamic_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseGridImageMetadata {
@@ -361,6 +382,7 @@ pub struct AiRichResponseGridImageMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiRichResponseImageUrl {
@@ -373,6 +395,7 @@ pub struct AiRichResponseImageUrl {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiRichResponseInlineImageMetadata {
@@ -389,6 +412,7 @@ pub struct AiRichResponseInlineImageMetadata {
 pub mod ai_rich_response_inline_image_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum AiRichResponseImageAlignment {
@@ -421,6 +445,7 @@ pub mod ai_rich_response_inline_image_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseLatexMetadata {
@@ -433,6 +458,7 @@ pub struct AiRichResponseLatexMetadata {
 pub mod ai_rich_response_latex_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AiRichResponseLatexExpression {
@@ -458,6 +484,7 @@ pub mod ai_rich_response_latex_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseMapMetadata {
@@ -478,6 +505,7 @@ pub struct AiRichResponseMapMetadata {
 pub mod ai_rich_response_map_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AiRichResponseMapAnnotation {
@@ -495,6 +523,7 @@ pub mod ai_rich_response_map_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseMessage {
@@ -509,6 +538,7 @@ pub struct AiRichResponseMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseSubMessage {
@@ -535,6 +565,7 @@ pub struct AiRichResponseSubMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AiRichResponseTableMetadata {
@@ -547,6 +578,7 @@ pub struct AiRichResponseTableMetadata {
 pub mod ai_rich_response_table_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiRichResponseTableRow {
@@ -558,6 +590,7 @@ pub mod ai_rich_response_table_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiRichResponseUnifiedResponse {
@@ -566,6 +599,7 @@ pub struct AiRichResponseUnifiedResponse {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AiThreadInfo {
@@ -578,6 +612,7 @@ pub struct AiThreadInfo {
 pub mod ai_thread_info {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiThreadClientInfo {
@@ -588,6 +623,7 @@ pub mod ai_thread_info {
     pub mod ai_thread_client_info {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum AiThreadType {
@@ -620,6 +656,7 @@ pub mod ai_thread_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiThreadServerInfo {
@@ -629,6 +666,7 @@ pub mod ai_thread_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Account {
@@ -643,6 +681,7 @@ pub struct Account {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ActionLink {
@@ -653,6 +692,7 @@ pub struct ActionLink {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AutoDownloadSettings {
@@ -667,6 +707,7 @@ pub struct AutoDownloadSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AvatarUserSettings {
@@ -677,6 +718,7 @@ pub struct AvatarUserSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BizAccountLinkInfo {
@@ -695,6 +737,7 @@ pub struct BizAccountLinkInfo {
 pub mod biz_account_link_info {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum AccountType {
@@ -720,6 +763,7 @@ pub mod biz_account_link_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum HostStorageType {
@@ -749,6 +793,7 @@ pub mod biz_account_link_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BizAccountPayload {
@@ -759,6 +804,7 @@ pub struct BizAccountPayload {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BizIdentityInfo {
@@ -783,6 +829,7 @@ pub struct BizIdentityInfo {
 pub mod biz_identity_info {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ActualActorsType {
@@ -811,6 +858,7 @@ pub mod biz_identity_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum HostStorageType {
@@ -839,6 +887,7 @@ pub mod biz_identity_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum VerifiedLevelValue {
@@ -871,6 +920,7 @@ pub mod biz_identity_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotAgeCollectionMetadata {
@@ -885,6 +935,7 @@ pub struct BotAgeCollectionMetadata {
 pub mod bot_age_collection_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum AgeCollectionType {
@@ -914,6 +965,7 @@ pub mod bot_age_collection_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotAvatarMetadata {
@@ -930,6 +982,7 @@ pub struct BotAvatarMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotCapabilityMetadata {
@@ -940,6 +993,7 @@ pub struct BotCapabilityMetadata {
 pub mod bot_capability_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BotCapabilityType {
@@ -1128,6 +1182,7 @@ pub mod bot_capability_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotDocumentMessageMetadata {
@@ -1138,6 +1193,7 @@ pub struct BotDocumentMessageMetadata {
 pub mod bot_document_message_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum DocumentPluginType {
@@ -1167,6 +1223,7 @@ pub mod bot_document_message_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotFeedbackMessage {
@@ -1189,6 +1246,7 @@ pub struct BotFeedbackMessage {
 pub mod bot_feedback_message {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SideBySideSurveyMetadata {
@@ -1215,6 +1273,7 @@ pub mod bot_feedback_message {
     pub mod side_by_side_survey_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct SideBySideSurveyAnalyticsData {
@@ -1227,6 +1286,7 @@ pub mod bot_feedback_message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct SidebySideSurveyMetaAiAnalyticsData {
@@ -1253,6 +1313,7 @@ pub mod bot_feedback_message {
         pub mod sideby_side_survey_meta_ai_analytics_data {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SideBySideSurveyAbandonEventData {
@@ -1261,6 +1322,7 @@ pub mod bot_feedback_message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SideBySideSurveyCtaClickEventData {
@@ -1271,6 +1333,7 @@ pub mod bot_feedback_message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SideBySideSurveyCtaImpressionEventData {
@@ -1279,12 +1342,14 @@ pub mod bot_feedback_message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SideBySideSurveyCardImpressionEventData {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SideBySideSurveyResponseEventData {
@@ -1297,6 +1362,7 @@ pub mod bot_feedback_message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BotFeedbackKind {
@@ -1364,6 +1430,7 @@ pub mod bot_feedback_message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BotFeedbackKindMultipleNegative {
@@ -1413,6 +1480,7 @@ pub mod bot_feedback_message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BotFeedbackKindMultiplePositive {
@@ -1438,6 +1506,7 @@ pub mod bot_feedback_message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ReportKind {
@@ -1467,6 +1536,7 @@ pub mod bot_feedback_message {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotGroupMetadata {
@@ -1475,6 +1545,7 @@ pub struct BotGroupMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotGroupParticipantMetadata {
@@ -1483,6 +1554,7 @@ pub struct BotGroupParticipantMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotImagineMetadata {
@@ -1493,6 +1565,7 @@ pub struct BotImagineMetadata {
 pub mod bot_imagine_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ImagineType {
@@ -1531,6 +1604,7 @@ pub mod bot_imagine_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotLinkedAccount {
@@ -1541,6 +1615,7 @@ pub struct BotLinkedAccount {
 pub mod bot_linked_account {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BotLinkedAccountType {
@@ -1567,6 +1642,7 @@ pub mod bot_linked_account {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotLinkedAccountsMetadata {
@@ -1579,6 +1655,7 @@ pub struct BotLinkedAccountsMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotMediaMetadata {
@@ -1601,6 +1678,7 @@ pub struct BotMediaMetadata {
 pub mod bot_media_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum OrientationType {
@@ -1633,6 +1711,7 @@ pub mod bot_media_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotMemoryFact {
@@ -1643,6 +1722,7 @@ pub struct BotMemoryFact {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotMemoryMetadata {
@@ -1655,6 +1735,7 @@ pub struct BotMemoryMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotMemuMetadata {
@@ -1663,6 +1744,7 @@ pub struct BotMemuMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotMessageOrigin {
@@ -1673,6 +1755,7 @@ pub struct BotMessageOrigin {
 pub mod bot_message_origin {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BotMessageOriginType {
@@ -1699,6 +1782,7 @@ pub mod bot_message_origin {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotMessageOriginMetadata {
@@ -1707,6 +1791,7 @@ pub struct BotMessageOriginMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotMessageSharingInfo {
@@ -1717,6 +1802,7 @@ pub struct BotMessageSharingInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotMetadata {
@@ -1797,6 +1883,7 @@ pub struct BotMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotMetricsMetadata {
@@ -1809,6 +1896,7 @@ pub struct BotMetricsMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotModeSelectionMetadata {
@@ -1819,6 +1907,7 @@ pub struct BotModeSelectionMetadata {
 pub mod bot_mode_selection_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BotUserSelectionMode {
@@ -1848,6 +1937,7 @@ pub mod bot_mode_selection_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotModelMetadata {
@@ -1862,6 +1952,7 @@ pub struct BotModelMetadata {
 pub mod bot_model_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ModelType {
@@ -1893,6 +1984,7 @@ pub mod bot_model_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PremiumModelStatus {
@@ -1925,6 +2017,7 @@ pub mod bot_model_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotPluginMetadata {
@@ -1957,6 +2050,7 @@ pub struct BotPluginMetadata {
 pub mod bot_plugin_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PluginType {
@@ -1988,6 +2082,7 @@ pub mod bot_plugin_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum SearchProvider {
@@ -2023,6 +2118,7 @@ pub mod bot_plugin_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotProgressIndicatorMetadata {
@@ -2037,6 +2133,7 @@ pub struct BotProgressIndicatorMetadata {
 pub mod bot_progress_indicator_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct BotPlanningStepMetadata {
@@ -2059,6 +2156,7 @@ pub mod bot_progress_indicator_metadata {
     pub mod bot_planning_step_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct BotPlanningSearchSourceMetadata {
@@ -2073,6 +2171,7 @@ pub mod bot_progress_indicator_metadata {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct BotPlanningSearchSourcesMetadata {
@@ -2087,6 +2186,7 @@ pub mod bot_progress_indicator_metadata {
         pub mod bot_planning_search_sources_metadata {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
             #[repr(i32)]
             pub enum BotPlanningSearchSourceProvider {
@@ -2122,6 +2222,7 @@ pub mod bot_progress_indicator_metadata {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct BotPlanningStepSectionMetadata {
@@ -2134,6 +2235,7 @@ pub mod bot_progress_indicator_metadata {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum BotSearchSourceProvider {
@@ -2168,6 +2270,7 @@ pub mod bot_progress_indicator_metadata {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum PlanningStepStatus {
@@ -2204,6 +2307,7 @@ pub mod bot_progress_indicator_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotPromotionMessageMetadata {
@@ -2216,6 +2320,7 @@ pub struct BotPromotionMessageMetadata {
 pub mod bot_promotion_message_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BotPromotionType {
@@ -2248,6 +2353,7 @@ pub mod bot_promotion_message_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotPromptSuggestion {
@@ -2258,6 +2364,7 @@ pub struct BotPromptSuggestion {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotPromptSuggestions {
@@ -2266,6 +2373,7 @@ pub struct BotPromptSuggestions {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotQuotaMetadata {
@@ -2276,6 +2384,7 @@ pub struct BotQuotaMetadata {
 pub mod bot_quota_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BotFeatureQuotaMetadata {
@@ -2290,6 +2399,7 @@ pub mod bot_quota_metadata {
     pub mod bot_feature_quota_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum BotFeatureType {
@@ -2320,6 +2430,7 @@ pub mod bot_quota_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotReminderMetadata {
@@ -2338,6 +2449,7 @@ pub struct BotReminderMetadata {
 pub mod bot_reminder_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ReminderAction {
@@ -2372,6 +2484,7 @@ pub mod bot_reminder_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ReminderFrequency {
@@ -2410,6 +2523,7 @@ pub mod bot_reminder_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotRenderingConfigMetadata {
@@ -2420,6 +2534,7 @@ pub struct BotRenderingConfigMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotRenderingMetadata {
@@ -2430,6 +2545,7 @@ pub struct BotRenderingMetadata {
 pub mod bot_rendering_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Keyword {
@@ -2441,6 +2557,7 @@ pub mod bot_rendering_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotSessionMetadata {
@@ -2451,6 +2568,7 @@ pub struct BotSessionMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotSignatureVerificationMetadata {
@@ -2459,6 +2577,7 @@ pub struct BotSignatureVerificationMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct BotSignatureVerificationUseCaseProof {
@@ -2475,6 +2594,7 @@ pub struct BotSignatureVerificationUseCaseProof {
 pub mod bot_signature_verification_use_case_proof {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BotSignatureUseCase {
@@ -2504,6 +2624,7 @@ pub mod bot_signature_verification_use_case_proof {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotSourcesMetadata {
@@ -2514,6 +2635,7 @@ pub struct BotSourcesMetadata {
 pub mod bot_sources_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BotSourceItem {
@@ -2536,6 +2658,7 @@ pub mod bot_sources_metadata {
     pub mod bot_source_item {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum SourceProvider {
@@ -2575,6 +2698,7 @@ pub mod bot_sources_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotSuggestedPromptMetadata {
@@ -2589,6 +2713,7 @@ pub struct BotSuggestedPromptMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct BotUnifiedResponseMutation {
@@ -2601,6 +2726,7 @@ pub struct BotUnifiedResponseMutation {
 pub mod bot_unified_response_mutation {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MediaDetailsMetadata {
@@ -2613,6 +2739,7 @@ pub mod bot_unified_response_mutation {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SideBySideMetadata {
@@ -2624,6 +2751,7 @@ pub mod bot_unified_response_mutation {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CallLogRecord {
@@ -2662,6 +2790,7 @@ pub struct CallLogRecord {
 pub mod call_log_record {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ParticipantInfo {
@@ -2672,6 +2801,7 @@ pub mod call_log_record {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum CallResult {
@@ -2727,6 +2857,7 @@ pub mod call_log_record {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum CallType {
@@ -2758,6 +2889,7 @@ pub mod call_log_record {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum SilenceReason {
@@ -2793,6 +2925,7 @@ pub mod call_log_record {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CertChain {
@@ -2805,6 +2938,7 @@ pub struct CertChain {
 pub mod cert_chain {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NoiseCertificate {
@@ -2817,6 +2951,7 @@ pub mod cert_chain {
     pub mod noise_certificate {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Details {
@@ -2835,6 +2970,7 @@ pub mod cert_chain {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ChatLockSettings {
@@ -2845,6 +2981,7 @@ pub struct ChatLockSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ChatRowOpaqueData {
@@ -2855,6 +2992,7 @@ pub struct ChatRowOpaqueData {
 pub mod chat_row_opaque_data {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DraftMessage {
@@ -2873,6 +3011,7 @@ pub mod chat_row_opaque_data {
     pub mod draft_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct CtwaContextData {
@@ -2905,6 +3044,7 @@ pub mod chat_row_opaque_data {
         pub mod ctwa_context_data {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
             #[repr(i32)]
             pub enum ContextInfoExternalAdReplyInfoMediaType {
@@ -2937,6 +3077,7 @@ pub mod chat_row_opaque_data {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct CtwaContextLinkData {
@@ -2953,6 +3094,7 @@ pub mod chat_row_opaque_data {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Citation {
@@ -2967,6 +3109,7 @@ pub struct Citation {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientPairingProps {
@@ -2981,6 +3124,7 @@ pub struct ClientPairingProps {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ClientPayload {
@@ -3057,6 +3201,7 @@ pub struct ClientPayload {
 pub mod client_payload {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DnsSource {
@@ -3069,6 +3214,7 @@ pub mod client_payload {
     pub mod dns_source {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum DnsResolutionMethod {
@@ -3116,6 +3262,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DevicePairingRegistrationData {
@@ -3138,6 +3285,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InteropData {
@@ -3150,6 +3298,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UserAgent {
@@ -3190,6 +3339,7 @@ pub mod client_payload {
     pub mod user_agent {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct AppVersion {
@@ -3206,6 +3356,7 @@ pub mod client_payload {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum DeviceType {
@@ -3243,6 +3394,7 @@ pub mod client_payload {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum Platform {
@@ -3379,6 +3531,7 @@ pub mod client_payload {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum ReleaseChannel {
@@ -3414,6 +3567,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct WebInfo {
@@ -3434,6 +3588,7 @@ pub mod client_payload {
     pub mod web_info {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct WebdPayload {
@@ -3462,6 +3617,7 @@ pub mod client_payload {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum WebSubPlatform {
@@ -3503,6 +3659,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum AccountType {
@@ -3531,6 +3688,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ConnectReason {
@@ -3574,6 +3732,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ConnectType {
@@ -3641,6 +3800,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum IosAppExtension {
@@ -3672,6 +3832,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Product {
@@ -3709,6 +3870,7 @@ pub mod client_payload {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum TrafficAnonymization {
@@ -3738,6 +3900,7 @@ pub mod client_payload {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CommentMetadata {
@@ -3748,6 +3911,7 @@ pub struct CommentMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CompanionCommitment {
@@ -3756,6 +3920,7 @@ pub struct CompanionCommitment {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct CompanionEphemeralIdentity {
@@ -3768,6 +3933,7 @@ pub struct CompanionEphemeralIdentity {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Config {
@@ -3778,6 +3944,7 @@ pub struct Config {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ContextInfo {
@@ -3896,6 +4063,7 @@ pub struct ContextInfo {
 pub mod context_info {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AdReplyInfo {
@@ -3912,6 +4080,7 @@ pub mod context_info {
     pub mod ad_reply_info {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum MediaType {
@@ -3944,6 +4113,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BusinessMessageForwardInfo {
@@ -3952,6 +4122,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct DataSharingContext {
@@ -3968,6 +4139,7 @@ pub mod context_info {
     pub mod data_sharing_context {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct Parameters {
@@ -3984,6 +4156,7 @@ pub mod context_info {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum DataSharingFlags {
@@ -4013,6 +4186,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ExternalAdReplyInfo {
@@ -4075,6 +4249,7 @@ pub mod context_info {
     pub mod external_ad_reply_info {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum AdType {
@@ -4103,6 +4278,7 @@ pub mod context_info {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum MediaType {
@@ -4135,6 +4311,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct FeatureEligibilities {
@@ -4151,6 +4328,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ForwardedNewsletterMessageInfo {
@@ -4171,6 +4349,7 @@ pub mod context_info {
     pub mod forwarded_newsletter_message_info {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum ContentType {
@@ -4203,6 +4382,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct QuestionReplyQuotedMessage {
@@ -4215,6 +4395,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusAudienceMetadata {
@@ -4225,6 +4406,7 @@ pub mod context_info {
     pub mod status_audience_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum AudienceType {
@@ -4254,6 +4436,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UtmInfo {
@@ -4264,6 +4447,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ForwardOrigin {
@@ -4304,6 +4488,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PairedMediaType {
@@ -4353,6 +4538,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum QuotedType {
@@ -4381,6 +4567,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum StatusAttributionType {
@@ -4418,6 +4605,7 @@ pub mod context_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum StatusSourceType {
@@ -4459,6 +4647,7 @@ pub mod context_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Conversation {
@@ -4575,6 +4764,7 @@ pub struct Conversation {
 pub mod conversation {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum EndOfHistoryTransferType {
@@ -4610,6 +4800,7 @@ pub mod conversation {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeviceCapabilities {
@@ -4630,6 +4821,7 @@ pub struct DeviceCapabilities {
 pub mod device_capabilities {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiThread {
@@ -4640,6 +4832,7 @@ pub mod device_capabilities {
     pub mod ai_thread {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum SupportLevel {
@@ -4672,6 +4865,7 @@ pub mod device_capabilities {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BusinessBroadcast {
@@ -4680,6 +4874,7 @@ pub mod device_capabilities {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LidMigration {
@@ -4688,6 +4883,7 @@ pub mod device_capabilities {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UserHasAvatar {
@@ -4696,6 +4892,7 @@ pub mod device_capabilities {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ChatLockSupportLevel {
@@ -4727,6 +4924,7 @@ pub mod device_capabilities {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum MemberNameTagPrimarySupport {
@@ -4759,6 +4957,7 @@ pub mod device_capabilities {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeviceConsistencyCodeMessage {
@@ -4769,6 +4968,7 @@ pub struct DeviceConsistencyCodeMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeviceListMetadata {
@@ -4791,6 +4991,7 @@ pub struct DeviceListMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DeviceProps {
@@ -4809,6 +5010,7 @@ pub struct DeviceProps {
 pub mod device_props {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppVersion {
@@ -4825,6 +5027,7 @@ pub mod device_props {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HistorySyncConfig {
@@ -4869,6 +5072,7 @@ pub mod device_props {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PlatformType {
@@ -4967,6 +5171,7 @@ pub mod device_props {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct DisappearingMode {
@@ -4983,6 +5188,7 @@ pub struct DisappearingMode {
 pub mod disappearing_mode {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Initiator {
@@ -5017,6 +5223,7 @@ pub mod disappearing_mode {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Trigger {
@@ -5058,6 +5265,7 @@ pub mod disappearing_mode {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmbeddedContent {
@@ -5068,6 +5276,7 @@ pub struct EmbeddedContent {
 pub mod embedded_content {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Content {
         #[prost(message, tag = "1")]
@@ -5078,6 +5287,7 @@ pub mod embedded_content {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmbeddedMessage {
@@ -5088,6 +5298,7 @@ pub struct EmbeddedMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EmbeddedMusic {
@@ -5122,6 +5333,7 @@ pub struct EmbeddedMusic {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EncryptedPairingRequest {
@@ -5132,6 +5344,7 @@ pub struct EncryptedPairingRequest {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EphemeralSetting {
@@ -5142,6 +5355,7 @@ pub struct EphemeralSetting {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EventAdditionalMetadata {
@@ -5150,6 +5364,7 @@ pub struct EventAdditionalMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct EventResponse {
@@ -5164,6 +5379,7 @@ pub struct EventResponse {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExitCode {
@@ -5174,6 +5390,7 @@ pub struct ExitCode {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ExternalBlobReference {
@@ -5192,6 +5409,7 @@ pub struct ExternalBlobReference {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Field {
@@ -5208,6 +5426,7 @@ pub struct Field {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ForwardedAiBotMessageInfo {
@@ -5220,6 +5439,7 @@ pub struct ForwardedAiBotMessageInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GlobalSettings {
@@ -5266,6 +5486,7 @@ pub struct GlobalSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct GroupHistoryBundleInfo {
@@ -5278,6 +5499,7 @@ pub struct GroupHistoryBundleInfo {
 pub mod group_history_bundle_info {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ProcessState {
@@ -5316,6 +5538,7 @@ pub mod group_history_bundle_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GroupHistoryIndividualMessageInfo {
@@ -5326,6 +5549,7 @@ pub struct GroupHistoryIndividualMessageInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GroupMention {
@@ -5336,6 +5560,7 @@ pub struct GroupMention {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GroupParticipant {
@@ -5350,6 +5575,7 @@ pub struct GroupParticipant {
 pub mod group_participant {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Rank {
@@ -5382,6 +5608,7 @@ pub mod group_participant {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HandshakeMessage {
@@ -5396,6 +5623,7 @@ pub struct HandshakeMessage {
 pub mod handshake_message {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ClientFinish {
@@ -5408,6 +5636,7 @@ pub mod handshake_message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ClientHello {
@@ -5424,6 +5653,7 @@ pub mod handshake_message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ServerHello {
@@ -5439,6 +5669,7 @@ pub mod handshake_message {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HistorySync {
@@ -5481,6 +5712,7 @@ pub struct HistorySync {
 pub mod history_sync {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BotAiWaitListState {
@@ -5509,6 +5741,7 @@ pub mod history_sync {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum HistorySyncType {
@@ -5553,6 +5786,7 @@ pub mod history_sync {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HistorySyncMsg {
@@ -5563,6 +5797,7 @@ pub struct HistorySyncMsg {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct HydratedTemplateButton {
@@ -5575,6 +5810,7 @@ pub struct HydratedTemplateButton {
 pub mod hydrated_template_button {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HydratedCallButton {
@@ -5585,6 +5821,7 @@ pub mod hydrated_template_button {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HydratedQuickReplyButton {
@@ -5595,6 +5832,7 @@ pub mod hydrated_template_button {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HydratedUrlButton {
@@ -5611,6 +5849,7 @@ pub mod hydrated_template_button {
     pub mod hydrated_url_button {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum WebviewPresentationType {
@@ -5643,6 +5882,7 @@ pub mod hydrated_template_button {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum HydratedButton {
         #[prost(message, tag = "1")]
@@ -5655,6 +5895,7 @@ pub mod hydrated_template_button {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct IdentityKeyPairStructure {
@@ -5665,6 +5906,7 @@ pub struct IdentityKeyPairStructure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InThreadSurveyMetadata {
@@ -5709,6 +5951,7 @@ pub struct InThreadSurveyMetadata {
 pub mod in_thread_survey_metadata {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InThreadSurveyOption {
@@ -5721,6 +5964,7 @@ pub mod in_thread_survey_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InThreadSurveyPrivacyStatementPart {
@@ -5731,6 +5975,7 @@ pub mod in_thread_survey_metadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct InThreadSurveyQuestion {
@@ -5744,6 +5989,7 @@ pub mod in_thread_survey_metadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct InteractiveAnnotation {
@@ -5762,6 +6008,7 @@ pub struct InteractiveAnnotation {
 pub mod interactive_annotation {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum StatusLinkType {
@@ -5793,6 +6040,7 @@ pub mod interactive_annotation {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Action {
         #[prost(message, tag = "2")]
@@ -5807,6 +6055,7 @@ pub mod interactive_annotation {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InteractiveMessageAdditionalMetadata {
@@ -5815,6 +6064,7 @@ pub struct InteractiveMessageAdditionalMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct KeepInChat {
@@ -5833,6 +6083,7 @@ pub struct KeepInChat {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct KeyExchangeMessage {
@@ -5849,6 +6100,7 @@ pub struct KeyExchangeMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct KeyId {
@@ -5857,6 +6109,7 @@ pub struct KeyId {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LidMigrationMapping {
@@ -5869,6 +6122,7 @@ pub struct LidMigrationMapping {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LidMigrationMappingSyncMessage {
@@ -5877,6 +6131,7 @@ pub struct LidMigrationMappingSyncMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct LidMigrationMappingSyncPayload {
@@ -5887,6 +6142,7 @@ pub struct LidMigrationMappingSyncPayload {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LegacyMessage {
@@ -5897,6 +6153,7 @@ pub struct LegacyMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LimitSharing {
@@ -5913,6 +6170,7 @@ pub struct LimitSharing {
 pub mod limit_sharing {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum TriggerType {
@@ -5948,6 +6206,7 @@ pub mod limit_sharing {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct LocalizedName {
@@ -5960,6 +6219,7 @@ pub struct LocalizedName {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Location {
@@ -5972,6 +6232,7 @@ pub struct Location {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MediaData {
@@ -5980,6 +6241,7 @@ pub struct MediaData {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MediaNotifyMessage {
@@ -5992,6 +6254,7 @@ pub struct MediaNotifyMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MediaRetryNotification {
@@ -6008,6 +6271,7 @@ pub struct MediaRetryNotification {
 pub mod media_retry_notification {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ResultType {
@@ -6043,6 +6307,7 @@ pub mod media_retry_notification {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MemberLabel {
@@ -6053,6 +6318,7 @@ pub struct MemberLabel {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Message {
@@ -6253,6 +6519,7 @@ pub struct Message {
 pub mod message {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AlbumMessage {
@@ -6265,6 +6532,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppStateFatalExceptionNotification {
@@ -6275,6 +6543,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppStateSyncKey {
@@ -6285,6 +6554,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppStateSyncKeyData {
@@ -6297,6 +6567,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppStateSyncKeyFingerprint {
@@ -6309,6 +6580,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AppStateSyncKeyId {
@@ -6317,6 +6589,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AppStateSyncKeyRequest {
@@ -6325,6 +6598,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AppStateSyncKeyShare {
@@ -6333,6 +6607,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AudioMessage {
@@ -6373,6 +6648,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BCallMessage {
@@ -6389,6 +6665,7 @@ pub mod message {
     pub mod b_call_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum MediaType {
@@ -6421,6 +6698,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ButtonsMessage {
@@ -6441,6 +6719,7 @@ pub mod message {
     pub mod buttons_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Button {
@@ -6457,6 +6736,7 @@ pub mod message {
         pub mod button {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct ButtonText {
@@ -6465,6 +6745,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct NativeFlowInfo {
@@ -6475,6 +6756,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
             #[repr(i32)]
             pub enum Type {
@@ -6507,6 +6789,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum HeaderType {
@@ -6550,6 +6833,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, PartialEq, ::prost::Oneof)]
         pub enum Header {
             #[prost(string, tag = "1")]
@@ -6566,6 +6850,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ButtonsResponseMessage {
@@ -6582,6 +6867,7 @@ pub mod message {
     pub mod buttons_response_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum Type {
@@ -6610,6 +6896,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
         pub enum Response {
             #[prost(string, tag = "2")]
@@ -6618,6 +6905,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Call {
@@ -6644,6 +6932,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CallLogMessage {
@@ -6662,6 +6951,7 @@ pub mod message {
     pub mod call_log_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct CallParticipant {
@@ -6672,6 +6962,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum CallOutcome {
@@ -6718,6 +7009,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum CallType {
@@ -6750,6 +7042,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct CancelPaymentRequestMessage {
@@ -6758,6 +7051,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Chat {
@@ -6768,6 +7062,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct CloudApiThreadControlNotification {
@@ -6788,6 +7083,7 @@ pub mod message {
     pub mod cloud_api_thread_control_notification {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct CloudApiThreadControlNotificationContent {
@@ -6798,6 +7094,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum CloudApiThreadControl {
@@ -6830,6 +7127,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CommentMessage {
@@ -6840,6 +7138,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ContactMessage {
@@ -6852,6 +7151,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ContactsArrayMessage {
@@ -6864,6 +7164,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DeclinePaymentRequestMessage {
@@ -6872,6 +7173,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct DeviceSentMessage {
@@ -6884,6 +7186,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct DocumentMessage {
@@ -6934,6 +7237,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct EncCommentMessage {
@@ -6946,6 +7250,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct EncEventResponseMessage {
@@ -6958,6 +7263,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct EncReactionMessage {
@@ -6970,6 +7276,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct EventMessage {
@@ -7000,6 +7307,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct EventResponseMessage {
@@ -7014,6 +7322,7 @@ pub mod message {
     pub mod event_response_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum EventResponseType {
@@ -7049,6 +7358,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ExtendedTextMessage {
@@ -7121,6 +7431,7 @@ pub mod message {
     pub mod extended_text_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum FontType {
@@ -7167,6 +7478,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum InviteLinkGroupType {
@@ -7201,6 +7513,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum PreviewType {
@@ -7242,6 +7555,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct FullHistorySyncOnDemandRequestMetadata {
@@ -7250,6 +7564,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct FutureProofMessage {
@@ -7258,6 +7573,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct GroupInviteMessage {
@@ -7282,6 +7598,7 @@ pub mod message {
     pub mod group_invite_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum GroupType {
@@ -7311,6 +7628,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct HighlyStructuredMessage {
@@ -7337,6 +7655,7 @@ pub mod message {
     pub mod highly_structured_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct HsmLocalizableParameter {
@@ -7349,6 +7668,7 @@ pub mod message {
         pub mod hsm_localizable_parameter {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct HsmCurrency {
@@ -7359,6 +7679,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct HsmDateTime {
@@ -7369,6 +7690,7 @@ pub mod message {
             pub mod hsm_date_time {
                 #[derive(serde::Serialize)]
                 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
                 #[cfg_attr(feature = "serde-deserialize", serde(default))]
                 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
                 pub struct HsmDateTimeComponent {
@@ -7391,6 +7713,7 @@ pub mod message {
                 pub mod hsm_date_time_component {
                     #[derive(serde::Serialize)]
                     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
                     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
                     #[repr(i32)]
                     pub enum CalendarType {
@@ -7419,6 +7742,7 @@ pub mod message {
                     }
                     #[derive(serde::Serialize)]
                     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
                     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
                     #[repr(i32)]
                     pub enum DayOfWeekType {
@@ -7463,6 +7787,7 @@ pub mod message {
                 }
                 #[derive(serde::Serialize)]
                 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
                 #[cfg_attr(feature = "serde-deserialize", serde(default))]
                 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
                 pub struct HsmDateTimeUnixEpoch {
@@ -7471,6 +7796,7 @@ pub mod message {
                 }
                 #[derive(serde::Serialize)]
                 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
                 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Oneof)]
                 pub enum DatetimeOneof {
                     #[prost(message, tag = "1")]
@@ -7481,6 +7807,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
             pub enum ParamOneof {
                 #[prost(message, tag = "2")]
@@ -7492,6 +7819,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HistorySyncMessageAccessStatus {
@@ -7500,6 +7828,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct HistorySyncNotification {
@@ -7536,6 +7865,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ImageMessage {
@@ -7606,6 +7936,7 @@ pub mod message {
     pub mod image_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum ImageSourceType {
@@ -7641,6 +7972,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InitialSecurityNotificationSettingSync {
@@ -7649,6 +7981,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct InteractiveMessage {
@@ -7669,6 +8002,7 @@ pub mod message {
     pub mod interactive_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Body {
@@ -7677,6 +8011,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct CarouselMessage {
@@ -7691,6 +8026,7 @@ pub mod message {
         pub mod carousel_message {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
             #[repr(i32)]
             pub enum CarouselCardType {
@@ -7723,6 +8059,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct CollectionMessage {
@@ -7735,6 +8072,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct Footer {
@@ -7749,6 +8087,7 @@ pub mod message {
         pub mod footer {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, PartialEq, ::prost::Oneof)]
             pub enum Media {
                 #[prost(message, tag = "2")]
@@ -7757,6 +8096,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct Header {
@@ -7773,6 +8113,7 @@ pub mod message {
         pub mod header {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, PartialEq, ::prost::Oneof)]
             pub enum Media {
                 #[prost(message, tag = "3")]
@@ -7791,6 +8132,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct NativeFlowMessage {
@@ -7805,6 +8147,7 @@ pub mod message {
         pub mod native_flow_message {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct NativeFlowButton {
@@ -7816,6 +8159,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct ShopMessage {
@@ -7830,6 +8174,7 @@ pub mod message {
         pub mod shop_message {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
             #[repr(i32)]
             pub enum Surface {
@@ -7865,6 +8210,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, PartialEq, ::prost::Oneof)]
         pub enum InteractiveMessage {
             #[prost(message, tag = "4")]
@@ -7879,6 +8225,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct InteractiveResponseMessage {
@@ -7893,6 +8240,7 @@ pub mod message {
     pub mod interactive_response_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Body {
@@ -7905,6 +8253,7 @@ pub mod message {
         pub mod body {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
             #[repr(i32)]
             pub enum Format {
@@ -7934,6 +8283,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct NativeFlowResponseMessage {
@@ -7946,6 +8296,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
         pub enum InteractiveResponseMessage {
             #[prost(message, tag = "2")]
@@ -7954,6 +8305,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InvoiceMessage {
@@ -7982,6 +8334,7 @@ pub mod message {
     pub mod invoice_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum AttachmentType {
@@ -8011,6 +8364,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct KeepInChatMessage {
@@ -8023,6 +8377,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LinkPreviewMetadata {
@@ -8049,6 +8404,7 @@ pub mod message {
     pub mod link_preview_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum SocialMediaPostType {
@@ -8090,6 +8446,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ListMessage {
@@ -8114,6 +8471,7 @@ pub mod message {
     pub mod list_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Product {
@@ -8122,6 +8480,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct ProductListHeaderImage {
@@ -8132,6 +8491,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct ProductListInfo {
@@ -8144,6 +8504,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct ProductSection {
@@ -8154,6 +8515,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Row {
@@ -8166,6 +8528,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct Section {
@@ -8176,6 +8539,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum ListType {
@@ -8208,6 +8572,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ListResponseMessage {
@@ -8226,6 +8591,7 @@ pub mod message {
     pub mod list_response_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct SingleSelectReply {
@@ -8234,6 +8600,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum ListType {
@@ -8263,6 +8630,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct LiveLocationMessage {
@@ -8289,6 +8657,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct LocationMessage {
@@ -8319,6 +8688,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MmsThumbnailMetadata {
@@ -8341,6 +8711,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct MessageHistoryBundle {
@@ -8363,6 +8734,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MessageHistoryMetadata {
@@ -8375,6 +8747,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct MessageHistoryNotice {
@@ -8385,6 +8758,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct NewsletterAdminInviteMessage {
@@ -8403,6 +8777,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct NewsletterFollowerInviteMessage {
@@ -8419,6 +8794,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct OrderMessage {
@@ -8457,6 +8833,7 @@ pub mod message {
     pub mod order_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum OrderStatus {
@@ -8488,6 +8865,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum OrderSurface {
@@ -8514,6 +8892,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PaymentExtendedMetadata {
@@ -8524,6 +8903,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PaymentInviteMessage {
@@ -8536,6 +8916,7 @@ pub mod message {
     pub mod payment_invite_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum ServiceType {
@@ -8571,6 +8952,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PaymentLinkMetadata {
@@ -8585,6 +8967,7 @@ pub mod message {
     pub mod payment_link_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct PaymentLinkButton {
@@ -8593,6 +8976,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct PaymentLinkHeader {
@@ -8603,6 +8987,7 @@ pub mod message {
         pub mod payment_link_header {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
             #[repr(i32)]
             pub enum PaymentLinkHeaderType {
@@ -8632,6 +9017,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct PaymentLinkProvider {
@@ -8641,6 +9027,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PeerDataOperationRequestMessage {
@@ -8667,6 +9054,7 @@ pub mod message {
     pub mod peer_data_operation_request_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct FullHistorySyncOnDemandRequest {
@@ -8677,6 +9065,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct GalaxyFlowAction {
@@ -8691,6 +9080,7 @@ pub mod message {
         pub mod galaxy_flow_action {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
             #[repr(i32)]
             pub enum GalaxyFlowActionType {
@@ -8717,6 +9107,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct HistorySyncChunkRetryRequest {
@@ -8731,6 +9122,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct HistorySyncOnDemandRequest {
@@ -8749,6 +9141,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct PlaceholderMessageResendRequest {
@@ -8757,6 +9150,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct RequestStickerReupload {
@@ -8765,6 +9159,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct RequestUrlPreview {
@@ -8775,6 +9170,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct SyncDCollectionFatalRecoveryRequest {
@@ -8786,6 +9182,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PeerDataOperationRequestResponseMessage {
@@ -8800,6 +9197,7 @@ pub mod message {
     pub mod peer_data_operation_request_response_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct PeerDataOperationResult {
@@ -8828,6 +9226,7 @@ pub mod message {
         pub mod peer_data_operation_result {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct CompanionCanonicalUserNonceFetchResponse {
@@ -8840,6 +9239,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct CompanionMetaNonceFetchResponse {
@@ -8848,6 +9248,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct FullHistorySyncOnDemandRequestResponse {
@@ -8858,6 +9259,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct HistorySyncChunkRetryResponse {
@@ -8874,6 +9276,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct LinkPreviewResponse {
@@ -8898,6 +9301,7 @@ pub mod message {
             pub mod link_preview_response {
                 #[derive(serde::Serialize)]
                 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
                 #[cfg_attr(feature = "serde-deserialize", serde(default))]
                 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
                 pub struct LinkPreviewHighQualityThumbnail {
@@ -8918,6 +9322,7 @@ pub mod message {
                 }
                 #[derive(serde::Serialize)]
                 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+                #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
                 #[cfg_attr(feature = "serde-deserialize", serde(default))]
                 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
                 pub struct PaymentLinkPreviewMetadata {
@@ -8929,6 +9334,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct PlaceholderMessageResendResponse {
@@ -8937,6 +9343,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct SyncDSnapshotFatalRecoveryResponse {
@@ -8947,6 +9354,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[cfg_attr(feature = "serde-deserialize", serde(default))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
             pub struct WaffleNonceFetchResponse {
@@ -8957,6 +9365,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
             #[repr(i32)]
             pub enum FullHistorySyncOnDemandResponseCode {
@@ -9000,6 +9409,7 @@ pub mod message {
             }
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
             #[repr(i32)]
             pub enum HistorySyncChunkRetryResponseCode {
@@ -9042,6 +9452,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PinInChatMessage {
@@ -9056,6 +9467,7 @@ pub mod message {
     pub mod pin_in_chat_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum Type {
@@ -9088,6 +9500,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PlaceholderMessage {
@@ -9098,6 +9511,7 @@ pub mod message {
     pub mod placeholder_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum PlaceholderType {
@@ -9124,6 +9538,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PollCreationMessage {
@@ -9148,6 +9563,7 @@ pub mod message {
     pub mod poll_creation_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Option {
@@ -9159,6 +9575,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollEncValue {
@@ -9169,6 +9586,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PollResultSnapshotMessage {
@@ -9185,6 +9603,7 @@ pub mod message {
     pub mod poll_result_snapshot_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct PollVote {
@@ -9196,6 +9615,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollUpdateMessage {
@@ -9210,12 +9630,14 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollUpdateMessageMetadata {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollVoteMessage {
@@ -9224,6 +9646,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ProductMessage {
@@ -9244,6 +9667,7 @@ pub mod message {
     pub mod product_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct CatalogSnapshot {
@@ -9256,6 +9680,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct ProductSnapshot {
@@ -9287,6 +9712,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ProtocolMessage {
@@ -9343,6 +9769,7 @@ pub mod message {
     pub mod protocol_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum Type {
@@ -9444,6 +9871,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct QuestionResponseMessage {
@@ -9454,6 +9882,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ReactionMessage {
@@ -9468,6 +9897,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct RequestPaymentMessage {
@@ -9488,6 +9918,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct RequestPhoneNumberMessage {
@@ -9496,6 +9927,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct RequestWelcomeMessageMetadata {
@@ -9506,6 +9938,7 @@ pub mod message {
     pub mod request_welcome_message_metadata {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum LocalChatState {
@@ -9535,6 +9968,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ScheduledCallCreationMessage {
@@ -9549,6 +9983,7 @@ pub mod message {
     pub mod scheduled_call_creation_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum CallType {
@@ -9581,6 +10016,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ScheduledCallEditMessage {
@@ -9593,6 +10029,7 @@ pub mod message {
     pub mod scheduled_call_edit_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum EditType {
@@ -9622,6 +10059,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SecretEncryptedMessage {
@@ -9638,6 +10076,7 @@ pub mod message {
     pub mod secret_encrypted_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum SecretEncType {
@@ -9670,6 +10109,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct SendPaymentMessage {
@@ -9684,6 +10124,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SenderKeyDistributionMessage {
@@ -9694,6 +10135,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusNotificationMessage {
@@ -9708,6 +10150,7 @@ pub mod message {
     pub mod status_notification_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum StatusNotificationType {
@@ -9743,6 +10186,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusQuestionAnswerMessage {
@@ -9753,6 +10197,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusQuotedMessage {
@@ -9769,6 +10214,7 @@ pub mod message {
     pub mod status_quoted_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum StatusQuotedMessageType {
@@ -9795,6 +10241,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusStickerInteractionMessage {
@@ -9809,6 +10256,7 @@ pub mod message {
     pub mod status_sticker_interaction_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum StatusStickerType {
@@ -9838,6 +10286,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct StickerMessage {
@@ -9886,6 +10335,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct StickerPackMessage {
@@ -9938,6 +10388,7 @@ pub mod message {
     pub mod sticker_pack_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Sticker {
@@ -9956,6 +10407,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum StickerPackOrigin {
@@ -9988,6 +10440,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StickerSyncRmrMessage {
@@ -10000,6 +10453,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct TemplateButtonReplyMessage {
@@ -10016,6 +10470,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct TemplateMessage {
@@ -10032,6 +10487,7 @@ pub mod message {
     pub mod template_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct FourRowTemplate {
@@ -10048,6 +10504,7 @@ pub mod message {
         pub mod four_row_template {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, PartialEq, ::prost::Oneof)]
             pub enum Title {
                 #[prost(message, tag = "1")]
@@ -10064,6 +10521,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, ::prost::Message)]
         pub struct HydratedFourRowTemplate {
@@ -10084,6 +10542,7 @@ pub mod message {
         pub mod hydrated_four_row_template {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, PartialEq, ::prost::Oneof)]
             pub enum Title {
                 #[prost(message, tag = "1")]
@@ -10100,6 +10559,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, PartialEq, ::prost::Oneof)]
         pub enum Format {
             #[prost(message, tag = "1")]
@@ -10112,6 +10572,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UrlMetadata {
@@ -10120,6 +10581,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct VideoEndCard {
@@ -10134,6 +10596,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct VideoMessage {
@@ -10204,6 +10667,7 @@ pub mod message {
     pub mod video_message {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum Attribution {
@@ -10238,6 +10702,7 @@ pub mod message {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum VideoSourceType {
@@ -10267,6 +10732,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum HistorySyncType {
@@ -10316,6 +10782,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum MediaKeyDomain {
@@ -10353,6 +10820,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PeerDataOperationRequestType {
@@ -10411,6 +10879,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PollContentType {
@@ -10442,6 +10911,7 @@ pub mod message {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PollType {
@@ -10471,6 +10941,7 @@ pub mod message {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MessageAddOn {
@@ -10495,6 +10966,7 @@ pub struct MessageAddOn {
 pub mod message_add_on {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum MessageAddOnType {
@@ -10533,6 +11005,7 @@ pub mod message_add_on {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MessageAddOnContextInfo {
@@ -10543,6 +11016,7 @@ pub struct MessageAddOnContextInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MessageAssociation {
@@ -10557,6 +11031,7 @@ pub struct MessageAssociation {
 pub mod message_association {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum AssociationType {
@@ -10640,6 +11115,7 @@ pub mod message_association {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MessageContextInfo {
@@ -10680,6 +11156,7 @@ pub struct MessageContextInfo {
 pub mod message_context_info {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum MessageAddonExpiryType {
@@ -10709,6 +11186,7 @@ pub mod message_context_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MessageKey {
@@ -10723,6 +11201,7 @@ pub struct MessageKey {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct MessageSecretMessage {
@@ -10735,6 +11214,7 @@ pub struct MessageSecretMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Money {
@@ -10747,6 +11227,7 @@ pub struct Money {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MsgOpaqueData {
@@ -10841,6 +11322,7 @@ pub struct MsgOpaqueData {
 pub mod msg_opaque_data {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct EventLocation {
@@ -10859,6 +11341,7 @@ pub mod msg_opaque_data {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollOption {
@@ -10869,6 +11352,7 @@ pub mod msg_opaque_data {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PollVoteSnapshot {
@@ -10879,6 +11363,7 @@ pub mod msg_opaque_data {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct PollVotesSnapshot {
@@ -10887,6 +11372,7 @@ pub mod msg_opaque_data {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PollContentType {
@@ -10918,6 +11404,7 @@ pub mod msg_opaque_data {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum PollType {
@@ -10947,6 +11434,7 @@ pub mod msg_opaque_data {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct MsgRowOpaqueData {
@@ -10957,6 +11445,7 @@ pub struct MsgRowOpaqueData {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NoiseCertificate {
@@ -10969,6 +11458,7 @@ pub struct NoiseCertificate {
 pub mod noise_certificate {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Details {
@@ -10986,6 +11476,7 @@ pub mod noise_certificate {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct NotificationMessageInfo {
@@ -11000,6 +11491,7 @@ pub struct NotificationMessageInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct NotificationSettings {
@@ -11018,6 +11510,7 @@ pub struct NotificationSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PairingRequest {
@@ -11030,6 +11523,7 @@ pub struct PairingRequest {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PastParticipant {
@@ -11044,6 +11538,7 @@ pub struct PastParticipant {
 pub mod past_participant {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum LeaveReason {
@@ -11073,6 +11568,7 @@ pub mod past_participant {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PastParticipants {
@@ -11083,6 +11579,7 @@ pub struct PastParticipants {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PatchDebugData {
@@ -11113,6 +11610,7 @@ pub struct PatchDebugData {
 pub mod patch_debug_data {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Platform {
@@ -11172,6 +11670,7 @@ pub mod patch_debug_data {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PaymentBackground {
@@ -11200,6 +11699,7 @@ pub struct PaymentBackground {
 pub mod payment_background {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MediaData {
@@ -11216,6 +11716,7 @@ pub mod payment_background {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Type {
@@ -11245,6 +11746,7 @@ pub mod payment_background {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PaymentInfo {
@@ -11279,6 +11781,7 @@ pub struct PaymentInfo {
 pub mod payment_info {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Currency {
@@ -11307,6 +11810,7 @@ pub mod payment_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Status {
@@ -11365,6 +11869,7 @@ pub mod payment_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum TxnStatus {
@@ -11484,6 +11989,7 @@ pub mod payment_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PhoneNumberToLidMapping {
@@ -11494,6 +12000,7 @@ pub struct PhoneNumberToLidMapping {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PhotoChange {
@@ -11506,6 +12013,7 @@ pub struct PhotoChange {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PinInChat {
@@ -11524,6 +12032,7 @@ pub struct PinInChat {
 pub mod pin_in_chat {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Type {
@@ -11556,6 +12065,7 @@ pub mod pin_in_chat {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct Point {
@@ -11570,6 +12080,7 @@ pub struct Point {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PollAdditionalMetadata {
@@ -11578,6 +12089,7 @@ pub struct PollAdditionalMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PollEncValue {
@@ -11588,6 +12100,7 @@ pub struct PollEncValue {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PollUpdate {
@@ -11604,6 +12117,7 @@ pub struct PollUpdate {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PreKeyRecordStructure {
@@ -11616,6 +12130,7 @@ pub struct PreKeyRecordStructure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PreKeySignalMessage {
@@ -11634,6 +12149,7 @@ pub struct PreKeySignalMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PremiumMessageInfo {
@@ -11642,6 +12158,7 @@ pub struct PremiumMessageInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct PrimaryEphemeralIdentity {
@@ -11652,6 +12169,7 @@ pub struct PrimaryEphemeralIdentity {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProcessedVideo {
@@ -11676,6 +12194,7 @@ pub struct ProcessedVideo {
 pub mod processed_video {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum VideoQuality {
@@ -11711,6 +12230,7 @@ pub mod processed_video {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProloguePayload {
@@ -11721,6 +12241,7 @@ pub struct ProloguePayload {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Pushname {
@@ -11731,6 +12252,7 @@ pub struct Pushname {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct QuarantinedMessage {
@@ -11741,6 +12263,7 @@ pub struct QuarantinedMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Reaction {
@@ -11757,6 +12280,7 @@ pub struct Reaction {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RecentEmojiWeight {
@@ -11767,6 +12291,7 @@ pub struct RecentEmojiWeight {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct RecordStructure {
@@ -11777,6 +12302,7 @@ pub struct RecordStructure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Reportable {
@@ -11791,6 +12317,7 @@ pub struct Reportable {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ReportingTokenInfo {
@@ -11799,6 +12326,7 @@ pub struct ReportingTokenInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SenderKeyDistributionMessage {
@@ -11813,6 +12341,7 @@ pub struct SenderKeyDistributionMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SenderKeyMessage {
@@ -11825,6 +12354,7 @@ pub struct SenderKeyMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SenderKeyRecordStructure {
@@ -11833,6 +12363,7 @@ pub struct SenderKeyRecordStructure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SenderKeyStateStructure {
@@ -11849,6 +12380,7 @@ pub struct SenderKeyStateStructure {
 pub mod sender_key_state_structure {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SenderChainKey {
@@ -11860,6 +12392,7 @@ pub mod sender_key_state_structure {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SenderMessageKey {
@@ -11871,6 +12404,7 @@ pub mod sender_key_state_structure {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SenderSigningKey {
@@ -11884,6 +12418,7 @@ pub mod sender_key_state_structure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ServerErrorReceipt {
@@ -11892,6 +12427,7 @@ pub struct ServerErrorReceipt {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SessionStructure {
@@ -11926,6 +12462,7 @@ pub struct SessionStructure {
 pub mod session_structure {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Chain {
@@ -11942,6 +12479,7 @@ pub mod session_structure {
     pub mod chain {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct ChainKey {
@@ -11953,6 +12491,7 @@ pub mod session_structure {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct MessageKey {
@@ -11971,6 +12510,7 @@ pub mod session_structure {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PendingKeyExchange {
@@ -11991,6 +12531,7 @@ pub mod session_structure {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PendingPreKey {
@@ -12004,6 +12545,7 @@ pub mod session_structure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SessionTransparencyMetadata {
@@ -12016,6 +12558,7 @@ pub struct SessionTransparencyMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignalMessage {
@@ -12030,6 +12573,7 @@ pub struct SignalMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SignedPreKeyRecordStructure {
@@ -12046,6 +12590,7 @@ pub struct SignedPreKeyRecordStructure {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StatusAttribution {
@@ -12060,6 +12605,7 @@ pub struct StatusAttribution {
 pub mod status_attribution {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiCreatedAttribution {
@@ -12070,6 +12616,7 @@ pub mod status_attribution {
     pub mod ai_created_attribution {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum Source {
@@ -12099,6 +12646,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ExternalShare {
@@ -12115,6 +12663,7 @@ pub mod status_attribution {
     pub mod external_share {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum Source {
@@ -12171,6 +12720,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct GroupStatus {
@@ -12179,6 +12729,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct Music {
@@ -12197,6 +12748,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct RlAttribution {
@@ -12207,6 +12759,7 @@ pub mod status_attribution {
     pub mod rl_attribution {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum Source {
@@ -12242,6 +12795,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusReshare {
@@ -12254,6 +12808,7 @@ pub mod status_attribution {
     pub mod status_reshare {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Metadata {
@@ -12268,6 +12823,7 @@ pub mod status_attribution {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum Source {
@@ -12306,6 +12862,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Type {
@@ -12355,6 +12912,7 @@ pub mod status_attribution {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
     pub enum AttributionData {
         #[prost(message, tag = "3")]
@@ -12373,6 +12931,7 @@ pub mod status_attribution {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StatusMentionMessage {
@@ -12381,6 +12940,7 @@ pub struct StatusMentionMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct StatusPsa {
@@ -12391,6 +12951,7 @@ pub struct StatusPsa {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct StickerMetadata {
@@ -12425,6 +12986,7 @@ pub struct StickerMetadata {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncActionData {
@@ -12439,6 +13001,7 @@ pub struct SyncActionData {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncActionValue {
@@ -12585,6 +13148,7 @@ pub struct SyncActionValue {
 pub mod sync_action_value {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AgentAction {
@@ -12597,6 +13161,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AiThreadRenameAction {
@@ -12605,6 +13170,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct AndroidUnsupportedActions {
@@ -12613,6 +13179,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ArchiveChatAction {
@@ -12623,6 +13190,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct AvatarUpdatedAction {
@@ -12635,6 +13203,7 @@ pub mod sync_action_value {
     pub mod avatar_updated_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum AvatarEventType {
@@ -12667,6 +13236,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BotWelcomeRequestAction {
@@ -12675,6 +13245,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BroadcastListParticipant {
@@ -12685,6 +13256,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct BusinessBroadcastAssociationAction {
@@ -12693,6 +13265,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct BusinessBroadcastListAction {
@@ -12707,6 +13280,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CallLogAction {
@@ -12715,6 +13289,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ChatAssignmentAction {
@@ -12723,6 +13298,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ChatAssignmentOpenedStatusAction {
@@ -12731,6 +13307,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct ClearChatAction {
@@ -12739,6 +13316,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ContactAction {
@@ -12757,6 +13335,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct CtwaPerCustomerDataSharingAction {
@@ -12765,6 +13344,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CustomPaymentMethod {
@@ -12779,6 +13359,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct CustomPaymentMethodMetadata {
@@ -12789,6 +13370,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CustomPaymentMethodsAction {
@@ -12797,6 +13379,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct DeleteChatAction {
@@ -12805,6 +13388,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DeleteIndividualCallLogAction {
@@ -12815,6 +13399,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DeleteMessageForMeAction {
@@ -12825,6 +13410,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct DetectedOutcomesStatusAction {
@@ -12833,6 +13419,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct ExternalWebBetaAction {
@@ -12841,6 +13428,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct FavoritesAction {
@@ -12851,6 +13439,7 @@ pub mod sync_action_value {
     pub mod favorites_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Favorite {
@@ -12860,6 +13449,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct InteractiveMessageAction {
@@ -12870,6 +13460,7 @@ pub mod sync_action_value {
     pub mod interactive_message_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum InteractiveMessageActionMode {
@@ -12896,6 +13487,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct KeyExpiration {
@@ -12904,6 +13496,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LabelAssociationAction {
@@ -12912,6 +13505,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LabelEditAction {
@@ -12938,6 +13532,7 @@ pub mod sync_action_value {
     pub mod label_edit_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum ListType {
@@ -12991,6 +13586,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LabelReorderingAction {
@@ -12999,6 +13595,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LidContactAction {
@@ -13011,6 +13608,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LocaleSetting {
@@ -13019,6 +13617,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct LockChatAction {
@@ -13027,6 +13626,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MaibaAiFeaturesControlAction {
@@ -13037,6 +13637,7 @@ pub mod sync_action_value {
     pub mod maiba_ai_features_control_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum MaibaAiFeatureStatus {
@@ -13069,6 +13670,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct MarkChatAsReadAction {
@@ -13079,6 +13681,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MarketingMessageAction {
@@ -13101,6 +13704,7 @@ pub mod sync_action_value {
     pub mod marketing_message_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum MarketingMessagePrototypeType {
@@ -13127,6 +13731,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MarketingMessageBroadcastAction {
@@ -13135,6 +13740,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MerchantPaymentPartnerAction {
@@ -13151,6 +13757,7 @@ pub mod sync_action_value {
     pub mod merchant_payment_partner_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum Status {
@@ -13180,6 +13787,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct MusicUserIdAction {
@@ -13190,6 +13798,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct MuteAction {
@@ -13202,6 +13811,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NewsletterSavedInterestsAction {
@@ -13210,6 +13820,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NoteEditAction {
@@ -13228,6 +13839,7 @@ pub mod sync_action_value {
     pub mod note_edit_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum NoteType {
@@ -13257,6 +13869,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NotificationActivitySettingAction {
@@ -13267,6 +13880,7 @@ pub mod sync_action_value {
     pub mod notification_activity_setting_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum NotificationActivitySetting {
@@ -13302,6 +13916,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct NuxAction {
@@ -13310,6 +13925,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PaymentInfoAction {
@@ -13318,6 +13934,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PaymentTosAction {
@@ -13330,6 +13947,7 @@ pub mod sync_action_value {
     pub mod payment_tos_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum PaymentNotice {
@@ -13356,6 +13974,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PinAction {
@@ -13364,6 +13983,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PnForLidChatAction {
@@ -13372,6 +13992,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrimaryFeature {
@@ -13380,6 +14001,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrimaryVersionAction {
@@ -13388,6 +14010,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrivacySettingChannelsPersonalisedRecommendationAction {
@@ -13396,6 +14019,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrivacySettingDisableLinkPreviewsAction {
@@ -13404,6 +14028,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrivacySettingRelayAllCalls {
@@ -13412,6 +14037,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PrivateProcessingSettingAction {
@@ -13422,6 +14048,7 @@ pub mod sync_action_value {
     pub mod private_processing_setting_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum PrivateProcessingStatus {
@@ -13454,6 +14081,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct PushNameSetting {
@@ -13462,6 +14090,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct QuickReplyAction {
@@ -13478,6 +14107,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct RecentEmojiWeightsAction {
@@ -13486,6 +14116,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct RemoveRecentStickerAction {
@@ -13494,6 +14125,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SettingsSyncAction {
@@ -13548,6 +14180,7 @@ pub mod sync_action_value {
     pub mod settings_sync_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum DisplayMode {
@@ -13582,6 +14215,7 @@ pub mod sync_action_value {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum SettingKey {
@@ -13676,6 +14310,7 @@ pub mod sync_action_value {
         }
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum SettingPlatform {
@@ -13714,6 +14349,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StarAction {
@@ -13722,6 +14358,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusPostOptInNotificationPreferencesAction {
@@ -13730,6 +14367,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StatusPrivacyAction {
@@ -13742,6 +14380,7 @@ pub mod sync_action_value {
     pub mod status_privacy_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum StatusDistributionMode {
@@ -13777,6 +14416,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct StickerAction {
@@ -13809,6 +14449,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SubscriptionAction {
@@ -13821,6 +14462,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct SyncActionMessage {
@@ -13831,6 +14473,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct SyncActionMessageRange {
@@ -13843,6 +14486,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct TimeFormatAction {
@@ -13851,6 +14495,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UgcBot {
@@ -13859,6 +14504,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UnarchiveChatsSetting {
@@ -13867,6 +14513,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UserStatusMuteAction {
@@ -13875,6 +14522,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UsernameChatStartModeAction {
@@ -13885,6 +14533,7 @@ pub mod sync_action_value {
     pub mod username_chat_start_mode_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum ChatStartMode {
@@ -13914,6 +14563,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct WaffleAccountLinkStateAction {
@@ -13924,6 +14574,7 @@ pub mod sync_action_value {
     pub mod waffle_account_link_state_action {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
         #[repr(i32)]
         pub enum AccountLinkState {
@@ -13956,6 +14607,7 @@ pub mod sync_action_value {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct WamoUserIdentifierAction {
@@ -13965,6 +14617,7 @@ pub mod sync_action_value {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncdIndex {
@@ -13973,6 +14626,7 @@ pub struct SyncdIndex {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncdMutation {
@@ -13985,6 +14639,7 @@ pub struct SyncdMutation {
 pub mod syncd_mutation {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum SyncdOperation {
@@ -14014,6 +14669,7 @@ pub mod syncd_mutation {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncdMutations {
@@ -14022,6 +14678,7 @@ pub struct SyncdMutations {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncdPatch {
@@ -14046,6 +14703,7 @@ pub struct SyncdPatch {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncdRecord {
@@ -14058,6 +14716,7 @@ pub struct SyncdRecord {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SyncdSnapshot {
@@ -14072,6 +14731,7 @@ pub struct SyncdSnapshot {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncdValue {
@@ -14080,6 +14740,7 @@ pub struct SyncdValue {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct SyncdVersion {
@@ -14088,6 +14749,7 @@ pub struct SyncdVersion {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct TapLinkAction {
@@ -14098,6 +14760,7 @@ pub struct TapLinkAction {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TemplateButton {
@@ -14110,6 +14773,7 @@ pub struct TemplateButton {
 pub mod template_button {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct CallButton {
@@ -14120,6 +14784,7 @@ pub mod template_button {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct QuickReplyButton {
@@ -14130,6 +14795,7 @@ pub mod template_button {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct UrlButton {
@@ -14140,6 +14806,7 @@ pub mod template_button {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Button {
         #[prost(message, tag = "1")]
@@ -14152,6 +14819,7 @@ pub mod template_button {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ThreadId {
@@ -14164,6 +14832,7 @@ pub struct ThreadId {
 pub mod thread_id {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum ThreadType {
@@ -14196,6 +14865,7 @@ pub mod thread_id {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UrlTrackingMap {
@@ -14206,6 +14876,7 @@ pub struct UrlTrackingMap {
 pub mod url_tracking_map {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct UrlTrackingMapElement {
@@ -14221,6 +14892,7 @@ pub mod url_tracking_map {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct UserPassword {
@@ -14237,6 +14909,7 @@ pub struct UserPassword {
 pub mod user_password {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
     pub struct TransformerArg {
@@ -14249,6 +14922,7 @@ pub mod user_password {
     pub mod transformer_arg {
         #[derive(serde::Serialize)]
         #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+        #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
         #[cfg_attr(feature = "serde-deserialize", serde(default))]
         #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
         pub struct Value {
@@ -14259,6 +14933,7 @@ pub mod user_password {
         pub mod value {
             #[derive(serde::Serialize)]
             #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+            #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
             #[derive(Clone, PartialEq, Eq, Hash, ::prost::Oneof)]
             pub enum Value {
                 #[prost(bytes, tag = "1")]
@@ -14270,6 +14945,7 @@ pub mod user_password {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Encoding {
@@ -14298,6 +14974,7 @@ pub mod user_password {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Transformer {
@@ -14330,6 +15007,7 @@ pub mod user_password {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct UserReceipt {
@@ -14348,6 +15026,7 @@ pub struct UserReceipt {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct VerifiedNameCertificate {
@@ -14362,6 +15041,7 @@ pub struct VerifiedNameCertificate {
 pub mod verified_name_certificate {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[cfg_attr(feature = "serde-deserialize", serde(default))]
     #[derive(Clone, PartialEq, ::prost::Message)]
     pub struct Details {
@@ -14379,6 +15059,7 @@ pub mod verified_name_certificate {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WallpaperSettings {
@@ -14389,6 +15070,7 @@ pub struct WallpaperSettings {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct WebFeatures {
@@ -14487,6 +15169,7 @@ pub struct WebFeatures {
 pub mod web_features {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Flag {
@@ -14522,6 +15205,7 @@ pub mod web_features {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WebMessageInfo {
@@ -14664,6 +15348,7 @@ pub struct WebMessageInfo {
 pub mod web_message_info {
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum BizPrivacyStatus {
@@ -14698,6 +15383,7 @@ pub mod web_message_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum Status {
@@ -14738,6 +15424,7 @@ pub mod web_message_info {
     }
     #[derive(serde::Serialize)]
     #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+    #[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
     #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
     #[repr(i32)]
     pub enum StubType {
@@ -15433,6 +16120,7 @@ pub mod web_message_info {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[cfg_attr(feature = "serde-deserialize", serde(default))]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WebNotificationsInfo {
@@ -15447,6 +16135,7 @@ pub struct WebNotificationsInfo {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum AdvEncryptionType {
@@ -15475,6 +16164,7 @@ impl AdvEncryptionType {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum AiRichResponseMessageType {
@@ -15503,6 +16193,7 @@ impl AiRichResponseMessageType {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum AiRichResponseSubMessageType {
@@ -15555,6 +16246,7 @@ impl AiRichResponseSubMessageType {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum BotMetricsEntryPoint {
@@ -15706,6 +16398,7 @@ impl BotMetricsEntryPoint {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum BotMetricsThreadEntryPoint {
@@ -15743,6 +16436,7 @@ impl BotMetricsThreadEntryPoint {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum BotSessionSource {
@@ -15789,6 +16483,7 @@ impl BotSessionSource {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum CollectionName {
@@ -15829,6 +16524,7 @@ impl CollectionName {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum KeepType {
@@ -15860,6 +16556,7 @@ impl KeepType {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum MediaVisibility {
@@ -15891,6 +16588,7 @@ impl MediaVisibility {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum MutationProps {
@@ -16138,6 +16836,7 @@ impl MutationProps {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum PrivacySystemMessage {
@@ -16169,6 +16868,7 @@ impl PrivacySystemMessage {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum SessionTransparencyType {
@@ -16197,6 +16897,7 @@ impl SessionTransparencyType {
 }
 #[derive(serde::Serialize)]
 #[cfg_attr(feature = "serde-deserialize", derive(serde::Deserialize))]
+#[cfg_attr(feature = "serde-snake-case", serde(rename_all(deserialize = "snake_case")))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
 pub enum WebLinkRenderConfig {
