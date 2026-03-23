@@ -194,7 +194,6 @@ impl Client {
     pub(crate) async fn patch_device_add(
         &self,
         user: &str,
-        _from_jid: &Jid,
         device: &wacore::stanza::devices::DeviceElement,
     ) {
         let device_id = device.device_id();
@@ -213,7 +212,7 @@ impl Client {
     }
 
     /// Remove a device from the registry after a device remove notification.
-    pub(crate) async fn patch_device_remove(&self, user: &str, _from_jid: &Jid, device_id: u32) {
+    pub(crate) async fn patch_device_remove(&self, user: &str, device_id: u32) {
         if let Some(mut record) = self.load_device_record(user).await {
             let before = record.devices.len();
             record.devices.retain(|d| d.device_id != device_id);
@@ -646,7 +645,6 @@ mod tests {
         use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 
         let client = create_test_client().await;
-        let from_jid = Jid::pn("15551234567");
 
         // Pre-populate registry cache with device 0
         let record = DeviceListRecord {
@@ -665,9 +663,7 @@ mod tests {
 
         // Patch: add device 3
         let elem = make_device_element(3, Some(5));
-        client
-            .patch_device_add("15551234567", &from_jid, &elem)
-            .await;
+        client.patch_device_add("15551234567", &elem).await;
 
         let updated = client
             .device_registry_cache
@@ -685,7 +681,6 @@ mod tests {
         use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 
         let client = create_test_client().await;
-        let from_jid = Jid::pn("15551234567");
 
         let record = DeviceListRecord {
             user: "15551234567".into(),
@@ -703,9 +698,7 @@ mod tests {
 
         // Patch: add device 3 again — should not duplicate
         let elem = make_device_element(3, None);
-        client
-            .patch_device_add("15551234567", &from_jid, &elem)
-            .await;
+        client.patch_device_add("15551234567", &elem).await;
 
         let updated = client
             .device_registry_cache
@@ -718,13 +711,10 @@ mod tests {
     #[tokio::test]
     async fn test_patch_device_add_noop_on_miss() {
         let client = create_test_client().await;
-        let from_jid = Jid::pn("15551234567");
 
         // No pre-populated cache — patch should be a no-op
         let elem = make_device_element(3, None);
-        client
-            .patch_device_add("15551234567", &from_jid, &elem)
-            .await;
+        client.patch_device_add("15551234567", &elem).await;
 
         assert!(
             client
@@ -740,7 +730,6 @@ mod tests {
         use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 
         let client = create_test_client().await;
-        let from_jid = Jid::pn("15551234567");
 
         let record = DeviceListRecord {
             user: "15551234567".into(),
@@ -762,9 +751,7 @@ mod tests {
             .insert("15551234567".into(), record)
             .await;
 
-        client
-            .patch_device_remove("15551234567", &from_jid, 3)
-            .await;
+        client.patch_device_remove("15551234567", 3).await;
 
         let updated = client
             .device_registry_cache
@@ -816,7 +803,6 @@ mod tests {
     #[tokio::test]
     async fn test_patch_device_add_updates_registry() {
         let client = create_test_client().await;
-        let from_jid = Jid::pn("15551234567");
 
         // Pre-populate registry cache
         let record = wacore::store::traits::DeviceListRecord {
@@ -835,9 +821,7 @@ mod tests {
 
         // Patch: add device 3
         let elem = make_device_element(3, Some(2));
-        client
-            .patch_device_add("15551234567", &from_jid, &elem)
-            .await;
+        client.patch_device_add("15551234567", &elem).await;
 
         let updated = client
             .device_registry_cache
@@ -966,5 +950,112 @@ mod tests {
         assert_eq!(devices.len(), 1);
         assert!(devices[0].is_lid(), "device JID should be LID-typed");
         assert_eq!(devices[0].user, lid, "device JID user should be the LID");
+    }
+
+    // ── DB-fallback tests for patch helpers ──────────────────────────────
+
+    #[tokio::test]
+    async fn test_patch_device_add_falls_back_to_db() {
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+
+        let client = create_test_client().await;
+
+        // Seed backend DB directly (bypassing moka cache)
+        let record = DeviceListRecord {
+            user: "15551234567".into(),
+            devices: vec![DeviceInfo {
+                device_id: 0,
+                key_index: None,
+            }],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+        };
+        client
+            .persistence_manager
+            .backend()
+            .update_device_list(record)
+            .await
+            .unwrap();
+
+        // Moka cache is empty — old code would no-op here
+        assert!(
+            client
+                .device_registry_cache
+                .get("15551234567")
+                .await
+                .is_none()
+        );
+
+        let elem = make_device_element(3, Some(7));
+        client.patch_device_add("15551234567", &elem).await;
+
+        // Verify patch was applied to DB (not silently dropped)
+        let updated = client
+            .persistence_manager
+            .backend()
+            .get_devices("15551234567")
+            .await
+            .unwrap()
+            .expect("record should still exist in DB");
+        assert_eq!(updated.devices.len(), 2);
+        assert!(updated.devices.iter().any(|d| d.device_id == 3));
+
+        // Cache should be warm now too
+        assert!(
+            client
+                .device_registry_cache
+                .get("15551234567")
+                .await
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_patch_device_remove_falls_back_to_db() {
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+
+        let client = create_test_client().await;
+
+        let record = DeviceListRecord {
+            user: "15551234567".into(),
+            devices: vec![
+                DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                },
+                DeviceInfo {
+                    device_id: 3,
+                    key_index: Some(5),
+                },
+            ],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+        };
+        client
+            .persistence_manager
+            .backend()
+            .update_device_list(record)
+            .await
+            .unwrap();
+
+        assert!(
+            client
+                .device_registry_cache
+                .get("15551234567")
+                .await
+                .is_none()
+        );
+
+        client.patch_device_remove("15551234567", 3).await;
+
+        let updated = client
+            .persistence_manager
+            .backend()
+            .get_devices("15551234567")
+            .await
+            .unwrap()
+            .expect("record should still exist");
+        assert_eq!(updated.devices.len(), 1);
+        assert_eq!(updated.devices[0].device_id, 0);
     }
 }

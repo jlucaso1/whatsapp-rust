@@ -349,19 +349,13 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
     match op.operation_type {
         wacore::stanza::devices::DeviceNotificationType::Add => {
             for device in &op.devices {
-                client
-                    .patch_device_add(notification.user(), &notification.from, device)
-                    .await;
+                client.patch_device_add(notification.user(), device).await;
             }
         }
         wacore::stanza::devices::DeviceNotificationType::Remove => {
             for device in &op.devices {
                 client
-                    .patch_device_remove(
-                        notification.user(),
-                        &notification.from,
-                        device.device_id(),
-                    )
+                    .patch_device_remove(notification.user(), device.device_id())
                     .await;
             }
         }
