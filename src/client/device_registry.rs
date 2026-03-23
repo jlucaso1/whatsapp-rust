@@ -186,15 +186,11 @@ impl Client {
         debug!("Invalidated device cache for user: {} ({:?})", user, lookup);
     }
 
-    /// Granularly patch device caches after a device notification.
+    /// Granularly patch device registry after a device notification.
     ///
     /// Matches WA Web's approach: read current → apply diff → write back.
-    /// Patches **all** cached PN/LID aliases so stale alternate-key lookups
-    /// are avoided.  Also persists the patched `DeviceListRecord` to the
-    /// backend so the change survives cache eviction / restart.
-    ///
-    /// If no entry is cached, the patch is a no-op — the next read will
-    /// fetch fresh from the backend.
+    /// Looks up the record from cache first, then falls back to the backend
+    /// DB so notifications are never silently dropped.
     pub(crate) async fn patch_device_add(
         &self,
         user: &str,
@@ -202,61 +198,81 @@ impl Client {
         device: &wacore::stanza::devices::DeviceElement,
     ) {
         let device_id = device.device_id();
-        let lookup = self.resolve_lookup_keys(user).await;
 
-        for key in lookup.all_keys() {
-            if let Some(mut record) = self.device_registry_cache.get(key).await {
-                if !record.devices.iter().any(|d| d.device_id == device_id) {
-                    record.devices.push(wacore::store::traits::DeviceInfo {
-                        device_id,
-                        key_index: device.key_index,
-                    });
-                    if let Err(e) = self.update_device_list(record).await {
-                        warn!("patch_device_add: failed to persist: {e}");
-                    }
-                }
-                return;
+        if let Some(mut record) = self.load_device_record(user).await
+            && !record.devices.iter().any(|d| d.device_id == device_id)
+        {
+            record.devices.push(wacore::store::traits::DeviceInfo {
+                device_id,
+                key_index: device.key_index,
+            });
+            if let Err(e) = self.update_device_list(record).await {
+                warn!("patch_device_add: failed to persist: {e}");
             }
         }
     }
 
-    /// Remove a device from the registry cache + backend after a device remove notification.
+    /// Remove a device from the registry after a device remove notification.
     pub(crate) async fn patch_device_remove(&self, user: &str, _from_jid: &Jid, device_id: u32) {
-        let lookup = self.resolve_lookup_keys(user).await;
-
-        for key in lookup.all_keys() {
-            if let Some(mut record) = self.device_registry_cache.get(key).await {
-                let before = record.devices.len();
-                record.devices.retain(|d| d.device_id != device_id);
-                if record.devices.len() != before
-                    && let Err(e) = self.update_device_list(record).await
-                {
-                    warn!("patch_device_remove: failed to persist: {e}");
-                }
-                return;
+        if let Some(mut record) = self.load_device_record(user).await {
+            let before = record.devices.len();
+            record.devices.retain(|d| d.device_id != device_id);
+            if record.devices.len() != before
+                && let Err(e) = self.update_device_list(record).await
+            {
+                warn!("patch_device_remove: failed to persist: {e}");
             }
         }
     }
 
-    /// Update key_index for a device in the registry cache + backend.
+    /// Update key_index for a device in the registry.
     pub(crate) async fn patch_device_update(
         &self,
         user: &str,
         device: &wacore::stanza::devices::DeviceElement,
     ) {
         let device_id = device.device_id();
-        let lookup = self.resolve_lookup_keys(user).await;
-        for key in lookup.all_keys() {
-            if let Some(mut record) = self.device_registry_cache.get(key).await {
-                if let Some(d) = record.devices.iter_mut().find(|d| d.device_id == device_id) {
-                    d.key_index = device.key_index;
-                    if let Err(e) = self.update_device_list(record).await {
-                        warn!("patch_device_update: failed to persist: {e}");
-                    }
-                }
-                return;
+
+        if let Some(mut record) = self.load_device_record(user).await
+            && let Some(d) = record.devices.iter_mut().find(|d| d.device_id == device_id)
+        {
+            d.key_index = device.key_index;
+            if let Err(e) = self.update_device_list(record).await {
+                warn!("patch_device_update: failed to persist: {e}");
             }
         }
+    }
+
+    /// Load a `DeviceListRecord` from cache or DB for patching.
+    async fn load_device_record(
+        &self,
+        user: &str,
+    ) -> Option<wacore::store::traits::DeviceListRecord> {
+        let lookup = self.resolve_lookup_keys(user).await;
+
+        for key in lookup.all_keys() {
+            if let Some(record) = self.device_registry_cache.get(key).await {
+                return Some(record);
+            }
+        }
+
+        let backend = self.persistence_manager.backend();
+        for key in lookup.all_keys() {
+            match backend.get_devices(key).await {
+                Ok(Some(record)) => {
+                    self.device_registry_cache
+                        .insert(record.user.clone(), record.clone())
+                        .await;
+                    return Some(record);
+                }
+                Ok(None) => continue,
+                Err(e) => {
+                    warn!("load_device_record: DB lookup failed for {key}: {e}");
+                }
+            }
+        }
+
+        None
     }
 
     /// Look up device JIDs from the device registry (cache + DB) for a single user.
