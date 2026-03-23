@@ -2635,10 +2635,14 @@ impl Client {
                 && let Some(act) = &val.nct_salt_sync_action
                 && let Some(salt) = &act.salt
             {
-                debug!(target: "Client/AppState", "Stored NCT salt via app state sync ({} bytes)", salt.len());
-                self.persistence_manager
-                    .process_command(DeviceCommand::SetNctSalt(Some(salt.clone())))
-                    .await;
+                if salt.is_empty() {
+                    warn!(target: "Client/AppState", "nct_salt_sync mutation has empty salt, ignoring");
+                } else {
+                    debug!(target: "Client/AppState", "Stored NCT salt via app state sync ({} bytes)", salt.len());
+                    self.persistence_manager
+                        .process_command(DeviceCommand::SetNctSalt(Some(salt.clone())))
+                        .await;
+                }
             } else {
                 warn!(target: "Client/AppState", "nct_salt_sync mutation missing salt in action value");
             }

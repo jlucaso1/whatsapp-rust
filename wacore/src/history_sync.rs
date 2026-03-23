@@ -258,7 +258,7 @@ mod tests {
             sync_type: wa::history_sync::HistorySyncType::InitialBootstrap as i32,
             nct_salt: Some(salt.clone()),
             pushnames: vec![wa::Pushname {
-                id: Some("5511999990000".into()),
+                id: Some("0000000000".into()),
                 pushname: Some("TestUser".into()),
             }],
             ..Default::default()
@@ -266,8 +266,7 @@ mod tests {
 
         let compressed = encode_and_compress(&hs);
         let result =
-            process_history_sync::<fn(Bytes)>(compressed, Some("5511999990000"), None, None)
-                .unwrap();
+            process_history_sync::<fn(Bytes)>(compressed, Some("0000000000"), None, None).unwrap();
 
         assert_eq!(result.nct_salt, Some(salt));
         assert_eq!(result.own_pushname.as_deref(), Some("TestUser"));
