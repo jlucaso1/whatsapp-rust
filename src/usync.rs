@@ -10,14 +10,13 @@ use wacore_binary::jid::Jid;
 
 impl Client {
     pub(crate) async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
-        debug!("get_user_devices: Using normal mode for {jids:?}");
-
         let mut jids_to_fetch: HashSet<Jid> = HashSet::with_capacity(jids.len());
         let mut all_devices = Vec::with_capacity(jids.len() * 2);
 
         for jid in jids.iter().map(|j| j.to_non_ad()) {
-            if let Some(cached_devices) = self.get_device_cache().await.get(&jid).await {
-                all_devices.extend(cached_devices);
+            // Device registry (in-memory cache + DB) is the single source of truth
+            if let Some(devices) = self.get_devices_from_registry(&jid).await {
+                all_devices.extend(devices);
                 continue;
             }
             jids_to_fetch.insert(jid);
@@ -58,12 +57,7 @@ impl Client {
             }
 
             for user_list in &response.device_lists {
-                self.get_device_cache()
-                    .await
-                    .insert(user_list.user.clone(), user_list.devices.clone())
-                    .await;
-
-                // Also update device registry for hasDevice checks (matches WhatsApp Web)
+                // Update device registry (single source of truth for device lists).
                 // Preserve key_index values from existing records (set via account_sync)
                 let existing_key_indices: std::collections::HashMap<u32, Option<u32>> = self
                     .persistence_manager
@@ -122,49 +116,110 @@ impl Client {
 mod tests {
     use super::*;
     use crate::test_utils::create_test_client;
+    use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 
     #[tokio::test]
-    async fn test_device_cache_hit() {
+    async fn test_device_registry_hit_resolves_devices() {
         let client = create_test_client().await;
 
-        let test_jid: Jid = "1234567890@s.whatsapp.net"
-            .parse()
-            .expect("test JID should be valid");
-        let device_jid: Jid = "1234567890:1@s.whatsapp.net"
-            .parse()
-            .expect("test device JID should be valid");
+        let user_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
 
-        // Manually insert into cache
-        client
-            .get_device_cache()
-            .await
-            .insert(test_jid.clone(), vec![device_jid.clone()])
-            .await;
+        // Insert a device record into the registry (simulates prior usync/notification)
+        let record = DeviceListRecord {
+            user: "1234567890".into(),
+            devices: vec![
+                DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                },
+                DeviceInfo {
+                    device_id: 3,
+                    key_index: Some(10),
+                },
+            ],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+        };
+        client.update_device_list(record).await.unwrap();
 
-        // Verify cache hit
-        let cached = client.get_device_cache().await.get(&test_jid).await;
-        assert!(cached.is_some());
-        let cached_devices = cached.expect("cache should have entry");
-        assert_eq!(cached_devices.len(), 1);
-        assert_eq!(cached_devices[0], device_jid);
+        // get_user_devices should resolve from registry without network
+        let devices = client.get_user_devices(&[user_jid]).await.unwrap();
+        assert_eq!(devices.len(), 2);
+        assert!(devices.iter().any(|d| d.device == 0));
+        assert!(devices.iter().any(|d| d.device == 3));
+        assert!(devices.iter().all(|d| d.is_pn()));
+    }
+
+    #[tokio::test]
+    async fn test_device_registry_hit_for_lid_jid() {
+        let client = create_test_client().await;
+
+        let lid_jid: Jid = "100000012345678@lid".parse().unwrap();
+
+        let record = DeviceListRecord {
+            user: "100000012345678".into(),
+            devices: vec![
+                DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                },
+                DeviceInfo {
+                    device_id: 39,
+                    key_index: Some(25),
+                },
+            ],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+        };
+        client.update_device_list(record).await.unwrap();
+
+        let devices = client.get_user_devices(&[lid_jid]).await.unwrap();
+        assert_eq!(devices.len(), 2);
+        assert!(devices.iter().any(|d| d.device == 0));
+        assert!(devices.iter().any(|d| d.device == 39));
+        assert!(devices.iter().all(|d| d.is_lid()));
+    }
+
+    #[tokio::test]
+    async fn test_device_registry_db_fallback() {
+        let client = create_test_client().await;
+
+        let user_jid: Jid = "9876543210@s.whatsapp.net".parse().unwrap();
+
+        // Insert into backend DB via update_device_list
+        let record = DeviceListRecord {
+            user: "9876543210".into(),
+            devices: vec![DeviceInfo {
+                device_id: 5,
+                key_index: None,
+            }],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+        };
+        client.update_device_list(record).await.unwrap();
+
+        // Evict from registry cache to force DB path
+        client.device_registry_cache.invalidate("9876543210").await;
+        client.device_registry_cache.run_pending_tasks().await;
+
+        // Should still resolve from DB
+        let devices = client.get_user_devices(&[user_jid]).await.unwrap();
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].device, 5);
     }
 
     #[tokio::test]
     async fn test_cache_size_eviction() {
         use crate::cache::Cache;
 
-        // Create a small cache
         let cache: Cache<i32, String> = Cache::builder().max_capacity(2).build();
 
-        // Insert 3 items
         cache.insert(1, "one".to_string()).await;
         cache.insert(2, "two".to_string()).await;
         cache.insert(3, "three".to_string()).await;
 
-        // Give time for eviction to occur
         cache.run_pending_tasks().await;
 
-        // The cache should have at most 2 items
         let count = cache.entry_count();
         assert!(
             count <= 2,

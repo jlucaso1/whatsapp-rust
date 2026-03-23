@@ -613,7 +613,7 @@ impl<B, T, H, R> BotBuilder<B, T, H, R> {
     ///     .with_http_client(http_client)
     ///     .with_cache_config(CacheConfig {
     ///         group_cache: CacheEntryConfig::new(None, 1_000),
-    ///         device_cache: CacheEntryConfig::new(None, 5_000),
+    ///         device_registry_cache: CacheEntryConfig::new(None, 5_000),
     ///         ..Default::default()
     ///     })
     ///     .build()

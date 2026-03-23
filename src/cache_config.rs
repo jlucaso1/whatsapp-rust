@@ -78,14 +78,14 @@ impl CacheEntryConfig {
 /// Each field is an optional [`CacheStore`] for that specific cache. When
 /// `None`, the default in-process moka cache is used.
 ///
-/// # Example — only group and device on Redis
+/// # Example — group and device registry on Redis
 ///
 /// ```rust,ignore
 /// let redis = Arc::new(MyRedisCacheStore::new("redis://localhost:6379"));
 /// let config = CacheConfig {
 ///     cache_stores: CacheStores {
 ///         group_cache: Some(redis.clone()),
-///         device_cache: Some(redis.clone()),
+///         device_registry_cache: Some(redis.clone()),
 ///         ..Default::default()
 ///     },
 ///     ..Default::default()
@@ -95,8 +95,6 @@ impl CacheEntryConfig {
 pub struct CacheStores {
     /// Custom store for group metadata cache.
     pub group_cache: Option<Arc<dyn CacheStore>>,
-    /// Custom store for device list cache.
-    pub device_cache: Option<Arc<dyn CacheStore>>,
     /// Custom store for device registry cache.
     pub device_registry_cache: Option<Arc<dyn CacheStore>>,
     /// Custom store for LID-PN bidirectional mapping cache.
@@ -118,7 +116,6 @@ impl CacheStores {
     pub fn all(store: Arc<dyn CacheStore>) -> Self {
         Self {
             group_cache: Some(store.clone()),
-            device_cache: Some(store.clone()),
             device_registry_cache: Some(store.clone()),
             lid_pn_cache: Some(store),
         }
@@ -142,7 +139,7 @@ impl CacheStores {
 /// };
 /// ```
 ///
-/// # Example — Redis for group and device caches only
+/// # Example — Redis for group and device registry caches
 ///
 /// ```rust,ignore
 /// use std::sync::Arc;
@@ -152,7 +149,7 @@ impl CacheStores {
 /// let config = CacheConfig {
 ///     cache_stores: CacheStores {
 ///         group_cache: Some(redis.clone()),
-///         device_cache: Some(redis.clone()),
+///         device_registry_cache: Some(redis.clone()),
 ///         ..Default::default()
 ///     },
 ///     ..Default::default()
@@ -162,8 +159,6 @@ impl CacheStores {
 pub struct CacheConfig {
     /// Group metadata cache (time_to_live). Default: 1h TTL, 250 entries.
     pub group_cache: CacheEntryConfig,
-    /// Device list cache (time_to_live). Default: 1h TTL, 5000 entries.
-    pub device_cache: CacheEntryConfig,
     /// Device registry cache (time_to_live). Default: 1h TTL, 5000 entries.
     pub device_registry_cache: CacheEntryConfig,
     /// LID-to-phone cache (time_to_idle). Default: 1h timeout, 10000 entries.
@@ -211,7 +206,6 @@ impl std::fmt::Debug for CacheConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("CacheConfig")
             .field("group_cache", &self.group_cache)
-            .field("device_cache", &self.device_cache)
             .field("device_registry_cache", &self.device_registry_cache)
             .field("lid_pn_cache", &self.lid_pn_cache)
             .field("retried_group_messages", &self.retried_group_messages)
@@ -228,10 +222,6 @@ impl std::fmt::Debug for CacheConfig {
             .field(
                 "cache_stores.group_cache",
                 &self.cache_stores.group_cache.is_some(),
-            )
-            .field(
-                "cache_stores.device_cache",
-                &self.cache_stores.device_cache.is_some(),
             )
             .field(
                 "cache_stores.device_registry_cache",
@@ -252,7 +242,6 @@ impl Default for CacheConfig {
 
         Self {
             group_cache: CacheEntryConfig::new(one_hour, 250),
-            device_cache: CacheEntryConfig::new(one_hour, 5_000),
             device_registry_cache: CacheEntryConfig::new(one_hour, 5_000),
             lid_pn_cache: CacheEntryConfig::new(one_hour, 10_000),
             retried_group_messages: CacheEntryConfig::new(five_min, 2_000),
