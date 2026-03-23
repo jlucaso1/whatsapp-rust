@@ -557,8 +557,13 @@ fn decrypt_message_with_record<R: Rng + CryptoRng>(
                                 ciphertext
                             )?
                         );
-                        // Note that we don't propagate `e` here; we always return InvalidMessage,
-                        // as we would for a Whisper message that tried several sessions.
+                        // Preserve BadMac so it maps to WA Web error code 7 in retry receipts.
+                        if errs
+                            .iter()
+                            .any(|e| matches!(e, SignalProtocolError::BadMac(_)))
+                        {
+                            return Err(SignalProtocolError::BadMac(original_message_type));
+                        }
                         return Err(SignalProtocolError::InvalidMessage(
                             original_message_type,
                             "decryption failed",

@@ -1596,7 +1596,7 @@ mod tests {
         )
         .await;
 
-        let sender_jid: Jid = "5511999990000@s.whatsapp.net"
+        let sender_jid: Jid = "0000000000000@s.whatsapp.net"
             .parse()
             .expect("test JID should be valid");
         let info = MessageInfo {
@@ -1643,6 +1643,7 @@ mod tests {
         let enc_nodes = vec![&enc_node];
 
         let (success, had_duplicates, dispatched) = client
+            .clone()
             .process_session_enc_batch(
                 &enc_nodes,
                 &info,
@@ -1652,11 +1653,30 @@ mod tests {
             .await;
 
         // Should behave identically to SessionNotFound: failure, no dupe, event dispatched.
-        // The retry receipt will use error code 1 (NoSession) with early key inclusion.
         assert!(
             !success && !had_duplicates && dispatched,
             "Empty session record should be treated as SessionNotFound: \
              expected (false, false, true), got ({success}, {had_duplicates}, {dispatched})"
+        );
+
+        // Verify we took the SessionNotFound path (error code 1 / NoSession) rather
+        // than the InvalidMessage path (error code 4). The key difference:
+        // - SessionNotFound does NOT delete the session from the cache
+        // - InvalidMessage/BadMac DOES delete it (via signal_cache.delete_session)
+        //
+        // If the session record is still present in the cache, we know the
+        // SessionNotFound branch ran, which sends RetryReason::NoSession (code 1)
+        // and triggers early key inclusion on retry #1 via should_include_keys().
+        let backend = client.persistence_manager.backend();
+        let session_still_exists = client
+            .signal_cache
+            .has_session(&signal_address, &*backend)
+            .await
+            .expect("has_session should not fail");
+        assert!(
+            session_still_exists,
+            "Session should NOT have been deleted — SessionNotFound path preserves it. \
+             If deleted, the InvalidMessage path ran instead (wrong error code)."
         );
     }
 
