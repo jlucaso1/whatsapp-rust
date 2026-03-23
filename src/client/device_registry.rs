@@ -298,19 +298,22 @@ impl Client {
     }
 
     /// Reconstruct `Vec<Jid>` from a `DeviceListRecord`, using the query JID's
-    /// server type to produce correctly-typed device JIDs (LID vs PN).
+    /// user part and server type. This ensures that a PN-typed query always
+    /// returns PN-typed device JIDs even if the record is stored under a LID key
+    /// (and vice versa), which matters after PN-to-LID migration.
     fn reconstruct_device_jids(
         query_jid: &Jid,
         record: &wacore::store::traits::DeviceListRecord,
     ) -> Vec<Jid> {
+        let user = &query_jid.user;
         record
             .devices
             .iter()
             .map(|d| {
                 if query_jid.is_lid() {
-                    Jid::lid_device(record.user.clone(), d.device_id as u16)
+                    Jid::lid_device(user.clone(), d.device_id as u16)
                 } else {
-                    Jid::pn_device(record.user.clone(), d.device_id as u16)
+                    Jid::pn_device(user.clone(), d.device_id as u16)
                 }
             })
             .collect()
@@ -830,8 +833,8 @@ mod tests {
         use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 
         let client = create_test_client().await;
-        let pn = "559984726662";
-        let lid = "236395184570386";
+        let pn = "15550000099";
+        let lid = "100000000000099";
 
         // Store device list under PN in backend
         let record = DeviceListRecord {
@@ -885,5 +888,61 @@ mod tests {
         let devices = client.get_devices_from_registry(&lid_jid).await;
         assert!(devices.is_some(), "should resolve devices via LID");
         assert_eq!(devices.unwrap().len(), 2);
+    }
+
+    /// Regression: querying a LID-stored record by PN (and vice versa) must
+    /// return device JIDs whose user part matches the *query* alias, not the
+    /// storage key.
+    #[tokio::test]
+    async fn test_reconstruct_device_jids_uses_query_alias() {
+        use crate::lid_pn_cache::LidPnEntry;
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+
+        let client = create_test_client().await;
+        let pn = "15550000088";
+        let lid = "100000000000088";
+
+        // Store record under LID key
+        let record = DeviceListRecord {
+            user: lid.to_string(),
+            devices: vec![DeviceInfo {
+                device_id: 5,
+                key_index: None,
+            }],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+        };
+        client
+            .device_registry_cache
+            .insert(lid.to_string(), record)
+            .await;
+
+        // Add LID-PN mapping so bidirectional lookup works
+        let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
+        client.lid_pn_cache.add(entry).await;
+
+        // Query by PN — should find the LID-stored record but return PN-typed JIDs
+        let pn_jid = Jid::pn(pn);
+        let devices = client
+            .get_devices_from_registry(&pn_jid)
+            .await
+            .expect("should resolve LID record via PN alias");
+        assert_eq!(devices.len(), 1);
+        assert!(devices[0].is_pn(), "device JID should be PN-typed");
+        assert_eq!(
+            devices[0].user, pn,
+            "device JID user should be the PN, not the LID"
+        );
+        assert_eq!(devices[0].device, 5);
+
+        // Query by LID — should return LID-typed JIDs
+        let lid_jid = Jid::lid(lid);
+        let devices = client
+            .get_devices_from_registry(&lid_jid)
+            .await
+            .expect("should resolve LID record via LID");
+        assert_eq!(devices.len(), 1);
+        assert!(devices[0].is_lid(), "device JID should be LID-typed");
+        assert_eq!(devices[0].user, lid, "device JID user should be the LID");
     }
 }

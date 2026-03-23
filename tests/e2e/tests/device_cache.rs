@@ -2,9 +2,13 @@ use e2e_tests::{TestClient, text_msg};
 use log::info;
 use whatsapp_rust::features::{GroupCreateOptions, GroupParticipantOptions};
 
-/// After a reconnect the in-memory device caches are gone, but the device
-/// registry in SQLite survives.  `get_user_devices()` should resolve device
-/// lists from the DB without a network usync IQ, keeping group sends fast.
+/// Verify that group messaging continues to work after a reconnect.
+///
+/// The first send populates the device registry (moka cache + SQLite DB).
+/// After reconnect the moka cache is still warm (same Client object), so
+/// this exercises the registry-based resolution path end-to-end. The SQLite
+/// DB fallback (cold moka) is covered by unit test
+/// `test_device_registry_db_fallback` in `usync.rs`.
 #[tokio::test]
 async fn test_group_send_uses_db_cache_after_reconnect() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
