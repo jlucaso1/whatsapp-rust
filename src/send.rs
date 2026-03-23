@@ -1096,15 +1096,15 @@ impl Client {
             return;
         }
 
-        // Resolve the destination to a LID for token lookup
-        let token_jid = if to.is_lid() {
-            to.user.clone()
+        // Resolve the destination to a LID user string once — reused for
+        // tctoken lookup, issuance, and cstoken HMAC input.
+        // Returns Some(lid_user) if resolved, None if no LID mapping exists.
+        let resolved_lid_user = if to.is_lid() {
+            Some(to.user.clone())
         } else {
-            match self.lid_pn_cache.get_current_lid(&to.user).await {
-                Some(lid) => lid,
-                None => to.user.clone(),
-            }
+            self.lid_pn_cache.get_current_lid(&to.user).await
         };
+        let token_jid = resolved_lid_user.as_deref().unwrap_or(&to.user).to_string();
 
         let backend = self.persistence_manager.backend();
 
@@ -1170,29 +1170,18 @@ impl Client {
 
                 // cstoken fallback: if no tctoken was attached, compute from NCT salt.
                 // Matches WA Web: genCsTokenBody in MsgCreateFanoutStanza.js
-                if !tc_token_attached {
-                    if let Some(salt) = &snapshot.nct_salt {
-                        // Resolve recipient's LID for the HMAC input
-                        let recipient_lid = if to.is_lid() {
-                            to.to_string()
-                        } else {
-                            match self.lid_pn_cache.get_current_lid(&to.user).await {
-                                Some(lid_user) => {
-                                    wacore_binary::jid::Jid::new(&lid_user, "lid").to_string()
-                                }
-                                None => {
-                                    log::debug!(target: "Client/CsToken", "Cannot compute cstoken: no LID for {}", to);
-                                    return;
-                                }
-                            }
-                        };
-
-                        let cs_token = compute_cs_token(salt, &recipient_lid);
-                        extra_nodes.push(build_cs_token_node(&cs_token));
-                        log::debug!(target: "Client/CsToken", "Attached cstoken for {} (NCT fallback)", to);
-                    } else {
-                        log::debug!(target: "Client/CsToken", "No tctoken or NCT salt available for {}", to);
-                    }
+                if !tc_token_attached
+                    && let Some(salt) = &snapshot.nct_salt
+                    && let Some(lid_user) = &resolved_lid_user
+                {
+                    // HMAC input is "user@lid" (account LID without device suffix),
+                    // matching WA Web's accountLid.toString()
+                    let recipient_lid = wacore_binary::jid::Jid::new(lid_user, "lid").to_string();
+                    let cs_token = compute_cs_token(salt, &recipient_lid);
+                    extra_nodes.push(build_cs_token_node(&cs_token));
+                    log::debug!(target: "Client/CsToken", "Attached cstoken for {} (NCT fallback)", to);
+                } else if !tc_token_attached {
+                    log::debug!(target: "Client/CsToken", "No tctoken or NCT salt/LID available for {}", to);
                 }
             }
         }

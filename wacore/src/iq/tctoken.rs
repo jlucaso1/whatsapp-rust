@@ -548,6 +548,20 @@ mod tests {
     }
 
     #[test]
+    fn test_compute_cs_token_known_answer() {
+        // Pre-computed HMAC-SHA256 to catch accidental algorithm changes
+        // (e.g., if someone swaps key/data arguments).
+        let salt = b"whatsapp_nct_salt_example";
+        let lid = "236395184570386@lid";
+        let expected: [u8; 32] = [
+            0xbe, 0x04, 0x33, 0xa3, 0x23, 0xc9, 0x37, 0x2e, 0x3b, 0x61, 0x78, 0xf1, 0xfc, 0x98,
+            0xd0, 0x94, 0x40, 0xba, 0xd1, 0x99, 0x93, 0xf5, 0xc7, 0x69, 0xad, 0xa4, 0xe5, 0xce,
+            0x2d, 0xc2, 0x2f, 0xed,
+        ];
+        assert_eq!(compute_cs_token(salt, lid), expected);
+    }
+
+    #[test]
     fn test_build_cs_token_node() {
         let node = build_cs_token_node(&[0xAA, 0xBB, 0xCC]);
         assert_eq!(node.tag, "cstoken");
