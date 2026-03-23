@@ -17,7 +17,6 @@ async fn test_group_send_uses_registry_cache_after_reconnect() -> anyhow::Result
     let mut client_b = TestClient::connect("e2e_devcache_b").await?;
 
     let jid_b = client_b.jid().await;
-    info!("B = {jid_b}");
 
     let group = client_a
         .client
@@ -29,7 +28,6 @@ async fn test_group_send_uses_registry_cache_after_reconnect() -> anyhow::Result
         })
         .await?;
     let group_jid = group.gid;
-    info!("Group: {group_jid}");
 
     // First send — populates device registry (in-memory cache + SQLite DB)
     let text_1 = "before reconnect";
