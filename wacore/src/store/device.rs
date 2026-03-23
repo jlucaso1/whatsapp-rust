@@ -158,6 +158,12 @@ pub struct Device {
     /// Prevents prekey ID collisions when prekeys are consumed non-sequentially.
     #[serde(default)]
     pub next_pre_key_id: u32,
+    /// NCT (Neuro-Computed Token) salt provisioned by the server via app state sync.
+    /// Used to compute cstoken = HMAC-SHA256(salt, recipient_lid) as a fallback
+    /// when no tctoken is available for first-contact messaging.
+    /// Source: WAWebNctSaltSync, syncd collection RegularHigh, action "nct_salt_sync".
+    #[serde(default)]
+    pub nct_salt: Option<Vec<u8>>,
 }
 
 impl Default for Device {
@@ -209,6 +215,7 @@ impl Device {
             edge_routing_info: None,
             props_hash: None,
             next_pre_key_id: 1,
+            nct_salt: None,
         }
     }
 

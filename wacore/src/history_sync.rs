@@ -18,7 +18,10 @@ pub enum HistorySyncError {
 #[derive(Debug, Default)]
 pub struct HistorySyncResult {
     pub own_pushname: Option<String>,
-
+    /// NCT salt from HistorySync field 19 (nctSalt).
+    /// Delivered during initial pairing so cstoken is available immediately.
+    /// Source: WAWeb/History/MsgHandlerAction.js:storeNctSaltFromHistorySync
+    pub nct_salt: Option<Vec<u8>>,
     pub conversations_processed: usize,
 }
 
@@ -111,6 +114,21 @@ where
                 pos = end;
             }
 
+            // field 19 = nctSalt (optional bytes, length-delimited)
+            // Delivered during initial pairing so cstoken is available immediately.
+            // Source: storeNctSaltFromHistorySync in WAWeb/History/MsgHandlerAction.js
+            19 if wire_type_raw == wire_type::LENGTH_DELIMITED => {
+                let (len, vlen) = read_varint(&buf[pos..])?;
+                pos += vlen;
+                let end = checked_end(pos, len, buf.len(), "nctSalt")?;
+
+                let salt = buf[pos..end].to_vec();
+                if !salt.is_empty() {
+                    result.nct_salt = Some(salt);
+                }
+                pos = end;
+            }
+
             _ => {
                 pos = skip_field(wire_type_raw, &buf, pos)?;
             }
@@ -186,5 +204,72 @@ fn skip_field(wire_type: u32, buf: &[u8], pos: usize) -> Result<usize, HistorySy
                 "unknown wire type {wire_type}"
             )))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::Compression;
+    use flate2::write::ZlibEncoder;
+    use prost::Message;
+    use std::io::Write;
+
+    /// Encode a HistorySync proto and zlib-compress it.
+    fn encode_and_compress(hs: &wa::HistorySync) -> Vec<u8> {
+        let proto_bytes = hs.encode_to_vec();
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&proto_bytes).unwrap();
+        encoder.finish().unwrap()
+    }
+
+    #[test]
+    fn test_nct_salt_extracted_from_history_sync() {
+        let salt = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
+        let hs = wa::HistorySync {
+            sync_type: wa::history_sync::HistorySyncType::InitialBootstrap as i32,
+            nct_salt: Some(salt.clone()),
+            ..Default::default()
+        };
+
+        let compressed = encode_and_compress(&hs);
+        let result = process_history_sync::<fn(Bytes)>(compressed, None, None, None).unwrap();
+
+        assert_eq!(result.nct_salt, Some(salt));
+    }
+
+    #[test]
+    fn test_nct_salt_none_when_absent() {
+        let hs = wa::HistorySync {
+            sync_type: wa::history_sync::HistorySyncType::InitialBootstrap as i32,
+            ..Default::default()
+        };
+
+        let compressed = encode_and_compress(&hs);
+        let result = process_history_sync::<fn(Bytes)>(compressed, None, None, None).unwrap();
+
+        assert!(result.nct_salt.is_none());
+    }
+
+    #[test]
+    fn test_nct_salt_and_pushname_coexist() {
+        let salt = vec![0x01, 0x02, 0x03];
+        let hs = wa::HistorySync {
+            sync_type: wa::history_sync::HistorySyncType::InitialBootstrap as i32,
+            nct_salt: Some(salt.clone()),
+            pushnames: vec![wa::Pushname {
+                id: Some("5511999990000".into()),
+                pushname: Some("TestUser".into()),
+            }],
+            ..Default::default()
+        };
+
+        let compressed = encode_and_compress(&hs);
+        let result =
+            process_history_sync::<fn(Bytes)>(compressed, Some("5511999990000"), None, None)
+                .unwrap();
+
+        assert_eq!(result.nct_salt, Some(salt));
+        assert_eq!(result.own_pushname.as_deref(), Some("TestUser"));
     }
 }

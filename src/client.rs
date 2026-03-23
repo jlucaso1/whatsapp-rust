@@ -2619,10 +2619,34 @@ impl Client {
     ) {
         use wacore::types::events::Event;
 
-        if m.operation != wa::syncd_mutation::SyncdOperation::Set {
+        if m.index.is_empty() {
             return;
         }
-        if m.index.is_empty() {
+
+        // NCT salt sync — handles both "set" (store salt) and "remove" (clear salt).
+        // Source: WAWebNctSaltSync, syncd collection RegularHigh, action "nct_salt_sync".
+        if m.index[0] == "nct_salt_sync" {
+            if m.operation == wa::syncd_mutation::SyncdOperation::Remove {
+                debug!(target: "Client/AppState", "Removing NCT salt via app state sync");
+                self.persistence_manager
+                    .process_command(DeviceCommand::SetNctSalt(None))
+                    .await;
+            } else if let Some(val) = &m.action_value
+                && let Some(act) = &val.nct_salt_sync_action
+                && let Some(salt) = &act.salt
+            {
+                debug!(target: "Client/AppState", "Stored NCT salt via app state sync ({} bytes)", salt.len());
+                self.persistence_manager
+                    .process_command(DeviceCommand::SetNctSalt(Some(salt.clone())))
+                    .await;
+            } else {
+                warn!(target: "Client/AppState", "nct_salt_sync mutation missing salt in action value");
+            }
+            return;
+        }
+
+        // All remaining mutations only care about Set operations
+        if m.operation != wa::syncd_mutation::SyncdOperation::Set {
             return;
         }
 

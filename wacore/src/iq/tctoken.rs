@@ -249,6 +249,27 @@ pub fn parse_privacy_token_notification(
     Ok(tokens)
 }
 
+/// Compute a cstoken (client-side token / NCT) for a recipient.
+///
+/// This is the fallback token used when no tctoken exists for the recipient.
+/// Matches WA Web: `genCsTokenBody` in `MsgCreateFanoutStanza.js`.
+///
+/// `salt` — NCT salt from app state sync (raw bytes, not base64).
+/// `recipient_lid` — The recipient's account LID string (e.g. `"12345:67@lid"`).
+pub fn compute_cs_token(salt: &[u8], recipient_lid: &str) -> Vec<u8> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(salt).expect("HMAC-SHA256 accepts any key length");
+    mac.update(recipient_lid.as_bytes());
+    mac.finalize().into_bytes().to_vec()
+}
+
+/// Build a `<cstoken>` stanza child for including in outgoing messages.
+pub fn build_cs_token_node(token: &[u8]) -> Node {
+    NodeBuilder::new("cstoken").bytes(token.to_vec()).build()
+}
+
 /// Build a `<tctoken>` stanza child for including in outgoing messages.
 pub fn build_tc_token_node(token: &[u8]) -> Node {
     NodeBuilder::new("tctoken").bytes(token.to_vec()).build()
@@ -498,5 +519,41 @@ mod tests {
         assert_eq!(spec.jids.len(), 2);
         assert_eq!(spec.jids[0], jid1);
         assert_eq!(spec.jids[1], jid2);
+    }
+
+    #[test]
+    fn test_compute_cs_token_deterministic() {
+        let salt = b"test_salt_bytes_16";
+        let lid = "100000000000001:67@lid";
+        let token1 = compute_cs_token(salt, lid);
+        let token2 = compute_cs_token(salt, lid);
+        assert_eq!(token1, token2);
+        assert_eq!(token1.len(), 32); // HMAC-SHA256 output is 32 bytes
+    }
+
+    #[test]
+    fn test_compute_cs_token_different_lids() {
+        let salt = b"test_salt_bytes_16";
+        let token1 = compute_cs_token(salt, "100000000000001:67@lid");
+        let token2 = compute_cs_token(salt, "100000000000002:67@lid");
+        assert_ne!(token1, token2);
+    }
+
+    #[test]
+    fn test_compute_cs_token_different_salts() {
+        let lid = "100000000000001:67@lid";
+        let token1 = compute_cs_token(b"salt_a", lid);
+        let token2 = compute_cs_token(b"salt_b", lid);
+        assert_ne!(token1, token2);
+    }
+
+    #[test]
+    fn test_build_cs_token_node() {
+        let node = build_cs_token_node(&[0xAA, 0xBB, 0xCC]);
+        assert_eq!(node.tag, "cstoken");
+        match &node.content {
+            Some(NodeContent::Bytes(data)) => assert_eq!(data, &[0xAA, 0xBB, 0xCC]),
+            _ => panic!("Expected binary content"),
+        }
     }
 }

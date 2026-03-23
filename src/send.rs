@@ -1069,14 +1069,16 @@ impl Client {
         Ok(())
     }
 
-    /// Look up and include a tctoken in outgoing 1:1 message stanza nodes.
+    /// Look up and include a privacy token in outgoing 1:1 message stanza nodes.
     ///
-    /// If a valid (non-expired) token exists, adds a `<tctoken>` child node.
-    /// If the token is missing or expired, attempts to issue new tokens via IQ.
+    /// Follows WA Web's fallback chain (MsgCreateFanoutStanza.js):
+    ///   1. tctoken — from stored trusted contact token (if valid, non-expired)
+    ///   2. cstoken — HMAC-SHA256(nct_salt, recipient_lid) fallback for first-contact
+    ///   3. No token — message sent without token (server may return 463)
     async fn maybe_include_tc_token(&self, to: &Jid, extra_nodes: &mut Vec<Node>) {
         use wacore::iq::tctoken::{
-            IssuePrivacyTokensSpec, build_tc_token_node, is_tc_token_expired,
-            should_send_new_tc_token,
+            IssuePrivacyTokensSpec, build_cs_token_node, build_tc_token_node, compute_cs_token,
+            is_tc_token_expired, should_send_new_tc_token,
         };
         use wacore::store::traits::TcTokenEntry;
 
@@ -1106,22 +1108,21 @@ impl Client {
 
         let backend = self.persistence_manager.backend();
 
-        // Look up existing token
+        // Look up existing tctoken
         let existing = match backend.get_tc_token(&token_jid).await {
             Ok(entry) => entry,
             Err(e) => {
                 log::warn!(target: "Client/TcToken", "Failed to get tc_token for {}: {e}", token_jid);
-                return;
+                None
             }
         };
 
         match existing {
             Some(entry) if !is_tc_token_expired(entry.token_timestamp) => {
-                // Valid token — include it in the stanza
+                // Valid tctoken — include it in the stanza
                 extra_nodes.push(build_tc_token_node(&entry.token));
 
                 // Check if we should re-issue (bucket boundary crossed).
-                // Update sender_timestamp to mark we've sent our token in this bucket.
                 if should_send_new_tc_token(entry.sender_timestamp) {
                     let now = wacore::time::now_secs();
                     let updated_entry = TcTokenEntry {
@@ -1134,8 +1135,10 @@ impl Client {
                 }
             }
             _ => {
-                // Token missing or expired — try to issue
+                // tctoken missing or expired — try to issue first
                 let to_lid = self.resolve_to_lid_jid(to).await;
+                let mut tc_token_attached = false;
+
                 match self
                     .execute(IssuePrivacyTokensSpec::new(std::slice::from_ref(&to_lid)))
                     .await
@@ -1149,21 +1152,46 @@ impl Client {
                                 sender_timestamp: Some(now),
                             };
 
-                            // Store the received token
                             let store_jid = received.jid.user.clone();
                             if let Err(e) = backend.put_tc_token(&store_jid, &entry).await {
                                 log::warn!(target: "Client/TcToken", "Failed to store issued tc_token: {e}");
                             }
 
-                            // Include in message stanza
                             if !received.token.is_empty() {
                                 extra_nodes.push(build_tc_token_node(&received.token));
+                                tc_token_attached = true;
                             }
                         }
                     }
                     Err(e) => {
                         log::debug!(target: "Client/TcToken", "Failed to issue tc_token for {}: {e}", to_lid);
-                        // Don't fail the message send — tctoken is optional
+                    }
+                }
+
+                // cstoken fallback: if no tctoken was attached, compute from NCT salt.
+                // Matches WA Web: genCsTokenBody in MsgCreateFanoutStanza.js
+                if !tc_token_attached {
+                    if let Some(salt) = &snapshot.nct_salt {
+                        // Resolve recipient's LID for the HMAC input
+                        let recipient_lid = if to.is_lid() {
+                            to.to_string()
+                        } else {
+                            match self.lid_pn_cache.get_current_lid(&to.user).await {
+                                Some(lid_user) => {
+                                    wacore_binary::jid::Jid::new(&lid_user, "lid").to_string()
+                                }
+                                None => {
+                                    log::debug!(target: "Client/CsToken", "Cannot compute cstoken: no LID for {}", to);
+                                    return;
+                                }
+                            }
+                        };
+
+                        let cs_token = compute_cs_token(salt, &recipient_lid);
+                        extra_nodes.push(build_cs_token_node(&cs_token));
+                        log::debug!(target: "Client/CsToken", "Attached cstoken for {} (NCT fallback)", to);
+                    } else {
+                        log::debug!(target: "Client/CsToken", "No tctoken or NCT salt available for {}", to);
                     }
                 }
             }

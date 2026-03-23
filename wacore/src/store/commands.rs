@@ -17,6 +17,7 @@ pub enum DeviceCommand {
     SetPropsHash(Option<String>),
     SetNextPreKeyId(u32),
     SetAdvSecretKey([u8; 32]),
+    SetNctSalt(Option<Vec<u8>>),
 }
 
 pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
@@ -50,6 +51,9 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
         }
         DeviceCommand::SetAdvSecretKey(key) => {
             device.adv_secret_key = key;
+        }
+        DeviceCommand::SetNctSalt(salt) => {
+            device.nct_salt = salt;
         }
     }
 }

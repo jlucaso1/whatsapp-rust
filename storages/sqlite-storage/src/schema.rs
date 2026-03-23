@@ -68,6 +68,7 @@ diesel::table! {
         edge_routing_info -> Nullable<Binary>,
         props_hash -> Nullable<Text>,
         next_pre_key_id -> Integer,
+        nct_salt -> Nullable<Binary>,
     }
 }
 

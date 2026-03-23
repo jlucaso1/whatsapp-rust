@@ -255,6 +255,22 @@ impl Client {
                     log::info!("Updating own push name from history sync to '{new_name}'");
                     self.update_push_name_and_notify(new_name).await;
                 }
+
+                // Store NCT salt if found and not already present.
+                // WA Web: storeNctSaltFromHistorySync in MsgHandlerAction.js
+                if let Some(salt) = sync_result.nct_salt {
+                    let snapshot = self.persistence_manager.get_device_snapshot().await;
+                    if snapshot.nct_salt.is_none() {
+                        log::info!("Stored NCT salt from history sync ({} bytes)", salt.len());
+                        self.persistence_manager
+                            .process_command(wacore::store::commands::DeviceCommand::SetNctSalt(
+                                Some(salt),
+                            ))
+                            .await;
+                    } else {
+                        log::debug!("NCT salt already present, skipping history sync salt");
+                    }
+                }
             }
             Some(Err(e)) => {
                 log::error!("Failed to process HistorySync data: {:?}", e);
