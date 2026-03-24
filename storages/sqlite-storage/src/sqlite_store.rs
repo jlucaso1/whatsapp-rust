@@ -52,27 +52,35 @@ fn is_retriable_sqlite_error(error: &DieselError) -> bool {
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 type SqlitePool = Pool<ConnectionManager<SqliteConnection>>;
-type DeviceRow = (
-    i32,
-    String,
-    String,
-    i32,
-    Vec<u8>,
-    Vec<u8>,
-    Vec<u8>,
-    i32,
-    Vec<u8>,
-    Vec<u8>,
-    Option<Vec<u8>>,
-    String,
-    i32,
-    i32,
-    i64,
-    i64,
-    Option<Vec<u8>>,
-    Option<String>,
-    i32,
-);
+
+/// Row representation for the `device` table.
+///
+/// Field order must match the column order in `schema::device`.
+/// Using a named struct instead of a positional tuple so fields are
+/// accessed by name, reducing the risk of mix-ups when columns are added.
+#[derive(Queryable)]
+#[allow(dead_code)] // `id` is required by Queryable column mapping but not read directly
+struct DeviceRow {
+    id: i32,
+    lid: String,
+    pn: String,
+    registration_id: i32,
+    noise_key: Vec<u8>,
+    identity_key: Vec<u8>,
+    signed_pre_key: Vec<u8>,
+    signed_pre_key_id: i32,
+    signed_pre_key_signature: Vec<u8>,
+    adv_secret_key: Vec<u8>,
+    account: Option<Vec<u8>>,
+    push_name: String,
+    app_version_primary: i32,
+    app_version_secondary: i32,
+    app_version_tertiary: i64,
+    app_version_last_fetched_ms: i64,
+    edge_routing_info: Option<Vec<u8>>,
+    props_hash: Option<String>,
+    next_pre_key_id: i32,
+}
 
 #[derive(Clone)]
 pub struct SqliteStore {
@@ -495,53 +503,33 @@ impl SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
-        if let Some((
-            _device_id,
-            lid_str,
-            pn_str,
-            registration_id,
-            noise_key_data,
-            identity_key_data,
-            signed_pre_key_data,
-            signed_pre_key_id,
-            signed_pre_key_signature_data,
-            adv_secret_key_data,
-            account_data,
-            push_name,
-            app_version_primary,
-            app_version_secondary,
-            app_version_tertiary,
-            app_version_last_fetched_ms,
-            edge_routing_info,
-            props_hash,
-            next_pre_key_id,
-        )) = row
-        {
-            let id = if !pn_str.is_empty() {
-                pn_str.parse().ok()
+        if let Some(row) = row {
+            let pn = if !row.pn.is_empty() {
+                row.pn.parse().ok()
             } else {
                 None
             };
-            let lid = if !lid_str.is_empty() {
-                lid_str.parse().ok()
+            let lid = if !row.lid.is_empty() {
+                row.lid.parse().ok()
             } else {
                 None
             };
 
-            let noise_key = self.deserialize_keypair(&noise_key_data)?;
-            let identity_key = self.deserialize_keypair(&identity_key_data)?;
-            let signed_pre_key = self.deserialize_keypair(&signed_pre_key_data)?;
+            let noise_key = self.deserialize_keypair(&row.noise_key)?;
+            let identity_key = self.deserialize_keypair(&row.identity_key)?;
+            let signed_pre_key = self.deserialize_keypair(&row.signed_pre_key)?;
 
             let signed_pre_key_signature: [u8; 64] =
-                signed_pre_key_signature_data.try_into().map_err(|_| {
+                row.signed_pre_key_signature.try_into().map_err(|_| {
                     StoreError::Serialization("Invalid signed_pre_key_signature length".to_string())
                 })?;
 
-            let adv_secret_key: [u8; 32] = adv_secret_key_data.try_into().map_err(|_| {
+            let adv_secret_key: [u8; 32] = row.adv_secret_key.try_into().map_err(|_| {
                 StoreError::Serialization("Invalid adv_secret_key length".to_string())
             })?;
 
-            let account = account_data
+            let account = row
+                .account
                 .map(|data| {
                     wacore::store::device::account_serde::from_bytes(&data)
                         .map_err(|e| StoreError::Serialization(e.to_string()))
@@ -549,28 +537,28 @@ impl SqliteStore {
                 .transpose()?;
 
             Ok(Some(CoreDevice {
-                pn: id,
+                pn,
                 lid,
-                registration_id: registration_id as u32,
+                registration_id: row.registration_id as u32,
                 noise_key,
                 identity_key,
                 signed_pre_key,
-                signed_pre_key_id: signed_pre_key_id as u32,
+                signed_pre_key_id: row.signed_pre_key_id as u32,
                 signed_pre_key_signature,
                 adv_secret_key,
                 account,
-                push_name,
-                app_version_primary: app_version_primary as u32,
-                app_version_secondary: app_version_secondary as u32,
-                app_version_tertiary: app_version_tertiary.try_into().unwrap_or(0u32),
-                app_version_last_fetched_ms,
+                push_name: row.push_name,
+                app_version_primary: row.app_version_primary as u32,
+                app_version_secondary: row.app_version_secondary as u32,
+                app_version_tertiary: row.app_version_tertiary.try_into().unwrap_or(0u32),
+                app_version_last_fetched_ms: row.app_version_last_fetched_ms,
                 device_props: {
                     use wacore::store::device::DEVICE_PROPS;
                     DEVICE_PROPS.clone()
                 },
-                edge_routing_info,
-                props_hash,
-                next_pre_key_id: next_pre_key_id as u32,
+                edge_routing_info: row.edge_routing_info,
+                props_hash: row.props_hash,
+                next_pre_key_id: row.next_pre_key_id as u32,
             }))
         } else {
             Ok(None)
