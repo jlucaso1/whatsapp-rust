@@ -70,6 +70,7 @@ impl<'a> Polls<'a> {
             poll_content_type: None,
             poll_type: None,
             correct_answer: None,
+            ..Default::default()
         };
 
         // WA Web: v3 for single-select, v1 for multi-select (GeneratePollCreationMessageProto.js:39-41)
