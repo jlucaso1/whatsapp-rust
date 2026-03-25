@@ -255,7 +255,7 @@ pub fn parse_privacy_token_notification(
 /// Matches WA Web: `genCsTokenBody` in `MsgCreateFanoutStanza.js`.
 ///
 /// `salt` — NCT salt from app state sync (raw bytes, not base64).
-/// `recipient_lid` — The recipient's account LID string (e.g. `"12345:67@lid"`).
+/// `recipient_lid` — The recipient's bare account LID string (e.g. `"12345@lid"`).
 pub fn compute_cs_token(salt: &[u8], recipient_lid: &str) -> Vec<u8> {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
