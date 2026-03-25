@@ -723,6 +723,7 @@ impl Client {
         }
         let mut skdm_update: Option<SkdmUpdate> = None;
         let mut should_issue_tc_token_after_send = false;
+        let mut used_cached_tc_token_key: Option<String> = None;
         let tc_issue_target = to.clone();
 
         let stanza_to_send: wacore_binary::Node = if peer && !to.is_group() {
@@ -1010,11 +1011,15 @@ impl Client {
             // Include tctoken in 1:1 messages (matches WhatsApp Web behavior).
             // Skip for newsletters, groups, and own JID.
             let mut extra_stanza_nodes = extra_stanza_nodes;
-            should_issue_tc_token_after_send = !to.is_group()
-                && !to.is_newsletter()
-                && self
+            if !to.is_group() && !to.is_newsletter() {
+                let (should_issue_after_send, cached_token_key) = self
                     .maybe_include_tc_token(&to, &mut extra_stanza_nodes)
                     .await;
+                should_issue_tc_token_after_send = should_issue_after_send;
+                if should_issue_after_send {
+                    used_cached_tc_token_key = cached_token_key;
+                }
+            }
             if should_issue_tc_token_after_send {
                 debug!(target: "Client/TcToken", "Scheduled tc token issuance after send for {}", to);
             }
@@ -1080,6 +1085,9 @@ impl Client {
         if should_issue_tc_token_after_send {
             self.issue_tc_token_after_send(&tc_issue_target).await;
         }
+        if let Some(token_key) = used_cached_tc_token_key {
+            self.mark_tc_token_used_after_send(&token_key).await;
+        }
 
         Ok(())
     }
@@ -1091,8 +1099,13 @@ impl Client {
     ///   2. cstoken — HMAC-SHA256(nct_salt, recipient_lid) fallback for first-contact
     ///   3. No token — message sent without token (server may return 463)
     ///
-    /// Returns whether we should issue a new tc token for this chat after send.
-    async fn maybe_include_tc_token(&self, to: &Jid, extra_nodes: &mut Vec<Node>) -> bool {
+    /// Returns whether we should issue a new tc token after send, and the cache key
+    /// of the attached valid tc token when that token should be marked as used.
+    async fn maybe_include_tc_token(
+        &self,
+        to: &Jid,
+        extra_nodes: &mut Vec<Node>,
+    ) -> (bool, Option<String>) {
         use wacore::iq::tctoken::{
             build_cs_token_node, build_tc_token_node, compute_cs_token, is_tc_token_expired,
             should_send_new_tc_token,
@@ -1109,7 +1122,7 @@ impl Client {
                 .as_ref()
                 .is_some_and(|lid| lid.is_same_user_as(to));
         if is_self {
-            return false;
+            return (false, None);
         }
 
         // Resolve the destination to a LID user string once — reused for
@@ -1142,6 +1155,7 @@ impl Client {
             {
                 // Valid tctoken — include it in the stanza
                 extra_nodes.push(build_tc_token_node(&entry.token));
+                return (should_issue_after_send, Some(token_jid));
             }
             _ => {
                 if let Some(salt) = &snapshot.nct_salt
@@ -1159,7 +1173,7 @@ impl Client {
             }
         }
 
-        should_issue_after_send
+        (should_issue_after_send, None)
     }
 
     async fn issue_tc_token_after_send(&self, to: &Jid) {
@@ -1202,6 +1216,34 @@ impl Client {
             if let Err(e) = backend.put_tc_token(&store_jid, &entry).await {
                 log::warn!(target: "Client/TcToken", "Failed to store issued tc_token: {e}");
             }
+        }
+    }
+
+    async fn mark_tc_token_used_after_send(&self, token_key: &str) {
+        use wacore::store::traits::TcTokenEntry;
+
+        let backend = self.persistence_manager.backend();
+        let existing = match backend.get_tc_token(token_key).await {
+            Ok(entry) => entry,
+            Err(e) => {
+                log::warn!(target: "Client/TcToken", "Failed to reload tc_token for {}: {e}", token_key);
+                return;
+            }
+        };
+
+        let Some(entry) = existing else {
+            return;
+        };
+        if entry.token.is_empty() {
+            return;
+        }
+
+        let updated_entry = TcTokenEntry {
+            sender_timestamp: Some(wacore::time::now_secs()),
+            ..entry
+        };
+        if let Err(e) = backend.put_tc_token(token_key, &updated_entry).await {
+            log::warn!(target: "Client/TcToken", "Failed to update sender_timestamp for {}: {e}", token_key);
         }
     }
 
