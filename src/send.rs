@@ -1097,7 +1097,6 @@ impl Client {
             build_cs_token_node, build_tc_token_node, compute_cs_token, is_tc_token_expired,
             should_send_new_tc_token,
         };
-        use wacore::store::traits::TcTokenEntry;
 
         // Skip for own JID — no need to send privacy token to ourselves
         let snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -1143,18 +1142,6 @@ impl Client {
             {
                 // Valid tctoken — include it in the stanza
                 extra_nodes.push(build_tc_token_node(&entry.token));
-
-                // Check if we should re-issue (bucket boundary crossed).
-                if should_issue_after_send {
-                    let now = wacore::time::now_secs();
-                    let updated_entry = TcTokenEntry {
-                        sender_timestamp: Some(now),
-                        ..entry
-                    };
-                    if let Err(e) = backend.put_tc_token(&token_jid, &updated_entry).await {
-                        log::warn!(target: "Client/TcToken", "Failed to update sender_timestamp: {e}");
-                    }
-                }
             }
             _ => {
                 if let Some(salt) = &snapshot.nct_salt

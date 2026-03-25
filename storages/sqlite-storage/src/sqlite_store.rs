@@ -565,6 +565,7 @@ impl SqliteStore {
                 props_hash: row.props_hash,
                 next_pre_key_id: row.next_pre_key_id as u32,
                 nct_salt: row.nct_salt,
+                nct_salt_sync_seen: false,
             }))
         } else {
             Ok(None)

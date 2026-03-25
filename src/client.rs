@@ -1061,6 +1061,7 @@ impl Client {
     }
 
     async fn cleanup_connection_state(&self) {
+        self.clear_sent_node_waiters();
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
         // Signal the keepalive loop (and any other tasks) to exit promptly.
@@ -3051,6 +3052,17 @@ impl Client {
             } else {
                 i += 1;
             }
+        }
+    }
+
+    fn clear_sent_node_waiters(&self) {
+        let mut waiters = self
+            .sent_node_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !waiters.is_empty() {
+            waiters.clear();
+            self.sent_node_waiter_count.store(0, Ordering::Release);
         }
     }
 

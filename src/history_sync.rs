@@ -259,11 +259,14 @@ impl Client {
                 // Store NCT salt if found.
                 // WA Web: storeNctSaltFromHistorySync in MsgHandlerAction.js
                 if let Some(salt) = sync_result.nct_salt {
-                    log::info!("Stored NCT salt from history sync ({} bytes)", salt.len());
+                    log::info!(
+                        "History sync provided NCT salt ({} bytes); applying as backfill only",
+                        salt.len()
+                    );
                     self.persistence_manager
-                        .process_command(wacore::store::commands::DeviceCommand::SetNctSalt(Some(
-                            salt,
-                        )))
+                        .process_command(
+                            wacore::store::commands::DeviceCommand::SetNctSaltFromHistorySync(salt),
+                        )
                         .await;
                 }
             }

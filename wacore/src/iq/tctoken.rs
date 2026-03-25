@@ -512,8 +512,8 @@ mod tests {
 
     #[test]
     fn test_issue_privacy_tokens_spec_new_from_slice() {
-        let jid1: Jid = "100000000000001@lid".parse().unwrap();
-        let jid2: Jid = "100000000000002@lid".parse().unwrap();
+        let jid1: Jid = "alice@lid".parse().unwrap();
+        let jid2: Jid = "bob@lid".parse().unwrap();
         let jids = [jid1.clone(), jid2.clone()];
         let spec = IssuePrivacyTokensSpec::new(&jids);
         assert_eq!(spec.jids.len(), 2);
@@ -524,7 +524,7 @@ mod tests {
     #[test]
     fn test_compute_cs_token_deterministic() {
         let salt = b"test_salt_bytes_16";
-        let lid = "100000000000001:67@lid";
+        let lid = "alice@lid";
         let token1 = compute_cs_token(salt, lid);
         let token2 = compute_cs_token(salt, lid);
         assert_eq!(token1, token2);
@@ -534,14 +534,14 @@ mod tests {
     #[test]
     fn test_compute_cs_token_different_lids() {
         let salt = b"test_salt_bytes_16";
-        let token1 = compute_cs_token(salt, "100000000000001:67@lid");
-        let token2 = compute_cs_token(salt, "100000000000002:67@lid");
+        let token1 = compute_cs_token(salt, "alice@lid");
+        let token2 = compute_cs_token(salt, "bob@lid");
         assert_ne!(token1, token2);
     }
 
     #[test]
     fn test_compute_cs_token_different_salts() {
-        let lid = "100000000000001:67@lid";
+        let lid = "alice@lid";
         let token1 = compute_cs_token(b"salt_a", lid);
         let token2 = compute_cs_token(b"salt_b", lid);
         assert_ne!(token1, token2);
@@ -552,11 +552,11 @@ mod tests {
         // Pre-computed HMAC-SHA256 to catch accidental algorithm changes
         // (e.g., if someone swaps key/data arguments).
         let salt = b"whatsapp_nct_salt_example";
-        let lid = "236395184570386@lid";
+        let lid = "alice@lid";
         let expected: [u8; 32] = [
-            0xbe, 0x04, 0x33, 0xa3, 0x23, 0xc9, 0x37, 0x2e, 0x3b, 0x61, 0x78, 0xf1, 0xfc, 0x98,
-            0xd0, 0x94, 0x40, 0xba, 0xd1, 0x99, 0x93, 0xf5, 0xc7, 0x69, 0xad, 0xa4, 0xe5, 0xce,
-            0x2d, 0xc2, 0x2f, 0xed,
+            0x7c, 0x6a, 0xfc, 0x32, 0x57, 0x85, 0xac, 0x3c, 0x4f, 0x57, 0x1e, 0x64, 0x8a, 0x3b,
+            0xb8, 0x22, 0xf0, 0xe2, 0xe4, 0x94, 0x34, 0x81, 0x2e, 0xd2, 0x80, 0x9a, 0xea, 0x2e,
+            0x70, 0x43, 0xb5, 0x76,
         ];
         assert_eq!(compute_cs_token(salt, lid), expected);
     }

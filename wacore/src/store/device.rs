@@ -163,6 +163,10 @@ pub struct Device {
     /// when no tctoken is available for first-contact messaging.
     #[serde(default)]
     pub nct_salt: Option<Vec<u8>>,
+    /// Runtime-only marker that an authoritative nct_salt_sync mutation was seen.
+    /// This prevents stale history sync data from resurrecting a cleared salt.
+    #[serde(skip)]
+    pub nct_salt_sync_seen: bool,
 }
 
 impl Default for Device {
@@ -215,6 +219,7 @@ impl Device {
             props_hash: None,
             next_pre_key_id: 1,
             nct_salt: None,
+            nct_salt_sync_seen: false,
         }
     }
 

@@ -378,14 +378,18 @@ async fn test_only_nct_send_ab_without_salt_still_receives_463() -> anyhow::Resu
         "sender should not have a tc token for recipient before first contact"
     );
 
-    let jid_a = client_a.jid().await;
+    let jid_a_lid = client_a
+        .client
+        .get_lid()
+        .await
+        .expect("restricted recipient should have a LID");
     let msg_id = format!("E2ECSNEG1{}", uuid::Uuid::new_v4().simple());
     let sent_msg_id = msg_id.clone();
     let sent_waiter = client_b.sent_message_waiter(&sent_msg_id);
     send_message_and_expect_463_with_id(
         &client_b,
         &mut client_a,
-        &jid_a,
+        &jid_a_lid,
         "send-ab-only first contact",
         msg_id,
     )
@@ -394,6 +398,10 @@ async fn test_only_nct_send_ab_without_salt_still_receives_463() -> anyhow::Resu
         .await
         .map_err(|_| anyhow::anyhow!("Timed out waiting for sent message node"))?
         .map_err(|_| anyhow::anyhow!("sent message waiter was canceled"))?;
+    assert_eq!(
+        sent.attrs.get("to").map(|v| v.to_string()),
+        Some(jid_a_lid.to_string())
+    );
     assert!(!has_child(&sent, "tctoken"));
     assert!(!has_child(&sent, "cstoken"));
 
@@ -430,14 +438,18 @@ async fn test_send_and_syncd_ab_without_delivery_still_receives_463() -> anyhow:
         "sender should not have a tc token for recipient before first contact"
     );
 
-    let jid_a = client_a.jid().await;
+    let jid_a_lid = client_a
+        .client
+        .get_lid()
+        .await
+        .expect("restricted recipient should have a LID");
     let msg_id = format!("E2ECSNEG2{}", uuid::Uuid::new_v4().simple());
     let sent_msg_id = msg_id.clone();
     let sent_waiter = client_b.sent_message_waiter(&sent_msg_id);
     send_message_and_expect_463_with_id(
         &client_b,
         &mut client_a,
-        &jid_a,
+        &jid_a_lid,
         "send-and-syncd-ab first contact",
         msg_id,
     )
@@ -446,6 +458,10 @@ async fn test_send_and_syncd_ab_without_delivery_still_receives_463() -> anyhow:
         .await
         .map_err(|_| anyhow::anyhow!("Timed out waiting for sent message node"))?
         .map_err(|_| anyhow::anyhow!("sent message waiter was canceled"))?;
+    assert_eq!(
+        sent.attrs.get("to").map(|v| v.to_string()),
+        Some(jid_a_lid.to_string())
+    );
     assert!(!has_child(&sent, "tctoken"));
     assert!(!has_child(&sent, "cstoken"));
 
@@ -703,11 +719,15 @@ async fn test_clearing_nct_salt_locally_makes_first_contact_fail_again() -> anyh
         &["restricted", "tc_enabled=0", "cs_enabled=1"],
     );
     let mut client_c = TestClient::connect_as("e2e_cstok_remove_c", &restricted_name_c).await?;
-    let jid_c = client_c.jid().await;
+    let jid_c_lid = client_c
+        .client
+        .get_lid()
+        .await
+        .expect("restricted recipient should have a LID");
     send_first_message_and_expect_463(
         &client_b,
         &mut client_c,
-        &jid_c,
+        &jid_c_lid,
         "remove-salt first contact should fail",
     )
     .await?;
