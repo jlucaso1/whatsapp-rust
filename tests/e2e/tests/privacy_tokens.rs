@@ -5,6 +5,7 @@ use log::info;
 use std::sync::Arc;
 use wacore::iq::tctoken::tc_token_expiration_cutoff;
 use wacore::store::traits::TcTokenEntry;
+use wacore::types::events::Event;
 use wacore_binary::node::Node;
 use whatsapp_rust::{NodeFilter, SendOptions};
 
@@ -12,6 +13,14 @@ fn has_child(node: &Node, tag: &str) -> bool {
     node.children()
         .map(|children| children.iter().any(|child| child.tag == tag))
         .unwrap_or(false)
+}
+
+fn has_descendant(node: &Node, tag: &str) -> bool {
+    node.children().is_some_and(|children| {
+        children
+            .iter()
+            .any(|child| child.tag == tag || has_descendant(child, tag))
+    })
 }
 
 async fn send_first_message_and_expect_463(
@@ -825,6 +834,235 @@ async fn test_nct_salt_survives_reconnect_and_still_allows_first_contact() -> an
     assert!(!has_child(&sent, "tctoken"));
     client_a
         .wait_for_text("reconnect cstoken first contact", 30)
+        .await?;
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_pn_target_first_contact_uses_cstoken_after_lid_resolution() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let restricted_name = scenario_push_name(
+        "e2e_cstok_pn_a",
+        &["restricted", "tc_enabled=0", "cs_enabled=1"],
+    );
+    let sender_name = scenario_push_name(
+        "e2e_cstok_pn_b",
+        &[
+            "nct_send_ab=1",
+            "nct_history_ab=1",
+            "nct_history_delivery=1",
+            "nct_syncd_delivery=0",
+        ],
+    );
+    let mut client_a = TestClient::connect_as("e2e_cstok_pn_a", &restricted_name).await?;
+    let client_b = TestClient::connect_as("e2e_cstok_pn_b", &sender_name).await?;
+
+    let nct_salt = client_b.wait_for_nct_salt(10).await?;
+    assert!(
+        !nct_salt.is_empty(),
+        "history sync should provision NCT salt"
+    );
+
+    let jid_a_pn = client_a.jid().await;
+    let key_a = client_a.tc_token_key().await?;
+    assert!(
+        client_b.client.tc_token().get(&key_a).await?.is_none(),
+        "sender should not have a tc token for recipient before first contact"
+    );
+
+    let user_info = client_b
+        .client
+        .contacts()
+        .get_user_info(std::slice::from_ref(&jid_a_pn))
+        .await?;
+    let resolved = user_info
+        .get(&jid_a_pn)
+        .expect("PN-target usync info should exist");
+    assert!(
+        resolved.lid.is_some(),
+        "PN-target usync info should carry the recipient account LID"
+    );
+
+    let msg_id = format!("E2ECSPN{}", uuid::Uuid::new_v4().simple());
+    let sent_waiter = client_b.sent_message_waiter(&msg_id);
+    client_b
+        .client
+        .send_message_with_options(
+            jid_a_pn.clone(),
+            text_msg("pn-target cstoken first contact"),
+            SendOptions {
+                message_id: Some(msg_id),
+                ..Default::default()
+            },
+        )
+        .await?;
+    let sent = tokio::time::timeout(tokio::time::Duration::from_secs(10), sent_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for PN-target sent message node"))?
+        .map_err(|_| anyhow::anyhow!("PN-target sent message waiter was canceled"))?;
+    assert_eq!(
+        sent.attrs.get("to").map(|v| v.to_string()),
+        Some(jid_a_pn.to_string())
+    );
+    assert!(has_child(&sent, "cstoken"));
+    assert!(!has_child(&sent, "tctoken"));
+
+    client_a
+        .wait_for_text("pn-target cstoken first contact", 30)
+        .await?;
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_restricted_profile_picture_requires_tctoken() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let restricted_name = restricted_push_name("e2e_ppic_priv_a");
+    let client_a = TestClient::connect_as("e2e_ppic_priv_a", &restricted_name).await?;
+    let mut client_b = TestClient::connect("e2e_ppic_priv_b").await?;
+
+    client_a
+        .client
+        .profile()
+        .set_profile_picture(vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10])
+        .await?;
+
+    let jid_a = client_a.jid().await;
+    let jid_b = client_b.jid().await;
+
+    let denied_waiter = client_b.client.wait_for_sent_node(
+        NodeFilter::tag("iq")
+            .attr("type", "get")
+            .attr("xmlns", "w:profile:picture")
+            .attr("target", jid_a.to_string()),
+    );
+    let denied = client_b
+        .client
+        .contacts()
+        .get_profile_picture(&jid_a, false)
+        .await?;
+    let denied_node = tokio::time::timeout(tokio::time::Duration::from_secs(10), denied_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for denied profile picture IQ"))?
+        .map_err(|_| anyhow::anyhow!("denied profile picture waiter was canceled"))?;
+    assert!(!has_descendant(&denied_node, "tctoken"));
+    assert!(
+        denied.is_none(),
+        "restricted profile picture should be hidden without a tc token"
+    );
+
+    send_and_expect_text(
+        &client_a.client,
+        &mut client_b,
+        &jid_b,
+        "seed profile picture tc token",
+        30,
+    )
+    .await?;
+    let key_a = client_a.tc_token_key().await?;
+    client_b.wait_for_tc_token(&key_a, 10).await?;
+
+    let allowed_waiter = client_b.client.wait_for_sent_node(
+        NodeFilter::tag("iq")
+            .attr("type", "get")
+            .attr("xmlns", "w:profile:picture")
+            .attr("target", jid_a.to_string()),
+    );
+    let allowed = client_b
+        .client
+        .contacts()
+        .get_profile_picture(&jid_a, false)
+        .await?;
+    let allowed_node = tokio::time::timeout(tokio::time::Duration::from_secs(10), allowed_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for allowed profile picture IQ"))?
+        .map_err(|_| anyhow::anyhow!("allowed profile picture waiter was canceled"))?;
+    assert!(has_descendant(&allowed_node, "tctoken"));
+    assert!(
+        allowed.is_some(),
+        "restricted profile picture should be visible once tc token exists"
+    );
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_restricted_presence_subscribe_requires_tctoken() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let restricted_name = restricted_push_name("e2e_presence_priv_a");
+    let client_a = TestClient::connect_as("e2e_presence_priv_a", &restricted_name).await?;
+    let mut client_b = TestClient::connect("e2e_presence_priv_b").await?;
+
+    let jid_a = client_a.jid().await;
+    let jid_b = client_b.jid().await;
+
+    let denied_waiter = client_b.client.wait_for_sent_node(
+        NodeFilter::tag("presence")
+            .attr("type", "subscribe")
+            .attr("to", jid_a.to_string()),
+    );
+    client_b.client.presence().subscribe(&jid_a).await?;
+    let denied_node = tokio::time::timeout(tokio::time::Duration::from_secs(10), denied_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for denied presence subscribe"))?
+        .map_err(|_| anyhow::anyhow!("denied presence subscribe waiter was canceled"))?;
+    assert!(!has_child(&denied_node, "tctoken"));
+
+    client_a.client.presence().set_unavailable().await?;
+    client_b
+        .assert_no_event(
+            5,
+            |e| matches!(e, Event::Presence(update) if update.from == jid_a && update.unavailable),
+            "restricted presence subscribe without tctoken should not deliver updates",
+        )
+        .await?;
+
+    send_and_expect_text(
+        &client_a.client,
+        &mut client_b,
+        &jid_b,
+        "seed presence tc token",
+        30,
+    )
+    .await?;
+    let key_a = client_a.tc_token_key().await?;
+    client_b.wait_for_tc_token(&key_a, 10).await?;
+
+    let allowed_waiter = client_b.client.wait_for_sent_node(
+        NodeFilter::tag("presence")
+            .attr("type", "subscribe")
+            .attr("to", jid_a.to_string()),
+    );
+    client_b.client.presence().subscribe(&jid_a).await?;
+    let allowed_node = tokio::time::timeout(tokio::time::Duration::from_secs(10), allowed_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for allowed presence subscribe"))?
+        .map_err(|_| anyhow::anyhow!("allowed presence subscribe waiter was canceled"))?;
+    assert!(has_child(&allowed_node, "tctoken"));
+
+    let _ = client_b
+        .wait_for_event(
+            5,
+            |e| matches!(e, Event::Presence(update) if update.from == jid_a && update.unavailable),
+        )
+        .await?;
+
+    client_a.client.presence().set_available().await?;
+    let _ = client_b
+        .wait_for_event(
+            10,
+            |e| matches!(e, Event::Presence(update) if update.from == jid_a && !update.unavailable),
+        )
         .await?;
 
     client_a.disconnect().await;

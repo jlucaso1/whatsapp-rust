@@ -1056,10 +1056,6 @@ impl Client {
 
         self.send_node(stanza_to_send).await?;
 
-        if should_issue_tc_token_after_send {
-            self.issue_tc_token_after_send(&tc_issue_target).await;
-        }
-
         // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
         // WA Web only calls markHasSenderKey() after the server confirms receipt.
         if let Some(update) = skdm_update {
@@ -1075,6 +1071,14 @@ impl Client {
         // Flush cached Signal state to DB after encryption
         if let Err(e) = self.flush_signal_cache().await {
             log::error!("Failed to flush signal cache after send_message_impl: {e:?}");
+        }
+
+        // Issue new tc token after send if a bucket boundary was crossed.
+        // WA Web fires this concurrently (MsgJob.js: sendTcToken is not awaited),
+        // but our send methods take &self not &Arc<Self> so we can't spawn here.
+        // Placed last so it doesn't block SKDM or signal-cache flush.
+        if should_issue_tc_token_after_send {
+            self.issue_tc_token_after_send(&tc_issue_target).await;
         }
 
         Ok(())
@@ -1134,12 +1138,14 @@ impl Client {
             should_send_new_tc_token(existing.as_ref().and_then(|entry| entry.sender_timestamp));
 
         match existing {
-            Some(entry) if !is_tc_token_expired(entry.token_timestamp) => {
+            Some(entry)
+                if !is_tc_token_expired(entry.token_timestamp) && !entry.token.is_empty() =>
+            {
                 // Valid tctoken — include it in the stanza
                 extra_nodes.push(build_tc_token_node(&entry.token));
 
                 // Check if we should re-issue (bucket boundary crossed).
-                if should_send_new_tc_token(entry.sender_timestamp) {
+                if should_issue_after_send {
                     let now = wacore::time::now_secs();
                     let updated_entry = TcTokenEntry {
                         sender_timestamp: Some(now),
@@ -1194,6 +1200,11 @@ impl Client {
         let backend = self.persistence_manager.backend();
         let now = wacore::time::now_secs();
         for received in tokens {
+            if received.token.is_empty() {
+                log::warn!(target: "Client/TcToken", "Server returned empty tc_token for {}, skipping", received.jid);
+                continue;
+            }
+
             let entry = TcTokenEntry {
                 token: received.token.clone(),
                 token_timestamp: received.timestamp,
