@@ -498,7 +498,7 @@ impl<'a> ChatActions<'a> {
             mute_action: Some(wa::sync_action_value::MuteAction {
                 muted: Some(muted),
                 mute_end_timestamp: mute_end,
-                auto_muted: None,
+                ..Default::default()
             }),
             timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
