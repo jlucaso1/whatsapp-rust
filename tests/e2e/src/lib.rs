@@ -25,6 +25,22 @@ pub fn mock_server_url() -> String {
     std::env::var("MOCK_SERVER_URL").unwrap_or_else(|_| "wss://127.0.0.1:8080/ws/chat".to_string())
 }
 
+pub fn unique_push_name(prefix: &str) -> String {
+    format!("{}_{}", prefix, uuid::Uuid::new_v4())
+}
+
+pub fn restricted_push_name(prefix: &str) -> String {
+    format!("restricted:{}", unique_push_name(prefix))
+}
+
+pub fn scenario_push_name(prefix: &str, flags: &[&str]) -> String {
+    assert!(
+        !flags.is_empty(),
+        "scenario_push_name requires at least one flag"
+    );
+    format!("scenario:{}:{}", flags.join(","), unique_push_name(prefix))
+}
+
 /// Event handler that sends events to a tokio broadcast channel for test assertions.
 pub struct ChannelEventHandler {
     tx: tokio::sync::broadcast::Sender<Event>,
@@ -207,6 +223,31 @@ impl TestClient {
                     "Timed out waiting for tc_token entry for {}",
                     jid_key
                 ));
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    pub async fn nct_salt(&self) -> Option<Vec<u8>> {
+        self.client
+            .persistence_manager()
+            .get_device_snapshot()
+            .await
+            .nct_salt
+            .clone()
+    }
+
+    pub async fn wait_for_nct_salt(&self, timeout_secs: u64) -> anyhow::Result<Vec<u8>> {
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
+
+        loop {
+            if let Some(salt) = self.nct_salt().await {
+                return Ok(salt);
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                return Err(anyhow::anyhow!("Timed out waiting for NCT salt"));
             }
 
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;

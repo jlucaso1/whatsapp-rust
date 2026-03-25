@@ -2,6 +2,7 @@ use crate::client::Client;
 use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::message::EditAttribute;
 use anyhow::anyhow;
+use log::debug;
 use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
@@ -721,6 +722,8 @@ impl Client {
             participants: Vec<Jid>,
         }
         let mut skdm_update: Option<SkdmUpdate> = None;
+        let mut should_issue_tc_token_after_send = false;
+        let tc_issue_target = to.clone();
 
         let stanza_to_send: wacore_binary::Node = if peer && !to.is_group() {
             // Peer messages are only valid for individual users, not groups
@@ -1007,9 +1010,13 @@ impl Client {
             // Include tctoken in 1:1 messages (matches WhatsApp Web behavior).
             // Skip for newsletters, groups, and own JID.
             let mut extra_stanza_nodes = extra_stanza_nodes;
-            if !to.is_group() && !to.is_newsletter() {
-                self.maybe_include_tc_token(&to, &mut extra_stanza_nodes)
+            should_issue_tc_token_after_send = !to.is_group()
+                && !to.is_newsletter()
+                && self
+                    .maybe_include_tc_token(&to, &mut extra_stanza_nodes)
                     .await;
+            if should_issue_tc_token_after_send {
+                debug!(target: "Client/TcToken", "Scheduled tc token issuance after send for {}", to);
             }
 
             // Acquire lock only for encryption
@@ -1049,6 +1056,10 @@ impl Client {
 
         self.send_node(stanza_to_send).await?;
 
+        if should_issue_tc_token_after_send {
+            self.issue_tc_token_after_send(&tc_issue_target).await;
+        }
+
         // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
         // WA Web only calls markHasSenderKey() after the server confirms receipt.
         if let Some(update) = skdm_update {
@@ -1075,10 +1086,12 @@ impl Client {
     ///   1. tctoken — from stored trusted contact token (if valid, non-expired)
     ///   2. cstoken — HMAC-SHA256(nct_salt, recipient_lid) fallback for first-contact
     ///   3. No token — message sent without token (server may return 463)
-    async fn maybe_include_tc_token(&self, to: &Jid, extra_nodes: &mut Vec<Node>) {
+    ///
+    /// Returns whether we should issue a new tc token for this chat after send.
+    async fn maybe_include_tc_token(&self, to: &Jid, extra_nodes: &mut Vec<Node>) -> bool {
         use wacore::iq::tctoken::{
-            IssuePrivacyTokensSpec, build_cs_token_node, build_tc_token_node, compute_cs_token,
-            is_tc_token_expired, should_send_new_tc_token,
+            build_cs_token_node, build_tc_token_node, compute_cs_token, is_tc_token_expired,
+            should_send_new_tc_token,
         };
         use wacore::store::traits::TcTokenEntry;
 
@@ -1093,7 +1106,7 @@ impl Client {
                 .as_ref()
                 .is_some_and(|lid| lid.is_same_user_as(to));
         if is_self {
-            return;
+            return false;
         }
 
         // Resolve the destination to a LID user string once — reused for
@@ -1117,6 +1130,9 @@ impl Client {
             }
         };
 
+        let should_issue_after_send =
+            should_send_new_tc_token(existing.as_ref().and_then(|entry| entry.sender_timestamp));
+
         match existing {
             Some(entry) if !is_tc_token_expired(entry.token_timestamp) => {
                 // Valid tctoken — include it in the stanza
@@ -1135,43 +1151,7 @@ impl Client {
                 }
             }
             _ => {
-                // tctoken missing or expired — try to issue first
-                let to_lid = self.resolve_to_lid_jid(to).await;
-                let mut tc_token_attached = false;
-
-                match self
-                    .execute(IssuePrivacyTokensSpec::new(std::slice::from_ref(&to_lid)))
-                    .await
-                {
-                    Ok(response) => {
-                        let now = wacore::time::now_secs();
-                        for received in &response.tokens {
-                            let entry = TcTokenEntry {
-                                token: received.token.clone(),
-                                token_timestamp: received.timestamp,
-                                sender_timestamp: Some(now),
-                            };
-
-                            let store_jid = received.jid.user.clone();
-                            if let Err(e) = backend.put_tc_token(&store_jid, &entry).await {
-                                log::warn!(target: "Client/TcToken", "Failed to store issued tc_token: {e}");
-                            }
-
-                            if !received.token.is_empty() {
-                                extra_nodes.push(build_tc_token_node(&received.token));
-                                tc_token_attached = true;
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        log::debug!(target: "Client/TcToken", "Failed to issue tc_token for {}: {e}", to_lid);
-                    }
-                }
-
-                // cstoken fallback: if no tctoken was attached, compute from NCT salt.
-                // Matches WA Web: genCsTokenBody in MsgCreateFanoutStanza.js
-                if !tc_token_attached
-                    && let Some(salt) = &snapshot.nct_salt
+                if let Some(salt) = &snapshot.nct_salt
                     && let Some(lid_user) = &resolved_lid_user
                 {
                     // HMAC input is "user@lid" (account LID without device suffix),
@@ -1180,9 +1160,49 @@ impl Client {
                     let cs_token = compute_cs_token(salt, &recipient_lid);
                     extra_nodes.push(build_cs_token_node(&cs_token));
                     log::debug!(target: "Client/CsToken", "Attached cstoken for {} (NCT fallback)", to);
-                } else if !tc_token_attached {
+                } else {
                     log::debug!(target: "Client/CsToken", "No tctoken or NCT salt/LID available for {}", to);
                 }
+            }
+        }
+
+        should_issue_after_send
+    }
+
+    async fn issue_tc_token_after_send(&self, to: &Jid) {
+        use wacore::iq::tctoken::IssuePrivacyTokensSpec;
+
+        let to_lid = self.resolve_to_lid_jid(to).await;
+        let Ok(response) = self
+            .execute(IssuePrivacyTokensSpec::new(std::slice::from_ref(&to_lid)))
+            .await
+        else {
+            log::debug!(target: "Client/TcToken", "Failed to issue tc_token for {}", to_lid);
+            return;
+        };
+
+        self.store_issued_tc_tokens(&response.tokens).await;
+    }
+
+    async fn store_issued_tc_tokens(&self, tokens: &[wacore::iq::tctoken::ReceivedTcToken]) {
+        use wacore::store::traits::TcTokenEntry;
+
+        if tokens.is_empty() {
+            return;
+        }
+
+        let backend = self.persistence_manager.backend();
+        let now = wacore::time::now_secs();
+        for received in tokens {
+            let entry = TcTokenEntry {
+                token: received.token.clone(),
+                token_timestamp: received.timestamp,
+                sender_timestamp: Some(now),
+            };
+
+            let store_jid = received.jid.user.clone();
+            if let Err(e) = backend.put_tc_token(&store_jid, &entry).await {
+                log::warn!(target: "Client/TcToken", "Failed to store issued tc_token: {e}");
             }
         }
     }
