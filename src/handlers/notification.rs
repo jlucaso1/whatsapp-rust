@@ -546,7 +546,6 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
     use wacore::iq::tctoken::parse_privacy_token_notification;
     use wacore::store::traits::TcTokenEntry;
 
-    // Extract from JID upfront for LID resolution and presence re-subscription.
     let from_jid = node.attrs().optional_jid("from");
 
     // Resolve the sender to a LID key for storage.
@@ -607,7 +606,7 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
     for received in &received_tokens {
         match backend.get_tc_token(&sender_lid).await {
             Ok(Some(existing)) => {
-                // Skip if token bytes are identical (matches WA Web arrayBuffersEqualUNSAFE check)
+                // Skip if token bytes are identical
                 if existing.token == received.token {
                     continue;
                 }
@@ -657,13 +656,12 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
         }
     }
 
-    // Re-subscribe presence for the sender if we have an active subscription and stored a new token.
-    // Matches WA Web: PresenceCollection.reSubscribeWhenActive(wid) after handleIncomingTcToken.
-    if token_stored && let Some(from) = &from_jid {
-        let is_subscribed = client.presence_subscriptions.lock().await.contains(from);
-        if is_subscribed && let Err(e) = client.presence().subscribe(from).await {
-            debug!(target: "Client/TcToken", "Failed to re-subscribe presence for {from}: {e}");
-        }
+    // Re-subscribe presence with the updated token.
+    if token_stored
+        && let Some(from) = &from_jid
+        && let Err(e) = client.presence().re_subscribe_when_active(from).await
+    {
+        debug!(target: "Client/TcToken", "Failed to re-subscribe presence for {from}: {e}");
     }
 }
 
