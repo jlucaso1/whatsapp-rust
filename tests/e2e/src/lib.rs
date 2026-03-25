@@ -74,7 +74,8 @@ impl TestClient {
             .with_backend(backend)
             .with_transport_factory(transport_factory)
             .with_http_client(UreqHttpClient::new())
-            .with_runtime(whatsapp_rust::TokioRuntime);
+            .with_runtime(whatsapp_rust::TokioRuntime)
+            .with_version((2, 3000, 0));
 
         if let Some(name) = push_name {
             builder = builder.with_push_name(name);
