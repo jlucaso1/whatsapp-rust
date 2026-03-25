@@ -1264,7 +1264,11 @@ impl Client {
 
         let backend = self.persistence_manager.backend();
         match backend.get_tc_token(&token_jid).await {
-            Ok(Some(entry)) if !is_tc_token_expired(entry.token_timestamp) => Some(entry.token),
+            Ok(Some(entry))
+                if !entry.token.is_empty() && !is_tc_token_expired(entry.token_timestamp) =>
+            {
+                Some(entry.token)
+            }
             Ok(_) => None,
             Err(e) => {
                 log::warn!(target: "Client/TcToken", "Failed to get tc_token for {}: {e}", token_jid);
