@@ -606,8 +606,18 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
     for received in &received_tokens {
         match backend.get_tc_token(&sender_lid).await {
             Ok(Some(existing)) => {
-                // Skip if token bytes are identical
+                // Skip if token bytes are identical and timestamp hasn't advanced
                 if existing.token == received.token {
+                    if received.timestamp > existing.token_timestamp {
+                        // Same bytes but newer timestamp — refresh to prevent premature pruning
+                        let refreshed = TcTokenEntry {
+                            token_timestamp: received.timestamp,
+                            ..existing
+                        };
+                        if let Err(e) = backend.put_tc_token(&sender_lid, &refreshed).await {
+                            warn!(target: "Client/TcToken", "Failed to refresh tc_token timestamp for {}: {e}", sender_lid);
+                        }
+                    }
                     continue;
                 }
 
