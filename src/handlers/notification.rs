@@ -546,7 +546,9 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
     use wacore::iq::tctoken::parse_privacy_token_notification;
     use wacore::store::traits::TcTokenEntry;
 
-    // Resolve the sender to a LID JID for storage.
+    let from_jid = node.attrs().optional_jid("from");
+
+    // Resolve the sender to a LID key for storage.
     // WA Web uses `sender_lid` attr if present, otherwise resolves from `from`.
     let sender_lid = node
         .attrs()
@@ -557,7 +559,7 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
         Some(lid) if !lid.is_empty() => lid,
         _ => {
             // Fall back to resolving from the `from` JID via LID-PN cache
-            let from_jid = match node.attrs().optional_jid("from") {
+            let from = match &from_jid {
                 Some(jid) => jid,
                 None => {
                     warn!(target: "Client/TcToken", "privacy_token notification missing 'from' attribute");
@@ -565,19 +567,19 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
                 }
             };
 
-            if from_jid.is_lid() {
-                from_jid.user.clone()
+            if from.is_lid() {
+                from.user.clone()
             } else {
                 // Try to resolve phone number to LID
-                match client.lid_pn_cache.get_current_lid(&from_jid.user).await {
+                match client.lid_pn_cache.get_current_lid(&from.user).await {
                     Some(lid) => lid,
                     None => {
                         debug!(
                             target: "Client/TcToken",
                             "Cannot resolve LID for privacy_token sender {}, storing under PN",
-                            from_jid
+                            from
                         );
-                        from_jid.user.clone()
+                        from.user.clone()
                     }
                 }
             }
@@ -599,10 +601,26 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
     }
 
     let backend = client.persistence_manager.backend();
+    let mut token_stored = false;
 
     for received in &received_tokens {
         match backend.get_tc_token(&sender_lid).await {
             Ok(Some(existing)) => {
+                // Skip if token bytes are identical and timestamp hasn't advanced
+                if existing.token == received.token {
+                    if received.timestamp > existing.token_timestamp {
+                        // Same bytes but newer timestamp — refresh to prevent premature pruning
+                        let refreshed = TcTokenEntry {
+                            token_timestamp: received.timestamp,
+                            ..existing
+                        };
+                        if let Err(e) = backend.put_tc_token(&sender_lid, &refreshed).await {
+                            warn!(target: "Client/TcToken", "Failed to refresh tc_token timestamp for {}: {e}", sender_lid);
+                        }
+                    }
+                    continue;
+                }
+
                 // Timestamp monotonicity guard: only store if incoming >= existing
                 if received.timestamp < existing.token_timestamp {
                     debug!(
@@ -624,6 +642,7 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
                     warn!(target: "Client/TcToken", "Failed to update tc_token for {}: {e}", sender_lid);
                 } else {
                     debug!(target: "Client/TcToken", "Updated tc_token for {} (t={})", sender_lid, received.timestamp);
+                    token_stored = true;
                 }
             }
             Ok(None) => {
@@ -638,12 +657,21 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
                     warn!(target: "Client/TcToken", "Failed to store tc_token for {}: {e}", sender_lid);
                 } else {
                     debug!(target: "Client/TcToken", "Stored new tc_token for {} (t={})", sender_lid, received.timestamp);
+                    token_stored = true;
                 }
             }
             Err(e) => {
                 warn!(target: "Client/TcToken", "Failed to read tc_token for {}: {e}, skipping", sender_lid);
             }
         }
+    }
+
+    // Re-subscribe presence with the updated token.
+    if token_stored
+        && let Some(from) = &from_jid
+        && let Err(e) = client.presence().re_subscribe_when_active(from).await
+    {
+        debug!(target: "Client/TcToken", "Failed to re-subscribe presence for {from}: {e}");
     }
 }
 

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use wacore::store::traits::TcTokenEntry;
 use wacore::types::events::{Event, EventHandler};
 use whatsapp_rust::Jid;
 use whatsapp_rust::bot::Bot;
@@ -170,6 +171,46 @@ impl TestClient {
             .await
             .expect("Client should have a JID after connect")
             .to_non_ad()
+    }
+
+    /// Get the storage key used for this client's tcToken entries.
+    ///
+    /// Notification handling stores tcTokens under the sender's LID when it is
+    /// available, otherwise it falls back to the phone-number user part.
+    pub async fn tc_token_key(&self) -> anyhow::Result<String> {
+        if let Some(lid) = self.client.get_lid().await {
+            return Ok(lid.user);
+        }
+
+        self.client
+            .get_pn()
+            .await
+            .map(|jid| jid.user)
+            .ok_or_else(|| anyhow::anyhow!("Client should have a JID after connect"))
+    }
+
+    /// Wait until a tcToken entry exists for the given storage key.
+    pub async fn wait_for_tc_token(
+        &self,
+        jid_key: &str,
+        timeout_secs: u64,
+    ) -> anyhow::Result<TcTokenEntry> {
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
+
+        loop {
+            if let Some(entry) = self.client.tc_token().get(jid_key).await? {
+                return Ok(entry);
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                return Err(anyhow::anyhow!(
+                    "Timed out waiting for tc_token entry for {}",
+                    jid_key
+                ));
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
     }
 
     // ── Event waiting ───────────────────────────────────────────────────────
