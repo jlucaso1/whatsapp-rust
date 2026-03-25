@@ -2,17 +2,35 @@ use e2e_tests::{
     TestClient, restricted_push_name, scenario_push_name, send_and_expect_text, text_msg,
 };
 use log::info;
+use std::sync::Arc;
 use wacore::iq::tctoken::tc_token_expiration_cutoff;
 use wacore::store::traits::TcTokenEntry;
+use wacore_binary::node::Node;
 use whatsapp_rust::{NodeFilter, SendOptions};
+
+fn has_child(node: &Node, tag: &str) -> bool {
+    node.children()
+        .map(|children| children.iter().any(|child| child.tag == tag))
+        .unwrap_or(false)
+}
 
 async fn send_first_message_and_expect_463(
     sender: &TestClient,
     recipient: &mut TestClient,
     recipient_jid: &whatsapp_rust::Jid,
     text: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Arc<Node>> {
     let msg_id = format!("E2E463{}", uuid::Uuid::new_v4().simple());
+    send_message_and_expect_463_with_id(sender, recipient, recipient_jid, text, msg_id).await
+}
+
+async fn send_message_and_expect_463_with_id(
+    sender: &TestClient,
+    recipient: &mut TestClient,
+    recipient_jid: &whatsapp_rust::Jid,
+    text: &str,
+    msg_id: String,
+) -> anyhow::Result<Arc<Node>> {
     let waiter = sender.client.wait_for_node(
         NodeFilter::tag("ack")
             .attr("id", msg_id.clone())
@@ -51,7 +69,9 @@ async fn send_first_message_and_expect_463(
             move |e| matches!(e, wacore::types::events::Event::Message(msg, _) if msg.conversation.as_deref() == Some(expected_text.as_str())),
             "restricted recipient should not receive first-contact message without privacy token",
         )
-        .await
+        .await?;
+
+    Ok(ack)
 }
 
 #[tokio::test]
@@ -350,13 +370,23 @@ async fn test_only_nct_send_ab_without_salt_still_receives_463() -> anyhow::Resu
     );
 
     let jid_a = client_a.jid().await;
-    send_first_message_and_expect_463(
+    let msg_id = format!("E2ECSNEG1{}", uuid::Uuid::new_v4().simple());
+    let sent_msg_id = msg_id.clone();
+    let sent_waiter = client_b.sent_message_waiter(&sent_msg_id);
+    send_message_and_expect_463_with_id(
         &client_b,
         &mut client_a,
         &jid_a,
         "send-ab-only first contact",
+        msg_id,
     )
     .await?;
+    let sent = tokio::time::timeout(tokio::time::Duration::from_secs(10), sent_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for sent message node"))?
+        .map_err(|_| anyhow::anyhow!("sent message waiter was canceled"))?;
+    assert!(!has_child(&sent, "tctoken"));
+    assert!(!has_child(&sent, "cstoken"));
 
     client_a.disconnect().await;
     client_b.disconnect().await;
@@ -392,13 +422,23 @@ async fn test_send_and_syncd_ab_without_delivery_still_receives_463() -> anyhow:
     );
 
     let jid_a = client_a.jid().await;
-    send_first_message_and_expect_463(
+    let msg_id = format!("E2ECSNEG2{}", uuid::Uuid::new_v4().simple());
+    let sent_msg_id = msg_id.clone();
+    let sent_waiter = client_b.sent_message_waiter(&sent_msg_id);
+    send_message_and_expect_463_with_id(
         &client_b,
         &mut client_a,
         &jid_a,
         "send-and-syncd-ab first contact",
+        msg_id,
     )
     .await?;
+    let sent = tokio::time::timeout(tokio::time::Duration::from_secs(10), sent_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for sent message node"))?
+        .map_err(|_| anyhow::anyhow!("sent message waiter was canceled"))?;
+    assert!(!has_child(&sent, "tctoken"));
+    assert!(!has_child(&sent, "cstoken"));
 
     client_a.disconnect().await;
     client_b.disconnect().await;
@@ -439,10 +479,24 @@ async fn test_history_sync_nct_salt_enables_cstoken_first_contact() -> anyhow::R
         .get_lid()
         .await
         .expect("restricted recipient should have a LID");
+    let sent_waiter = client_b.next_sent_message_waiter();
     client_b
         .client
-        .send_message(jid_a_lid, text_msg("history-sync cstoken first contact"))
+        .send_message_with_options(
+            jid_a_lid,
+            text_msg("history-sync cstoken first contact"),
+            SendOptions {
+                message_id: Some(format!("E2ECSHIST{}", uuid::Uuid::new_v4().simple())),
+                ..Default::default()
+            },
+        )
         .await?;
+    let sent = tokio::time::timeout(tokio::time::Duration::from_secs(10), sent_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for next sent message node"))?
+        .map_err(|_| anyhow::anyhow!("sent message waiter was canceled"))?;
+    assert!(has_child(&sent, "cstoken"));
+    assert!(!has_child(&sent, "tctoken"));
     client_a
         .wait_for_text("history-sync cstoken first contact", 30)
         .await?;
@@ -494,10 +548,24 @@ async fn test_cstoken_only_first_contact_succeeds_when_tctoken_disabled() -> any
         .get_lid()
         .await
         .expect("restricted recipient should have a LID");
+    let sent_waiter = client_b.next_sent_message_waiter();
     client_b
         .client
-        .send_message(jid_a_lid, text_msg("cstoken-only first contact"))
+        .send_message_with_options(
+            jid_a_lid,
+            text_msg("cstoken-only first contact"),
+            SendOptions {
+                message_id: Some(format!("E2ECSONLY{}", uuid::Uuid::new_v4().simple())),
+                ..Default::default()
+            },
+        )
         .await?;
+    let sent = tokio::time::timeout(tokio::time::Duration::from_secs(10), sent_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for next sent message node"))?
+        .map_err(|_| anyhow::anyhow!("sent message waiter was canceled"))?;
+    assert!(has_child(&sent, "cstoken"));
+    assert!(!has_child(&sent, "tctoken"));
     client_a
         .wait_for_text("cstoken-only first contact", 30)
         .await?;
@@ -541,10 +609,24 @@ async fn test_syncd_nct_salt_enables_cstoken_first_contact() -> anyhow::Result<(
         .get_lid()
         .await
         .expect("restricted recipient should have a LID");
+    let sent_waiter = client_b.next_sent_message_waiter();
     client_b
         .client
-        .send_message(jid_a_lid, text_msg("syncd cstoken first contact"))
+        .send_message_with_options(
+            jid_a_lid,
+            text_msg("syncd cstoken first contact"),
+            SendOptions {
+                message_id: Some(format!("E2ECSSYN{}", uuid::Uuid::new_v4().simple())),
+                ..Default::default()
+            },
+        )
         .await?;
+    let sent = tokio::time::timeout(tokio::time::Duration::from_secs(10), sent_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for next sent message node"))?
+        .map_err(|_| anyhow::anyhow!("sent message waiter was canceled"))?;
+    assert!(has_child(&sent, "cstoken"));
+    assert!(!has_child(&sent, "tctoken"));
     client_a
         .wait_for_text("syncd cstoken first contact", 30)
         .await?;
@@ -657,10 +739,24 @@ async fn test_tctoken_only_reply_succeeds_when_cstoken_disabled() -> anyhow::Res
         "sender should have a valid tc token before reply"
     );
 
+    let sent_waiter = client_b.next_sent_message_waiter();
     client_b
         .client
-        .send_message(jid_a.clone(), text_msg("tctoken-only reply"))
+        .send_message_with_options(
+            jid_a.clone(),
+            text_msg("tctoken-only reply"),
+            SendOptions {
+                message_id: Some(format!("E2ETCONLY{}", uuid::Uuid::new_v4().simple())),
+                ..Default::default()
+            },
+        )
         .await?;
+    let sent = tokio::time::timeout(tokio::time::Duration::from_secs(10), sent_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for next sent message node"))?
+        .map_err(|_| anyhow::anyhow!("sent message waiter was canceled"))?;
+    assert!(has_child(&sent, "tctoken"));
+    assert!(!has_child(&sent, "cstoken"));
     client_a.wait_for_text("tctoken-only reply", 30).await?;
 
     client_a.disconnect().await;
@@ -709,10 +805,24 @@ async fn test_nct_salt_survives_reconnect_and_still_allows_first_contact() -> an
         .get_lid()
         .await
         .expect("restricted recipient should have a LID");
+    let sent_waiter = client_b.next_sent_message_waiter();
     client_b
         .client
-        .send_message(jid_a_lid, text_msg("reconnect cstoken first contact"))
+        .send_message_with_options(
+            jid_a_lid,
+            text_msg("reconnect cstoken first contact"),
+            SendOptions {
+                message_id: Some(format!("E2ECSRECON{}", uuid::Uuid::new_v4().simple())),
+                ..Default::default()
+            },
+        )
         .await?;
+    let sent = tokio::time::timeout(tokio::time::Duration::from_secs(10), sent_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for next sent message node"))?
+        .map_err(|_| anyhow::anyhow!("sent message waiter was canceled"))?;
+    assert!(has_child(&sent, "cstoken"));
+    assert!(!has_child(&sent, "tctoken"));
     client_a
         .wait_for_text("reconnect cstoken first contact", 30)
         .await?;

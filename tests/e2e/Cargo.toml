@@ -13,9 +13,11 @@ dhat-heap = ["dep:dhat"]
 [dependencies]
 anyhow = { workspace = true }
 dhat = { version = "0.3", optional = true }
+futures = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }
 uuid = { workspace = true, features = ["v4"] }
 wacore = { path = "../../wacore" }
+wacore-binary = { path = "../../wacore/binary" }
 whatsapp-rust = { path = "../..", features = ["danger-skip-tls-verify", "debug-diagnostics"] }
 whatsapp-rust-sqlite-storage = { path = "../../storages/sqlite-storage" }
 whatsapp-rust-tokio-transport = { path = "../../transports/tokio-transport", features = [

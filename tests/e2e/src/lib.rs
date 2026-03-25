@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use wacore::store::traits::TcTokenEntry;
 use wacore::types::events::{Event, EventHandler};
+use wacore_binary::node::Node;
 use whatsapp_rust::Jid;
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::traits::Backend;
@@ -227,6 +228,19 @@ impl TestClient {
 
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
         }
+    }
+
+    pub fn sent_message_waiter(
+        &self,
+        msg_id: &str,
+    ) -> futures::channel::oneshot::Receiver<Arc<Node>> {
+        self.client
+            .wait_for_sent_node(whatsapp_rust::NodeFilter::tag("message").attr("id", msg_id))
+    }
+
+    pub fn next_sent_message_waiter(&self) -> futures::channel::oneshot::Receiver<Arc<Node>> {
+        self.client
+            .wait_for_sent_node(whatsapp_rust::NodeFilter::tag("message"))
     }
 
     pub async fn nct_salt(&self) -> Option<Vec<u8>> {

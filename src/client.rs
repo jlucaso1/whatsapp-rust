@@ -91,6 +91,11 @@ struct NodeWaiter {
     tx: futures::channel::oneshot::Sender<Arc<Node>>,
 }
 
+struct SentNodeWaiter {
+    filter: NodeFilter,
+    tx: futures::channel::oneshot::Sender<Arc<Node>>,
+}
+
 use async_lock::Mutex;
 use async_lock::RwLock;
 use std::time::Duration;
@@ -282,6 +287,9 @@ pub struct Client {
     /// Guarded by `node_waiter_count` for zero-cost when no waiters are active.
     node_waiters: std::sync::Mutex<Vec<NodeWaiter>>,
     node_waiter_count: AtomicUsize,
+    /// Waiters for raw outgoing nodes before encryption.
+    sent_node_waiters: std::sync::Mutex<Vec<SentNodeWaiter>>,
+    sent_node_waiter_count: AtomicUsize,
 
     pub(crate) unique_id: String,
     pub(crate) id_counter: Arc<AtomicU64>,
@@ -582,6 +590,8 @@ impl Client {
             response_waiters: Arc::new(Mutex::new(HashMap::new())),
             node_waiters: std::sync::Mutex::new(Vec::new()),
             node_waiter_count: AtomicUsize::new(0),
+            sent_node_waiters: std::sync::Mutex::new(Vec::new()),
+            sent_node_waiter_count: AtomicUsize::new(0),
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
             unified_session: crate::unified_session::UnifiedSessionManager::new(),
@@ -2981,6 +2991,25 @@ impl Client {
         rx
     }
 
+    /// Register a waiter for an outgoing node before it is encrypted and sent.
+    ///
+    /// This is intended for tests and diagnostics that need to inspect the raw
+    /// stanza built by the client, such as asserting whether `<tctoken>` or
+    /// `<cstoken>` was attached.
+    pub fn wait_for_sent_node(
+        &self,
+        filter: NodeFilter,
+    ) -> futures::channel::oneshot::Receiver<Arc<Node>> {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        self.sent_node_waiter_count.fetch_add(1, Ordering::Release);
+        let mut waiters = self
+            .sent_node_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        waiters.push(SentNodeWaiter { filter, tx });
+        rx
+    }
+
     /// Check pending node waiters against an incoming node.
     /// Only called when `node_waiter_count > 0`.
     fn resolve_node_waiters(&self, node: &Arc<Node>) {
@@ -2998,6 +3027,26 @@ impl Client {
                 // Match found — remove and send
                 let w = waiters.swap_remove(i);
                 self.node_waiter_count.fetch_sub(1, Ordering::Release);
+                let _ = w.tx.send(Arc::clone(node));
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    fn resolve_sent_node_waiters(&self, node: &Arc<Node>) {
+        let mut waiters = self
+            .sent_node_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut i = 0;
+        while i < waiters.len() {
+            if waiters[i].tx.is_canceled() {
+                waiters.swap_remove(i);
+                self.sent_node_waiter_count.fetch_sub(1, Ordering::Release);
+            } else if waiters[i].filter.matches(node) {
+                let w = waiters.swap_remove(i);
+                self.sent_node_waiter_count.fetch_sub(1, Ordering::Release);
                 let _ = w.tx.send(Arc::clone(node));
             } else {
                 i += 1;
@@ -3156,6 +3205,9 @@ impl Client {
         };
 
         debug!(target: "Client/Send", "{}", DisplayableNode(&node));
+        if self.sent_node_waiter_count.load(Ordering::Acquire) > 0 {
+            self.resolve_sent_node_waiters(&Arc::new(node.clone()));
+        }
 
         let mut plaintext_buf = Vec::with_capacity(1024);
 
