@@ -70,12 +70,13 @@ impl SenderKeyDeviceCache {
         }
     }
 
-    pub(crate) async fn get(&self, group_jid: &str) -> Option<Arc<SenderKeyDeviceMap>> {
-        self.inner.get(group_jid).await
-    }
-
-    pub(crate) async fn insert(&self, group_jid: String, map: Arc<SenderKeyDeviceMap>) {
-        self.inner.insert(group_jid, map).await;
+    /// Atomically get-or-init: returns cached value or runs `init` once per key.
+    /// Concurrent callers for the same key share the single init result.
+    pub(crate) async fn get_or_init<F>(&self, group_jid: &str, init: F) -> Arc<SenderKeyDeviceMap>
+    where
+        F: std::future::Future<Output = Arc<SenderKeyDeviceMap>>,
+    {
+        self.inner.get_with_by_ref(group_jid, init).await
     }
 
     pub(crate) async fn invalidate(&self, group_jid: &str) {

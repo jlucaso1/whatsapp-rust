@@ -440,37 +440,31 @@ impl Client {
     ) -> Option<Vec<Jid>> {
         use crate::sender_key_device_cache::SenderKeyDeviceMap;
 
-        // L1: in-memory cache (zero-cost on hit)
-        let cached_map = if let Some(map) = self.sender_key_device_cache.get(group_jid).await {
-            if map.is_empty() {
-                return None;
-            }
-            map
-        } else {
-            // L2: DB read + parse + populate cache
-            let db_rows = self
-                .persistence_manager
-                .get_sender_key_devices(group_jid)
-                .await
-                .unwrap_or_else(|e| {
-                    log::warn!(
-                        "Failed to read sender key devices for {}: {:?}",
-                        group_jid,
-                        e
-                    );
-                    vec![]
-                });
+        // Atomic get-or-init: if another task invalidated the cache during our
+        // DB read, get_or_init's single-flight guarantee means the stale data
+        // won't be inserted — the invalidation wins and the next caller re-inits.
+        let pm = self.persistence_manager.clone();
+        let cached_map = self
+            .sender_key_device_cache
+            .get_or_init(group_jid, async {
+                let db_rows = pm
+                    .get_sender_key_devices(group_jid)
+                    .await
+                    .unwrap_or_else(|e| {
+                        log::warn!(
+                            "Failed to read sender key devices for {}: {:?}",
+                            group_jid,
+                            e
+                        );
+                        vec![]
+                    });
+                std::sync::Arc::new(SenderKeyDeviceMap::from_db_rows(&db_rows))
+            })
+            .await;
 
-            if db_rows.is_empty() {
-                return None;
-            }
-
-            let map = std::sync::Arc::new(SenderKeyDeviceMap::from_db_rows(&db_rows));
-            self.sender_key_device_cache
-                .insert(group_jid.to_string(), map.clone())
-                .await;
-            map
-        };
+        if cached_map.is_empty() {
+            return None;
+        }
 
         let jids_to_resolve: Vec<Jid> = participants.iter().map(|jid| jid.to_non_ad()).collect();
 
