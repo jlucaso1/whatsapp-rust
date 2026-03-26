@@ -33,6 +33,16 @@ use wacore_binary::node::{Node, NodeContent};
 /// IQ namespace for A/B props.
 pub const PROPS_NAMESPACE: &str = "abt";
 
+/// Well-known AB prop config codes from WhatsApp Web's ABPropConfigs.
+pub mod config_codes {
+    /// `privacy_token_sending_on_all_1_on_1_messages` — gate tctoken on 1:1 messages.
+    pub const PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES: u32 = 10_518;
+    /// `privacy_token_sending_on_group_create` — gate tctoken on group creation.
+    pub const PRIVACY_TOKEN_ON_GROUP_CREATE: u32 = 11_261;
+    /// `privacy_token_sending_on_group_participant_add` — gate tctoken on group participant add.
+    pub const PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD: u32 = 11_262;
+}
+
 /// Protocol version for props requests.
 pub const PROPS_PROTOCOL_VERSION: &str = "1";
 

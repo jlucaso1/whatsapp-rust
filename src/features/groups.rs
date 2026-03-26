@@ -205,6 +205,18 @@ impl<'a> Groups<'a> {
 
         options.participants = normalize_participants(&resolved_participants);
 
+        // Auto-attach privacy tokens if the AB prop is enabled and the caller
+        // didn't already set tokens via with_privacy().
+        if self
+            .client
+            .ab_props()
+            .is_enabled(wacore::iq::props::config_codes::PRIVACY_TOKEN_ON_GROUP_CREATE)
+            .await
+        {
+            self.attach_tokens_to_participants(&mut options.participants)
+                .await;
+        }
+
         let gid = self.client.execute(GroupCreateIq::new(options)).await?;
 
         Ok(CreateGroupResult { gid })
@@ -244,10 +256,19 @@ impl<'a> Groups<'a> {
         jid: &Jid,
         participants: &[Jid],
     ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
-        let result = self
+        let iq = if self
             .client
-            .execute(AddParticipantsIq::new(jid, participants))
-            .await?;
+            .ab_props()
+            .is_enabled(wacore::iq::props::config_codes::PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD)
+            .await
+        {
+            let options = self.resolve_participant_tokens(participants).await;
+            AddParticipantsIq::with_options(jid, options)
+        } else {
+            AddParticipantsIq::new(jid, participants)
+        };
+
+        let result = self.client.execute(iq).await?;
         // Patch cache with only the participants the server accepted (status 200).
         // Note: the get→mutate→insert is not atomic; a concurrent notification
         // for the same group could race.  This is acceptable — the cache is
@@ -451,6 +472,80 @@ impl<'a> Groups<'a> {
             .client
             .execute(SetMemberAddModeIq::new(jid, mode))
             .await?)
+    }
+
+    // --- Privacy token helpers (mirrors WA Web's getPermissionTokenMap) ---
+
+    /// Resolve tc_tokens for a list of JIDs, returning GroupParticipantOptions with tokens.
+    async fn resolve_participant_tokens(&self, jids: &[Jid]) -> Vec<GroupParticipantOptions> {
+        let mut options = Vec::with_capacity(jids.len());
+        for jid in jids {
+            let token_key = self.resolve_token_key(jid).await;
+            let privacy = self.lookup_valid_token(&token_key).await;
+            let mut opt = GroupParticipantOptions::new(jid.clone());
+            if let Some(token) = privacy {
+                opt = opt.with_privacy(token);
+            }
+            options.push(opt);
+        }
+        options
+    }
+
+    /// Attach tokens to existing GroupParticipantOptions (mutates in place).
+    /// Used by create_group() where participants are already resolved.
+    /// Skips participants that already have a token set by the caller.
+    async fn attach_tokens_to_participants(&self, participants: &mut [GroupParticipantOptions]) {
+        for p in participants.iter_mut() {
+            if p.privacy.is_some() {
+                continue; // caller already set a token, don't overwrite
+            }
+            let token_key = self.resolve_token_key(&p.jid).await;
+            let token = self.lookup_valid_token(&token_key).await;
+            if token.is_none() {
+                log::debug!(
+                    target: "Client/Groups",
+                    "No valid tc_token for participant {} (key={}), skipping privacy attachment",
+                    p.jid, token_key
+                );
+            }
+            p.privacy = token;
+        }
+    }
+
+    /// Resolve JID to the tc_token store key (LID user if available, else phone user).
+    /// Same pattern as send.rs `maybe_include_tc_token`.
+    async fn resolve_token_key(&self, jid: &Jid) -> String {
+        if jid.is_lid() {
+            jid.user.clone()
+        } else {
+            self.client
+                .lid_pn_cache
+                .get_current_lid(&jid.user)
+                .await
+                .unwrap_or_else(|| jid.user.clone())
+        }
+    }
+
+    /// Look up a valid, non-expired tc_token from the store.
+    async fn lookup_valid_token(&self, token_key: &str) -> Option<Vec<u8>> {
+        use wacore::iq::tctoken::is_tc_token_expired;
+        let backend = self.client.persistence_manager.backend();
+        match backend.get_tc_token(token_key).await {
+            Ok(Some(entry))
+                if !entry.token.is_empty() && !is_tc_token_expired(entry.token_timestamp) =>
+            {
+                Some(entry.token)
+            }
+            Ok(_) => None,
+            Err(e) => {
+                log::warn!(
+                    target: "Client/Groups",
+                    "Failed to get tc_token for {}: {e}",
+                    token_key
+                );
+                None
+            }
+        }
     }
 }
 

@@ -324,6 +324,9 @@ pub struct Client {
     /// This allows us to reuse existing LID-based sessions when sending replies.
     /// The cache is backed by persistent storage and warmed up on client initialization.
     pub(crate) lid_pn_cache: Arc<LidPnCache>,
+    /// In-memory cache of A/B experiment properties received from the server.
+    /// Populated on connect via `fetch_props()`, queried by features to gate behavior.
+    pub(crate) ab_props: Arc<wacore::store::ab_props::AbPropsCache>,
 
     /// Per-chat mutex for serializing message enqueue operations.
     /// This ensures messages are enqueued in the order they arrive,
@@ -614,6 +617,7 @@ impl Client {
                 &cache_config.lid_pn_cache,
                 cache_config.cache_stores.lid_pn_cache.clone(),
             )),
+            ab_props: Arc::new(wacore::store::ab_props::AbPropsCache::new()),
             message_enqueue_locks: Cache::builder()
                 .max_capacity(cache_config.message_enqueue_locks_capacity.max(1))
                 .build(),
@@ -1584,6 +1588,9 @@ impl Client {
             );
         }
 
+        // Populate the in-memory AB props cache so features can query prop values.
+        self.ab_props.apply_response(&response).await;
+
         if let Some(new_hash) = response.hash {
             self.persistence_manager
                 .process_command(DeviceCommand::SetPropsHash(Some(new_hash)))
@@ -1591,6 +1598,15 @@ impl Client {
         }
 
         Ok(())
+    }
+
+    /// Access the in-memory A/B experiment properties cache.
+    ///
+    /// Props are populated on connect via `fetch_props()`. Features use this
+    /// to check if server-side feature flags are enabled, matching WhatsApp
+    /// Web's `getABPropConfigValue()` pattern.
+    pub fn ab_props(&self) -> &wacore::store::ab_props::AbPropsCache {
+        &self.ab_props
     }
 
     pub async fn fetch_privacy_settings(
