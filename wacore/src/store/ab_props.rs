@@ -7,37 +7,40 @@
 //! Not persisted — props are fetched on every connect.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_lock::RwLock;
 
 use crate::iq::props::{AbPropConfig, PropsResponse};
 
-/// In-memory cache of AB experiment properties.
-///
-/// Thread-safe via `async_lock::RwLock`. Reads are cheap (no contention),
-/// writes happen only during `fetch_props()` on connect.
+/// In-memory cache of AB experiment properties, populated on connect.
 pub struct AbPropsCache {
-    /// config_code → config_value for experiment props.
     props: RwLock<HashMap<u32, String>>,
+    /// Guards against applying a delta into an empty cache on cold start.
+    seeded: AtomicBool,
 }
 
 impl AbPropsCache {
     pub fn new() -> Self {
         Self {
             props: RwLock::new(HashMap::new()),
+            seeded: AtomicBool::new(false),
         }
     }
 
-    /// Populate the cache from a server response.
-    ///
-    /// - **Full update** (`!delta_update`): clears existing values, then inserts all experiment props.
-    /// - **Delta update** (`delta_update`): merges (overwrites) changed experiment props into existing map.
-    /// - Sampling props are skipped (they are server-side analytics, not client feature flags).
+    /// True after the first full (non-delta) update.
+    pub fn is_seeded(&self) -> bool {
+        self.seeded.load(Ordering::Acquire)
+    }
+
+    /// Replace (full) or merge (delta) experiment props from a server response.
+    /// Sampling props are skipped (server-side analytics only).
     pub async fn apply_response(&self, response: &PropsResponse) {
         let mut map = self.props.write().await;
 
         if !response.delta_update {
             map.clear();
+            self.seeded.store(true, Ordering::Release);
         }
 
         for prop in &response.props {
@@ -47,21 +50,18 @@ impl AbPropsCache {
         }
     }
 
-    /// Get the raw config value for a prop by its config code.
     pub async fn get(&self, config_code: u32) -> Option<String> {
         self.props.read().await.get(&config_code).cloned()
     }
 
-    /// Check if a prop is enabled (truthy).
-    ///
-    /// Returns `true` if the value is `"1"`, `"true"`, or `"enabled"` (case-insensitive).
-    /// Returns `false` if the prop is absent, empty, or has any other value.
+    /// True when the prop value is truthy (`"1"`, `"true"`, or `"enabled"`).
     pub async fn is_enabled(&self, config_code: u32) -> bool {
         match self.props.read().await.get(&config_code) {
-            Some(value) => matches!(
-                value.to_ascii_lowercase().as_str(),
-                "1" | "true" | "enabled"
-            ),
+            Some(value) => {
+                value == "1"
+                    || value.eq_ignore_ascii_case("true")
+                    || value.eq_ignore_ascii_case("enabled")
+            }
             None => false,
         }
     }

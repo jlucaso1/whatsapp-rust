@@ -1118,21 +1118,8 @@ macro_rules! define_group_participant_iq {
     };
 }
 
-/// IQ specification for adding participants to a group.
-///
-/// Supports optional per-participant privacy tokens (tctoken), matching WhatsApp
-/// Web's `privacy_token_sending_on_group_participant_add` AB prop behavior.
-///
-/// Wire format:
-/// ```xml
-/// <iq type="set" xmlns="w:g2" to="{group_jid}">
-///   <add>
-///     <participant jid="{user_jid}">
-///       <privacy>hex_encoded_token</privacy>  <!-- optional -->
-///     </participant>
-///   </add>
-/// </iq>
-/// ```
+/// IQ specification for adding participants to a group, with optional
+/// per-participant privacy tokens.
 #[derive(Debug, Clone)]
 pub struct AddParticipantsIq {
     pub group_jid: Jid,
@@ -1169,10 +1156,12 @@ impl IqSpec for AddParticipantsIq {
             .iter()
             .map(|p| {
                 let mut attrs = vec![("jid", p.jid.to_string())];
-                if let Some(pn) = &p.phone_number {
+                // phone_number is only meaningful for LID JIDs
+                if p.jid.is_lid()
+                    && let Some(pn) = &p.phone_number
+                {
                     attrs.push(("phone_number", pn.to_string()));
                 }
-                // Same serialization as build_create_group_node() for privacy tokens
                 if let Some(privacy_bytes) = &p.privacy {
                     NodeBuilder::new("participant")
                         .attrs(attrs)
@@ -2441,6 +2430,32 @@ mod tests {
             assert!(
                 privacy_children.is_empty(),
                 "expected no <privacy> child when privacy is None"
+            );
+        } else {
+            panic!("expected nodes content");
+        }
+    }
+
+    #[test]
+    fn test_add_participants_strips_phone_number_for_pn_jid() {
+        let group: Jid = "120363000000000001@g.us".parse().unwrap();
+        let pn_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        // PN JID with phone_number set: build_iq should strip it
+        let p1 = GroupParticipantOptions::new(pn_jid.clone())
+            .with_phone_number("9876543210@s.whatsapp.net".parse().unwrap());
+        let spec = AddParticipantsIq::with_options(&group, vec![p1]);
+        let iq = spec.build_iq();
+
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            let add_node = &nodes[0];
+            let participants: Vec<_> = add_node.get_children_by_tag("participant").collect();
+            assert_eq!(participants.len(), 1);
+            assert!(
+                participants[0]
+                    .attrs()
+                    .optional_string("phone_number")
+                    .is_none(),
+                "phone_number should be stripped for non-LID JIDs"
             );
         } else {
             panic!("expected nodes content");

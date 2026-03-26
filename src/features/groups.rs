@@ -205,8 +205,6 @@ impl<'a> Groups<'a> {
 
         options.participants = normalize_participants(&resolved_participants);
 
-        // Auto-attach privacy tokens if the AB prop is enabled and the caller
-        // didn't already set tokens via with_privacy().
         if self
             .client
             .ab_props()
@@ -474,32 +472,41 @@ impl<'a> Groups<'a> {
             .await?)
     }
 
-    // --- Privacy token helpers (mirrors WA Web's getPermissionTokenMap) ---
-
-    /// Resolve tc_tokens for a list of JIDs, returning GroupParticipantOptions with tokens.
     async fn resolve_participant_tokens(&self, jids: &[Jid]) -> Vec<GroupParticipantOptions> {
-        let mut options = Vec::with_capacity(jids.len());
-        for jid in jids {
-            let token_key = self.resolve_token_key(jid).await;
-            let privacy = self.lookup_valid_token(&token_key).await;
+        if jids.is_empty() {
+            return Vec::new();
+        }
+        let only_lid = self.only_check_lid().await;
+        let futs = jids.iter().map(|jid| async move {
             let mut opt = GroupParticipantOptions::new(jid.clone());
-            if let Some(token) = privacy {
+            if let Some(token_key) = self.resolve_token_key(jid, only_lid).await
+                && let Some(token) = self.lookup_valid_token(&token_key).await
+            {
                 opt = opt.with_privacy(token);
             }
-            options.push(opt);
-        }
-        options
+            opt
+        });
+        futures::future::join_all(futs).await
     }
 
-    /// Attach tokens to existing GroupParticipantOptions (mutates in place).
-    /// Used by create_group() where participants are already resolved.
     /// Skips participants that already have a token set by the caller.
     async fn attach_tokens_to_participants(&self, participants: &mut [GroupParticipantOptions]) {
-        for p in participants.iter_mut() {
+        if participants.is_empty() {
+            return;
+        }
+        let only_lid = self.only_check_lid().await;
+        let futs = participants.iter().enumerate().map(|(i, p)| async move {
             if p.privacy.is_some() {
-                continue; // caller already set a token, don't overwrite
+                return (i, None);
             }
-            let token_key = self.resolve_token_key(&p.jid).await;
+            let Some(token_key) = self.resolve_token_key(&p.jid, only_lid).await else {
+                log::debug!(
+                    target: "Client/Groups",
+                    "No LID mapping for participant {}, skipping privacy attachment",
+                    p.jid
+                );
+                return (i, None);
+            };
             let token = self.lookup_valid_token(&token_key).await;
             if token.is_none() {
                 log::debug!(
@@ -508,25 +515,41 @@ impl<'a> Groups<'a> {
                     p.jid, token_key
                 );
             }
-            p.privacy = token;
+            (i, token)
+        });
+        for (i, token) in futures::future::join_all(futs).await {
+            if token.is_some() {
+                participants[i].privacy = token;
+            }
         }
     }
 
-    /// Resolve JID to the tc_token store key (LID user if available, else phone user).
-    /// Same pattern as send.rs `maybe_include_tc_token`.
-    async fn resolve_token_key(&self, jid: &Jid) -> String {
+    async fn only_check_lid(&self) -> bool {
+        self.client
+            .ab_props()
+            .is_enabled(wacore::iq::props::config_codes::PRIVACY_TOKEN_ONLY_CHECK_LID)
+            .await
+    }
+
+    /// Resolve JID to tc_token store key. When `only_lid`, PN JIDs without a
+    /// LID mapping return `None` instead of falling back to the PN user.
+    async fn resolve_token_key(&self, jid: &Jid, only_lid: bool) -> Option<String> {
         if jid.is_lid() {
-            jid.user.clone()
+            Some(jid.user.clone())
+        } else if only_lid {
+            self.client.lid_pn_cache.get_current_lid(&jid.user).await
         } else {
-            self.client
-                .lid_pn_cache
-                .get_current_lid(&jid.user)
-                .await
-                .unwrap_or_else(|| jid.user.clone())
+            Some(
+                self.client
+                    .lid_pn_cache
+                    .get_current_lid(&jid.user)
+                    .await
+                    .unwrap_or_else(|| jid.user.clone()),
+            )
         }
     }
 
-    /// Look up a valid, non-expired tc_token from the store.
+    /// Returns the tc_token if present and not expired.
     async fn lookup_valid_token(&self, token_key: &str) -> Option<Vec<u8>> {
         use wacore::iq::tctoken::is_tc_token_expired;
         let backend = self.client.persistence_manager.backend();

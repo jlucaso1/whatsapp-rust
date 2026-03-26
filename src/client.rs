@@ -324,8 +324,6 @@ pub struct Client {
     /// This allows us to reuse existing LID-based sessions when sending replies.
     /// The cache is backed by persistent storage and warmed up on client initialization.
     pub(crate) lid_pn_cache: Arc<LidPnCache>,
-    /// In-memory cache of A/B experiment properties received from the server.
-    /// Populated on connect via `fetch_props()`, queried by features to gate behavior.
     pub(crate) ab_props: Arc<wacore::store::ab_props::AbPropsCache>,
 
     /// Per-chat mutex for serializing message enqueue operations.
@@ -1562,13 +1560,14 @@ impl Client {
             .props_hash
             .clone();
 
+        // Deltas only contain changed props, so they're invalid against an empty cache.
         let spec = match &stored_hash {
-            Some(hash) => {
+            Some(hash) if self.ab_props.is_seeded() => {
                 debug!("Fetching props with hash for delta update...");
                 PropsSpec::with_hash(hash)
             }
-            None => {
-                debug!("Fetching props (full, no stored hash)...");
+            _ => {
+                debug!("Fetching props (full)...");
                 PropsSpec::new()
             }
         };
@@ -1588,7 +1587,6 @@ impl Client {
             );
         }
 
-        // Populate the in-memory AB props cache so features can query prop values.
         self.ab_props.apply_response(&response).await;
 
         if let Some(new_hash) = response.hash {
@@ -1600,12 +1598,7 @@ impl Client {
         Ok(())
     }
 
-    /// Access the in-memory A/B experiment properties cache.
-    ///
-    /// Props are populated on connect via `fetch_props()`. Features use this
-    /// to check if server-side feature flags are enabled, matching WhatsApp
-    /// Web's `getABPropConfigValue()` pattern.
-    pub fn ab_props(&self) -> &wacore::store::ab_props::AbPropsCache {
+    pub(crate) fn ab_props(&self) -> &wacore::store::ab_props::AbPropsCache {
         &self.ab_props
     }
 
