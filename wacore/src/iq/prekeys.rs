@@ -187,7 +187,7 @@ impl IqSpec for PreKeyFetchSpec {
 ///       <signature>[64-byte signature]</signature>
 ///     </skey>
 ///     <list>
-///       <id>[3-byte BE prekey ID]</id>
+///       <key>[3-byte BE prekey ID]</key>
 ///       ...
 ///     </list>
 ///     <hash>[20-byte SHA-1 hash]</hash>
