@@ -1061,7 +1061,11 @@ impl Client {
     }
 
     async fn cleanup_connection_state(&self) {
-        self.clear_node_waiters();
+        // Note: node_waiters are intentionally NOT cleared here — they are
+        // cross-connection (callers may register a waiter before an action that
+        // completes on a subsequent connection, e.g. after 515 reconnect).
+        // sent_node_waiters ARE cleared because they match pre-encryption
+        // outgoing stanzas, which are transport-scoped.
         self.clear_sent_node_waiters();
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
@@ -3053,18 +3057,6 @@ impl Client {
             } else {
                 i += 1;
             }
-        }
-    }
-
-    fn clear_node_waiters(&self) {
-        let mut waiters = self
-            .node_waiters
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let count = waiters.len();
-        if count > 0 {
-            waiters.clear();
-            self.node_waiter_count.fetch_sub(count, Ordering::Release);
         }
     }
 
