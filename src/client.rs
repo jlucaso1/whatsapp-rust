@@ -91,6 +91,11 @@ struct NodeWaiter {
     tx: futures::channel::oneshot::Sender<Arc<Node>>,
 }
 
+struct SentNodeWaiter {
+    filter: NodeFilter,
+    tx: futures::channel::oneshot::Sender<Arc<Node>>,
+}
+
 use async_lock::Mutex;
 use async_lock::RwLock;
 use std::time::Duration;
@@ -282,6 +287,9 @@ pub struct Client {
     /// Guarded by `node_waiter_count` for zero-cost when no waiters are active.
     node_waiters: std::sync::Mutex<Vec<NodeWaiter>>,
     node_waiter_count: AtomicUsize,
+    /// Waiters for raw outgoing nodes before encryption.
+    sent_node_waiters: std::sync::Mutex<Vec<SentNodeWaiter>>,
+    sent_node_waiter_count: AtomicUsize,
 
     pub(crate) unique_id: String,
     pub(crate) id_counter: Arc<AtomicU64>,
@@ -582,6 +590,8 @@ impl Client {
             response_waiters: Arc::new(Mutex::new(HashMap::new())),
             node_waiters: std::sync::Mutex::new(Vec::new()),
             node_waiter_count: AtomicUsize::new(0),
+            sent_node_waiters: std::sync::Mutex::new(Vec::new()),
+            sent_node_waiter_count: AtomicUsize::new(0),
             unique_id: format!("{}.{}", unique_id_bytes[0], unique_id_bytes[1]),
             id_counter: Arc::new(AtomicU64::new(0)),
             unified_session: crate::unified_session::UnifiedSessionManager::new(),
@@ -1051,6 +1061,12 @@ impl Client {
     }
 
     async fn cleanup_connection_state(&self) {
+        // Note: node_waiters are intentionally NOT cleared here — they are
+        // cross-connection (callers may register a waiter before an action that
+        // completes on a subsequent connection, e.g. after 515 reconnect).
+        // sent_node_waiters ARE cleared because they match pre-encryption
+        // outgoing stanzas, which are transport-scoped.
+        self.clear_sent_node_waiters();
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
         // Signal the keepalive loop (and any other tasks) to exit promptly.
@@ -2643,10 +2659,38 @@ impl Client {
     ) {
         use wacore::types::events::Event;
 
-        if m.operation != wa::syncd_mutation::SyncdOperation::Set {
+        if m.index.is_empty() {
             return;
         }
-        if m.index.is_empty() {
+
+        // NCT salt sync — handles both "set" (store salt) and "remove" (clear salt).
+        // Source: WAWebNctSaltSync, syncd collection RegularHigh, action "nct_salt_sync".
+        if m.index[0] == "nct_salt_sync" {
+            if m.operation == wa::syncd_mutation::SyncdOperation::Remove {
+                debug!(target: "Client/AppState", "Removing NCT salt via app state sync");
+                self.persistence_manager
+                    .process_command(DeviceCommand::SetNctSalt(None))
+                    .await;
+            } else if let Some(val) = &m.action_value
+                && let Some(act) = &val.nct_salt_sync_action
+                && let Some(salt) = &act.salt
+            {
+                if salt.is_empty() {
+                    warn!(target: "Client/AppState", "nct_salt_sync mutation has empty salt, ignoring");
+                } else {
+                    debug!(target: "Client/AppState", "Stored NCT salt via app state sync ({} bytes)", salt.len());
+                    self.persistence_manager
+                        .process_command(DeviceCommand::SetNctSalt(Some(salt.clone())))
+                        .await;
+                }
+            } else {
+                warn!(target: "Client/AppState", "nct_salt_sync mutation missing salt in action value");
+            }
+            return;
+        }
+
+        // All remaining mutations only care about Set operations
+        if m.operation != wa::syncd_mutation::SyncdOperation::Set {
             return;
         }
 
@@ -2977,6 +3021,25 @@ impl Client {
         rx
     }
 
+    /// Register a waiter for an outgoing node before it is encrypted and sent.
+    ///
+    /// This is intended for tests and diagnostics that need to inspect the raw
+    /// stanza built by the client, such as asserting whether `<tctoken>` or
+    /// `<cstoken>` was attached.
+    pub fn wait_for_sent_node(
+        &self,
+        filter: NodeFilter,
+    ) -> futures::channel::oneshot::Receiver<Arc<Node>> {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        self.sent_node_waiter_count.fetch_add(1, Ordering::Release);
+        let mut waiters = self
+            .sent_node_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        waiters.push(SentNodeWaiter { filter, tx });
+        rx
+    }
+
     /// Check pending node waiters against an incoming node.
     /// Only called when `node_waiter_count > 0`.
     fn resolve_node_waiters(&self, node: &Arc<Node>) {
@@ -2998,6 +3061,39 @@ impl Client {
             } else {
                 i += 1;
             }
+        }
+    }
+
+    fn resolve_sent_node_waiters(&self, node: &Arc<Node>) {
+        let mut waiters = self
+            .sent_node_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut i = 0;
+        while i < waiters.len() {
+            if waiters[i].tx.is_canceled() {
+                waiters.swap_remove(i);
+                self.sent_node_waiter_count.fetch_sub(1, Ordering::Release);
+            } else if waiters[i].filter.matches(node) {
+                let w = waiters.swap_remove(i);
+                self.sent_node_waiter_count.fetch_sub(1, Ordering::Release);
+                let _ = w.tx.send(Arc::clone(node));
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    fn clear_sent_node_waiters(&self) {
+        let mut waiters = self
+            .sent_node_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let count = waiters.len();
+        if count > 0 {
+            waiters.clear();
+            self.sent_node_waiter_count
+                .fetch_sub(count, Ordering::Release);
         }
     }
 
@@ -3152,6 +3248,9 @@ impl Client {
         };
 
         debug!(target: "Client/Send", "{}", DisplayableNode(&node));
+        if self.sent_node_waiter_count.load(Ordering::Acquire) > 0 {
+            self.resolve_sent_node_waiters(&Arc::new(node.clone()));
+        }
 
         let mut plaintext_buf = Vec::with_capacity(1024);
 

@@ -249,6 +249,27 @@ pub fn parse_privacy_token_notification(
     Ok(tokens)
 }
 
+/// Compute a cstoken (client-side token / NCT) for a recipient.
+///
+/// This is the fallback token used when no tctoken exists for the recipient.
+/// Matches WA Web: `genCsTokenBody` in `MsgCreateFanoutStanza.js`.
+///
+/// `salt` — NCT salt from app state sync (raw bytes, not base64).
+/// `recipient_lid` — The recipient's bare account LID string (e.g. `"12345@lid"`).
+pub fn compute_cs_token(salt: &[u8], recipient_lid: &str) -> Vec<u8> {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+
+    let mut mac = Hmac::<Sha256>::new_from_slice(salt).expect("HMAC-SHA256 accepts any key length");
+    mac.update(recipient_lid.as_bytes());
+    mac.finalize().into_bytes().to_vec()
+}
+
+/// Build a `<cstoken>` stanza child for including in outgoing messages.
+pub fn build_cs_token_node(token: &[u8]) -> Node {
+    NodeBuilder::new("cstoken").bytes(token.to_vec()).build()
+}
+
 /// Build a `<tctoken>` stanza child for including in outgoing messages.
 pub fn build_tc_token_node(token: &[u8]) -> Node {
     NodeBuilder::new("tctoken").bytes(token.to_vec()).build()
@@ -491,12 +512,62 @@ mod tests {
 
     #[test]
     fn test_issue_privacy_tokens_spec_new_from_slice() {
-        let jid1: Jid = "100000000000001@lid".parse().unwrap();
-        let jid2: Jid = "100000000000002@lid".parse().unwrap();
+        let jid1: Jid = "alice@lid".parse().unwrap();
+        let jid2: Jid = "bob@lid".parse().unwrap();
         let jids = [jid1.clone(), jid2.clone()];
         let spec = IssuePrivacyTokensSpec::new(&jids);
         assert_eq!(spec.jids.len(), 2);
         assert_eq!(spec.jids[0], jid1);
         assert_eq!(spec.jids[1], jid2);
+    }
+
+    #[test]
+    fn test_compute_cs_token_deterministic() {
+        let salt = b"test_salt_bytes_16";
+        let lid = "alice@lid";
+        let token1 = compute_cs_token(salt, lid);
+        let token2 = compute_cs_token(salt, lid);
+        assert_eq!(token1, token2);
+        assert_eq!(token1.len(), 32); // HMAC-SHA256 output is 32 bytes
+    }
+
+    #[test]
+    fn test_compute_cs_token_different_lids() {
+        let salt = b"test_salt_bytes_16";
+        let token1 = compute_cs_token(salt, "alice@lid");
+        let token2 = compute_cs_token(salt, "bob@lid");
+        assert_ne!(token1, token2);
+    }
+
+    #[test]
+    fn test_compute_cs_token_different_salts() {
+        let lid = "alice@lid";
+        let token1 = compute_cs_token(b"salt_a", lid);
+        let token2 = compute_cs_token(b"salt_b", lid);
+        assert_ne!(token1, token2);
+    }
+
+    #[test]
+    fn test_compute_cs_token_known_answer() {
+        // Pre-computed HMAC-SHA256 to catch accidental algorithm changes
+        // (e.g., if someone swaps key/data arguments).
+        let salt = b"whatsapp_nct_salt_example";
+        let lid = "alice@lid";
+        let expected: [u8; 32] = [
+            0x7c, 0x6a, 0xfc, 0x32, 0x57, 0x85, 0xac, 0x3c, 0x4f, 0x57, 0x1e, 0x64, 0x8a, 0x3b,
+            0xb8, 0x22, 0xf0, 0xe2, 0xe4, 0x94, 0x34, 0x81, 0x2e, 0xd2, 0x80, 0x9a, 0xea, 0x2e,
+            0x70, 0x43, 0xb5, 0x76,
+        ];
+        assert_eq!(compute_cs_token(salt, lid), expected);
+    }
+
+    #[test]
+    fn test_build_cs_token_node() {
+        let node = build_cs_token_node(&[0xAA, 0xBB, 0xCC]);
+        assert_eq!(node.tag, "cstoken");
+        match &node.content {
+            Some(NodeContent::Bytes(data)) => assert_eq!(data, &[0xAA, 0xBB, 0xCC]),
+            _ => panic!("Expected binary content"),
+        }
     }
 }

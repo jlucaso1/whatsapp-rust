@@ -80,6 +80,7 @@ struct DeviceRow {
     edge_routing_info: Option<Vec<u8>>,
     props_hash: Option<String>,
     next_pre_key_id: i32,
+    nct_salt: Option<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -320,6 +321,7 @@ impl SqliteStore {
         let edge_routing_info = device_data.edge_routing_info.clone();
         let props_hash = device_data.props_hash.clone();
         let next_pre_key_id = device_data.next_pre_key_id as i32;
+        let nct_salt = device_data.nct_salt.clone();
         let new_lid = device_data
             .lid
             .as_ref()
@@ -357,6 +359,7 @@ impl SqliteStore {
                     device::edge_routing_info.eq(edge_routing_info.clone()),
                     device::props_hash.eq(props_hash.clone()),
                     device::next_pre_key_id.eq(next_pre_key_id),
+                    device::nct_salt.eq(nct_salt.clone()),
                 ))
                 .on_conflict(device::id)
                 .do_update()
@@ -379,6 +382,7 @@ impl SqliteStore {
                     device::edge_routing_info.eq(edge_routing_info),
                     device::props_hash.eq(props_hash),
                     device::next_pre_key_id.eq(next_pre_key_id),
+                    device::nct_salt.eq(nct_salt),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -441,6 +445,7 @@ impl SqliteStore {
                     device::edge_routing_info.eq(None::<Vec<u8>>),
                     device::props_hash.eq(None::<String>),
                     device::next_pre_key_id.eq(new_device.next_pre_key_id as i32),
+                    device::nct_salt.eq(None::<Vec<u8>>),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -559,6 +564,8 @@ impl SqliteStore {
                 edge_routing_info: row.edge_routing_info,
                 props_hash: row.props_hash,
                 next_pre_key_id: row.next_pre_key_id as u32,
+                nct_salt: row.nct_salt,
+                nct_salt_sync_seen: false,
             }))
         } else {
             Ok(None)

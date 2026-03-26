@@ -25,6 +25,35 @@ impl<'a> Contacts<'a> {
         Self { client }
     }
 
+    async fn persist_lid_mappings<'b, I>(&self, entries: I)
+    where
+        I: IntoIterator<Item = (&'b Jid, Option<&'b Jid>)>,
+    {
+        for (jid, lid) in entries {
+            let Some(lid) = lid else {
+                continue;
+            };
+            if !jid.is_pn() || !lid.is_lid() {
+                continue;
+            }
+            if let Err(err) = self
+                .client
+                .add_lid_pn_mapping(
+                    &lid.user,
+                    &jid.user,
+                    crate::lid_pn_cache::LearningSource::Usync,
+                )
+                .await
+            {
+                log::warn!(
+                    "Failed to persist usync LID mapping {} -> {}: {err}",
+                    jid,
+                    lid
+                );
+            }
+        }
+    }
+
     pub async fn is_on_whatsapp(&self, phones: &[&str]) -> Result<Vec<IsOnWhatsAppResult>> {
         if phones.is_empty() {
             return Ok(Vec::new());
@@ -50,7 +79,10 @@ impl<'a> Contacts<'a> {
         let phone_strings: Vec<String> = phones.iter().map(|s| s.to_string()).collect();
         let spec = ContactInfoSpec::new(phone_strings, request_id);
 
-        Ok(self.client.execute(spec).await?)
+        let info = self.client.execute(spec).await?;
+        self.persist_lid_mappings(info.iter().map(|entry| (&entry.jid, entry.lid.as_ref())))
+            .await;
+        Ok(info)
     }
 
     pub async fn get_profile_picture(
@@ -98,7 +130,10 @@ impl<'a> Contacts<'a> {
         let request_id = self.client.generate_request_id();
         let spec = UserInfoSpec::new(jids.to_vec(), request_id);
 
-        Ok(self.client.execute(spec).await?)
+        let info = self.client.execute(spec).await?;
+        self.persist_lid_mappings(info.values().map(|entry| (&entry.jid, entry.lid.as_ref())))
+            .await;
+        Ok(info)
     }
 }
 

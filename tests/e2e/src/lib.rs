@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use wacore::store::traits::TcTokenEntry;
 use wacore::types::events::{Event, EventHandler};
+use wacore_binary::node::Node;
 use whatsapp_rust::Jid;
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::traits::Backend;
@@ -23,6 +24,22 @@ pub async fn create_test_store(prefix: &str) -> anyhow::Result<SqliteStore> {
 /// Returns the mock server WebSocket URL from env, or the default.
 pub fn mock_server_url() -> String {
     std::env::var("MOCK_SERVER_URL").unwrap_or_else(|_| "wss://127.0.0.1:8080/ws/chat".to_string())
+}
+
+pub fn unique_push_name(prefix: &str) -> String {
+    format!("{}_{}", prefix, uuid::Uuid::new_v4())
+}
+
+pub fn restricted_push_name(prefix: &str) -> String {
+    format!("restricted:{}", unique_push_name(prefix))
+}
+
+pub fn scenario_push_name(prefix: &str, flags: &[&str]) -> String {
+    assert!(
+        !flags.is_empty(),
+        "scenario_push_name requires at least one flag"
+    );
+    format!("scenario:{}:{}", flags.join(","), unique_push_name(prefix))
 }
 
 /// Event handler that sends events to a tokio broadcast channel for test assertions.
@@ -207,6 +224,44 @@ impl TestClient {
                     "Timed out waiting for tc_token entry for {}",
                     jid_key
                 ));
+            }
+
+            tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        }
+    }
+
+    pub fn sent_message_waiter(
+        &self,
+        msg_id: &str,
+    ) -> futures::channel::oneshot::Receiver<Arc<Node>> {
+        self.client
+            .wait_for_sent_node(whatsapp_rust::NodeFilter::tag("message").attr("id", msg_id))
+    }
+
+    pub fn next_sent_message_waiter(&self) -> futures::channel::oneshot::Receiver<Arc<Node>> {
+        self.client
+            .wait_for_sent_node(whatsapp_rust::NodeFilter::tag("message"))
+    }
+
+    pub async fn nct_salt(&self) -> Option<Vec<u8>> {
+        self.client
+            .persistence_manager()
+            .get_device_snapshot()
+            .await
+            .nct_salt
+            .clone()
+    }
+
+    pub async fn wait_for_nct_salt(&self, timeout_secs: u64) -> anyhow::Result<Vec<u8>> {
+        let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(timeout_secs);
+
+        loop {
+            if let Some(salt) = self.nct_salt().await {
+                return Ok(salt);
+            }
+
+            if tokio::time::Instant::now() >= deadline {
+                return Err(anyhow::anyhow!("Timed out waiting for NCT salt"));
             }
 
             tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
