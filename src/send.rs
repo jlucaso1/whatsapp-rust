@@ -327,7 +327,6 @@ impl Client {
         };
 
         let is_full_distribution = force_skdm || skdm_target_devices.is_none();
-        let devices_receiving_skdm: Vec<Jid> = skdm_target_devices.clone().unwrap_or_default();
         #[allow(clippy::needless_late_init)]
         let skdm_is_full: bool;
 
@@ -346,7 +345,7 @@ impl Client {
             ]
         };
 
-        let stanza = match wacore::send::prepare_group_stanza(
+        let prepared = match wacore::send::prepare_group_stanza(
             &mut stores,
             self,
             &mut group_info,
@@ -363,9 +362,9 @@ impl Client {
         )
         .await
         {
-            Ok(stanza) => {
+            Ok(prepared) => {
                 skdm_is_full = is_full_distribution;
-                stanza
+                prepared
             }
             Err(e) => {
                 if let Some(SignalProtocolError::NoSenderKeyState(_)) =
@@ -393,7 +392,8 @@ impl Client {
                         sender_key_store: &mut store_adapter_retry.sender_key_store,
                     };
 
-                    let retry_stanza = wacore::send::prepare_group_stanza(
+                    skdm_is_full = true;
+                    wacore::send::prepare_group_stanza(
                         &mut stores_retry,
                         self,
                         &mut group_info,
@@ -408,47 +408,25 @@ impl Client {
                         None,
                         &extra_stanza_nodes,
                     )
-                    .await?;
-
-                    // Retry is always full distribution (rotated sender key)
-                    skdm_is_full = true;
-                    retry_stanza
+                    .await?
                 } else {
                     return Err(e);
                 }
             }
         };
 
-        // For status broadcasts, the server doesn't know the recipient list
-        // (unlike groups where the server has the member list). We must always
-        // include a <participants> node so the server knows who to deliver to.
-        // If prepare_group_stanza already added one (SKDM distribution), we
-        // extend it with bare <to> entries for devices that already have the
-        // sender key. If there's no <participants> node yet, we create one.
-        let stanza = self.ensure_status_participants(stanza, &group_info).await?;
+        let stanza = self
+            .ensure_status_participants(prepared.node, &group_info)
+            .await?;
 
         self.send_node(stanza).await?;
 
-        // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
-        // WA Web only calls markHasSenderKey() after the server confirms receipt.
-        // Resolve device list for tracking (only on full distribution)
-        let resolved_for_tracking: Vec<Jid> = if skdm_is_full {
-            let jids: Vec<Jid> = group_info
-                .participants
-                .iter()
-                .map(|j| j.to_non_ad())
-                .collect();
-            SendContextResolver::resolve_devices(self, &jids)
-                .await
-                .unwrap_or_default()
-        } else {
-            devices_receiving_skdm.clone()
-        };
+        // Use the exact device list from the stanza — no re-resolve needed
         self.update_sender_key_devices(
             &to_str,
-            &devices_receiving_skdm,
+            &prepared.skdm_devices,
             skdm_is_full,
-            &resolved_for_tracking,
+            &prepared.skdm_devices,
         )
         .await;
 
@@ -873,12 +851,6 @@ impl Client {
             };
 
             let is_full_distribution = force_skdm || skdm_target_devices.is_none();
-            // Extract the partial device list before moving skdm_target_devices into prepare_group_stanza
-            let partial_skdm_devices: Vec<Jid> = if is_full_distribution {
-                vec![]
-            } else {
-                skdm_target_devices.clone().unwrap_or_default()
-            };
 
             match wacore::send::prepare_group_stanza(
                 &mut stores,
@@ -897,25 +869,13 @@ impl Client {
             )
             .await
             {
-                Ok(stanza) => {
-                    let resolved = if is_full_distribution {
-                        let jids: Vec<Jid> = group_info
-                            .participants
-                            .iter()
-                            .map(|j| j.to_non_ad())
-                            .collect();
-                        SendContextResolver::resolve_devices(self, &jids)
-                            .await
-                            .unwrap_or_default()
-                    } else {
-                        partial_skdm_devices
-                    };
+                Ok(prepared) => {
                     skdm_update = Some(SkdmUpdate {
                         to_str: to_str.clone(),
-                        devices: resolved,
+                        devices: prepared.skdm_devices,
                         is_full_distribution,
                     });
-                    stanza
+                    prepared.node
                 }
                 Err(e) => {
                     if let Some(SignalProtocolError::NoSenderKeyState(_)) =
@@ -923,7 +883,6 @@ impl Client {
                     {
                         log::warn!("No sender key for group {}, forcing distribution.", to);
 
-                        // Clear SKDM recipients since we're rotating the key
                         if let Err(e) = self
                             .persistence_manager
                             .clear_sender_key_devices(&to_str)
@@ -944,7 +903,7 @@ impl Client {
                             sender_key_store: &mut store_adapter_retry.sender_key_store,
                         };
 
-                        let retry_stanza = wacore::send::prepare_group_stanza(
+                        let retry_prepared = wacore::send::prepare_group_stanza(
                             &mut stores_retry,
                             self,
                             &mut group_info,
@@ -954,27 +913,19 @@ impl Client {
                             to,
                             message,
                             request_id,
-                            true, // Force distribution on retry
-                            None, // Distribute to all devices
+                            true,
+                            None,
                             edit.clone(),
                             &extra_stanza_nodes,
                         )
                         .await?;
 
-                        let jids: Vec<Jid> = group_info
-                            .participants
-                            .iter()
-                            .map(|j| j.to_non_ad())
-                            .collect();
-                        let resolved = SendContextResolver::resolve_devices(self, &jids)
-                            .await
-                            .unwrap_or_default();
                         skdm_update = Some(SkdmUpdate {
                             to_str,
-                            devices: resolved,
+                            devices: retry_prepared.skdm_devices,
                             is_full_distribution: true,
                         });
-                        retry_stanza
+                        retry_prepared.node
                     } else {
                         return Err(e);
                     }

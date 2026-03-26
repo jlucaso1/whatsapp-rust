@@ -839,6 +839,16 @@ where
     Ok(stanza_builder.children(children).build())
 }
 
+/// Result of `prepare_group_stanza` — carries the stanza node and the exact
+/// device list used for SKDM distribution, so callers can persist sender key
+/// tracking without re-resolving devices.
+pub struct PreparedGroupStanza {
+    pub node: Node,
+    /// Devices that received SKDM in this stanza. Empty when no SKDM was distributed
+    /// (e.g., all devices already have the sender key).
+    pub skdm_devices: Vec<Jid>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_group_stanza<
     'a,
@@ -860,7 +870,7 @@ pub async fn prepare_group_stanza<
     skdm_target_devices: Option<Vec<Jid>>,
     edit: Option<crate::types::message::EditAttribute>,
     extra_stanza_nodes: &[Node],
-) -> Result<Node> {
+) -> Result<PreparedGroupStanza> {
     let (own_sending_jid, _) = match group_info.addressing_mode {
         crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
         crate::types::message::AddressingMode::Pn => (own_jid.clone(), "pn"),
@@ -1129,7 +1139,10 @@ pub async fn prepare_group_stanza<
 
     let stanza = stanza_builder.children(message_children).build();
 
-    Ok(stanza)
+    Ok(PreparedGroupStanza {
+        node: stanza,
+        skdm_devices: distribution_list.unwrap_or_default(),
+    })
 }
 
 pub async fn create_sender_key_distribution_message_for_group(
