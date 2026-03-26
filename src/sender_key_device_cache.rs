@@ -103,6 +103,7 @@ impl SenderKeyDeviceCache {
         self.inner.invalidate(group_jid).await;
     }
 
+    #[cfg(feature = "debug-diagnostics")]
     pub(crate) fn entry_count(&self) -> u64 {
         self.inner.entry_count()
     }
