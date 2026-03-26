@@ -15,8 +15,6 @@ impl Client {
         group_jid: &str,
         device_jids: &[Jid],
     ) -> Result<()> {
-        use anyhow::anyhow;
-
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         let own_lid_user = snapshot.lid.as_ref().map(|j| j.user.as_str());
         let own_pn_user = snapshot.pn.as_ref().map(|j| j.user.as_str());
@@ -38,8 +36,9 @@ impl Client {
         let entries: Vec<(&str, bool)> = filtered.iter().map(|s| (s.as_str(), false)).collect();
         self.persistence_manager
             .set_sender_key_status(group_jid, &entries)
-            .await
-            .map_err(|e| anyhow!("{e}"))
+            .await?;
+        self.sender_key_device_cache.invalidate(group_jid).await;
+        Ok(())
     }
 
     /// Take a sent message for retry handling. Checks L1 cache first (if enabled),

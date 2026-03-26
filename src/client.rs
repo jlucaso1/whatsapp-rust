@@ -136,6 +136,7 @@ pub struct MemoryDiagnostics {
     pub lid_pn_pn_entries: u64,
     pub retried_group_messages: u64,
     pub recent_messages: u64,
+    pub sender_key_device_cache: u64,
     pub message_retry_counts: u64,
     pub pdo_pending_requests: u64,
     // -- Moka caches (capacity-only, no TTL) --
@@ -176,6 +177,11 @@ impl std::fmt::Display for MemoryDiagnostics {
             self.retried_group_messages
         )?;
         writeln!(f, "  recent_messages:        {}", self.recent_messages)?;
+        writeln!(
+            f,
+            "  sk_device_cache:        {}",
+            self.sender_key_device_cache
+        )?;
         writeln!(f, "  message_retry_counts:   {}", self.message_retry_counts)?;
         writeln!(f, "  pdo_pending_requests:   {}", self.pdo_pending_requests)?;
         writeln!(f, "--- Moka caches (capacity-only) ---")?;
@@ -346,6 +352,8 @@ pub struct Client {
     /// Cache for recent messages (serialized bytes) for retry functionality.
     /// Uses moka cache with TTL and max capacity for automatic eviction.
     pub(crate) recent_messages: Cache<StanzaKey, Vec<u8>>,
+
+    pub(crate) sender_key_device_cache: crate::sender_key_device_cache::SenderKeyDeviceCache,
 
     pub(crate) pending_retries: Arc<async_lock::Mutex<HashSet<String>>>,
 
@@ -639,6 +647,10 @@ impl Client {
             connection_generation: Arc::new(AtomicU64::new(0)),
 
             recent_messages: cache_config.recent_messages.build_with_ttl(),
+
+            sender_key_device_cache: crate::sender_key_device_cache::SenderKeyDeviceCache::new(
+                &cache_config.sender_key_devices_cache,
+            ),
 
             pending_retries: Arc::new(async_lock::Mutex::new(HashSet::new())),
 
@@ -1175,6 +1187,7 @@ impl Client {
             lid_pn_pn_entries: lid_pn,
             retried_group_messages: self.retried_group_messages.entry_count(),
             recent_messages: self.recent_messages.entry_count(),
+            sender_key_device_cache: self.sender_key_device_cache.entry_count(),
             message_retry_counts: self.message_retry_counts.entry_count(),
             pdo_pending_requests: self.pdo_pending_requests.entry_count(),
             session_locks: self.session_locks.entry_count(),

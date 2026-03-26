@@ -8,7 +8,9 @@ use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
 use wacore::types::message::AddressingMode;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{DeviceKey, Jid, JidExt as _};
+#[cfg(test)]
+use wacore_binary::jid::DeviceKey;
+use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 
@@ -372,6 +374,7 @@ impl Client {
                     {
                         log::warn!("Failed to clear status SKDM recipients: {:?}", e);
                     }
+                    self.sender_key_device_cache.invalidate(&to_str).await;
 
                     let mut store_adapter_retry = SignalProtocolStoreAdapter::new(
                         device_store_arc.clone(),
@@ -435,41 +438,33 @@ impl Client {
         participants: &[Jid],
         own_sending_jid: &Jid,
     ) -> Option<Vec<Jid>> {
-        use std::collections::HashSet;
+        use crate::sender_key_device_cache::SenderKeyDeviceMap;
 
-        let device_map = self
-            .persistence_manager
-            .get_sender_key_devices(group_jid)
-            .await
-            .unwrap_or_else(|e| {
-                log::warn!(
-                    "Failed to read sender key devices for {}: {:?}",
-                    group_jid,
-                    e
-                );
-                vec![]
-            });
+        // Atomic get-or-init: if another task invalidated the cache during our
+        // DB read, get_or_init's single-flight guarantee means the stale data
+        // won't be inserted — the invalidation wins and the next caller re-inits.
+        let pm = self.persistence_manager.clone();
+        let cached_map = self
+            .sender_key_device_cache
+            .get_or_init(group_jid, async {
+                let db_rows = pm
+                    .get_sender_key_devices(group_jid)
+                    .await
+                    .unwrap_or_else(|e| {
+                        log::warn!(
+                            "Failed to read sender key devices for {}: {:?}",
+                            group_jid,
+                            e
+                        );
+                        vec![]
+                    });
+                std::sync::Arc::new(SenderKeyDeviceMap::from_db_rows(&db_rows))
+            })
+            .await;
 
-        if device_map.is_empty() {
+        if cached_map.is_empty() {
             return None;
         }
-
-        let parsed: Vec<(Jid, bool)> = device_map
-            .iter()
-            .filter_map(|(jid_str, has_key)| jid_str.parse::<Jid>().ok().map(|jid| (jid, *has_key)))
-            .collect();
-
-        let has_key_set: HashSet<DeviceKey<'_>> = parsed
-            .iter()
-            .filter(|(_, has)| *has)
-            .map(|(jid, _)| jid.device_key())
-            .collect();
-
-        let forgotten_users: HashSet<&str> = parsed
-            .iter()
-            .filter(|(_, has)| !*has)
-            .map(|(jid, _)| jid.user.as_str())
-            .collect();
 
         let jids_to_resolve: Vec<Jid> = participants.iter().map(|jid| jid.to_non_ad()).collect();
 
@@ -478,9 +473,6 @@ impl Client {
                 let needs_skdm: Vec<Jid> = all_devices
                     .into_iter()
                     .filter(|device| {
-                        // Skip our own sending device and hosted devices —
-                        // they're excluded from SKDM in prepare_group_stanza
-                        // and would never appear in the sender key map
                         if device.is_hosted() {
                             return false;
                         }
@@ -489,8 +481,11 @@ impl Client {
                         {
                             return false;
                         }
-                        !has_key_set.contains(&device.device_key())
-                            || forgotten_users.contains(device.user.as_str())
+                        // O(1) lookups into pre-indexed cache
+                        !cached_map
+                            .device_has_key(&device.user, device.device)
+                            .unwrap_or(false)
+                            || cached_map.is_user_forgotten(&device.user)
                     })
                     .collect();
 
@@ -522,19 +517,24 @@ impl Client {
     /// for the stanza, avoiding a redundant `resolve_devices` call and preventing
     /// the clear-then-fail race where a transient resolver failure leaves the map empty.
     /// Mark devices as `has_key=true` after successful SKDM distribution.
-    /// Uses upsert — stale entries from removed participants are harmless.
     async fn update_sender_key_devices(&self, group_jid: &str, devices: &[Jid]) {
-        if !devices.is_empty() {
-            let strs: Vec<String> = devices.iter().map(|j| j.to_string()).collect();
-            let entries: Vec<(&str, bool)> = strs.iter().map(|s| (s.as_str(), true)).collect();
-            if let Err(e) = self
-                .persistence_manager
-                .set_sender_key_status(group_jid, &entries)
-                .await
-            {
-                log::warn!("Failed to update sender key devices: {:?}", e);
-            }
+        if devices.is_empty() {
+            return;
         }
+
+        // Write to DB first, then invalidate cache. Next read reloads from
+        // DB with the authoritative state. This avoids the clone+modify race
+        // where concurrent writers can overwrite each other's mutations.
+        let strs: Vec<String> = devices.iter().map(|j| j.to_string()).collect();
+        let entries: Vec<(&str, bool)> = strs.iter().map(|s| (s.as_str(), true)).collect();
+        if let Err(e) = self
+            .persistence_manager
+            .set_sender_key_status(group_jid, &entries)
+            .await
+        {
+            log::warn!("Failed to update sender key devices: {:?}", e);
+        }
+        self.sender_key_device_cache.invalidate(group_jid).await;
     }
 
     /// Ensure the status stanza has a <participants> node listing all recipient
@@ -867,6 +867,7 @@ impl Client {
                         {
                             log::warn!("Failed to clear SKDM recipients: {:?}", e);
                         }
+                        self.sender_key_device_cache.invalidate(&to_str).await;
 
                         let mut store_adapter_retry = SignalProtocolStoreAdapter::new(
                             device_store_arc.clone(),

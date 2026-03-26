@@ -173,6 +173,9 @@ pub struct CacheConfig {
     pub message_retry_counts: CacheEntryConfig,
     /// PDO pending requests (time_to_live). Default: 30s TTL, 500 entries.
     pub pdo_pending_requests: CacheEntryConfig,
+    /// Sender key device tracking cache (time_to_idle). Default: 1h TTI, 500 entries.
+    /// Caches per-group SKDM distribution state to avoid DB reads on every group send.
+    pub sender_key_devices_cache: CacheEntryConfig,
 
     // --- Coordination caches (capacity-only, no TTL) ---
     /// Per-device Signal session lock capacity. Default: 2000.
@@ -212,6 +215,7 @@ impl std::fmt::Debug for CacheConfig {
             .field("recent_messages", &self.recent_messages)
             .field("message_retry_counts", &self.message_retry_counts)
             .field("pdo_pending_requests", &self.pdo_pending_requests)
+            .field("sender_key_devices_cache", &self.sender_key_devices_cache)
             .field("session_locks_capacity", &self.session_locks_capacity)
             .field("message_queues_capacity", &self.message_queues_capacity)
             .field(
@@ -248,6 +252,7 @@ impl Default for CacheConfig {
             recent_messages: CacheEntryConfig::new(five_min, 0),
             message_retry_counts: CacheEntryConfig::new(five_min, 1_000),
             pdo_pending_requests: CacheEntryConfig::new(Some(Duration::from_secs(30)), 500),
+            sender_key_devices_cache: CacheEntryConfig::new(one_hour, 500),
             session_locks_capacity: 2_000,
             message_queues_capacity: 2_000,
             message_enqueue_locks_capacity: 2_000,
