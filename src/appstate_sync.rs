@@ -188,7 +188,6 @@ mod tests {
         async fn get_devices(&self, _: &str) -> StoreResult<Option<DeviceListRecord>> {
             Ok(None)
         }
-        // (mark_forget_sender_key and consume_forget_marks replaced by unified API above)
         async fn get_tc_token(
             &self,
             _: &str,

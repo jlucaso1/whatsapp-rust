@@ -1666,7 +1666,7 @@ impl ProtocolStore for SqliteStore {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() as i32;
+            .as_secs() as i64;
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
@@ -2041,9 +2041,6 @@ impl ProtocolStore for SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
-
-    // (mark_forget_sender_key and consume_forget_marks replaced by
-    //  unified set_sender_key_status / get_sender_key_devices above)
 
     async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>> {
         let pool = self.pool.clone();

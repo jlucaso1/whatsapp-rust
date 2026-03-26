@@ -106,7 +106,7 @@ diesel::table! {
         device_jid -> Text,
         has_key -> Integer,
         device_id -> Integer,
-        updated_at -> Integer,
+        updated_at -> BigInt,
     }
 }
 

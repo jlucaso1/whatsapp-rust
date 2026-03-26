@@ -463,7 +463,14 @@ impl Client {
             .persistence_manager
             .get_sender_key_devices(group_jid)
             .await
-            .unwrap_or_default();
+            .unwrap_or_else(|e| {
+                log::warn!(
+                    "Failed to read sender key devices for {}: {:?}",
+                    group_jid,
+                    e
+                );
+                vec![]
+            });
 
         if device_map.is_empty() {
             return None; // no tracking data, force full distribution
