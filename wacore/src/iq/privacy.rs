@@ -245,6 +245,13 @@ pub struct DisallowedListUpdate {
     pub users: Vec<DisallowedListUserEntry>,
 }
 
+/// Response from setting a privacy category.
+/// Mirrors `WAWebSetPrivacyJob` setPrivacyParser which extracts `{name, value, dhash}`.
+#[derive(Debug, Clone, Default)]
+pub struct SetPrivacySettingResponse {
+    pub dhash: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct SetPrivacySettingSpec {
     pub category: PrivacyCategory,
@@ -283,7 +290,7 @@ impl SetPrivacySettingSpec {
 }
 
 impl IqSpec for SetPrivacySettingSpec {
-    type Response = ();
+    type Response = SetPrivacySettingResponse;
 
     fn build_iq(&self) -> InfoQuery<'static> {
         let mut category_node = NodeBuilder::new("category")
@@ -310,7 +317,6 @@ impl IqSpec for SetPrivacySettingSpec {
                 .collect();
 
             category_node = category_node.children(user_nodes);
-            // LID addressing mode per WAWebSetPrivacyJob function `f`
             privacy_node = privacy_node.attr("addressing_mode", "lid");
         }
 
@@ -323,8 +329,19 @@ impl IqSpec for SetPrivacySettingSpec {
         )
     }
 
-    fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
-        Ok(())
+    /// Parse the SET response. WA Web's `setPrivacyParser` extracts `{name, value, dhash}`
+    /// per category; we only need the dhash for disallowed-list conflict resolution.
+    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+        use crate::iq::node::optional_attr;
+
+        let dhash = response.get_optional_child("privacy").and_then(|privacy| {
+            privacy
+                .get_children_by_tag("category")
+                .next()
+                .and_then(|cat| optional_attr(cat, "dhash").map(|c| c.into_owned()))
+        });
+
+        Ok(SetPrivacySettingResponse { dhash })
     }
 }
 
@@ -653,6 +670,42 @@ mod tests {
         assert_eq!(users.len(), 2);
         assert_eq!(attr_str(users[0], "action").as_deref(), Some("add"));
         assert_eq!(attr_str(users[1], "action").as_deref(), Some("remove"));
+    }
+
+    #[test]
+    fn test_set_privacy_parse_response_with_dhash() {
+        let spec =
+            SetPrivacySettingSpec::new(PrivacyCategory::Last, PrivacyValue::ContactBlacklist);
+        let response = NodeBuilder::new("iq")
+            .attr("type", "result")
+            .children([NodeBuilder::new("privacy")
+                .children([NodeBuilder::new("category")
+                    .attr("name", "last")
+                    .attr("value", "contact_blacklist")
+                    .attr("dhash", "updated_hash_456")
+                    .build()])
+                .build()])
+            .build();
+
+        let result = spec.parse_response(&response).unwrap();
+        assert_eq!(result.dhash.as_deref(), Some("updated_hash_456"));
+    }
+
+    #[test]
+    fn test_set_privacy_parse_response_without_dhash() {
+        let spec = SetPrivacySettingSpec::new(PrivacyCategory::Online, PrivacyValue::MatchLastSeen);
+        let response = NodeBuilder::new("iq")
+            .attr("type", "result")
+            .children([NodeBuilder::new("privacy")
+                .children([NodeBuilder::new("category")
+                    .attr("name", "online")
+                    .attr("value", "match_last_seen")
+                    .build()])
+                .build()])
+            .build();
+
+        let result = spec.parse_response(&response).unwrap();
+        assert!(result.dhash.is_none());
     }
 
     // --- Validation tests ---

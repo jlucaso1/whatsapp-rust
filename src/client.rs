@@ -1601,7 +1601,7 @@ impl Client {
         &self,
         category: wacore::iq::privacy::PrivacyCategory,
         value: wacore::iq::privacy::PrivacyValue,
-    ) -> Result<(), crate::request::IqError> {
+    ) -> Result<wacore::iq::privacy::SetPrivacySettingResponse, crate::request::IqError> {
         use wacore::iq::privacy::SetPrivacySettingSpec;
         self.execute(SetPrivacySettingSpec::new(category, value))
             .await
@@ -1610,11 +1610,12 @@ impl Client {
     /// Set a privacy setting to `contact_blacklist` with a disallowed list update.
     ///
     /// Only `Last`, `Profile`, `Status`, `GroupAdd` support disallowed lists.
+    /// Returns the server's updated dhash for use in subsequent updates.
     pub async fn set_privacy_disallowed_list(
         &self,
         category: wacore::iq::privacy::PrivacyCategory,
         update: wacore::iq::privacy::DisallowedListUpdate,
-    ) -> Result<(), crate::request::IqError> {
+    ) -> Result<wacore::iq::privacy::SetPrivacySettingResponse, crate::request::IqError> {
         use wacore::iq::privacy::SetPrivacySettingSpec;
         self.execute(SetPrivacySettingSpec::with_disallowed_list(
             category, update,
