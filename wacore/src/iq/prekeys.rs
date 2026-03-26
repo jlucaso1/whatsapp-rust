@@ -187,7 +187,7 @@ impl IqSpec for PreKeyFetchSpec {
 ///       <signature>[64-byte signature]</signature>
 ///     </skey>
 ///     <list>
-///       <key>[3-byte BE prekey ID]</key>
+///       <id>[3-byte BE prekey ID]</id>
 ///       ...
 ///     </list>
 ///     <hash>[20-byte SHA-1 hash]</hash>
@@ -881,12 +881,8 @@ mod tests {
                         .build(),
                     NodeBuilder::new("list")
                         .children([
-                            NodeBuilder::new("key")
-                                .bytes(vec![0x00, 0x00, 0x0A])
-                                .build(),
-                            NodeBuilder::new("key")
-                                .bytes(vec![0x00, 0x00, 0x0B])
-                                .build(),
+                            NodeBuilder::new("id").bytes(vec![0x00, 0x00, 0x0A]).build(),
+                            NodeBuilder::new("id").bytes(vec![0x00, 0x00, 0x0B]).build(),
                         ])
                         .build(),
                     NodeBuilder::new("hash").bytes(hash_bytes.clone()).build(),

@@ -6,6 +6,7 @@ use log::{debug, info, warn};
 use std::sync::Arc;
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::iq::dirty::{DirtyBit, DirtyType};
+
 use wacore_binary::node::{Node, NodeContent};
 
 /// Handler for `<ib>` (information broadcast) stanzas.
@@ -43,22 +44,21 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                         continue;
                     }
                 };
-                let ts = attrs
-                    .optional_string("timestamp")
-                    .and_then(|s| s.parse::<u64>().ok());
+                let timestamp_str = attrs.optional_string("timestamp");
 
-                let dirty_type = DirtyType::from(dirty_type_str.as_ref());
+                let bit = match DirtyBit::from_raw(&dirty_type_str, timestamp_str.as_deref()) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!("Invalid dirty notification: {e}");
+                        continue;
+                    }
+                };
 
                 let needs_offline_wait = matches!(
-                    dirty_type,
+                    bit.dirty_type,
                     DirtyType::Groups | DirtyType::NewsletterMetadata
                 );
-                let needs_resync = dirty_type == DirtyType::SyncdAppState;
-
-                let bit = match ts {
-                    Some(t) => DirtyBit::with_timestamp(dirty_type, t),
-                    None => DirtyBit::new(dirty_type),
-                };
+                let needs_resync = bit.dirty_type == DirtyType::SyncdAppState;
 
                 debug!(
                     "Received dirty state notification for type: '{dirty_type_str}'. Sending clean IQ."

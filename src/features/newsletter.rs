@@ -592,8 +592,6 @@ fn parse_newsletter_messages_response(
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
 
-        // TODO: verify against WAWeb/Newsletter/MsgParser.js whether the server always sends
-        // a type attribute. If so, this default is moot.
         let message_type = msg_node
             .attrs
             .get("type")
@@ -623,4 +621,42 @@ fn parse_newsletter_messages_response(
     }
 
     Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wacore_binary::builder::NodeBuilder;
+
+    #[test]
+    fn test_missing_type_attribute_defaults_to_text() {
+        let response = NodeBuilder::new("iq")
+            .children([NodeBuilder::new("messages")
+                .children([NodeBuilder::new("message")
+                    .attr("server_id", "42")
+                    .attr("t", "1700000000")
+                    .build()])
+                .build()])
+            .build();
+
+        let msgs = parse_newsletter_messages_response(&response).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0].message_type, NewsletterMessageType::Text);
+    }
+
+    #[test]
+    fn test_explicit_type_attribute_parsed() {
+        let response = NodeBuilder::new("iq")
+            .children([NodeBuilder::new("messages")
+                .children([NodeBuilder::new("message")
+                    .attr("server_id", "1")
+                    .attr("t", "1700000000")
+                    .attr("type", "media")
+                    .build()])
+                .build()])
+            .build();
+
+        let msgs = parse_newsletter_messages_response(&response).unwrap();
+        assert_eq!(msgs[0].message_type, NewsletterMessageType::Media);
+    }
 }

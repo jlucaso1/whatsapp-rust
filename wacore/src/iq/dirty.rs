@@ -5,10 +5,8 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
-/// IQ namespace for dirty bits.
 pub const DIRTY_NAMESPACE: &str = "urn:xmpp:whatsapp:dirty";
 
-/// Known dirty bit types.
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum DirtyType {
     #[str = "account_sync"]
@@ -23,7 +21,15 @@ pub enum DirtyType {
     Other(String),
 }
 
-/// A dirty bit to clean.
+#[derive(Debug, thiserror::Error)]
+pub enum DirtyBitParseError {
+    #[error("invalid timestamp '{value}': {source}")]
+    InvalidTimestamp {
+        value: String,
+        source: std::num::ParseIntError,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct DirtyBit {
     pub dirty_type: DirtyType,
@@ -44,6 +50,23 @@ impl DirtyBit {
             timestamp: Some(timestamp),
         }
     }
+
+    /// Parse from raw protocol node attributes.
+    pub fn from_raw(dirty_type: &str, timestamp: Option<&str>) -> Result<Self, DirtyBitParseError> {
+        let ts = timestamp
+            .map(|s| {
+                s.parse::<u64>()
+                    .map_err(|e| DirtyBitParseError::InvalidTimestamp {
+                        value: s.to_string(),
+                        source: e,
+                    })
+            })
+            .transpose()?;
+        Ok(Self {
+            dirty_type: DirtyType::from(dirty_type),
+            timestamp: ts,
+        })
+    }
 }
 
 /// Clears dirty bits on the server.
@@ -57,19 +80,11 @@ impl CleanDirtyBitsSpec {
         Self { bits: vec![bit] }
     }
 
-    /// Parse from raw string attributes. Fails if `timestamp` is not valid u64.
-    // TODO: IB handler silently drops unparseable timestamps via .ok(). Consider using
-    // from_raw() there for consistent error reporting.
-    pub fn from_raw(dirty_type: &str, timestamp: Option<&str>) -> Result<Self, anyhow::Error> {
-        let bit = if let Some(ts) = timestamp {
-            let ts_num: u64 = ts
-                .parse()
-                .map_err(|e| anyhow::anyhow!("invalid timestamp '{}': {}", ts, e))?;
-            DirtyBit::with_timestamp(DirtyType::from(dirty_type), ts_num)
-        } else {
-            DirtyBit::new(DirtyType::from(dirty_type))
-        };
-        Ok(Self { bits: vec![bit] })
+    /// Parse from raw string attributes. Delegates to `DirtyBit::from_raw`.
+    pub fn from_raw(dirty_type: &str, timestamp: Option<&str>) -> Result<Self, DirtyBitParseError> {
+        Ok(Self {
+            bits: vec![DirtyBit::from_raw(dirty_type, timestamp)?],
+        })
     }
 
     pub fn multiple(bits: Vec<DirtyBit>) -> Self {
