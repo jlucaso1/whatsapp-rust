@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use wacore_binary::jid::{Jid, JidExt, MessageId, MessageServerId};
 use waproto::whatsapp as wa;
 
+use crate::StringEnum;
+
 /// Unique identifier for a message stanza within a chat.
 /// Used for deduplication and retry tracking.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -26,6 +28,23 @@ pub enum AddressingMode {
     Pn,
     #[str = "lid"]
     Lid,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+pub enum MessageCategory {
+    #[string_default]
+    #[str = ""]
+    Empty,
+    #[str = "peer"]
+    Peer,
+    #[string_fallback]
+    Other(String),
+}
+
+impl serde::Serialize for MessageCategory {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -117,7 +136,7 @@ pub struct MessageInfo {
     pub r#type: String,
     pub push_name: String,
     pub timestamp: DateTime<Utc>,
-    pub category: String,
+    pub category: MessageCategory,
     pub multicast: bool,
     pub media_type: String,
     pub edit: EditAttribute,

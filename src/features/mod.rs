@@ -37,8 +37,8 @@ pub use media_reupload::{MediaRetryResult, MediaReupload, MediaReuploadRequest};
 pub use mex::{Mex, MexError, MexErrorExtensions, MexGraphQLError, MexRequest, MexResponse};
 
 pub use newsletter::{
-    Newsletter, NewsletterMessage, NewsletterMetadata, NewsletterReactionCount, NewsletterRole,
-    NewsletterState, NewsletterVerification,
+    Newsletter, NewsletterMessage, NewsletterMessageType, NewsletterMetadata,
+    NewsletterReactionCount, NewsletterRole, NewsletterState, NewsletterVerification,
 };
 
 pub use polls::{PollOptionResult, Polls};

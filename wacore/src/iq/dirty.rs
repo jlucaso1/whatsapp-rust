@@ -5,21 +5,31 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
-/// IQ namespace for dirty bits.
 pub const DIRTY_NAMESPACE: &str = "urn:xmpp:whatsapp:dirty";
 
-/// Known dirty bit types.
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum DirtyType {
     #[str = "account_sync"]
     AccountSync,
     #[str = "groups"]
     Groups,
+    #[str = "syncd_app_state"]
+    SyncdAppState,
+    #[str = "newsletter_metadata"]
+    NewsletterMetadata,
     #[string_fallback]
     Other(String),
 }
 
-/// A dirty bit to clean.
+#[derive(Debug, thiserror::Error)]
+pub enum DirtyBitParseError {
+    #[error("invalid timestamp '{value}': {source}")]
+    InvalidTimestamp {
+        value: String,
+        source: std::num::ParseIntError,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct DirtyBit {
     pub dirty_type: DirtyType,
@@ -40,6 +50,23 @@ impl DirtyBit {
             timestamp: Some(timestamp),
         }
     }
+
+    /// Parse from raw protocol node attributes.
+    pub fn from_raw(dirty_type: &str, timestamp: Option<&str>) -> Result<Self, DirtyBitParseError> {
+        let ts = timestamp
+            .map(|s| {
+                s.parse::<u64>()
+                    .map_err(|e| DirtyBitParseError::InvalidTimestamp {
+                        value: s.to_string(),
+                        source: e,
+                    })
+            })
+            .transpose()?;
+        Ok(Self {
+            dirty_type: DirtyType::from(dirty_type),
+            timestamp: ts,
+        })
+    }
 }
 
 /// Clears dirty bits on the server.
@@ -49,17 +76,15 @@ pub struct CleanDirtyBitsSpec {
 }
 
 impl CleanDirtyBitsSpec {
-    /// Returns error if `timestamp` cannot be parsed as `u64`.
-    pub fn single(dirty_type: &str, timestamp: Option<&str>) -> Result<Self, anyhow::Error> {
-        let bit = if let Some(ts) = timestamp {
-            let ts_num: u64 = ts
-                .parse()
-                .map_err(|e| anyhow::anyhow!("invalid timestamp '{}': {}", ts, e))?;
-            DirtyBit::with_timestamp(DirtyType::from(dirty_type), ts_num)
-        } else {
-            DirtyBit::new(DirtyType::from(dirty_type))
-        };
-        Ok(Self { bits: vec![bit] })
+    pub fn single(bit: DirtyBit) -> Self {
+        Self { bits: vec![bit] }
+    }
+
+    /// Parse from raw string attributes. Delegates to `DirtyBit::from_raw`.
+    pub fn from_raw(dirty_type: &str, timestamp: Option<&str>) -> Result<Self, DirtyBitParseError> {
+        Ok(Self {
+            bits: vec![DirtyBit::from_raw(dirty_type, timestamp)?],
+        })
     }
 
     pub fn multiple(bits: Vec<DirtyBit>) -> Self {
@@ -103,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_clean_dirty_bits_spec_single() {
-        let spec = CleanDirtyBitsSpec::single("account_sync", None).unwrap();
+        let spec = CleanDirtyBitsSpec::single(DirtyBit::new(DirtyType::AccountSync));
         let iq = spec.build_iq();
 
         assert_eq!(iq.namespace, DIRTY_NAMESPACE);
@@ -126,7 +151,8 @@ mod tests {
 
     #[test]
     fn test_clean_dirty_bits_spec_with_timestamp() {
-        let spec = CleanDirtyBitsSpec::single("groups", Some("1234567890")).unwrap();
+        let spec =
+            CleanDirtyBitsSpec::single(DirtyBit::with_timestamp(DirtyType::Groups, 1234567890));
         let iq = spec.build_iq();
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
@@ -144,8 +170,8 @@ mod tests {
     }
 
     #[test]
-    fn test_clean_dirty_bits_spec_invalid_timestamp() {
-        let result = CleanDirtyBitsSpec::single("account_sync", Some("not_a_number"));
+    fn test_clean_dirty_bits_from_raw_invalid_timestamp() {
+        let result = CleanDirtyBitsSpec::from_raw("account_sync", Some("not_a_number"));
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string();
         assert!(
@@ -153,6 +179,18 @@ mod tests {
             "Error should mention invalid timestamp: {}",
             err_msg
         );
+    }
+
+    #[test]
+    fn test_clean_dirty_bits_from_raw() {
+        let spec = CleanDirtyBitsSpec::from_raw("groups", Some("1234567890")).unwrap();
+        assert_eq!(spec.bits.len(), 1);
+        assert_eq!(spec.bits[0].dirty_type, DirtyType::Groups);
+        assert_eq!(spec.bits[0].timestamp, Some(1234567890));
+
+        let spec = CleanDirtyBitsSpec::from_raw("account_sync", None).unwrap();
+        assert_eq!(spec.bits[0].dirty_type, DirtyType::AccountSync);
+        assert_eq!(spec.bits[0].timestamp, None);
     }
 
     #[test]
@@ -187,7 +225,7 @@ mod tests {
 
     #[test]
     fn test_clean_dirty_bits_spec_parse_response() {
-        let spec = CleanDirtyBitsSpec::single("account_sync", None).unwrap();
+        let spec = CleanDirtyBitsSpec::single(DirtyBit::new(DirtyType::AccountSync));
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
         let result = spec.parse_response(&response);
@@ -198,6 +236,11 @@ mod tests {
     fn test_dirty_type_from_str() {
         assert_eq!(DirtyType::from("account_sync"), DirtyType::AccountSync);
         assert_eq!(DirtyType::from("groups"), DirtyType::Groups);
+        assert_eq!(DirtyType::from("syncd_app_state"), DirtyType::SyncdAppState);
+        assert_eq!(
+            DirtyType::from("newsletter_metadata"),
+            DirtyType::NewsletterMetadata
+        );
         assert_eq!(
             DirtyType::from("other"),
             DirtyType::Other("other".to_string())

@@ -16,6 +16,7 @@
 //! </iq>
 //! ```
 
+use crate::StringEnum;
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
@@ -24,6 +25,17 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
+#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+pub enum HostType {
+    #[str = "primary"]
+    #[string_default]
+    Primary,
+    #[str = "fallback"]
+    Fallback,
+    #[string_fallback]
+    Other(String),
+}
+
 /// Media connection host information.
 ///
 /// Hosts are sorted primary-first by `MediaConnSpec::parse_response`.
@@ -31,8 +43,8 @@ use wacore_binary::node::{Node, NodeContent};
 #[derive(Debug, Clone)]
 pub struct MediaConnHost {
     pub hostname: String,
-    /// `"primary"` or `"fallback"` — determines retry order.
-    pub host_type: String,
+    /// Determines retry order: primary hosts are tried first.
+    pub host_type: HostType,
     /// Fallback hostname to try if this host fails.
     pub fallback_hostname: Option<String>,
 }
@@ -42,7 +54,7 @@ impl MediaConnHost {
     pub fn new(hostname: String) -> Self {
         Self {
             hostname,
-            host_type: "primary".to_string(),
+            host_type: HostType::Primary,
             fallback_hostname: None,
         }
     }
@@ -52,7 +64,7 @@ impl MediaConnHost {
 #[derive(Debug, Clone)]
 pub struct MediaConnHostExtended {
     pub hostname: String,
-    pub host_type: String, // "primary" or "fallback"
+    pub host_type: HostType,
     pub fallback_hostname: Option<String>,
     pub ip4: Option<String>,
     pub ip6: Option<String>,
@@ -66,7 +78,7 @@ pub struct MediaConnHostExtended {
 
 impl MediaConnHostExtended {
     /// Create a simple host (for fallback hosts).
-    pub fn simple(hostname: String, host_type: String) -> Self {
+    pub fn simple(hostname: String, host_type: HostType) -> Self {
         Self {
             hostname,
             host_type,
@@ -93,7 +105,7 @@ impl MediaConnHostExtended {
     ) -> Self {
         Self {
             hostname,
-            host_type: "primary".to_string(),
+            host_type: HostType::Primary,
             fallback_hostname: Some(fallback_hostname),
             fallback_ip4: Some(ip4.clone()),
             fallback_ip6: Some(ip6.clone()),
@@ -115,7 +127,7 @@ impl ProtocolNode for MediaConnHostExtended {
     fn into_node(self) -> Node {
         let mut builder = NodeBuilder::new("host")
             .attr("hostname", &self.hostname)
-            .attr("type", &self.host_type);
+            .attr("type", self.host_type.as_str());
 
         if let Some(ref fallback_hostname) = self.fallback_hostname {
             builder = builder.attr("fallback_hostname", fallback_hostname);
@@ -189,9 +201,8 @@ impl ProtocolNode for MediaConnHostExtended {
             .to_string();
         let host_type = attrs
             .optional_string("type")
-            .as_deref()
-            .unwrap_or("primary")
-            .to_string();
+            .map(|s| HostType::from(s.as_ref()))
+            .unwrap_or(HostType::Primary);
 
         Ok(Self {
             hostname,
@@ -372,7 +383,13 @@ impl IqSpec for MediaConnSpec {
                 })
             })
             .collect();
-        hosts.sort_by_key(|h| if h.host_type == "primary" { 0 } else { 1 });
+        hosts.sort_by_key(|h| {
+            if h.host_type == HostType::Primary {
+                0
+            } else {
+                1
+            }
+        });
 
         Ok(MediaConnResponse {
             auth,
@@ -463,7 +480,7 @@ mod tests {
 
         let parsed = MediaConnHostExtended::try_from_node(&node).unwrap();
         assert_eq!(parsed.hostname, host.hostname);
-        assert_eq!(parsed.host_type, "primary");
+        assert_eq!(parsed.host_type, HostType::Primary);
         assert!(parsed.upload);
         assert!(parsed.download);
         assert_eq!(parsed.download_categories.len(), 2);
@@ -481,7 +498,7 @@ mod tests {
                 vec!["image".to_string()],
                 vec!["0".to_string()],
             ),
-            MediaConnHostExtended::simple("localhost:3000".to_string(), "fallback".to_string()),
+            MediaConnHostExtended::simple("localhost:3000".to_string(), HostType::Fallback),
         ];
 
         let response = MediaConnResponseExtended::mock("test-auth".to_string(), 300, hosts);
@@ -496,7 +513,7 @@ mod tests {
         assert_eq!(parsed.max_buckets, Some(12));
         assert_eq!(parsed.ip_token, Some("MOCK_IP_TOKEN".to_string()));
         assert_eq!(parsed.hosts.len(), 2);
-        assert_eq!(parsed.hosts[0].host_type, "primary");
-        assert_eq!(parsed.hosts[1].host_type, "fallback");
+        assert_eq!(parsed.hosts[0].host_type, HostType::Primary);
+        assert_eq!(parsed.hosts[1].host_type, HostType::Fallback);
     }
 }

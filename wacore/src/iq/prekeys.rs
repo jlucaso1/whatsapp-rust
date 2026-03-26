@@ -117,11 +117,21 @@ impl IqSpec for PreKeyCountSpec {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, crate::StringEnum)]
+pub enum PreKeyFetchReason {
+    #[str = "identity"]
+    Identity,
+    #[str = "retry"]
+    Retry,
+    #[string_fallback]
+    Other(String),
+}
+
 /// Fetches pre-key bundles for a list of JIDs.
 #[derive(Debug, Clone)]
 pub struct PreKeyFetchSpec {
     pub jids: Vec<Jid>,
-    pub reason: Option<String>,
+    pub reason: Option<PreKeyFetchReason>,
 }
 
 impl PreKeyFetchSpec {
@@ -129,10 +139,10 @@ impl PreKeyFetchSpec {
         Self { jids, reason: None }
     }
 
-    pub fn with_reason(jids: Vec<Jid>, reason: impl Into<String>) -> Self {
+    pub fn with_reason(jids: Vec<Jid>, reason: PreKeyFetchReason) -> Self {
         Self {
             jids,
-            reason: Some(reason.into()),
+            reason: Some(reason),
         }
     }
 }
@@ -141,7 +151,10 @@ impl IqSpec for PreKeyFetchSpec {
     type Response = std::collections::HashMap<Jid, PreKeyBundle>;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        let content = PreKeyUtils::build_fetch_prekeys_request(&self.jids, self.reason.as_deref());
+        let content = PreKeyUtils::build_fetch_prekeys_request(
+            &self.jids,
+            self.reason.as_ref().map(|r| r.as_str()),
+        );
 
         InfoQuery::get(
             "encrypt",
@@ -823,9 +836,9 @@ mod tests {
     #[test]
     fn test_prekey_fetch_spec_with_reason() {
         let jids = vec!["1234567890:0@s.whatsapp.net".parse().unwrap()];
-        let spec = PreKeyFetchSpec::with_reason(jids, "retry");
+        let spec = PreKeyFetchSpec::with_reason(jids, PreKeyFetchReason::Retry);
 
-        assert_eq!(spec.reason, Some("retry".to_string()));
+        assert_eq!(spec.reason, Some(PreKeyFetchReason::Retry));
     }
 
     #[test]

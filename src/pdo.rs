@@ -21,7 +21,7 @@ use log::{debug, info, warn};
 use prost::Message;
 use std::sync::Arc;
 use std::time::Duration;
-use wacore::types::message::{EditAttribute, MessageSource, MsgMetaInfo};
+use wacore::types::message::{EditAttribute, MessageCategory, MessageSource, MsgMetaInfo};
 use wacore_binary::jid::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
@@ -400,7 +400,7 @@ impl Client {
             },
             timestamp,
             push_name: web_msg.push_name.clone().unwrap_or_default(),
-            category: String::new(),
+            category: MessageCategory::default(),
             multicast: false,
             media_type: String::new(),
             edit: EditAttribute::default(),

@@ -1539,12 +1539,11 @@ impl Client {
 
     pub async fn clean_dirty_bits(
         &self,
-        type_: &str,
-        timestamp: Option<&str>,
+        bit: wacore::iq::dirty::DirtyBit,
     ) -> Result<(), crate::request::IqError> {
         use wacore::iq::dirty::CleanDirtyBitsSpec;
 
-        let spec = CleanDirtyBitsSpec::single(type_, timestamp)?;
+        let spec = CleanDirtyBitsSpec::single(bit);
         self.execute(spec).await
     }
 

@@ -61,11 +61,12 @@ pub use features::{
     GroupSubject, GroupType, Groups, IsOnWhatsAppResult, JoinGroupResult, LinkSubgroupsResult,
     MediaRetryResult, MediaReupload, MediaReuploadRequest, MemberAddMode, MemberLinkMode,
     MembershipApprovalMode, MembershipRequest, Mex, MexError, MexErrorExtensions, MexRequest,
-    MexResponse, Newsletter, NewsletterMessage, NewsletterMetadata, NewsletterReactionCount,
-    NewsletterRole, NewsletterState, NewsletterVerification, ParticipantChangeResponse, Presence,
-    PresenceError, PresenceStatus, Profile, ProfilePicture, SetProfilePictureResponse, Status,
-    StatusPrivacySetting, StatusSendOptions, SyncActionMessageRange, TcToken,
-    UnlinkSubgroupsResult, UserInfo, group_type, message_key, message_range,
+    MexResponse, Newsletter, NewsletterMessage, NewsletterMessageType, NewsletterMetadata,
+    NewsletterReactionCount, NewsletterRole, NewsletterState, NewsletterVerification,
+    ParticipantChangeResponse, Presence, PresenceError, PresenceStatus, Profile, ProfilePicture,
+    SetProfilePictureResponse, Status, StatusPrivacySetting, StatusSendOptions,
+    SyncActionMessageRange, TcToken, UnlinkSubgroupsResult, UserInfo, group_type, message_key,
+    message_range,
 };
 
 pub mod bot;

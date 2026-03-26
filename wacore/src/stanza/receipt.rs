@@ -3,7 +3,7 @@
 //! These functions contain no runtime dependencies (`self`, `Client`, spawn, sleep).
 //! Orchestration and dispatch remain in `whatsapp-rust/src/receipt.rs`.
 
-use crate::types::message::MessageInfo;
+use crate::types::message::{MessageCategory, MessageInfo};
 use wacore_binary::jid::{JidExt as _, STATUS_BROADCAST_USER};
 
 /// Determines whether a delivery receipt should be sent for this message.
@@ -28,13 +28,13 @@ pub fn should_send_delivery_receipt(info: &MessageInfo) -> bool {
     // messages (category="peer").  These tell the primary phone that
     // this companion device received the message.
     // For all other messages, skip receipts for our own messages.
-    info.category == "peer" || !info.source.is_from_me
+    info.category == MessageCategory::Peer || !info.source.is_from_me
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::message::{MessageInfo, MessageSource};
+    use crate::types::message::{MessageCategory, MessageInfo, MessageSource};
 
     #[test]
     fn skip_empty_id() {
@@ -107,7 +107,7 @@ mod tests {
                 is_from_me: true,
                 ..Default::default()
             },
-            category: "peer".to_string(),
+            category: MessageCategory::Peer,
             ..Default::default()
         };
         assert!(should_send_delivery_receipt(&info));

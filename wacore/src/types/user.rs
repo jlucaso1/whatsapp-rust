@@ -1,7 +1,5 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
 #[derive(Debug, Clone)]
@@ -59,29 +57,4 @@ pub struct PrivacySettings {
     pub call_add: Option<PrivacySetting>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub online: Option<PrivacySetting>,
-}
-
-#[derive(Debug, Clone)]
-pub struct BusinessHoursConfig {
-    pub day_of_week: String,
-    pub mode: String,
-    pub open_time: String,
-    pub close_time: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Category {
-    pub id: String,
-    pub name: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct BusinessProfile {
-    pub jid: Jid,
-    pub address: Option<String>,
-    pub email: Option<String>,
-    pub categories: Vec<Category>,
-    pub profile_options: HashMap<String, String>,
-    pub business_hours_time_zone: Option<String>,
-    pub business_hours: Vec<BusinessHoursConfig>,
 }

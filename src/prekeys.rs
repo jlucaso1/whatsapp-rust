@@ -10,7 +10,7 @@ use log;
 
 use std::sync::atomic::Ordering;
 use wacore::iq::prekeys::{
-    DigestKeyBundleSpec, PreKeyCountSpec, PreKeyFetchSpec, PreKeyUploadSpec,
+    DigestKeyBundleSpec, PreKeyCountSpec, PreKeyFetchReason, PreKeyFetchSpec, PreKeyUploadSpec,
 };
 use wacore::libsignal::protocol::{KeyPair, PreKeyBundle, PublicKey};
 use wacore::libsignal::store::record_helpers::new_pre_key_record;
@@ -27,7 +27,7 @@ impl Client {
     pub(crate) async fn fetch_pre_keys(
         &self,
         jids: &[Jid],
-        reason: Option<&str>,
+        reason: Option<PreKeyFetchReason>,
     ) -> Result<std::collections::HashMap<Jid, PreKeyBundle>, anyhow::Error> {
         let spec = match reason {
             Some(r) => PreKeyFetchSpec::with_reason(jids.to_vec(), r),

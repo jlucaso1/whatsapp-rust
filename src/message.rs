@@ -17,6 +17,7 @@ use wacore::libsignal::protocol::{
     PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION,
 };
 use wacore::libsignal::store::sender_key_name::SenderKeyName;
+use wacore::message_processing::EncType;
 use wacore::types::jid::JidExt;
 use wacore_binary::jid::Jid;
 use wacore_binary::jid::JidExt as _;
@@ -442,9 +443,9 @@ impl Client {
             }
 
             // Fall back to built-in handlers
-            match enc_type.as_ref() {
-                "pkmsg" | "msg" => session_enc_nodes.push(enc_node),
-                "skmsg" => group_content_enc_nodes.push(enc_node),
+            match EncType::from_wire(enc_type.as_ref()) {
+                Some(et) if et.is_session() => session_enc_nodes.push(enc_node),
+                Some(EncType::SenderKey) => group_content_enc_nodes.push(enc_node),
                 _ => log::warn!("Unknown enc type: {enc_type}"),
             }
         }
@@ -454,9 +455,11 @@ impl Client {
         // so the skmsg decryption would fail with NoSenderKey.
         if !session_enc_nodes.is_empty()
             && !group_content_enc_nodes.is_empty()
-            && all_enc_nodes
-                .first()
-                .is_some_and(|n| n.attrs.get("type").is_some_and(|v| v == "skmsg"))
+            && all_enc_nodes.first().is_some_and(|n| {
+                n.attrs
+                    .get("type")
+                    .is_some_and(|v| v == EncType::SenderKey.as_wire_str())
+            })
         {
             log::error!(
                 "[msg:{}] Protocol violation: skmsg is first in multi-enc message from {}. \
@@ -697,8 +700,9 @@ impl Client {
                 }
             };
             let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
+            let enc_type_enum = EncType::from_wire(enc_type.as_ref());
 
-            let parsed_message = if enc_type.as_ref() == "pkmsg" {
+            let parsed_message = if enc_type_enum == Some(EncType::PreKeyMessage) {
                 match PreKeySignalMessage::try_from(ciphertext) {
                     Ok(m) => CiphertextMessage::PreKeySignalMessage(m),
                     Err(e) => {
@@ -716,7 +720,7 @@ impl Client {
                 }
             };
 
-            if enc_type.as_ref() == "pkmsg" {
+            if enc_type_enum == Some(EncType::PreKeyMessage) {
                 // FLAGGED FOR DEBUGGING: "Bad Mac" Reproducibility
                 #[cfg(feature = "debug-snapshots")]
                 {
@@ -2086,6 +2090,7 @@ mod tests {
     async fn test_parse_message_info_sender_alt_extraction() {
         use crate::store::SqliteStore;
         use std::sync::Arc;
+        use wacore::types::message::AddressingMode;
         use wacore_binary::builder::NodeBuilder;
 
         let backend = Arc::new(
@@ -2129,7 +2134,7 @@ mod tests {
             .attr("from", "120363021033254949@g.us")
             .attr("participant", "987654321000000.2:42@lid")
             .attr("participant_pn", "551234567890:42@s.whatsapp.net")
-            .attr("addressing_mode", "lid")
+            .attr("addressing_mode", AddressingMode::Lid.as_str())
             .attr("id", "test1")
             .attr("t", "12345")
             .build();
@@ -2155,7 +2160,7 @@ mod tests {
             .attr("from", "120363021033254949@g.us")
             .attr("participant", "100000000000001.1:75@lid")
             .attr("participant_pn", "15551234567:75@s.whatsapp.net")
-            .attr("addressing_mode", "lid")
+            .attr("addressing_mode", AddressingMode::Lid.as_str())
             .attr("id", "test2")
             .attr("t", "12346")
             .build();
@@ -2441,6 +2446,7 @@ mod tests {
             create_sender_key_distribution_message, process_sender_key_distribution_message,
         };
         use wacore::libsignal::store::sender_key_name::SenderKeyName;
+        use wacore::types::message::AddressingMode;
         use wacore_binary::builder::NodeBuilder;
 
         let backend = Arc::new(
@@ -2517,7 +2523,7 @@ mod tests {
                 .attr("id", "SECOND_MSG_TEST")
                 .attr("t", "1759306493")
                 .attr("type", "text")
-                .attr("addressing_mode", "lid")
+                .attr("addressing_mode", AddressingMode::Lid.as_str())
                 .children(vec![skmsg_node])
                 .build(),
         );
@@ -3183,6 +3189,8 @@ mod tests {
     /// 2. This enables sending to users we've only seen as LID senders
     #[tokio::test]
     async fn test_lid_pn_cache_populated_for_lid_sender_with_participant_pn() {
+        use wacore::types::message::AddressingMode;
+
         // Setup client
         let backend = Arc::new(
             SqliteStore::new("file:memdb_lid_sender_test?mode=memory&cache=shared")
@@ -3212,7 +3220,7 @@ mod tests {
             .attr("from", "120363123456789012@g.us") // Group chat
             .attr("participant", Jid::lid(lid).to_string()) // Sender is LID
             .attr("participant_pn", Jid::pn(phone).to_string()) // Their phone number
-            .attr("addressing_mode", "lid") // Required for participant_pn to be parsed
+            .attr("addressing_mode", AddressingMode::Lid.as_str()) // Required for participant_pn to be parsed
             .attr("id", "TEST123456789")
             .attr("t", "1765482972")
             .attr("type", "text")
@@ -3687,7 +3695,7 @@ mod tests {
 
     /// Helper to create a test MessageInfo with customizable fields
     fn create_test_message_info(chat: &str, msg_id: &str, sender: &str) -> MessageInfo {
-        use wacore::types::message::{EditAttribute, MessageSource, MsgMetaInfo};
+        use wacore::types::message::{EditAttribute, MessageCategory, MessageSource, MsgMetaInfo};
 
         let chat_jid: Jid = chat.parse().expect("valid chat JID");
         let sender_jid: Jid = sender.parse().expect("valid sender JID");
@@ -3709,7 +3717,7 @@ mod tests {
             },
             timestamp: wacore::time::now_utc(),
             push_name: "Test User".to_string(),
-            category: "".to_string(),
+            category: MessageCategory::default(),
             multicast: false,
             media_type: "".to_string(),
             edit: EditAttribute::default(),

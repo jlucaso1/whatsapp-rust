@@ -3,6 +3,7 @@ use crate::message::RetryReason;
 use crate::types::events::Receipt;
 use log::{info, warn};
 use prost::Message;
+use wacore::types::message::MessageCategory;
 
 use scopeguard;
 use std::sync::Arc;
@@ -782,8 +783,8 @@ impl Client {
                     .is_some_and(|lid| info.source.sender.is_same_user_as(lid));
 
             if is_from_own_account {
-                if info.category == "peer" {
-                    builder = builder.attr("category", "peer");
+                if info.category == MessageCategory::Peer {
+                    builder = builder.attr("category", MessageCategory::Peer.as_str());
                 } else {
                     // Include recipient so the sender can look up the original message.
                     // Without this, the retry fails silently (getTargetChat returns null).
@@ -964,7 +965,7 @@ mod tests {
     /// Matches WhatsApp Web's sendRetryReceipt: if (to.isUser()) { if (isMeAccount(to)) { ... } }
     #[test]
     fn retry_receipt_attributes_for_device_sync_vs_peer_vs_group() {
-        use wacore::types::message::{MessageInfo, MessageSource};
+        use wacore::types::message::{MessageCategory, MessageInfo, MessageSource};
         use wacore_binary::builder::NodeBuilder;
 
         let our_pn = Jid::pn("559999999999");
@@ -989,8 +990,8 @@ mod tests {
                     || info.source.sender.is_same_user_as(our_lid);
 
                 if is_from_own_account {
-                    if info.category == "peer" {
-                        builder = builder.attr("category", "peer");
+                    if info.category == MessageCategory::Peer {
+                        builder = builder.attr("category", MessageCategory::Peer.as_str());
                     } else {
                         let recipient = info.source.recipient.as_ref().unwrap_or(&info.source.chat);
                         builder = builder.attr("recipient", recipient.clone());
@@ -1013,7 +1014,7 @@ mod tests {
                 recipient: Some(recipient_lid.clone()),
                 ..Default::default()
             },
-            category: String::new(),
+            category: MessageCategory::default(),
             ..Default::default()
         };
 
@@ -1046,7 +1047,7 @@ mod tests {
                 recipient: None,
                 ..Default::default()
             },
-            category: "peer".to_string(),
+            category: MessageCategory::Peer,
             ..Default::default()
         };
 
@@ -1072,7 +1073,7 @@ mod tests {
                 recipient: None,
                 ..Default::default()
             },
-            category: String::new(),
+            category: MessageCategory::default(),
             ..Default::default()
         };
 
@@ -1101,7 +1102,7 @@ mod tests {
                 recipient: None,
                 ..Default::default()
             },
-            category: String::new(),
+            category: MessageCategory::default(),
             ..Default::default()
         };
 

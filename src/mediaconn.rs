@@ -8,8 +8,8 @@ use std::time::Duration;
 use wacore::iq::mediaconn::MediaConnSpec;
 use wacore::time::Instant;
 
-/// Re-export the host type from wacore.
-pub use wacore::iq::mediaconn::MediaConnHost;
+/// Re-export protocol types from wacore.
+pub use wacore::iq::mediaconn::{HostType, MediaConnHost};
 
 /// Number of retry attempts after a media auth error (401/403).
 /// On auth failure, the media connection is invalidated and refreshed before retrying.

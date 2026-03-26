@@ -143,7 +143,9 @@ pub fn parse_message_info(
     own_jid: &wacore_binary::jid::Jid,
     own_lid: Option<&wacore_binary::jid::Jid>,
 ) -> Result<crate::types::message::MessageInfo> {
-    use crate::types::message::{AddressingMode, EditAttribute, MessageInfo, MessageSource};
+    use crate::types::message::{
+        AddressingMode, EditAttribute, MessageCategory, MessageInfo, MessageSource,
+    };
     use wacore_binary::jid::{self, JidExt as _};
 
     let mut attrs = node.attrs();
@@ -219,7 +221,7 @@ pub fn parse_message_info(
 
     let category = attrs
         .optional_string("category")
-        .map(|s| s.to_string())
+        .map(|s| MessageCategory::from(s.as_ref()))
         .unwrap_or_default();
 
     let id = attrs.required_string("id")?.to_string();
