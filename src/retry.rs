@@ -261,7 +261,10 @@ impl Client {
             // WA Web rotateKey: unknown device (not in participant list, not LID) →
             // force full sender key rotation by clearing all sender key device tracking.
             if !participant_jid.is_lid() && !receipt.source.chat.is_status_broadcast() {
-                let is_known_participant = cached_group_info.as_ref().is_none_or(|g| {
+                // If we can't verify membership (no cached group info), treat
+                // as unknown and trigger rotation (matches WA Web where the
+                // device wouldn't be in the senderKey map → rotateKey=true)
+                let is_known_participant = cached_group_info.as_ref().is_some_and(|g| {
                     g.participants
                         .iter()
                         .any(|p| p.user == participant_jid.user)
