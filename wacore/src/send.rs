@@ -192,6 +192,9 @@ fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
 pub fn should_hide_decrypt_fail(msg: &wa::Message) -> bool {
     let msg = unwrap_message(msg);
 
+    use wa::message::protocol_message::Type as ProtocolType;
+    use wa::message::secret_encrypted_message::SecretEncType;
+
     msg.reaction_message.is_some()
         || msg.enc_reaction_message.is_some()
         || msg.pin_in_chat_message.is_some()
@@ -202,9 +205,27 @@ pub fn should_hide_decrypt_fail(msg: &wa::Message) -> bool {
             .poll_update_message
             .as_ref()
             .is_some_and(|p| p.vote.is_some())
-    // TODO: messageHistoryNotice, secretEncryptedMessage (EVENT_EDIT/POLL_EDIT),
-    //       botInvokeMessage (REQUEST_WELCOME_MESSAGE),
-    //       protocolMessage (EPHEMERAL_SYNC_RESPONSE, GROUP_MEMBER_LABEL_CHANGE)
+        || msg.message_history_notice.is_some()
+        || msg.secret_encrypted_message.as_ref().is_some_and(|s| {
+            matches!(
+                SecretEncType::try_from(s.secret_enc_type.unwrap_or(0)),
+                Ok(SecretEncType::EventEdit | SecretEncType::PollEdit)
+            )
+        })
+        || msg
+            .bot_invoke_message
+            .as_ref()
+            .and_then(|b| b.message.as_ref())
+            .and_then(|m| m.protocol_message.as_ref())
+            .is_some_and(|p| p.r#type == Some(ProtocolType::RequestWelcomeMessage as i32))
+        || msg.protocol_message.as_ref().is_some_and(|p| {
+            matches!(
+                p.r#type,
+                Some(t) if t == ProtocolType::EphemeralSyncResponse as i32
+                    || t == ProtocolType::RequestWelcomeMessage as i32
+                    || t == ProtocolType::GroupMemberLabelChange as i32
+            ) || p.edited_message.is_some()
+        })
 }
 
 pub async fn encrypt_group_message<S, R>(
