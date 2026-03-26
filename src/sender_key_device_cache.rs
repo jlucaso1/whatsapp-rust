@@ -57,27 +57,6 @@ impl SenderKeyDeviceMap {
     pub fn is_user_forgotten(&self, user: &str) -> bool {
         self.forgotten_users.contains(user)
     }
-
-    pub fn upsert(&mut self, user: &str, device: u16, has_key: bool) {
-        let user_key = if let Some((existing, _)) = self.devices.get_key_value(user) {
-            existing.clone()
-        } else {
-            Arc::from(user)
-        };
-        self.devices
-            .entry(user_key.clone())
-            .or_default()
-            .insert(device, has_key);
-        if has_key {
-            if let Some(device_map) = self.devices.get(user_key.as_ref())
-                && device_map.values().all(|v| *v)
-            {
-                self.forgotten_users.remove(&user_key);
-            }
-        } else {
-            self.forgotten_users.insert(user_key);
-        }
-    }
 }
 
 pub(crate) struct SenderKeyDeviceCache {

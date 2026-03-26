@@ -528,18 +528,9 @@ impl Client {
             return;
         }
 
-        // Write-through: update in-memory cache if present
-        if let Some(existing) = self.sender_key_device_cache.get(group_jid).await {
-            let mut updated = (*existing).clone();
-            for jid in devices {
-                updated.upsert(&jid.user, jid.device, true);
-            }
-            self.sender_key_device_cache
-                .insert(group_jid.to_string(), std::sync::Arc::new(updated))
-                .await;
-        }
-
-        // Persist to DB
+        // Write to DB first, then invalidate cache. Next read reloads from
+        // DB with the authoritative state. This avoids the clone+modify race
+        // where concurrent writers can overwrite each other's mutations.
         let strs: Vec<String> = devices.iter().map(|j| j.to_string()).collect();
         let entries: Vec<(&str, bool)> = strs.iter().map(|s| (s.as_str(), true)).collect();
         if let Err(e) = self
@@ -549,6 +540,7 @@ impl Client {
         {
             log::warn!("Failed to update sender key devices: {:?}", e);
         }
+        self.sender_key_device_cache.invalidate(group_jid).await;
     }
 
     /// Ensure the status stanza has a <participants> node listing all recipient

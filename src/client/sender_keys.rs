@@ -15,8 +15,6 @@ impl Client {
         group_jid: &str,
         device_jids: &[Jid],
     ) -> Result<()> {
-        use anyhow::anyhow;
-
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         let own_lid_user = snapshot.lid.as_ref().map(|j| j.user.as_str());
         let own_pn_user = snapshot.pn.as_ref().map(|j| j.user.as_str());
@@ -35,26 +33,12 @@ impl Client {
             return Ok(());
         }
 
-        // Write-through: update in-memory cache if present
-        if let Some(existing) = self.sender_key_device_cache.get(group_jid).await {
-            let mut updated = (*existing).clone();
-            for jid in device_jids.iter().filter(|jid| {
-                let is_own = own_lid_user.is_some_and(|u| u == jid.user)
-                    || own_pn_user.is_some_and(|u| u == jid.user);
-                !is_own
-            }) {
-                updated.upsert(&jid.user, jid.device, false);
-            }
-            self.sender_key_device_cache
-                .insert(group_jid.to_string(), std::sync::Arc::new(updated))
-                .await;
-        }
-
         let entries: Vec<(&str, bool)> = filtered.iter().map(|s| (s.as_str(), false)).collect();
         self.persistence_manager
             .set_sender_key_status(group_jid, &entries)
-            .await
-            .map_err(|e| anyhow!("{e}"))
+            .await?;
+        self.sender_key_device_cache.invalidate(group_jid).await;
+        Ok(())
     }
 
     /// Take a sent message for retry handling. Checks L1 cache first (if enabled),
