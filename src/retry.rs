@@ -279,29 +279,35 @@ impl Client {
                     );
 
                     // WA Web: deleteGroupSenderKeyInfo(groupWid, ownWid)
-                    // Delete our own sender key so a fresh one is generated on next send.
-                    // This provides forward secrecy — removed participants can't decrypt
-                    // messages encrypted with the new key.
-                    // Use group addressing mode (not participant JID type) to
-                    // pick the correct own JID for the sender key namespace
-                    let use_lid = cached_group_info.as_ref().is_some_and(|g| {
-                        g.addressing_mode == wacore::types::message::AddressingMode::Lid
-                    });
-                    let own_jid = if use_lid {
-                        device_snapshot.lid.as_ref()
-                    } else {
-                        device_snapshot.pn.as_ref()
+                    // Delete our own sender key for forward secrecy.
+                    // When addressing mode is known, delete only that namespace.
+                    // When unknown (group info unavailable), delete both PN and LID
+                    // to ensure the active key is removed regardless of mode.
+                    let backend = self.persistence_manager.backend();
+                    let addressing_mode = cached_group_info.as_ref().map(|g| g.addressing_mode);
+
+                    let jids_to_delete: Vec<_> = match addressing_mode {
+                        Some(wacore::types::message::AddressingMode::Lid) => {
+                            device_snapshot.lid.as_ref().into_iter().collect()
+                        }
+                        Some(wacore::types::message::AddressingMode::Pn) => {
+                            device_snapshot.pn.as_ref().into_iter().collect()
+                        }
+                        None => {
+                            // Can't determine mode — delete both namespaces
+                            device_snapshot
+                                .lid
+                                .as_ref()
+                                .into_iter()
+                                .chain(device_snapshot.pn.as_ref())
+                                .collect()
+                        }
                     };
-                    if let Some(own_jid) = own_jid {
-                        let sender_key_address =
-                            format!("{}:{}", group_jid, own_jid.to_protocol_address());
-                        if let Err(e) = self
-                            .persistence_manager
-                            .backend()
-                            .delete_sender_key(&sender_key_address)
-                            .await
-                        {
-                            log::warn!("Failed to delete sender key for rotation: {}", e);
+
+                    for own_jid in jids_to_delete {
+                        let addr = format!("{}:{}", group_jid, own_jid.to_protocol_address());
+                        if let Err(e) = backend.delete_sender_key(&addr).await {
+                            log::warn!("Failed to delete sender key {} for rotation: {}", addr, e);
                         }
                     }
 
