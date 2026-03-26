@@ -187,7 +187,7 @@ impl IqSpec for PreKeyFetchSpec {
 ///       <signature>[64-byte signature]</signature>
 ///     </skey>
 ///     <list>
-///       <key>[3-byte BE prekey ID]</key>
+///       <id>[3-byte BE prekey ID]</id>
 ///       ...
 ///     </list>
 ///     <hash>[20-byte SHA-1 hash]</hash>
@@ -269,14 +269,15 @@ impl IqSpec for DigestKeyBundleSpec {
             (0, Vec::new(), Vec::new())
         };
 
-        // Filter children by tag "key" to skip any non-prekey nodes
+        // Parse all children of <list> as 3-byte prekey IDs.
+        // Server sends them as <id> nodes (not <key>), matching WA Web's
+        // mapChildren which iterates all children without tag filtering.
         let prekey_ids = digest_node
             .get_optional_child("list")
             .and_then(|list| list.children())
             .map(|children| {
                 children
                     .iter()
-                    .filter(|child| child.tag == "key")
                     .map(|child| extract_content_uint(Some(child)))
                     .collect()
             })
@@ -880,12 +881,8 @@ mod tests {
                         .build(),
                     NodeBuilder::new("list")
                         .children([
-                            NodeBuilder::new("key")
-                                .bytes(vec![0x00, 0x00, 0x0A])
-                                .build(),
-                            NodeBuilder::new("key")
-                                .bytes(vec![0x00, 0x00, 0x0B])
-                                .build(),
+                            NodeBuilder::new("id").bytes(vec![0x00, 0x00, 0x0A]).build(),
+                            NodeBuilder::new("id").bytes(vec![0x00, 0x00, 0x0B]).build(),
                         ])
                         .build(),
                     NodeBuilder::new("hash").bytes(hash_bytes.clone()).build(),
