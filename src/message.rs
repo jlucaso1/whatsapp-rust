@@ -506,21 +506,7 @@ impl Client {
         // SKDM is lost, ALL subsequent skmsg messages from that sender will fail
         // with "No sender key state".
         let _global_permit = loop {
-            let (generation, semaphore) = match self.message_processing_semaphore.lock() {
-                Ok(guard) => (
-                    self.message_semaphore_generation
-                        .load(std::sync::atomic::Ordering::SeqCst),
-                    guard.clone(),
-                ),
-                Err(poisoned) => {
-                    let guard = poisoned.into_inner();
-                    (
-                        self.message_semaphore_generation
-                            .load(std::sync::atomic::Ordering::SeqCst),
-                        guard.clone(),
-                    )
-                }
-            };
+            let (generation, semaphore) = self.read_message_semaphore();
             let permit = semaphore.acquire_arc().await;
             if generation
                 == self

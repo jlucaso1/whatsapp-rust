@@ -441,6 +441,18 @@ pub struct Client {
 }
 
 impl Client {
+    /// Read the current semaphore generation and Arc atomically under the mutex.
+    pub(crate) fn read_message_semaphore(&self) -> (u64, Arc<async_lock::Semaphore>) {
+        let guard = match self.message_processing_semaphore.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        (
+            self.message_semaphore_generation.load(Ordering::SeqCst),
+            guard.clone(),
+        )
+    }
+
     /// Replace the message processing semaphore and bump the generation counter.
     ///
     /// Both operations happen under the same mutex hold so readers always see
