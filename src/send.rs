@@ -367,7 +367,6 @@ impl Client {
                 {
                     log::warn!("No sender key for status broadcast, forcing distribution.");
 
-                    self.sender_key_device_cache.invalidate(&to_str).await;
                     if let Err(e) = self
                         .persistence_manager
                         .clear_sender_key_devices(&to_str)
@@ -375,6 +374,7 @@ impl Client {
                     {
                         log::warn!("Failed to clear status SKDM recipients: {:?}", e);
                     }
+                    self.sender_key_device_cache.invalidate(&to_str).await;
 
                     let mut store_adapter_retry = SignalProtocolStoreAdapter::new(
                         device_store_arc.clone(),
@@ -874,7 +874,6 @@ impl Client {
                     {
                         log::warn!("No sender key for group {}, forcing distribution.", to);
 
-                        self.sender_key_device_cache.invalidate(&to_str).await;
                         if let Err(e) = self
                             .persistence_manager
                             .clear_sender_key_devices(&to_str)
@@ -882,6 +881,7 @@ impl Client {
                         {
                             log::warn!("Failed to clear SKDM recipients: {:?}", e);
                         }
+                        self.sender_key_device_cache.invalidate(&to_str).await;
 
                         let mut store_adapter_retry = SignalProtocolStoreAdapter::new(
                             device_store_arc.clone(),

@@ -314,7 +314,9 @@ impl Client {
                             .await;
                     }
 
-                    self.sender_key_device_cache.invalidate(&group_jid).await;
+                    // Clear DB first, then invalidate cache. This order prevents
+                    // a concurrent resolve_skdm_targets from reading stale DB rows
+                    // and re-inserting them into cache after invalidation.
                     if let Err(e) = self
                         .persistence_manager
                         .clear_sender_key_devices(&group_jid)
@@ -322,6 +324,7 @@ impl Client {
                     {
                         log::warn!("Failed to clear sender key devices for rotation: {}", e);
                     }
+                    self.sender_key_device_cache.invalidate(&group_jid).await;
                 }
             }
 
