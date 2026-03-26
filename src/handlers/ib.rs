@@ -43,10 +43,11 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                         continue;
                     }
                 };
-                let timestamp_str = attrs.optional_string("timestamp").map(|s| s.to_string());
+                let ts = attrs
+                    .optional_string("timestamp")
+                    .and_then(|s| s.parse::<u64>().ok());
 
                 let dirty_type = DirtyType::from(dirty_type_str.as_ref());
-                let ts = timestamp_str.and_then(|s| s.parse::<u64>().ok());
 
                 let needs_offline_wait = matches!(
                     dirty_type,
