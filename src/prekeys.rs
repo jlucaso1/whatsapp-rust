@@ -95,16 +95,13 @@ impl Client {
         let mut keys_to_upload = Vec::with_capacity(WANTED_PRE_KEY_COUNT);
         let mut key_pairs_to_upload = Vec::with_capacity(WANTED_PRE_KEY_COUNT);
 
-        for i in 0..WANTED_PRE_KEY_COUNT {
-            let pre_key_id = start_id + i as u32;
+        // WA Web uses 24-bit PreKey IDs (max 2^24 - 1 = 16777215).
+        // Wrap around to 1 when exceeding the range (ID 0 is reserved).
+        const MAX_PREKEY_ID: u32 = 16777215;
 
-            if pre_key_id > 16777215 {
-                log::warn!(
-                    "Pre-key ID {} exceeds maximum range, wrapping around",
-                    pre_key_id
-                );
-                break;
-            }
+        for i in 0..WANTED_PRE_KEY_COUNT {
+            let pre_key_id = (start_id + i as u32) % (MAX_PREKEY_ID + 1);
+            let pre_key_id = if pre_key_id == 0 { 1 } else { pre_key_id };
 
             let key_pair = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
             let pre_key_record = new_pre_key_record(pre_key_id, &key_pair);
@@ -155,8 +152,8 @@ impl Client {
             log::warn!("Failed to mark prekeys as uploaded: {:?}", e);
         }
 
-        // Update the persistent counter so future uploads never reuse these IDs.
-        let next_id = start_id + key_pairs_to_upload.len() as u32;
+        let next_id = (start_id + key_pairs_to_upload.len() as u32) % (MAX_PREKEY_ID + 1);
+        let next_id = if next_id == 0 { 1 } else { next_id };
         self.persistence_manager
             .process_command(DeviceCommand::SetNextPreKeyId(next_id))
             .await;
