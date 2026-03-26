@@ -1588,15 +1588,39 @@ impl Client {
         self.execute(PrivacySettingsSpec::new()).await
     }
 
-    /// Set a privacy setting (e.g. "last" → "contacts").
+    /// Set a privacy setting.
+    ///
+    /// Use [`PrivacyCategory::is_valid_value`] to check valid combinations.
+    ///
+    /// # Example
+    /// ```ignore
+    /// use wacore::iq::privacy::{PrivacyCategory, PrivacyValue};
+    /// client.set_privacy_setting(PrivacyCategory::Last, PrivacyValue::Contacts).await?;
+    /// ```
     pub async fn set_privacy_setting(
         &self,
-        category: &str,
-        value: &str,
-    ) -> Result<(), crate::request::IqError> {
+        category: wacore::iq::privacy::PrivacyCategory,
+        value: wacore::iq::privacy::PrivacyValue,
+    ) -> Result<wacore::iq::privacy::SetPrivacySettingResponse, crate::request::IqError> {
         use wacore::iq::privacy::SetPrivacySettingSpec;
         self.execute(SetPrivacySettingSpec::new(category, value))
             .await
+    }
+
+    /// Set a privacy setting to `contact_blacklist` with a disallowed list update.
+    ///
+    /// Only `Last`, `Profile`, `Status`, `GroupAdd` support disallowed lists.
+    /// Returns the server's updated dhash for use in subsequent updates.
+    pub async fn set_privacy_disallowed_list(
+        &self,
+        category: wacore::iq::privacy::PrivacyCategory,
+        update: wacore::iq::privacy::DisallowedListUpdate,
+    ) -> Result<wacore::iq::privacy::SetPrivacySettingResponse, crate::request::IqError> {
+        use wacore::iq::privacy::SetPrivacySettingSpec;
+        self.execute(SetPrivacySettingSpec::with_disallowed_list(
+            category, update,
+        ))
+        .await
     }
 
     /// Set the default disappearing messages duration (seconds). Pass 0 to disable.
