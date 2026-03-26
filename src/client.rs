@@ -1609,9 +1609,7 @@ impl Client {
 
     /// Set a privacy setting to `contact_blacklist` with a disallowed list update.
     ///
-    /// Only categories that support disallowed lists can be used:
-    /// `Last`, `Profile`, `Status`, `GroupAdd`.
-    /// See [`PrivacyCategory::supports_disallowed_list`].
+    /// Only `Last`, `Profile`, `Status`, `GroupAdd` support disallowed lists.
     pub async fn set_privacy_disallowed_list(
         &self,
         category: wacore::iq::privacy::PrivacyCategory,

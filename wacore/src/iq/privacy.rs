@@ -253,8 +253,13 @@ pub struct SetPrivacySettingSpec {
 }
 
 impl SetPrivacySettingSpec {
-    /// Create a simple privacy setting change.
     pub fn new(category: PrivacyCategory, value: PrivacyValue) -> Self {
+        debug_assert!(
+            category.is_valid_value(&value),
+            "{:?} does not accept {:?}",
+            category,
+            value
+        );
         Self {
             category,
             value,
@@ -262,9 +267,13 @@ impl SetPrivacySettingSpec {
         }
     }
 
-    /// Create a privacy setting change with a disallowed list update.
     /// Automatically sets the value to `ContactBlacklist`.
     pub fn with_disallowed_list(category: PrivacyCategory, update: DisallowedListUpdate) -> Self {
+        debug_assert!(
+            category.supports_disallowed_list(),
+            "{:?} does not support disallowed lists",
+            category
+        );
         Self {
             category,
             value: PrivacyValue::ContactBlacklist,
