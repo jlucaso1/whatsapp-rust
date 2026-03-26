@@ -282,7 +282,12 @@ impl Client {
                     // Delete our own sender key so a fresh one is generated on next send.
                     // This provides forward secrecy — removed participants can't decrypt
                     // messages encrypted with the new key.
-                    let own_jid = if participant_jid.is_lid() {
+                    // Use group addressing mode (not participant JID type) to
+                    // pick the correct own JID for the sender key namespace
+                    let use_lid = cached_group_info.as_ref().is_some_and(|g| {
+                        g.addressing_mode == wacore::types::message::AddressingMode::Lid
+                    });
+                    let own_jid = if use_lid {
                         device_snapshot.lid.as_ref()
                     } else {
                         device_snapshot.pn.as_ref()

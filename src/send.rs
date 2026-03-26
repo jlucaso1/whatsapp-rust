@@ -326,10 +326,6 @@ impl Client {
                 .await
         };
 
-        let is_full_distribution = force_skdm || skdm_target_devices.is_none();
-        #[allow(clippy::needless_late_init)]
-        let skdm_is_full: bool;
-
         // WhatsApp Web includes <meta status_setting="..."/> on non-revoke status messages.
         // Revoke messages omit this node.
         let is_revoke = message.protocol_message.as_ref().is_some_and(|pm| {
@@ -362,10 +358,7 @@ impl Client {
         )
         .await
         {
-            Ok(prepared) => {
-                skdm_is_full = is_full_distribution;
-                prepared
-            }
+            Ok(prepared) => prepared,
             Err(e) => {
                 if let Some(SignalProtocolError::NoSenderKeyState(_)) =
                     e.downcast_ref::<SignalProtocolError>()
@@ -392,7 +385,6 @@ impl Client {
                         sender_key_store: &mut store_adapter_retry.sender_key_store,
                     };
 
-                    skdm_is_full = true;
                     wacore::send::prepare_group_stanza(
                         &mut stores_retry,
                         self,
@@ -421,14 +413,8 @@ impl Client {
 
         self.send_node(stanza).await?;
 
-        // Use the exact device list from the stanza — no re-resolve needed
-        self.update_sender_key_devices(
-            &to_str,
-            &prepared.skdm_devices,
-            skdm_is_full,
-            &prepared.skdm_devices,
-        )
-        .await;
+        self.update_sender_key_devices(&to_str, &prepared.skdm_devices)
+            .await;
 
         // Flush cached Signal state to DB after encryption
         if let Err(e) = self.flush_signal_cache().await {
@@ -526,29 +512,15 @@ impl Client {
     /// The `all_resolved_devices` parameter carries the exact device list resolved
     /// for the stanza, avoiding a redundant `resolve_devices` call and preventing
     /// the clear-then-fail race where a transient resolver failure leaves the map empty.
-    async fn update_sender_key_devices(
-        &self,
-        to_str: &str,
-        devices_receiving_skdm: &[Jid],
-        is_full_distribution: bool,
-        all_resolved_devices: &[Jid],
-    ) {
-        // On full distribution, use the resolved device list. On partial, use SKDM recipients.
-        // We don't clear old entries — the upsert overwrites matching rows, and stale entries
-        // from removed participants are harmless (they'll never match on the next send).
-        // This avoids the clear-then-fail race where a transient write failure leaves the map empty.
-        let device_list: &[Jid] = if is_full_distribution {
-            all_resolved_devices
-        } else {
-            devices_receiving_skdm
-        };
-
-        if !device_list.is_empty() {
-            let strs: Vec<String> = device_list.iter().map(|j| j.to_string()).collect();
+    /// Mark devices as `has_key=true` after successful SKDM distribution.
+    /// Uses upsert — stale entries from removed participants are harmless.
+    async fn update_sender_key_devices(&self, group_jid: &str, devices: &[Jid]) {
+        if !devices.is_empty() {
+            let strs: Vec<String> = devices.iter().map(|j| j.to_string()).collect();
             let entries: Vec<(&str, bool)> = strs.iter().map(|s| (s.as_str(), true)).collect();
             if let Err(e) = self
                 .persistence_manager
-                .set_sender_key_status(to_str, &entries)
+                .set_sender_key_status(group_jid, &entries)
                 .await
             {
                 log::warn!("Failed to update sender key devices: {:?}", e);
@@ -739,7 +711,6 @@ impl Client {
         struct SkdmUpdate {
             to_str: String,
             devices: Vec<Jid>,
-            is_full_distribution: bool,
         }
         let mut skdm_update: Option<SkdmUpdate> = None;
         let mut should_issue_tc_token_after_send = false;
@@ -850,8 +821,6 @@ impl Client {
                     .await
             };
 
-            let is_full_distribution = force_skdm || skdm_target_devices.is_none();
-
             match wacore::send::prepare_group_stanza(
                 &mut stores,
                 self,
@@ -873,7 +842,6 @@ impl Client {
                     skdm_update = Some(SkdmUpdate {
                         to_str: to_str.clone(),
                         devices: prepared.skdm_devices,
-                        is_full_distribution,
                     });
                     prepared.node
                 }
@@ -923,7 +891,6 @@ impl Client {
                         skdm_update = Some(SkdmUpdate {
                             to_str,
                             devices: retry_prepared.skdm_devices,
-                            is_full_distribution: true,
                         });
                         retry_prepared.node
                     } else {
@@ -1010,13 +977,8 @@ impl Client {
         // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
         // WA Web only calls markHasSenderKey() after the server confirms receipt.
         if let Some(update) = skdm_update {
-            self.update_sender_key_devices(
-                &update.to_str,
-                &update.devices,
-                update.is_full_distribution,
-                &update.devices,
-            )
-            .await;
+            self.update_sender_key_devices(&update.to_str, &update.devices)
+                .await;
         }
 
         // Flush cached Signal state to DB after encryption

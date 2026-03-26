@@ -1,12 +1,4 @@
-//! Sender Key and message cache methods for Client.
-//!
-//! This module contains methods for managing sender keys (SKDM) for group messaging
-//! and caching recent messages for retry handling.
-//!
-//! Key features:
-//! - Mark participants for fresh SKDM on retry
-//! - Consume forget marks when sending group messages
-//! - Cache recent messages for retry handling
+//! Sender key tracking and message cache methods for Client.
 
 use anyhow::Result;
 use wacore_binary::jid::Jid;
@@ -26,15 +18,14 @@ impl Client {
         use anyhow::anyhow;
 
         let snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_lid_user = snapshot.lid.as_ref().map(|j| j.user.as_str().to_owned());
-        let own_pn_user = snapshot.pn.as_ref().map(|j| j.user.as_str().to_owned());
+        let own_lid_user = snapshot.lid.as_ref().map(|j| j.user.as_str());
+        let own_pn_user = snapshot.pn.as_ref().map(|j| j.user.as_str());
 
-        // Filter out own devices using Jid user comparison (no string prefix hacks)
         let filtered: Vec<String> = device_jids
             .iter()
             .filter(|jid| {
-                let is_own = own_lid_user.as_deref().is_some_and(|u| u == jid.user)
-                    || own_pn_user.as_deref().is_some_and(|u| u == jid.user);
+                let is_own = own_lid_user.is_some_and(|u| u == jid.user)
+                    || own_pn_user.is_some_and(|u| u == jid.user);
                 !is_own
             })
             .map(|jid| jid.to_string())
@@ -46,7 +37,6 @@ impl Client {
 
         let entries: Vec<(&str, bool)> = filtered.iter().map(|s| (s.as_str(), false)).collect();
         self.persistence_manager
-            .backend()
             .set_sender_key_status(group_jid, &entries)
             .await
             .map_err(|e| anyhow!("{e}"))
