@@ -63,8 +63,8 @@ pub struct PrivacySettings {
 
 #[derive(Debug, Clone)]
 pub struct BusinessHoursConfig {
-    pub day_of_week: String,
-    pub mode: String,
+    pub day_of_week: crate::iq::business::DayOfWeek,
+    pub mode: crate::iq::business::BusinessHourMode,
     pub open_time: String,
     pub close_time: String,
 }

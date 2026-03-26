@@ -194,7 +194,9 @@ impl Client {
             return Ok(0);
         }
 
-        let prekey_bundles = self.fetch_pre_keys(jids, Some("identity")).await?;
+        let prekey_bundles = self
+            .fetch_pre_keys(jids, Some(wacore::iq::prekeys::PreKeyFetchReason::Identity))
+            .await?;
 
         let device_store = self.persistence_manager.get_device_arc().await;
         let mut adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(

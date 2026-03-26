@@ -4,6 +4,8 @@
 //! Uses MEX (GraphQL) for metadata/management and standard IQ for message operations.
 //! Newsletter messages are plaintext (no Signal E2E encryption).
 
+use wacore::StringEnum;
+
 use crate::client::Client;
 use crate::features::mex::{MexError, MexRequest};
 use prost::Message as ProtoMessage;
@@ -16,6 +18,27 @@ use wacore_binary::node::{Node, NodeContent};
 use waproto::whatsapp as wa;
 
 // Types
+
+/// Message type in a newsletter (channel).
+#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+pub enum NewsletterMessageType {
+    #[str = "text"]
+    Text,
+    #[str = "media"]
+    Media,
+    #[str = "reaction"]
+    Reaction,
+    #[str = "revoke"]
+    Revoke,
+    #[str = "poll_creation"]
+    PollCreation,
+    #[str = "poll_vote"]
+    PollVote,
+    #[str = "edit"]
+    Edit,
+    #[string_fallback]
+    Other(String),
+}
 
 /// Newsletter verification status.
 #[derive(Debug, Clone)]
@@ -71,8 +94,8 @@ pub struct NewsletterMessage {
     pub server_id: u64,
     /// Message timestamp (Unix seconds).
     pub timestamp: u64,
-    /// Message type ("text", "media", etc.).
-    pub message_type: String,
+    /// Message type (text, media, reaction, etc.).
+    pub message_type: NewsletterMessageType,
     /// Whether the viewer is the sender.
     pub is_sender: bool,
     /// Decoded protobuf message (from `<plaintext>` bytes).
@@ -573,8 +596,8 @@ fn parse_newsletter_messages_response(
         let message_type = msg_node
             .attrs
             .get("type")
-            .map(|v| v.as_str().into_owned())
-            .unwrap_or_default();
+            .map(|v| NewsletterMessageType::from(v.as_str().as_ref()))
+            .unwrap_or(NewsletterMessageType::Other(String::new()));
 
         let is_sender = msg_node.attrs.get("is_sender").is_some_and(|v| v == "true");
 

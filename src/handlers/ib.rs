@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use log::{debug, info, warn};
 use std::sync::Arc;
 use wacore::appstate::patch_decode::WAPatchName;
+use wacore::iq::dirty::{DirtyBit, DirtyType};
 use wacore_binary::node::{Node, NodeContent};
 
 /// Handler for `<ib>` (information broadcast) stanzas.
@@ -35,38 +36,46 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
         match child.tag.as_ref() {
             "dirty" => {
                 let mut attrs = child.attrs();
-                let dirty_type = match attrs.optional_string("type") {
+                let dirty_type_str = match attrs.optional_string("type") {
                     Some(t) => t.to_string(),
                     None => {
                         warn!("Dirty notification missing 'type' attribute");
                         continue;
                     }
                 };
-                let timestamp = attrs.optional_string("timestamp").map(|s| s.to_string());
+                let timestamp_str = attrs.optional_string("timestamp").map(|s| s.to_string());
+
+                let dirty_type = DirtyType::from(dirty_type_str.as_ref());
+                let ts = timestamp_str.and_then(|s| s.parse::<u64>().ok());
+                let bit = match ts {
+                    Some(t) => DirtyBit::with_timestamp(dirty_type.clone(), t),
+                    None => DirtyBit::new(dirty_type.clone()),
+                };
 
                 debug!(
-                    "Received dirty state notification for type: '{dirty_type}'. Sending clean IQ."
+                    "Received dirty state notification for type: '{dirty_type_str}'. Sending clean IQ."
                 );
 
                 let client_clone = client.clone();
 
                 // WA Web gates `groups` and `newsletter_metadata` dirty types behind
-                // offlineDeliveryEnd — only process them after offline sync completes.
+                // offlineDeliveryEnd -- only process them after offline sync completes.
                 // `account_sync` and `syncd_app_state` run immediately.
                 // See WAWebHandleDirtyBits in 5Yec01dI04o.js:50765-50782.
                 client
                     .runtime
                     .spawn(Box::pin(async move {
-                        if dirty_type == "groups" || dirty_type == "newsletter_metadata" {
+                        if matches!(
+                            dirty_type,
+                            DirtyType::Groups | DirtyType::NewsletterMetadata
+                        ) {
                             client_clone.wait_for_offline_delivery_end().await;
                         }
                         if client_clone.is_shutting_down() {
                             debug!("Skipping clean dirty bits: client is shutting down");
                             return;
                         }
-                        if let Err(e) = client_clone
-                            .clean_dirty_bits(&dirty_type, timestamp.as_deref())
-                            .await
+                        if let Err(e) = client_clone.clean_dirty_bits(bit).await
                             && !client_clone.is_shutting_down()
                         {
                             warn!("Failed to send clean dirty bits IQ: {e:?}");
@@ -74,9 +83,11 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
 
                         // Re-sync app state collections when notified they are stale.
                         // Real WA Web re-syncs all collections on syncd_app_state dirty.
-                        // See WAWebHandleDirtyBits → WAWebSyncdCollectionsStateMachine.
-                        if dirty_type == "syncd_app_state" && !client_clone.is_shutting_down() {
-                            info!("syncd_app_state dirty — re-syncing all app state collections");
+                        // See WAWebHandleDirtyBits -> WAWebSyncdCollectionsStateMachine.
+                        if dirty_type == DirtyType::SyncdAppState
+                            && !client_clone.is_shutting_down()
+                        {
+                            info!("syncd_app_state dirty -- re-syncing all app state collections");
                             if let Err(e) = client_clone
                                 .sync_collections_batched(vec![
                                     WAPatchName::CriticalBlock,
