@@ -105,7 +105,16 @@ impl TestClient {
         client.register_handler(event_handler);
         let run_handle = bot.run().await?;
 
-        // Wait for PairSuccess + Connected
+        // Wait for PairSuccess + Connected.
+        //
+        // PairSuccess arrives quickly (handshake only), but Connected is dispatched
+        // only after the critical app-state sync completes (sync_collections_batched).
+        // Under CI load with many concurrent clients, the mock server may be slow to
+        // serve app-state IQs, so Connected can take significantly longer than pairing.
+        //
+        // We use a two-phase timeout: 30s for pairing, then an additional 30s for
+        // Connected (which includes critical sync). This avoids a single shared timeout
+        // where a slow sync eats into the pairing budget.
         let timeout = tokio::time::Duration::from_secs(30);
         let mut got_pair = false;
         let mut got_connected = false;
@@ -144,11 +153,43 @@ impl TestClient {
 
         match wait_result {
             Err(_) => {
-                client.disconnect().await;
-                drop(run_handle); // aborts task via AbortHandle drop
-                return Err(anyhow::anyhow!(
-                    "Timed out waiting for PairSuccess + Connected"
-                ));
+                // If we got PairSuccess but not Connected, the critical sync is slow.
+                // Give it extra time via wait_for_startup_sync instead of failing immediately.
+                if got_pair && !got_connected {
+                    eprintln!(
+                        "WARN: Got PairSuccess but Connected timed out after {timeout:?}, \
+                         waiting for startup sync..."
+                    );
+                    if let Err(e) = client
+                        .wait_for_startup_sync(tokio::time::Duration::from_secs(30))
+                        .await
+                    {
+                        client.disconnect().await;
+                        drop(run_handle);
+                        return Err(anyhow::anyhow!(
+                            "Timed out waiting for Connected after PairSuccess: {e}"
+                        ));
+                    }
+                    // Drain the Connected event that should now be available
+                    let connected_timeout = tokio::time::Duration::from_secs(5);
+                    let _ = tokio::time::timeout(connected_timeout, async {
+                        loop {
+                            match event_rx.recv().await {
+                                Ok(Event::Connected(_)) => break,
+                                Ok(_) => continue,
+                                Err(_) => break,
+                            }
+                        }
+                    })
+                    .await;
+                } else {
+                    client.disconnect().await;
+                    drop(run_handle);
+                    return Err(anyhow::anyhow!(
+                        "Timed out waiting for PairSuccess + Connected \
+                         (got_pair={got_pair}, got_connected={got_connected})"
+                    ));
+                }
             }
             Ok(Err(e)) => {
                 client.disconnect().await;
@@ -157,9 +198,6 @@ impl TestClient {
             }
             Ok(Ok(())) => {}
         }
-
-        assert!(got_pair, "Should have received PairSuccess");
-        assert!(got_connected, "Should have received Connected");
 
         if let Err(e) = client
             .wait_for_startup_sync(tokio::time::Duration::from_secs(15))

@@ -324,6 +324,7 @@ pub struct Client {
     /// This allows us to reuse existing LID-based sessions when sending replies.
     /// The cache is backed by persistent storage and warmed up on client initialization.
     pub(crate) lid_pn_cache: Arc<LidPnCache>,
+    pub(crate) ab_props: Arc<wacore::store::ab_props::AbPropsCache>,
 
     /// Per-chat mutex for serializing message enqueue operations.
     /// This ensures messages are enqueued in the order they arrive,
@@ -614,6 +615,7 @@ impl Client {
                 &cache_config.lid_pn_cache,
                 cache_config.cache_stores.lid_pn_cache.clone(),
             )),
+            ab_props: Arc::new(wacore::store::ab_props::AbPropsCache::new()),
             message_enqueue_locks: Cache::builder()
                 .max_capacity(cache_config.message_enqueue_locks_capacity.max(1))
                 .build(),
@@ -1558,13 +1560,14 @@ impl Client {
             .props_hash
             .clone();
 
+        // Deltas only contain changed props, so they're invalid against an empty cache.
         let spec = match &stored_hash {
-            Some(hash) => {
+            Some(hash) if self.ab_props.is_seeded() => {
                 debug!("Fetching props with hash for delta update...");
                 PropsSpec::with_hash(hash)
             }
-            None => {
-                debug!("Fetching props (full, no stored hash)...");
+            _ => {
+                debug!("Fetching props (full)...");
                 PropsSpec::new()
             }
         };
@@ -1584,6 +1587,8 @@ impl Client {
             );
         }
 
+        self.ab_props.apply_response(&response).await;
+
         if let Some(new_hash) = response.hash {
             self.persistence_manager
                 .process_command(DeviceCommand::SetPropsHash(Some(new_hash)))
@@ -1591,6 +1596,10 @@ impl Client {
         }
 
         Ok(())
+    }
+
+    pub(crate) fn ab_props(&self) -> &wacore::store::ab_props::AbPropsCache {
+        &self.ab_props
     }
 
     pub async fn fetch_privacy_settings(

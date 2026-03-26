@@ -1118,17 +1118,77 @@ macro_rules! define_group_participant_iq {
     };
 }
 
-define_group_participant_iq!(
-    /// IQ specification for adding participants to a group.
-    ///
-    /// Wire format:
-    /// ```xml
-    /// <iq type="set" xmlns="w:g2" to="{group_jid}">
-    ///   <add><participant jid="{user_jid}"/></add>
-    /// </iq>
-    /// ```
-    AddParticipantsIq, action = "add", response = Vec<ParticipantChangeResponse>
-);
+/// IQ specification for adding participants to a group, with optional
+/// per-participant privacy tokens.
+#[derive(Debug, Clone)]
+pub struct AddParticipantsIq {
+    pub group_jid: Jid,
+    pub participants: Vec<GroupParticipantOptions>,
+}
+
+impl AddParticipantsIq {
+    /// Create from plain JIDs (no privacy tokens). Backwards compatible.
+    pub fn new(group_jid: &Jid, participants: &[Jid]) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            participants: participants
+                .iter()
+                .map(|jid| GroupParticipantOptions::new(jid.clone()))
+                .collect(),
+        }
+    }
+
+    /// Create with full participant options (JID + optional phone_number + optional privacy token).
+    pub fn with_options(group_jid: &Jid, participants: Vec<GroupParticipantOptions>) -> Self {
+        Self {
+            group_jid: group_jid.clone(),
+            participants,
+        }
+    }
+}
+
+impl IqSpec for AddParticipantsIq {
+    type Response = Vec<ParticipantChangeResponse>;
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let children: Vec<Node> = self
+            .participants
+            .iter()
+            .map(|p| {
+                let mut attrs = vec![("jid", p.jid.to_string())];
+                // phone_number is only meaningful for LID JIDs
+                if p.jid.is_lid()
+                    && let Some(pn) = &p.phone_number
+                {
+                    attrs.push(("phone_number", pn.to_string()));
+                }
+                if let Some(privacy_bytes) = &p.privacy {
+                    NodeBuilder::new("participant")
+                        .attrs(attrs)
+                        .children([NodeBuilder::new("privacy")
+                            .string_content(hex::encode(privacy_bytes))
+                            .build()])
+                        .build()
+                } else {
+                    NodeBuilder::new("participant").attrs(attrs).build()
+                }
+            })
+            .collect();
+
+        let action_node = NodeBuilder::new("add").children(children).build();
+
+        InfoQuery::set_ref(
+            GROUP_IQ_NAMESPACE,
+            &self.group_jid,
+            Some(NodeContent::Nodes(vec![action_node])),
+        )
+    }
+
+    fn parse_response(&self, response: &Node) -> Result<Self::Response> {
+        let action_node = required_child(response, "add")?;
+        collect_children::<ParticipantChangeResponse>(action_node, "participant")
+    }
+}
 
 define_group_participant_iq!(
     /// IQ specification for removing participants from a group.
@@ -2313,6 +2373,90 @@ mod tests {
             assert_eq!(add_node.tag, "add");
             let participants: Vec<_> = add_node.get_children_by_tag("participant").collect();
             assert_eq!(participants.len(), 2);
+        } else {
+            panic!("expected nodes content");
+        }
+    }
+
+    #[test]
+    fn test_add_participants_with_options_privacy() {
+        let group: Jid = "120363000000000001@g.us".parse().unwrap();
+        let p1 = GroupParticipantOptions {
+            jid: "1234567890@s.whatsapp.net".parse().unwrap(),
+            phone_number: None,
+            privacy: Some(vec![0xDE, 0xAD, 0xBE, 0xEF]),
+        };
+        let spec = AddParticipantsIq::with_options(&group, vec![p1]);
+        let iq = spec.build_iq();
+
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            let add_node = &nodes[0];
+            assert_eq!(add_node.tag, "add");
+
+            let participants: Vec<_> = add_node.get_children_by_tag("participant").collect();
+            assert_eq!(participants.len(), 1);
+
+            let privacy_children: Vec<_> = participants[0].get_children_by_tag("privacy").collect();
+            assert_eq!(privacy_children.len(), 1, "expected a <privacy> child node");
+
+            match &privacy_children[0].content {
+                Some(NodeContent::String(s)) => assert_eq!(s, "deadbeef"),
+                other => panic!("expected String content in <privacy>, got: {:?}", other),
+            }
+        } else {
+            panic!("expected nodes content");
+        }
+    }
+
+    #[test]
+    fn test_add_participants_with_options_no_privacy() {
+        let group: Jid = "120363000000000001@g.us".parse().unwrap();
+        let p1 = GroupParticipantOptions {
+            jid: "1234567890@s.whatsapp.net".parse().unwrap(),
+            phone_number: None,
+            privacy: None,
+        };
+        let spec = AddParticipantsIq::with_options(&group, vec![p1]);
+        let iq = spec.build_iq();
+
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            let add_node = &nodes[0];
+            assert_eq!(add_node.tag, "add");
+
+            let participants: Vec<_> = add_node.get_children_by_tag("participant").collect();
+            assert_eq!(participants.len(), 1);
+
+            let privacy_children: Vec<_> = participants[0].get_children_by_tag("privacy").collect();
+            assert!(
+                privacy_children.is_empty(),
+                "expected no <privacy> child when privacy is None"
+            );
+        } else {
+            panic!("expected nodes content");
+        }
+    }
+
+    #[test]
+    fn test_add_participants_strips_phone_number_for_pn_jid() {
+        let group: Jid = "120363000000000001@g.us".parse().unwrap();
+        let pn_jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        // PN JID with phone_number set: build_iq should strip it
+        let p1 = GroupParticipantOptions::new(pn_jid.clone())
+            .with_phone_number("9876543210@s.whatsapp.net".parse().unwrap());
+        let spec = AddParticipantsIq::with_options(&group, vec![p1]);
+        let iq = spec.build_iq();
+
+        if let Some(NodeContent::Nodes(nodes)) = &iq.content {
+            let add_node = &nodes[0];
+            let participants: Vec<_> = add_node.get_children_by_tag("participant").collect();
+            assert_eq!(participants.len(), 1);
+            assert!(
+                participants[0]
+                    .attrs()
+                    .optional_string("phone_number")
+                    .is_none(),
+                "phone_number should be stripped for non-LID JIDs"
+            );
         } else {
             panic!("expected nodes content");
         }
