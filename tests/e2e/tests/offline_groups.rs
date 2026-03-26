@@ -1,5 +1,6 @@
 use e2e_tests::{TestClient, text_msg};
 use log::info;
+use std::collections::HashSet;
 use wacore::types::events::Event;
 use whatsapp_rust::features::{GroupCreateOptions, GroupParticipantOptions};
 
@@ -250,6 +251,241 @@ async fn test_offline_group_message_delivery() -> anyhow::Result<()> {
     client_a.disconnect().await;
     client_b.disconnect().await;
     client_c.disconnect().await;
+
+    Ok(())
+}
+
+/// Regression test for the semaphore transition bug during offline→online sync.
+///
+/// When a device comes back online, the message processing semaphore transitions from
+/// 1 permit (sequential) to 64 permits (concurrent). Messages that were waiting on
+/// the old semaphore used to be silently dropped. If the dropped message was a pkmsg
+/// carrying a sender key distribution message (SKDM), ALL subsequent group messages
+/// from that sender would fail with "No sender key state".
+///
+/// This test reproduces the scenario:
+/// 1. Multiple senders send messages across multiple groups while a device is offline
+/// 2. The first message from each new sender contains pkmsg+skmsg (SKDM + content)
+/// 3. Subsequent messages from the same sender contain only skmsg
+/// 4. After reconnection, ALL messages must be decrypted — none silently dropped
+#[tokio::test]
+async fn test_offline_multi_sender_group_messages() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    // Create 3 senders (A, D, E) and 1 receiver (C), plus an online observer (B)
+    let client_a = TestClient::connect("e2e_off_multi_a").await?;
+    let mut client_b = TestClient::connect("e2e_off_multi_b").await?;
+    let mut client_c = TestClient::connect("e2e_off_multi_c").await?;
+    let client_d = TestClient::connect("e2e_off_multi_d").await?;
+    let client_e = TestClient::connect("e2e_off_multi_e").await?;
+
+    let jid_b = client_b.jid().await;
+    let jid_c = client_c.jid().await;
+    let jid_d = client_d.jid().await;
+    let jid_e = client_e.jid().await;
+
+    info!("B={jid_b}, C={jid_c}, D={jid_d}, E={jid_e}");
+
+    // Create two groups to increase message volume during offline sync
+    let group1_jid = client_a
+        .client
+        .groups()
+        .create_group(GroupCreateOptions {
+            subject: "Multi-Sender Group 1".to_string(),
+            participants: vec![
+                GroupParticipantOptions::new(jid_b.clone()),
+                GroupParticipantOptions::new(jid_c.clone()),
+                GroupParticipantOptions::new(jid_d.clone()),
+                GroupParticipantOptions::new(jid_e.clone()),
+            ],
+            ..Default::default()
+        })
+        .await?
+        .gid;
+    info!("Group 1 created: {group1_jid}");
+
+    let group2_jid = client_a
+        .client
+        .groups()
+        .create_group(GroupCreateOptions {
+            subject: "Multi-Sender Group 2".to_string(),
+            participants: vec![
+                GroupParticipantOptions::new(jid_b.clone()),
+                GroupParticipantOptions::new(jid_c.clone()),
+                GroupParticipantOptions::new(jid_d.clone()),
+            ],
+            ..Default::default()
+        })
+        .await?
+        .gid;
+    info!("Group 2 created: {group2_jid}");
+
+    // Drain group creation notifications for all participants
+    for _ in 0..2 {
+        client_b.wait_for_group_notification(10).await?;
+    }
+    for _ in 0..2 {
+        client_c.wait_for_group_notification(10).await?;
+    }
+    info!("All participants received group creation notifications");
+
+    // Take C offline. We use reconnect() (NOT reconnect_and_wait()) because we
+    // need C to be offline while messages are sent. reconnect() triggers a
+    // disconnect + background auto-reconnect; the 100ms sleep gives the server
+    // time to detect the TCP close and start queuing messages for C.
+    // This is the standard offline simulation pattern used by all offline tests.
+    client_c.client.reconnect().await;
+    info!("C disconnected (will auto-reconnect)");
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+    // Send multiple messages from multiple senders across both groups while C is offline.
+    // This creates the conditions for the semaphore transition bug:
+    // - Multiple groups → multiple per-chat queues
+    // - Multiple senders → pkmsg required for first message from each sender to C
+    // - The pkmsg carries the SKDM; if dropped, all subsequent skmsg from that sender fail
+
+    let mut expected_messages = Vec::new();
+
+    // A sends 3 messages to group 1
+    for i in 1..=3 {
+        let text = format!("A-g1-msg{i}");
+        client_a
+            .client
+            .send_message(group1_jid.clone(), text_msg(&text))
+            .await?;
+        expected_messages.push(text);
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+
+    // D sends 3 messages to group 1
+    for i in 1..=3 {
+        let text = format!("D-g1-msg{i}");
+        client_d
+            .client
+            .send_message(group1_jid.clone(), text_msg(&text))
+            .await?;
+        expected_messages.push(text);
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+
+    // A sends 2 messages to group 2
+    for i in 1..=2 {
+        let text = format!("A-g2-msg{i}");
+        client_a
+            .client
+            .send_message(group2_jid.clone(), text_msg(&text))
+            .await?;
+        expected_messages.push(text);
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+
+    // D sends 2 messages to group 2
+    for i in 1..=2 {
+        let text = format!("D-g2-msg{i}");
+        client_d
+            .client
+            .send_message(group2_jid.clone(), text_msg(&text))
+            .await?;
+        expected_messages.push(text);
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+
+    // E sends 2 messages to group 1
+    for i in 1..=2 {
+        let text = format!("E-g1-msg{i}");
+        client_e
+            .client
+            .send_message(group1_jid.clone(), text_msg(&text))
+            .await?;
+        expected_messages.push(text);
+        tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
+    }
+
+    info!("Sent {} messages while C offline", expected_messages.len());
+
+    // Verify B receives all messages (sanity check that sends worked)
+    let mut b_received = 0;
+    for _ in 0..expected_messages.len() {
+        if client_b
+            .wait_for_event(
+                10,
+                |e| matches!(e, Event::Message(msg, _) if msg.conversation.is_some()),
+            )
+            .await
+            .is_ok()
+        {
+            b_received += 1;
+        }
+    }
+    info!("B received {b_received} messages (online observer)");
+
+    // Wait for C to reconnect and receive ALL messages from the offline queue.
+    // Use an overall deadline rather than fixed attempt count to tolerate
+    // duplicate deliveries, extra notifications, and variable reconnect time.
+    let mut received_texts: HashSet<String> = HashSet::new();
+    let total_expected = expected_messages.len();
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(60);
+
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline - tokio::time::Instant::now();
+        let timeout_secs = remaining.as_secs().max(1);
+
+        let result = client_c
+            .wait_for_event(timeout_secs, |e| {
+                matches!(e, Event::Message(msg, _) if msg.conversation.is_some())
+                    || matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
+            })
+            .await;
+
+        match result {
+            Ok(Event::Message(msg, _)) => {
+                if let Some(text) = msg.conversation {
+                    info!("C received: {text}");
+                    received_texts.insert(text);
+                }
+            }
+            Ok(Event::Notification(_)) => {
+                // Group notifications are expected, just skip
+            }
+            Ok(_) => {}
+            Err(_) => break, // no more events within timeout
+        }
+
+        // Early exit once all expected messages are collected
+        if received_texts.len() >= total_expected {
+            break;
+        }
+    }
+
+    info!(
+        "C received {}/{} messages after reconnect",
+        received_texts.len(),
+        total_expected
+    );
+
+    // Assert ALL messages were received — the critical assertion.
+    // If the semaphore transition bug is present, messages from one or more senders
+    // will be missing because their pkmsg (carrying the SKDM) was silently dropped.
+    let mut missing = Vec::new();
+    for expected in &expected_messages {
+        if !received_texts.contains(expected) {
+            missing.push(expected.clone());
+        }
+    }
+
+    assert!(
+        missing.is_empty(),
+        "C is missing {} messages after offline sync: {:?}\nReceived: {:?}",
+        missing.len(),
+        missing,
+        received_texts
+    );
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
+    client_c.disconnect().await;
+    client_d.disconnect().await;
+    client_e.disconnect().await;
 
     Ok(())
 }
