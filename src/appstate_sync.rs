@@ -22,7 +22,6 @@ mod tests {
         AppStateSyncKey, AppSyncStore, DeviceListRecord, DeviceStore, LidPnMappingEntry,
         ProtocolStore, SignalStore,
     };
-    use wacore_binary::jid::Jid;
     use waproto::whatsapp as wa;
 
     type MockMacMap = Arc<Mutex<HashMap<(String, Vec<u8>), Vec<u8>>>>;
@@ -153,13 +152,13 @@ mod tests {
     #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
     #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl ProtocolStore for MockBackend {
-        async fn get_skdm_recipients(&self, _: &str) -> StoreResult<Vec<Jid>> {
+        async fn get_sender_key_devices(&self, _: &str) -> StoreResult<Vec<(String, bool)>> {
             Ok(vec![])
         }
-        async fn add_skdm_recipients(&self, _: &str, _: &[Jid]) -> StoreResult<()> {
+        async fn set_sender_key_status(&self, _: &str, _: &[(&str, bool)]) -> StoreResult<()> {
             Ok(())
         }
-        async fn clear_skdm_recipients(&self, _: &str) -> StoreResult<()> {
+        async fn clear_sender_key_devices(&self, _: &str) -> StoreResult<()> {
             Ok(())
         }
         async fn get_lid_mapping(&self, _: &str) -> StoreResult<Option<LidPnMappingEntry>> {
@@ -188,12 +187,6 @@ mod tests {
         }
         async fn get_devices(&self, _: &str) -> StoreResult<Option<DeviceListRecord>> {
             Ok(None)
-        }
-        async fn mark_forget_sender_key(&self, _: &str, _: &str) -> StoreResult<()> {
-            Ok(())
-        }
-        async fn consume_forget_marks(&self, _: &str) -> StoreResult<Vec<String>> {
-            Ok(vec![])
         }
         async fn get_tc_token(
             &self,

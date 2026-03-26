@@ -40,3 +40,5 @@ Read these when working on the relevant area:
 - `agent_docs/feature_implementation.md` — Step-by-step feature implementation flow
 - `agent_docs/e2e_testing.md` — E2E test patterns, file organization, event-driven waiting
 - `agent_docs/debugging.md` — evcxr REPL, binary protocol debugging
+
+When adding comments to the code, dont be so verbose, also only explain why, not what

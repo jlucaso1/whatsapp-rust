@@ -257,12 +257,14 @@ impl Client {
 
         if is_group_or_status {
             let group_jid = receipt.source.chat.to_string();
-            let participant_str = participant_jid.to_string();
 
             // WA Web rotateKey: unknown device (not in participant list, not LID) →
-            // force full sender key rotation by clearing all SKDM recipients.
+            // force full sender key rotation by clearing all sender key device tracking.
             if !participant_jid.is_lid() && !receipt.source.chat.is_status_broadcast() {
-                let is_known_participant = cached_group_info.as_ref().is_none_or(|g| {
+                // If we can't verify membership (no cached group info), treat
+                // as unknown and trigger rotation (matches WA Web where the
+                // device wouldn't be in the senderKey map → rotateKey=true)
+                let is_known_participant = cached_group_info.as_ref().is_some_and(|g| {
                     g.participants
                         .iter()
                         .any(|p| p.user == participant_jid.user)
@@ -275,24 +277,61 @@ impl Client {
                         participant_str,
                         group_jid
                     );
+
+                    // WA Web: deleteGroupSenderKeyInfo(groupWid, ownWid)
+                    // Delete our own sender key for forward secrecy.
+                    // When addressing mode is known, delete only that namespace.
+                    // When unknown (group info unavailable), delete both PN and LID
+                    // to ensure the active key is removed regardless of mode.
+                    let addressing_mode = cached_group_info.as_ref().map(|g| g.addressing_mode);
+
+                    let jids_to_delete: Vec<_> = match addressing_mode {
+                        Some(wacore::types::message::AddressingMode::Lid) => {
+                            device_snapshot.lid.as_ref().into_iter().collect()
+                        }
+                        Some(wacore::types::message::AddressingMode::Pn) => {
+                            device_snapshot.pn.as_ref().into_iter().collect()
+                        }
+                        None => {
+                            // Can't determine mode — delete both namespaces
+                            device_snapshot
+                                .lid
+                                .as_ref()
+                                .into_iter()
+                                .chain(device_snapshot.pn.as_ref())
+                                .collect()
+                        }
+                    };
+
+                    for own_jid in jids_to_delete {
+                        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+                        let sk_name = SenderKeyName::new(
+                            group_jid.clone(),
+                            own_jid.to_protocol_address().to_string(),
+                        );
+                        self.signal_cache
+                            .delete_sender_key(sk_name.cache_key())
+                            .await;
+                    }
+
                     if let Err(e) = self
                         .persistence_manager
-                        .clear_skdm_recipients(&group_jid)
+                        .clear_sender_key_devices(&group_jid)
                         .await
                     {
-                        log::warn!("Failed to clear SKDM recipients for rotation: {}", e);
+                        log::warn!("Failed to clear sender key devices for rotation: {}", e);
                     }
                 }
             }
 
-            // Mark this participant as needing fresh SKDM (filters out own devices internally)
+            // Mark this device as needing fresh SKDM (filters out own devices internally)
             if let Err(e) = self
-                .mark_forget_sender_key(&group_jid, std::slice::from_ref(&participant_str))
+                .mark_forget_sender_key(&group_jid, std::slice::from_ref(&participant_jid))
                 .await
             {
                 log::warn!(
                     "Failed to mark sender key forget for {} in {}: {}",
-                    participant_str,
+                    participant_jid,
                     group_jid,
                     e
                 );
@@ -304,7 +343,7 @@ impl Client {
                 };
                 info!(
                     "Marked {} for fresh SKDM in {} {} due to retry receipt",
-                    participant_str, chat_type, group_jid
+                    participant_jid, chat_type, group_jid
                 );
             }
         } else {

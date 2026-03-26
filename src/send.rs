@@ -318,70 +318,13 @@ impl Client {
             sender_key_store: &mut store_adapter.sender_key_store,
         };
 
-        let marked_for_fresh_skdm = self.consume_forget_marks(&to_str).await.unwrap_or_default();
-
+        // Determine which devices need SKDM using the unified per-device map
         let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
             None
         } else {
-            let known_recipients = self
-                .persistence_manager
-                .get_skdm_recipients(&to_str)
+            self.resolve_skdm_targets(&to_str, &group_info.participants, &own_jid)
                 .await
-                .unwrap_or_default();
-
-            if known_recipients.is_empty() {
-                None
-            } else {
-                let jids_to_resolve: Vec<Jid> = group_info
-                    .participants
-                    .iter()
-                    .map(|jid| jid.to_non_ad())
-                    .collect();
-
-                match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
-                    Ok(all_devices) => {
-                        let known_set: std::collections::HashSet<DeviceKey<'_>> =
-                            known_recipients.iter().map(|j| j.device_key()).collect();
-                        let new_devices: Vec<Jid> = all_devices
-                            .into_iter()
-                            .filter(|device| !known_set.contains(&device.device_key()))
-                            .collect();
-                        if new_devices.is_empty() {
-                            Some(vec![])
-                        } else {
-                            Some(new_devices)
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to resolve devices for status SKDM check: {:?}", e);
-                        None
-                    }
-                }
-            }
         };
-
-        let skdm_target_devices: Option<Vec<Jid>> = if !marked_for_fresh_skdm.is_empty() {
-            match skdm_target_devices {
-                None => None,
-                Some(mut devices) => {
-                    for marked_jid_str in &marked_for_fresh_skdm {
-                        if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
-                            && !devices.iter().any(|d| d.device_eq(&marked_jid))
-                        {
-                            devices.push(marked_jid);
-                        }
-                    }
-                    Some(devices)
-                }
-            }
-        } else {
-            skdm_target_devices
-        };
-
-        let is_full_distribution = force_skdm || skdm_target_devices.is_none();
-        let devices_receiving_skdm: Vec<Jid> = skdm_target_devices.clone().unwrap_or_default();
-        #[allow(clippy::needless_late_init)]
-        let skdm_is_full: bool;
 
         // WhatsApp Web includes <meta status_setting="..."/> on non-revoke status messages.
         // Revoke messages omit this node.
@@ -398,7 +341,7 @@ impl Client {
             ]
         };
 
-        let stanza = match wacore::send::prepare_group_stanza(
+        let prepared = match wacore::send::prepare_group_stanza(
             &mut stores,
             self,
             &mut group_info,
@@ -415,10 +358,7 @@ impl Client {
         )
         .await
         {
-            Ok(stanza) => {
-                skdm_is_full = is_full_distribution;
-                stanza
-            }
+            Ok(prepared) => prepared,
             Err(e) => {
                 if let Some(SignalProtocolError::NoSenderKeyState(_)) =
                     e.downcast_ref::<SignalProtocolError>()
@@ -427,7 +367,7 @@ impl Client {
 
                     if let Err(e) = self
                         .persistence_manager
-                        .clear_skdm_recipients(&to_str)
+                        .clear_sender_key_devices(&to_str)
                         .await
                     {
                         log::warn!("Failed to clear status SKDM recipients: {:?}", e);
@@ -445,7 +385,7 @@ impl Client {
                         sender_key_store: &mut store_adapter_retry.sender_key_store,
                     };
 
-                    let retry_stanza = wacore::send::prepare_group_stanza(
+                    wacore::send::prepare_group_stanza(
                         &mut stores_retry,
                         self,
                         &mut group_info,
@@ -460,36 +400,21 @@ impl Client {
                         None,
                         &extra_stanza_nodes,
                     )
-                    .await?;
-
-                    // Retry is always full distribution (rotated sender key)
-                    skdm_is_full = true;
-                    retry_stanza
+                    .await?
                 } else {
                     return Err(e);
                 }
             }
         };
 
-        // For status broadcasts, the server doesn't know the recipient list
-        // (unlike groups where the server has the member list). We must always
-        // include a <participants> node so the server knows who to deliver to.
-        // If prepare_group_stanza already added one (SKDM distribution), we
-        // extend it with bare <to> entries for devices that already have the
-        // sender key. If there's no <participants> node yet, we create one.
-        let stanza = self.ensure_status_participants(stanza, &group_info).await?;
+        let stanza = self
+            .ensure_status_participants(prepared.node, &group_info)
+            .await?;
 
         self.send_node(stanza).await?;
 
-        // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
-        // WA Web only calls markHasSenderKey() after the server confirms receipt.
-        self.update_skdm_recipients(
-            &to_str,
-            &devices_receiving_skdm,
-            skdm_is_full,
-            &group_info.participants,
-        )
-        .await;
+        self.update_sender_key_devices(&to_str, &prepared.skdm_devices)
+            .await;
 
         // Flush cached Signal state to DB after encryption
         if let Err(e) = self.flush_signal_cache().await {
@@ -499,43 +424,115 @@ impl Client {
         Ok(request_id)
     }
 
-    /// Update SKDM recipient bookkeeping after a successful group/status send.
+    /// Resolve which devices need SKDM by reading the per-device sender key map.
     ///
-    /// Called AFTER `send_node()` succeeds to match WhatsApp Web behavior, which
-    /// only marks devices as having the sender key after the server ACK.
-    /// If specific devices received SKDM, record them. If this was a full distribution
-    /// (all participants), resolve all devices and record them instead.
-    async fn update_skdm_recipients(
+    /// Returns `None` for full distribution (no map data or all unknown), or
+    /// `Some(devices)` listing only the devices that need fresh SKDM.
+    /// Uses `Jid::device_key()` for O(1) lookups — no string allocations in the hot path.
+    async fn resolve_skdm_targets(
         &self,
-        to_str: &str,
-        devices_receiving_skdm: &[Jid],
-        is_full_distribution: bool,
+        group_jid: &str,
         participants: &[Jid],
-    ) {
-        if !devices_receiving_skdm.is_empty() {
+        own_sending_jid: &Jid,
+    ) -> Option<Vec<Jid>> {
+        use std::collections::HashSet;
+
+        let device_map = self
+            .persistence_manager
+            .get_sender_key_devices(group_jid)
+            .await
+            .unwrap_or_else(|e| {
+                log::warn!(
+                    "Failed to read sender key devices for {}: {:?}",
+                    group_jid,
+                    e
+                );
+                vec![]
+            });
+
+        if device_map.is_empty() {
+            return None;
+        }
+
+        let parsed: Vec<(Jid, bool)> = device_map
+            .iter()
+            .filter_map(|(jid_str, has_key)| jid_str.parse::<Jid>().ok().map(|jid| (jid, *has_key)))
+            .collect();
+
+        let has_key_set: HashSet<DeviceKey<'_>> = parsed
+            .iter()
+            .filter(|(_, has)| *has)
+            .map(|(jid, _)| jid.device_key())
+            .collect();
+
+        let forgotten_users: HashSet<&str> = parsed
+            .iter()
+            .filter(|(_, has)| !*has)
+            .map(|(jid, _)| jid.user.as_str())
+            .collect();
+
+        let jids_to_resolve: Vec<Jid> = participants.iter().map(|jid| jid.to_non_ad()).collect();
+
+        match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
+            Ok(all_devices) => {
+                let needs_skdm: Vec<Jid> = all_devices
+                    .into_iter()
+                    .filter(|device| {
+                        // Skip our own sending device and hosted devices —
+                        // they're excluded from SKDM in prepare_group_stanza
+                        // and would never appear in the sender key map
+                        if device.is_hosted() {
+                            return false;
+                        }
+                        if device.user == own_sending_jid.user
+                            && device.device == own_sending_jid.device
+                        {
+                            return false;
+                        }
+                        !has_key_set.contains(&device.device_key())
+                            || forgotten_users.contains(device.user.as_str())
+                    })
+                    .collect();
+
+                if needs_skdm.is_empty() {
+                    Some(vec![])
+                } else {
+                    log::debug!(
+                        "Found {} devices needing SKDM for {}",
+                        needs_skdm.len(),
+                        group_jid
+                    );
+                    Some(needs_skdm)
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to resolve devices for SKDM check: {:?}", e);
+                None
+            }
+        }
+    }
+
+    /// Update sender key device tracking after a successful group/status send.
+    ///
+    /// Called AFTER `send_node()` succeeds (WA Web: `markHasSenderKey` after server ACK).
+    /// On full distribution, clears old state and marks the provided device list.
+    /// On partial, marks only the specific SKDM recipients.
+    ///
+    /// The `all_resolved_devices` parameter carries the exact device list resolved
+    /// for the stanza, avoiding a redundant `resolve_devices` call and preventing
+    /// the clear-then-fail race where a transient resolver failure leaves the map empty.
+    /// Mark devices as `has_key=true` after successful SKDM distribution.
+    /// Uses upsert — stale entries from removed participants are harmless.
+    async fn update_sender_key_devices(&self, group_jid: &str, devices: &[Jid]) {
+        if !devices.is_empty() {
+            let strs: Vec<String> = devices.iter().map(|j| j.to_string()).collect();
+            let entries: Vec<(&str, bool)> = strs.iter().map(|s| (s.as_str(), true)).collect();
             if let Err(e) = self
                 .persistence_manager
-                .add_skdm_recipients(to_str, devices_receiving_skdm)
+                .set_sender_key_status(group_jid, &entries)
                 .await
             {
-                log::warn!("Failed to update SKDM recipients: {:?}", e);
-            }
-        } else if is_full_distribution {
-            let jids_to_resolve: Vec<Jid> =
-                participants.iter().map(|jid| jid.to_non_ad()).collect();
-            match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
-                Ok(all_devices) => {
-                    if let Err(e) = self
-                        .persistence_manager
-                        .add_skdm_recipients(to_str, &all_devices)
-                        .await
-                    {
-                        log::warn!("Failed to persist SKDM recipients: {:?}", e);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to resolve devices for SKDM recipients: {:?}", e);
-                }
+                log::warn!("Failed to update sender key devices: {:?}", e);
             }
         }
     }
@@ -723,8 +720,6 @@ impl Client {
         struct SkdmUpdate {
             to_str: String,
             devices: Vec<Jid>,
-            is_full_distribution: bool,
-            participants: Vec<Jid>,
         }
         let mut skdm_update: Option<SkdmUpdate> = None;
         let mut should_issue_tc_token_after_send = false;
@@ -826,86 +821,14 @@ impl Client {
                 sender_key_store: &mut store_adapter.sender_key_store,
             };
 
-            // Consume forget marks - these participants need fresh SKDMs (matches WhatsApp Web)
-            // markForgetSenderKey is called during retry handling, this consumes those marks
-            let marked_for_fresh_skdm =
-                self.consume_forget_marks(&to_str).await.unwrap_or_default();
-
-            // Determine which devices need SKDM distribution
+            // Determine which devices need SKDM distribution using the unified
+            // per-device sender key map (matches WA Web's participant.senderKey Map).
             let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
                 None
             } else {
-                let known_recipients = self
-                    .persistence_manager
-                    .get_skdm_recipients(&to_str)
+                self.resolve_skdm_targets(&to_str, &group_info.participants, &own_sending_jid)
                     .await
-                    .unwrap_or_default();
-
-                if known_recipients.is_empty() {
-                    None
-                } else {
-                    let jids_to_resolve: Vec<Jid> = group_info
-                        .participants
-                        .iter()
-                        .map(|jid| jid.to_non_ad())
-                        .collect();
-
-                    match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
-                        Ok(all_devices) => {
-                            use std::collections::HashSet;
-
-                            let known_set: HashSet<DeviceKey<'_>> =
-                                known_recipients.iter().map(|j| j.device_key()).collect();
-
-                            let new_devices: Vec<Jid> = all_devices
-                                .into_iter()
-                                .filter(|device| !known_set.contains(&device.device_key()))
-                                .collect();
-
-                            if new_devices.is_empty() {
-                                Some(vec![])
-                            } else {
-                                log::debug!(
-                                    "Found {} new devices needing SKDM for group {}",
-                                    new_devices.len(),
-                                    to
-                                );
-                                Some(new_devices)
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to resolve devices for SKDM check: {:?}", e);
-                            None
-                        }
-                    }
-                }
             };
-
-            // Merge devices marked for fresh SKDM (from retry/error handling)
-            let skdm_target_devices: Option<Vec<Jid>> = if !marked_for_fresh_skdm.is_empty() {
-                match skdm_target_devices {
-                    None => None,
-                    Some(mut devices) => {
-                        for marked_jid_str in &marked_for_fresh_skdm {
-                            if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
-                                && !devices.iter().any(|d| d.device_eq(&marked_jid))
-                            {
-                                log::debug!(
-                                    "Adding {} to SKDM targets (marked for fresh key)",
-                                    marked_jid_str
-                                );
-                                devices.push(marked_jid);
-                            }
-                        }
-                        Some(devices)
-                    }
-                }
-            } else {
-                skdm_target_devices
-            };
-
-            let is_full_distribution = force_skdm || skdm_target_devices.is_none();
-            let devices_receiving_skdm: Vec<Jid> = skdm_target_devices.clone().unwrap_or_default();
 
             match wacore::send::prepare_group_stanza(
                 &mut stores,
@@ -924,14 +847,12 @@ impl Client {
             )
             .await
             {
-                Ok(stanza) => {
+                Ok(prepared) => {
                     skdm_update = Some(SkdmUpdate {
                         to_str: to_str.clone(),
-                        devices: devices_receiving_skdm,
-                        is_full_distribution,
-                        participants: group_info.participants.clone(),
+                        devices: prepared.skdm_devices,
                     });
-                    stanza
+                    prepared.node
                 }
                 Err(e) => {
                     if let Some(SignalProtocolError::NoSenderKeyState(_)) =
@@ -939,10 +860,9 @@ impl Client {
                     {
                         log::warn!("No sender key for group {}, forcing distribution.", to);
 
-                        // Clear SKDM recipients since we're rotating the key
                         if let Err(e) = self
                             .persistence_manager
-                            .clear_skdm_recipients(&to_str)
+                            .clear_sender_key_devices(&to_str)
                             .await
                         {
                             log::warn!("Failed to clear SKDM recipients: {:?}", e);
@@ -960,7 +880,7 @@ impl Client {
                             sender_key_store: &mut store_adapter_retry.sender_key_store,
                         };
 
-                        let retry_stanza = wacore::send::prepare_group_stanza(
+                        let retry_prepared = wacore::send::prepare_group_stanza(
                             &mut stores_retry,
                             self,
                             &mut group_info,
@@ -970,21 +890,18 @@ impl Client {
                             to,
                             message,
                             request_id,
-                            true, // Force distribution on retry
-                            None, // Distribute to all devices
+                            true,
+                            None,
                             edit.clone(),
                             &extra_stanza_nodes,
                         )
                         .await?;
 
-                        // Retry is always full distribution (rotated sender key)
                         skdm_update = Some(SkdmUpdate {
                             to_str,
-                            devices: vec![],
-                            is_full_distribution: true,
-                            participants: group_info.participants.clone(),
+                            devices: retry_prepared.skdm_devices,
                         });
-                        retry_stanza
+                        retry_prepared.node
                     } else {
                         return Err(e);
                     }
@@ -1069,13 +986,8 @@ impl Client {
         // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
         // WA Web only calls markHasSenderKey() after the server confirms receipt.
         if let Some(update) = skdm_update {
-            self.update_skdm_recipients(
-                &update.to_str,
-                &update.devices,
-                update.is_full_distribution,
-                &update.participants,
-            )
-            .await;
+            self.update_sender_key_devices(&update.to_str, &update.devices)
+                .await;
         }
 
         // Flush cached Signal state to DB after encryption
