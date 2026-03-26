@@ -499,4 +499,90 @@ mod tests {
             assert_eq!(chain_separate.index(), chain_combined.index());
         }
     }
+
+    /// Regression test: ChainKey with counter at u32::MAX should fail when advancing
+    #[test]
+    fn test_chain_key_overflow_regression() {
+        let key = [0xFFu8; 32];
+        let chain_key_at_max = ChainKey::new(key, u32::MAX);
+
+        // Verify counter is at max
+        assert_eq!(chain_key_at_max.index(), u32::MAX);
+
+        // Attempting to advance should return an error, not panic or wrap
+        let result = chain_key_at_max.next_chain_key();
+        assert!(result.is_err(), "next_chain_key() should fail at u32::MAX");
+
+        // Verify error message contains overflow indication
+        if let Err(e) = result {
+            let error_str = format!("{:?}", e);
+            assert!(
+                error_str.contains("overflow") || error_str.contains("u32::MAX"),
+                "Error should indicate overflow: {error_str}"
+            );
+        }
+    }
+
+    /// Regression test: step_with_message_keys should also fail at u32::MAX
+    #[test]
+    fn test_chain_key_overflow_step_with_message_keys() {
+        let key = [0xEEu8; 32];
+        let chain_key_at_max = ChainKey::new(key, u32::MAX);
+
+        // step_with_message_keys should fail with overflow error
+        let result = chain_key_at_max.step_with_message_keys();
+        assert!(
+            result.is_err(),
+            "step_with_message_keys() should fail at u32::MAX"
+        );
+
+        if let Err(e) = result {
+            let error_str = format!("{:?}", e);
+            assert!(
+                error_str.contains("overflow") || error_str.contains("u32::MAX"),
+                "Error should indicate overflow: {error_str}"
+            );
+        }
+    }
+
+    /// Regression test: Verify overflow at boundary near u32::MAX
+    #[test]
+    fn test_chain_key_overflow_boundary() {
+        let key = [0xDDu8; 32];
+
+        // Counter at u32::MAX - 1 should succeed once, then fail
+        let chain_near_max = ChainKey::new(key, u32::MAX - 1);
+        let chain_at_max = chain_near_max
+            .next_chain_key()
+            .expect("should advance to u32::MAX");
+        assert_eq!(chain_at_max.index(), u32::MAX);
+
+        // Now at u32::MAX, next advance should fail
+        let result = chain_at_max.next_chain_key();
+        assert!(result.is_err(), "should fail when advancing from u32::MAX");
+    }
+
+    /// Regression test: Chained advances should fail at overflow
+    #[test]
+    fn test_chain_key_overflow_chained_advances() {
+        let key = [0xCCu8; 32];
+
+        // Start near max and advance multiple times
+        let chain1 = ChainKey::new(key, u32::MAX - 3);
+        let chain2 = chain1.next_chain_key().expect("advance to MAX-2");
+        assert_eq!(chain2.index(), u32::MAX - 2);
+
+        let chain3 = chain2.next_chain_key().expect("advance to MAX-1");
+        assert_eq!(chain3.index(), u32::MAX - 1);
+
+        let chain4 = chain3.next_chain_key().expect("advance to MAX");
+        assert_eq!(chain4.index(), u32::MAX);
+
+        // This should fail
+        let result = chain4.next_chain_key();
+        assert!(
+            result.is_err(),
+            "chained advance beyond u32::MAX should fail"
+        );
+    }
 }
