@@ -277,6 +277,29 @@ impl Client {
                         participant_str,
                         group_jid
                     );
+
+                    // WA Web: deleteGroupSenderKeyInfo(groupWid, ownWid)
+                    // Delete our own sender key so a fresh one is generated on next send.
+                    // This provides forward secrecy — removed participants can't decrypt
+                    // messages encrypted with the new key.
+                    let own_jid = if participant_jid.is_lid() {
+                        device_snapshot.lid.as_ref()
+                    } else {
+                        device_snapshot.pn.as_ref()
+                    };
+                    if let Some(own_jid) = own_jid {
+                        let sender_key_address =
+                            format!("{}:{}", group_jid, own_jid.to_protocol_address());
+                        if let Err(e) = self
+                            .persistence_manager
+                            .backend()
+                            .delete_sender_key(&sender_key_address)
+                            .await
+                        {
+                            log::warn!("Failed to delete sender key for rotation: {}", e);
+                        }
+                    }
+
                     if let Err(e) = self
                         .persistence_manager
                         .clear_sender_key_devices(&group_jid)
