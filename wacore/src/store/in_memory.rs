@@ -7,14 +7,12 @@
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 
-use async_lock::Mutex;
-use async_trait::async_trait;
-use wacore_binary::jid::Jid;
-
 use crate::appstate::hash::HashState;
 use crate::store::Device;
 use crate::store::error::Result;
 use crate::store::traits::*;
+use async_lock::Mutex;
+use async_trait::async_trait;
 use wacore_appstate::processor::AppStateMutationMAC;
 
 /// Key for the sent-message store: `(chat_jid, message_id)`.
@@ -34,9 +32,6 @@ struct PreKeyEntry {
 /// Key for base-key collision detection: `(address, message_id)`.
 type BaseKeyKey = (String, String);
 
-/// Key for forget-sender-key marks: `group_jid` -> set of participants.
-type ForgetMarks = HashMap<String, Vec<String>>;
-
 /// Inner state protected by the mutex.
 #[derive(Default)]
 struct InMemoryState {
@@ -55,13 +50,13 @@ struct InMemoryState {
     mutation_macs: HashMap<(String, Vec<u8>), Vec<u8>>,
 
     // --- Protocol ---
-    skdm_recipients: HashMap<String, Vec<Jid>>,
+    /// Unified per-device sender key tracking: group_jid -> (device_jid -> has_key)
+    sender_key_devices: HashMap<String, HashMap<String, bool>>,
     lid_mappings: HashMap<String, LidPnMappingEntry>,
     /// Reverse index: phone_number -> lid
     pn_to_lid: HashMap<String, String>,
     base_keys: HashMap<BaseKeyKey, Vec<u8>>,
     device_lists: HashMap<String, DeviceListRecord>,
-    forget_marks: ForgetMarks,
     tc_tokens: HashMap<String, TcTokenEntry>,
     sent_messages: HashMap<SentMessageKey, SentMessageEntry>,
 
@@ -310,32 +305,33 @@ impl AppSyncStore for InMemoryBackend {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl ProtocolStore for InMemoryBackend {
-    // --- SKDM Tracking ---
+    // --- Per-Device Sender Key Tracking ---
 
-    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>> {
+    async fn get_sender_key_devices(&self, group_jid: &str) -> Result<Vec<(String, bool)>> {
         Ok(self
             .state
             .lock()
             .await
-            .skdm_recipients
+            .sender_key_devices
             .get(group_jid)
-            .cloned()
+            .map(|map| map.iter().map(|(k, v)| (k.clone(), *v)).collect())
             .unwrap_or_default())
     }
 
-    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()> {
+    async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()> {
         let mut s = self.state.lock().await;
-        let list = s.skdm_recipients.entry(group_jid.to_string()).or_default();
-        for jid in device_jids {
-            if !list.contains(jid) {
-                list.push(jid.clone());
-            }
+        let map = s
+            .sender_key_devices
+            .entry(group_jid.to_string())
+            .or_default();
+        for (device_jid, has_key) in entries {
+            map.insert(device_jid.to_string(), *has_key);
         }
         Ok(())
     }
 
-    async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()> {
-        self.state.lock().await.skdm_recipients.remove(group_jid);
+    async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()> {
+        self.state.lock().await.sender_key_devices.remove(group_jid);
         Ok(())
     }
 
@@ -429,27 +425,6 @@ impl ProtocolStore for InMemoryBackend {
 
     async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>> {
         Ok(self.state.lock().await.device_lists.get(user).cloned())
-    }
-
-    // --- Sender Key Status (Lazy Deletion) ---
-
-    async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()> {
-        let mut s = self.state.lock().await;
-        let list = s.forget_marks.entry(group_jid.to_string()).or_default();
-        if !list.contains(&participant.to_string()) {
-            list.push(participant.to_string());
-        }
-        Ok(())
-    }
-
-    async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>> {
-        Ok(self
-            .state
-            .lock()
-            .await
-            .forget_marks
-            .remove(group_jid)
-            .unwrap_or_default())
     }
 
     // --- TcToken Storage ---

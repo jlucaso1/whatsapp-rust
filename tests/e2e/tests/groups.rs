@@ -605,3 +605,108 @@ async fn test_group_leave() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// Tests per-device sender key tracking across multiple group messages.
+///
+/// Verifies that:
+/// 1. First group message from A establishes sender keys (SKDM distributed to all)
+/// 2. Subsequent messages from A skip SKDM (devices already have the key)
+/// 3. Adding a new member (C) forces SKDM redistribution to include C's devices
+/// 4. All messages are decrypted correctly by all recipients throughout
+#[tokio::test]
+async fn test_per_device_sender_key_tracking() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client_a = TestClient::connect("e2e_skdev_a").await?;
+    let mut client_b = TestClient::connect("e2e_skdev_b").await?;
+    let mut client_c = TestClient::connect("e2e_skdev_c").await?;
+
+    let jid_b = client_b.jid().await;
+    let jid_c = client_c.jid().await;
+
+    // Create group with A and B only
+    let group_jid = client_a
+        .client
+        .groups()
+        .create_group(GroupCreateOptions {
+            subject: "SK Device Track Test".to_string(),
+            participants: vec![GroupParticipantOptions::new(jid_b.clone())],
+            ..Default::default()
+        })
+        .await?
+        .gid;
+    info!("Group created: {group_jid}");
+
+    // A sends first message — triggers full SKDM distribution to B
+    let text_1 = "First from A";
+    client_a
+        .client
+        .send_message(group_jid.clone(), text_msg(text_1))
+        .await?;
+    client_b.wait_for_group_text(&group_jid, text_1, 10).await?;
+    info!("B received first message");
+
+    // A sends second message — should reuse sender key (no SKDM needed)
+    let text_2 = "Second from A";
+    client_a
+        .client
+        .send_message(group_jid.clone(), text_msg(text_2))
+        .await?;
+    client_b.wait_for_group_text(&group_jid, text_2, 10).await?;
+    info!("B received second message (sender key reused)");
+
+    // B sends a message — B's own sender key distributed to A
+    let text_3 = "First from B";
+    client_b
+        .client
+        .send_message(group_jid.clone(), text_msg(text_3))
+        .await?;
+    info!("B sent message to group");
+
+    // Add C to the group — forces sender key redistribution on next send
+    let add_result = client_a
+        .client
+        .groups()
+        .add_participants(&group_jid, std::slice::from_ref(&jid_c))
+        .await?;
+    assert_eq!(
+        add_result[0].status.as_deref(),
+        Some("200"),
+        "Add C should succeed"
+    );
+    info!("C added to group");
+
+    // Drain group notification for B and C
+    client_b.wait_for_group_notification(10).await?;
+    client_c.wait_for_group_notification(10).await?;
+
+    // A sends message after member change — SKDM must include C's devices now
+    let text_4 = "Hello C, welcome!";
+    client_a
+        .client
+        .send_message(group_jid.clone(), text_msg(text_4))
+        .await?;
+
+    // Both B and C should receive it
+    client_b.wait_for_group_text(&group_jid, text_4, 10).await?;
+    info!("B received post-add message");
+
+    client_c.wait_for_group_text(&group_jid, text_4, 30).await?;
+    info!("C received post-add message (new member got SKDM)");
+
+    // A sends another message — all devices should have keys now
+    let text_5 = "All settled";
+    client_a
+        .client
+        .send_message(group_jid.clone(), text_msg(text_5))
+        .await?;
+    client_b.wait_for_group_text(&group_jid, text_5, 10).await?;
+    client_c.wait_for_group_text(&group_jid, text_5, 10).await?;
+    info!("Both B and C received final message");
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
+    client_c.disconnect().await;
+
+    Ok(())
+}

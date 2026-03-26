@@ -101,11 +101,12 @@ diesel::table! {
 }
 
 diesel::table! {
-    sender_key_status (group_jid, participant, device_id) {
+    sender_key_devices (group_jid, device_jid, device_id) {
         group_jid -> Text,
-        participant -> Text,
+        device_jid -> Text,
+        has_key -> Integer,
         device_id -> Integer,
-        marked_at -> Integer,
+        updated_at -> Integer,
     }
 }
 
@@ -130,15 +131,6 @@ diesel::table! {
         id -> Integer,
         record -> Binary,
         device_id -> Integer,
-    }
-}
-
-diesel::table! {
-    skdm_recipients (group_jid, device_jid, device_id) {
-        group_jid -> Text,
-        device_jid -> Text,
-        device_id -> Integer,
-        created_at -> Integer,
     }
 }
 
@@ -173,11 +165,10 @@ diesel::allow_tables_to_appear_in_same_query!(
     identities,
     lid_pn_mapping,
     prekeys,
-    sender_key_status,
+    sender_key_devices,
     sender_keys,
     sent_messages,
     sessions,
     signed_prekeys,
-    skdm_recipients,
     tc_tokens,
 );

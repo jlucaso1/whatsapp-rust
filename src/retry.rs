@@ -257,10 +257,9 @@ impl Client {
 
         if is_group_or_status {
             let group_jid = receipt.source.chat.to_string();
-            let participant_str = participant_jid.to_string();
 
             // WA Web rotateKey: unknown device (not in participant list, not LID) →
-            // force full sender key rotation by clearing all SKDM recipients.
+            // force full sender key rotation by clearing all sender key device tracking.
             if !participant_jid.is_lid() && !receipt.source.chat.is_status_broadcast() {
                 let is_known_participant = cached_group_info.as_ref().is_none_or(|g| {
                     g.participants
@@ -277,22 +276,22 @@ impl Client {
                     );
                     if let Err(e) = self
                         .persistence_manager
-                        .clear_skdm_recipients(&group_jid)
+                        .clear_sender_key_devices(&group_jid)
                         .await
                     {
-                        log::warn!("Failed to clear SKDM recipients for rotation: {}", e);
+                        log::warn!("Failed to clear sender key devices for rotation: {}", e);
                     }
                 }
             }
 
-            // Mark this participant as needing fresh SKDM (filters out own devices internally)
+            // Mark this device as needing fresh SKDM (filters out own devices internally)
             if let Err(e) = self
-                .mark_forget_sender_key(&group_jid, std::slice::from_ref(&participant_str))
+                .mark_forget_sender_key(&group_jid, std::slice::from_ref(&participant_jid))
                 .await
             {
                 log::warn!(
                     "Failed to mark sender key forget for {} in {}: {}",
-                    participant_str,
+                    participant_jid,
                     group_jid,
                     e
                 );
@@ -304,7 +303,7 @@ impl Client {
                 };
                 info!(
                     "Marked {} for fresh SKDM in {} {} due to retry receipt",
-                    participant_str, chat_type, group_jid
+                    participant_jid, chat_type, group_jid
                 );
             }
         } else {

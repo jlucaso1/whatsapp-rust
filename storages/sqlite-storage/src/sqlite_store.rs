@@ -15,7 +15,6 @@ use wacore::libsignal::protocol::{KeyPair, PrivateKey, PublicKey};
 use wacore::store::Device as CoreDevice;
 use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::*;
-use wacore_binary::jid::Jid;
 
 /// Internal error type that preserves the Diesel error for structured matching
 /// before converting to `StoreError`. Used in retry loops where we need to
@@ -1630,44 +1629,40 @@ impl AppSyncStore for SqliteStore {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl ProtocolStore for SqliteStore {
-    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>> {
+    async fn get_sender_key_devices(&self, group_jid: &str) -> Result<Vec<(String, bool)>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Vec<Jid>> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<(String, bool)>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let recipients: Vec<String> = skdm_recipients::table
-                .select(skdm_recipients::device_jid)
-                .filter(skdm_recipients::group_jid.eq(&group_jid))
-                .filter(skdm_recipients::device_id.eq(device_id))
+            let rows: Vec<(String, i32)> = sender_key_devices::table
+                .select((sender_key_devices::device_jid, sender_key_devices::has_key))
+                .filter(sender_key_devices::group_jid.eq(&group_jid))
+                .filter(sender_key_devices::device_id.eq(device_id))
                 .load(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            let jids: Vec<Jid> = recipients
-                .iter()
-                .filter_map(|s| match s.parse::<Jid>() {
-                    Ok(jid) => Some(jid),
-                    Err(e) => {
-                        warn!("Failed to parse SKDM recipient '{}': {}", s, e);
-                        None
-                    }
-                })
-                .collect();
-            Ok(jids)
+            Ok(rows
+                .into_iter()
+                .map(|(jid, has_key)| (jid, has_key != 0))
+                .collect())
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
-    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()> {
-        if device_jids.is_empty() {
+    async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()> {
+        if entries.is_empty() {
             return Ok(());
         }
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        let device_jid_strs: Vec<String> = device_jids.iter().map(|j| j.to_string()).collect();
+        let owned_entries: Vec<(String, bool)> = entries
+            .iter()
+            .map(|(jid, has_key)| (jid.to_string(), *has_key))
+            .collect();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -1677,29 +1672,35 @@ impl ProtocolStore for SqliteStore {
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
 
-            let values: Vec<_> = device_jid_strs
+            let values: Vec<_> = owned_entries
                 .iter()
-                .map(|device_jid| {
+                .map(|(device_jid, has_key)| {
                     (
-                        skdm_recipients::group_jid.eq(&group_jid),
-                        skdm_recipients::device_jid.eq(device_jid),
-                        skdm_recipients::device_id.eq(device_id),
-                        skdm_recipients::created_at.eq(now),
+                        sender_key_devices::group_jid.eq(&group_jid),
+                        sender_key_devices::device_jid.eq(device_jid),
+                        sender_key_devices::has_key.eq(i32::from(*has_key)),
+                        sender_key_devices::device_id.eq(device_id),
+                        sender_key_devices::updated_at.eq(now),
                     )
                 })
                 .collect();
 
-            const CHUNK_SIZE: usize = 200; // SQLite variable limit ~999, 4 cols/row
+            const CHUNK_SIZE: usize = 190; // SQLite variable limit ~999, 5 cols/row
 
             for chunk in values.chunks(CHUNK_SIZE) {
-                diesel::insert_into(skdm_recipients::table)
+                diesel::insert_into(sender_key_devices::table)
                     .values(chunk)
                     .on_conflict((
-                        skdm_recipients::group_jid,
-                        skdm_recipients::device_jid,
-                        skdm_recipients::device_id,
+                        sender_key_devices::group_jid,
+                        sender_key_devices::device_jid,
+                        sender_key_devices::device_id,
                     ))
-                    .do_nothing()
+                    .do_update()
+                    .set((
+                        sender_key_devices::has_key
+                            .eq(diesel::upsert::excluded(sender_key_devices::has_key)),
+                        sender_key_devices::updated_at.eq(now),
+                    ))
                     .execute(&mut conn)
                     .map_err(|e| StoreError::Database(e.to_string()))?;
             }
@@ -1710,7 +1711,7 @@ impl ProtocolStore for SqliteStore {
         Ok(())
     }
 
-    async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()> {
+    async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
@@ -1719,9 +1720,9 @@ impl ProtocolStore for SqliteStore {
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
             diesel::delete(
-                skdm_recipients::table
-                    .filter(skdm_recipients::group_jid.eq(&group_jid))
-                    .filter(skdm_recipients::device_id.eq(device_id)),
+                sender_key_devices::table
+                    .filter(sender_key_devices::group_jid.eq(&group_jid))
+                    .filter(sender_key_devices::device_id.eq(device_id)),
             )
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -2041,68 +2042,8 @@ impl ProtocolStore for SqliteStore {
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
-    async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()> {
-        let pool = self.pool.clone();
-        let device_id = self.device_id;
-        let group_jid = group_jid.to_string();
-        let participant = participant.to_string();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i32;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(sender_key_status::table)
-                .values((
-                    sender_key_status::group_jid.eq(&group_jid),
-                    sender_key_status::participant.eq(&participant),
-                    sender_key_status::device_id.eq(device_id),
-                    sender_key_status::marked_at.eq(now),
-                ))
-                .on_conflict((
-                    sender_key_status::group_jid,
-                    sender_key_status::participant,
-                    sender_key_status::device_id,
-                ))
-                .do_update()
-                .set(sender_key_status::marked_at.eq(now))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
-    }
-
-    async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>> {
-        let pool = self.pool.clone();
-        let device_id = self.device_id;
-        let group_jid = group_jid.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let participants: Vec<String> = sender_key_status::table
-                .select(sender_key_status::participant)
-                .filter(sender_key_status::group_jid.eq(&group_jid))
-                .filter(sender_key_status::device_id.eq(device_id))
-                .load(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            diesel::delete(
-                sender_key_status::table
-                    .filter(sender_key_status::group_jid.eq(&group_jid))
-                    .filter(sender_key_status::device_id.eq(device_id)),
-            )
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(participants)
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
-    }
+    // (mark_forget_sender_key and consume_forget_marks replaced by
+    //  unified set_sender_key_status / get_sender_key_devices above)
 
     async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>> {
         let pool = self.pool.clone();
@@ -2578,59 +2519,73 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sender_key_status_mark_and_consume() {
+    async fn test_sender_key_devices_set_and_get() {
         let store = create_test_store().await;
 
         let group = "group123@g.us";
-        let participant = "user1@s.whatsapp.net";
 
+        // Set two devices: one has key, one needs SKDM
         store
-            .mark_forget_sender_key(group, participant)
+            .set_sender_key_status(group, &[("user1:5@lid", true), ("user2:3@lid", false)])
             .await
-            .expect("mark failed");
+            .expect("set failed");
 
-        let consumed = store
-            .consume_forget_marks(group)
+        let devices = store
+            .get_sender_key_devices(group)
             .await
-            .expect("consume failed");
-        assert_eq!(consumed.len(), 1);
-        assert!(consumed.contains(&participant.to_string()));
-
-        let consumed = store
-            .consume_forget_marks(group)
-            .await
-            .expect("consume failed");
-        assert!(consumed.is_empty());
+            .expect("get failed");
+        assert_eq!(devices.len(), 2);
+        assert!(devices.contains(&("user1:5@lid".to_string(), true)));
+        assert!(devices.contains(&("user2:3@lid".to_string(), false)));
     }
 
     #[tokio::test]
-    async fn test_sender_key_status_consume_multiple() {
+    async fn test_sender_key_devices_upsert_overwrites() {
+        let store = create_test_store().await;
+
+        let group = "group123@g.us";
+
+        // Initially mark as needing SKDM
+        store
+            .set_sender_key_status(group, &[("user1:5@lid", false)])
+            .await
+            .expect("set failed");
+
+        // Then mark as having key (simulates successful SKDM delivery)
+        store
+            .set_sender_key_status(group, &[("user1:5@lid", true)])
+            .await
+            .expect("set failed");
+
+        let devices = store
+            .get_sender_key_devices(group)
+            .await
+            .expect("get failed");
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0], ("user1:5@lid".to_string(), true));
+    }
+
+    #[tokio::test]
+    async fn test_sender_key_devices_clear() {
         let store = create_test_store().await;
 
         let group = "group123@g.us";
 
         store
-            .mark_forget_sender_key(group, "user1@s.whatsapp.net")
+            .set_sender_key_status(group, &[("user1:5@lid", true), ("user2:3@lid", true)])
             .await
-            .expect("mark failed");
+            .expect("set failed");
+
         store
-            .mark_forget_sender_key(group, "user2@s.whatsapp.net")
+            .clear_sender_key_devices(group)
             .await
-            .expect("mark failed");
+            .expect("clear failed");
 
-        let consumed = store
-            .consume_forget_marks(group)
+        let devices = store
+            .get_sender_key_devices(group)
             .await
-            .expect("consume failed");
-        assert_eq!(consumed.len(), 2);
-        assert!(consumed.contains(&"user1@s.whatsapp.net".to_string()));
-        assert!(consumed.contains(&"user2@s.whatsapp.net".to_string()));
-
-        let consumed = store
-            .consume_forget_marks(group)
-            .await
-            .expect("consume failed");
-        assert!(consumed.is_empty());
+            .expect("get failed");
+        assert!(devices.is_empty());
     }
 
     #[tokio::test]
@@ -2749,22 +2704,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sender_key_status_different_groups() {
+    async fn test_sender_key_devices_different_groups() {
         let store = create_test_store().await;
 
         let group1 = "group1@g.us";
         let group2 = "group2@g.us";
-        let participant = "user@s.whatsapp.net";
 
         store
-            .mark_forget_sender_key(group1, participant)
+            .set_sender_key_status(group1, &[("user:5@lid", true)])
             .await
-            .expect("mark failed");
+            .expect("set failed");
 
-        let consumed = store.consume_forget_marks(group1).await.unwrap();
-        assert_eq!(consumed.len(), 1);
+        let g1 = store.get_sender_key_devices(group1).await.unwrap();
+        assert_eq!(g1.len(), 1);
 
-        let consumed = store.consume_forget_marks(group2).await.unwrap();
-        assert!(consumed.is_empty());
+        let g2 = store.get_sender_key_devices(group2).await.unwrap();
+        assert!(g2.is_empty());
     }
 }

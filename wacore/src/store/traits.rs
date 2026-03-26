@@ -12,7 +12,6 @@ use crate::store::error::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use wacore_appstate::processor::AppStateMutationMAC;
-use wacore_binary::jid::Jid;
 
 /// App state synchronization key for WhatsApp's app state protocol.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -199,16 +198,20 @@ pub trait AppSyncStore: Send + Sync {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait ProtocolStore: Send + Sync {
-    // --- SKDM Tracking ---
+    // --- Per-Device Sender Key Tracking (matches WA Web's participant.senderKey Map) ---
 
-    /// Get device JIDs that have received SKDM for a group.
-    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>>;
+    /// Get the sender key distribution status for all known devices in a group.
+    /// Returns `(device_jid_string, has_key)` pairs where `has_key` indicates
+    /// whether the device has a valid sender key (`true`) or needs fresh SKDM (`false`).
+    async fn get_sender_key_devices(&self, group_jid: &str) -> Result<Vec<(String, bool)>>;
 
-    /// Record devices that have received SKDM for a group.
-    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()>;
+    /// Set sender key status for devices. Called with `has_key=true` after successful
+    /// SKDM distribution (WA Web: `markHasSenderKey`), or `has_key=false` to mark
+    /// devices as needing fresh SKDM (WA Web: `markForgetSenderKey`).
+    async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()>;
 
-    /// Clear SKDM recipients for a group (call when sender key is rotated).
-    async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()>;
+    /// Clear all sender key device tracking for a group (on sender key rotation).
+    async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()>;
 
     // --- LID-PN Mapping ---
 
@@ -248,14 +251,7 @@ pub trait ProtocolStore: Send + Sync {
     /// Get all known devices for a user.
     async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
 
-    // --- Sender Key Status (Lazy Deletion) ---
-
-    /// Mark a participant's sender key as needing regeneration for a group.
-    async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()>;
-
-    /// Get participants that need fresh SKDM (marked for forget).
-    /// Consumes the marks (deletes them after reading).
-    async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>>;
+    // (sender_key_status methods replaced by unified sender_key_devices above)
 
     // --- TcToken Storage ---
 

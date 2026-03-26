@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use wacore::runtime::Runtime;
-use wacore_binary::jid::Jid;
 
 pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
@@ -177,27 +176,30 @@ impl PersistenceManager {
 }
 
 impl PersistenceManager {
-    pub async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>, StoreError> {
-        self.backend
-            .get_skdm_recipients(group_jid)
-            .await
-            .map_err(db_err)
-    }
-
-    pub async fn add_skdm_recipients(
+    pub async fn get_sender_key_devices(
         &self,
         group_jid: &str,
-        device_jids: &[Jid],
-    ) -> Result<(), StoreError> {
+    ) -> Result<Vec<(String, bool)>, StoreError> {
         self.backend
-            .add_skdm_recipients(group_jid, device_jids)
+            .get_sender_key_devices(group_jid)
             .await
             .map_err(db_err)
     }
 
-    pub async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<(), StoreError> {
+    pub async fn set_sender_key_status(
+        &self,
+        group_jid: &str,
+        entries: &[(&str, bool)],
+    ) -> Result<(), StoreError> {
         self.backend
-            .clear_skdm_recipients(group_jid)
+            .set_sender_key_status(group_jid, entries)
+            .await
+            .map_err(db_err)
+    }
+
+    pub async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<(), StoreError> {
+        self.backend
+            .clear_sender_key_devices(group_jid)
             .await
             .map_err(db_err)
     }

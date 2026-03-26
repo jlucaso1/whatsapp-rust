@@ -15,71 +15,44 @@ use waproto::whatsapp as wa;
 use super::Client;
 
 impl Client {
-    /// Mark participants for fresh SKDM on next group send.
-    /// Filters out our own devices (we don't need to send SKDM to ourselves).
-    /// Matches WhatsApp Web's WAWebApiParticipantStore.markForgetSenderKey behavior.
+    /// Mark device JIDs as needing fresh SKDM (has_key = false).
+    /// Filters out our own devices (WA Web: `!isMeDevice(e)` check).
     /// Called from handle_retry_receipt for group/status messages.
     pub(crate) async fn mark_forget_sender_key(
         &self,
         group_jid: &str,
-        participants: &[String],
+        device_jids: &[Jid],
     ) -> Result<()> {
         use anyhow::anyhow;
 
-        // Get our own user ID to filter out (WhatsApp Web: isMeDevice check)
         let device_store = self.persistence_manager.get_device_arc().await;
         let device_guard = device_store.read().await;
-        let own_lid_user = device_guard.lid.as_ref().map(|j| j.user.clone());
-        let own_pn_user = device_guard.pn.as_ref().map(|j| j.user.clone());
+        let own_lid_user = device_guard
+            .lid
+            .as_ref()
+            .map(|j| j.user.as_str().to_owned());
+        let own_pn_user = device_guard.pn.as_ref().map(|j| j.user.as_str().to_owned());
         drop(device_guard);
 
-        // Pre-compute prefix strings outside the filter loop to avoid repeated allocations
-        // Include exact match string in tuple to avoid repeated Option lookups
-        let lid_prefixes = own_lid_user
-            .as_ref()
-            .map(|lid| (format!("{lid}:"), format!("{lid}@"), lid.as_str()));
-        let pn_prefixes = own_pn_user
-            .as_ref()
-            .map(|pn| (format!("{pn}:"), format!("{pn}@"), pn.as_str()));
-
-        // Filter out own devices (WhatsApp Web: !isMeDevice(e))
-        let filtered: Vec<String> = participants
+        // Filter out own devices using Jid user comparison (no string prefix hacks)
+        let filtered: Vec<String> = device_jids
             .iter()
-            .filter(|p| {
-                // Parse participant JID and check if it's our own
-                let is_own_lid = lid_prefixes.as_ref().is_some_and(|(colon, at, exact)| {
-                    p.starts_with(colon) || p.starts_with(at) || p.as_str() == *exact
-                });
-                let is_own_pn = pn_prefixes.as_ref().is_some_and(|(colon, at, exact)| {
-                    p.starts_with(colon) || p.starts_with(at) || p.as_str() == *exact
-                });
-                !is_own_lid && !is_own_pn
+            .filter(|jid| {
+                let is_own = own_lid_user.as_deref().is_some_and(|u| u == jid.user)
+                    || own_pn_user.as_deref().is_some_and(|u| u == jid.user);
+                !is_own
             })
-            .cloned()
+            .map(|jid| jid.to_string())
             .collect();
 
         if filtered.is_empty() {
             return Ok(());
         }
 
-        let backend = self.persistence_manager.backend();
-        for participant in &filtered {
-            backend
-                .mark_forget_sender_key(group_jid, participant)
-                .await
-                .map_err(|e| anyhow!("{e}"))?;
-        }
-        Ok(())
-    }
-
-    /// Get participants marked for fresh SKDM and consume the marks.
-    /// Matches WhatsApp Web's getGroupSenderKeyList pattern.
-    pub(crate) async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>> {
-        use anyhow::anyhow;
-
-        let backend = self.persistence_manager.backend();
-        backend
-            .consume_forget_marks(group_jid)
+        let entries: Vec<(&str, bool)> = filtered.iter().map(|s| (s.as_str(), false)).collect();
+        self.persistence_manager
+            .backend()
+            .set_sender_key_status(group_jid, &entries)
             .await
             .map_err(|e| anyhow!("{e}"))
     }

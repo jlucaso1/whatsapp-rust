@@ -318,64 +318,12 @@ impl Client {
             sender_key_store: &mut store_adapter.sender_key_store,
         };
 
-        let marked_for_fresh_skdm = self.consume_forget_marks(&to_str).await.unwrap_or_default();
-
+        // Determine which devices need SKDM using the unified per-device map
         let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
             None
         } else {
-            let known_recipients = self
-                .persistence_manager
-                .get_skdm_recipients(&to_str)
+            self.resolve_skdm_targets(&to_str, &group_info.participants)
                 .await
-                .unwrap_or_default();
-
-            if known_recipients.is_empty() {
-                None
-            } else {
-                let jids_to_resolve: Vec<Jid> = group_info
-                    .participants
-                    .iter()
-                    .map(|jid| jid.to_non_ad())
-                    .collect();
-
-                match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
-                    Ok(all_devices) => {
-                        let known_set: std::collections::HashSet<DeviceKey<'_>> =
-                            known_recipients.iter().map(|j| j.device_key()).collect();
-                        let new_devices: Vec<Jid> = all_devices
-                            .into_iter()
-                            .filter(|device| !known_set.contains(&device.device_key()))
-                            .collect();
-                        if new_devices.is_empty() {
-                            Some(vec![])
-                        } else {
-                            Some(new_devices)
-                        }
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to resolve devices for status SKDM check: {:?}", e);
-                        None
-                    }
-                }
-            }
-        };
-
-        let skdm_target_devices: Option<Vec<Jid>> = if !marked_for_fresh_skdm.is_empty() {
-            match skdm_target_devices {
-                None => None,
-                Some(mut devices) => {
-                    for marked_jid_str in &marked_for_fresh_skdm {
-                        if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
-                            && !devices.iter().any(|d| d.device_eq(&marked_jid))
-                        {
-                            devices.push(marked_jid);
-                        }
-                    }
-                    Some(devices)
-                }
-            }
-        } else {
-            skdm_target_devices
         };
 
         let is_full_distribution = force_skdm || skdm_target_devices.is_none();
@@ -427,7 +375,7 @@ impl Client {
 
                     if let Err(e) = self
                         .persistence_manager
-                        .clear_skdm_recipients(&to_str)
+                        .clear_sender_key_devices(&to_str)
                         .await
                     {
                         log::warn!("Failed to clear status SKDM recipients: {:?}", e);
@@ -483,7 +431,7 @@ impl Client {
 
         // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
         // WA Web only calls markHasSenderKey() after the server confirms receipt.
-        self.update_skdm_recipients(
+        self.update_sender_key_devices(
             &to_str,
             &devices_receiving_skdm,
             skdm_is_full,
@@ -499,43 +447,131 @@ impl Client {
         Ok(request_id)
     }
 
-    /// Update SKDM recipient bookkeeping after a successful group/status send.
+    /// Resolve which devices need SKDM by reading the per-device sender key map.
     ///
-    /// Called AFTER `send_node()` succeeds to match WhatsApp Web behavior, which
-    /// only marks devices as having the sender key after the server ACK.
-    /// If specific devices received SKDM, record them. If this was a full distribution
-    /// (all participants), resolve all devices and record them instead.
-    async fn update_skdm_recipients(
+    /// Returns `None` for full distribution (no map data or all unknown), or
+    /// `Some(devices)` listing only the devices that need fresh SKDM.
+    /// Uses `Jid::device_key()` for O(1) lookups — no string allocations in the hot path.
+    async fn resolve_skdm_targets(
+        &self,
+        group_jid: &str,
+        participants: &[Jid],
+    ) -> Option<Vec<Jid>> {
+        use std::collections::HashSet;
+
+        let device_map = self
+            .persistence_manager
+            .get_sender_key_devices(group_jid)
+            .await
+            .unwrap_or_default();
+
+        if device_map.is_empty() {
+            return None; // no tracking data, force full distribution
+        }
+
+        // Parse stored JID strings once, reuse for both has_key and forgotten_users lookups
+        let parsed: Vec<(Jid, bool)> = device_map
+            .iter()
+            .filter_map(|(jid_str, has_key)| jid_str.parse::<Jid>().ok().map(|jid| (jid, *has_key)))
+            .collect();
+
+        let has_key_set: HashSet<DeviceKey<'_>> = parsed
+            .iter()
+            .filter(|(_, has)| *has)
+            .map(|(jid, _)| jid.device_key())
+            .collect();
+
+        // User-level check: if ANY device of a user has has_key=false,
+        // all devices of that user need SKDM (matches WA Web's getGroupSenderKeyList)
+        let forgotten_users: HashSet<&str> = parsed
+            .iter()
+            .filter(|(_, has)| !*has)
+            .map(|(jid, _)| jid.user.as_str())
+            .collect();
+
+        let jids_to_resolve: Vec<Jid> = participants.iter().map(|jid| jid.to_non_ad()).collect();
+
+        match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
+            Ok(all_devices) => {
+                let needs_skdm: Vec<Jid> = all_devices
+                    .into_iter()
+                    .filter(|device| {
+                        !has_key_set.contains(&device.device_key())
+                            || forgotten_users.contains(device.user.as_str())
+                    })
+                    .collect();
+
+                if needs_skdm.is_empty() {
+                    Some(vec![])
+                } else {
+                    log::debug!(
+                        "Found {} devices needing SKDM for {}",
+                        needs_skdm.len(),
+                        group_jid
+                    );
+                    Some(needs_skdm)
+                }
+            }
+            Err(e) => {
+                log::warn!("Failed to resolve devices for SKDM check: {:?}", e);
+                None
+            }
+        }
+    }
+
+    /// Update sender key device tracking after a successful group/status send.
+    ///
+    /// Called AFTER `send_node()` succeeds (WA Web: `markHasSenderKey` after server ACK).
+    /// Marks devices that received SKDM as `has_key=true`. On full distribution,
+    /// clears and rebuilds the entire map for the group.
+    async fn update_sender_key_devices(
         &self,
         to_str: &str,
         devices_receiving_skdm: &[Jid],
         is_full_distribution: bool,
         participants: &[Jid],
     ) {
-        if !devices_receiving_skdm.is_empty() {
+        if is_full_distribution {
+            // Full distribution: clear old state and record all resolved devices
             if let Err(e) = self
                 .persistence_manager
-                .add_skdm_recipients(to_str, devices_receiving_skdm)
+                .clear_sender_key_devices(to_str)
                 .await
             {
-                log::warn!("Failed to update SKDM recipients: {:?}", e);
+                log::warn!("Failed to clear sender key devices: {:?}", e);
             }
-        } else if is_full_distribution {
             let jids_to_resolve: Vec<Jid> =
                 participants.iter().map(|jid| jid.to_non_ad()).collect();
             match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
                 Ok(all_devices) => {
+                    let strs: Vec<String> = all_devices.iter().map(|j| j.to_string()).collect();
+                    let entries: Vec<(&str, bool)> =
+                        strs.iter().map(|s| (s.as_str(), true)).collect();
                     if let Err(e) = self
                         .persistence_manager
-                        .add_skdm_recipients(to_str, &all_devices)
+                        .set_sender_key_status(to_str, &entries)
                         .await
                     {
-                        log::warn!("Failed to persist SKDM recipients: {:?}", e);
+                        log::warn!("Failed to persist sender key devices: {:?}", e);
                     }
                 }
                 Err(e) => {
-                    log::warn!("Failed to resolve devices for SKDM recipients: {:?}", e);
+                    log::warn!("Failed to resolve devices for sender key tracking: {:?}", e);
                 }
+            }
+        } else if !devices_receiving_skdm.is_empty() {
+            // Partial distribution: mark specific devices as has_key=true
+            let strs: Vec<String> = devices_receiving_skdm
+                .iter()
+                .map(|j| j.to_string())
+                .collect();
+            let entries: Vec<(&str, bool)> = strs.iter().map(|s| (s.as_str(), true)).collect();
+            if let Err(e) = self
+                .persistence_manager
+                .set_sender_key_status(to_str, &entries)
+                .await
+            {
+                log::warn!("Failed to update sender key devices: {:?}", e);
             }
         }
     }
@@ -826,82 +862,13 @@ impl Client {
                 sender_key_store: &mut store_adapter.sender_key_store,
             };
 
-            // Consume forget marks - these participants need fresh SKDMs (matches WhatsApp Web)
-            // markForgetSenderKey is called during retry handling, this consumes those marks
-            let marked_for_fresh_skdm =
-                self.consume_forget_marks(&to_str).await.unwrap_or_default();
-
-            // Determine which devices need SKDM distribution
+            // Determine which devices need SKDM distribution using the unified
+            // per-device sender key map (matches WA Web's participant.senderKey Map).
             let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
                 None
             } else {
-                let known_recipients = self
-                    .persistence_manager
-                    .get_skdm_recipients(&to_str)
+                self.resolve_skdm_targets(&to_str, &group_info.participants)
                     .await
-                    .unwrap_or_default();
-
-                if known_recipients.is_empty() {
-                    None
-                } else {
-                    let jids_to_resolve: Vec<Jid> = group_info
-                        .participants
-                        .iter()
-                        .map(|jid| jid.to_non_ad())
-                        .collect();
-
-                    match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
-                        Ok(all_devices) => {
-                            use std::collections::HashSet;
-
-                            let known_set: HashSet<DeviceKey<'_>> =
-                                known_recipients.iter().map(|j| j.device_key()).collect();
-
-                            let new_devices: Vec<Jid> = all_devices
-                                .into_iter()
-                                .filter(|device| !known_set.contains(&device.device_key()))
-                                .collect();
-
-                            if new_devices.is_empty() {
-                                Some(vec![])
-                            } else {
-                                log::debug!(
-                                    "Found {} new devices needing SKDM for group {}",
-                                    new_devices.len(),
-                                    to
-                                );
-                                Some(new_devices)
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!("Failed to resolve devices for SKDM check: {:?}", e);
-                            None
-                        }
-                    }
-                }
-            };
-
-            // Merge devices marked for fresh SKDM (from retry/error handling)
-            let skdm_target_devices: Option<Vec<Jid>> = if !marked_for_fresh_skdm.is_empty() {
-                match skdm_target_devices {
-                    None => None,
-                    Some(mut devices) => {
-                        for marked_jid_str in &marked_for_fresh_skdm {
-                            if let Ok(marked_jid) = marked_jid_str.parse::<Jid>()
-                                && !devices.iter().any(|d| d.device_eq(&marked_jid))
-                            {
-                                log::debug!(
-                                    "Adding {} to SKDM targets (marked for fresh key)",
-                                    marked_jid_str
-                                );
-                                devices.push(marked_jid);
-                            }
-                        }
-                        Some(devices)
-                    }
-                }
-            } else {
-                skdm_target_devices
             };
 
             let is_full_distribution = force_skdm || skdm_target_devices.is_none();
@@ -942,7 +909,7 @@ impl Client {
                         // Clear SKDM recipients since we're rotating the key
                         if let Err(e) = self
                             .persistence_manager
-                            .clear_skdm_recipients(&to_str)
+                            .clear_sender_key_devices(&to_str)
                             .await
                         {
                             log::warn!("Failed to clear SKDM recipients: {:?}", e);
@@ -1069,7 +1036,7 @@ impl Client {
         // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
         // WA Web only calls markHasSenderKey() after the server confirms receipt.
         if let Some(update) = skdm_update {
-            self.update_skdm_recipients(
+            self.update_sender_key_devices(
                 &update.to_str,
                 &update.devices,
                 update.is_full_distribution,
