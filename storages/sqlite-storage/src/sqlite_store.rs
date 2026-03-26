@@ -1656,81 +1656,75 @@ impl ProtocolStore for SqliteStore {
         if entries.is_empty() {
             return Ok(());
         }
-        let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        let owned_entries: Vec<(String, bool)> = entries
-            .iter()
-            .map(|(jid, has_key)| (jid.to_string(), *has_key))
-            .collect();
+        let owned_entries: Arc<Vec<(String, bool)>> = Arc::new(
+            entries
+                .iter()
+                .map(|(jid, has_key)| (jid.to_string(), *has_key))
+                .collect(),
+        );
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs() as i64;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+        self.with_retry("set_sender_key_status", || {
+            let group_jid = group_jid.clone();
+            let owned_entries = Arc::clone(&owned_entries);
+            Box::new(move |conn: &mut SqliteConnection| {
+                let values: Vec<_> = owned_entries
+                    .iter()
+                    .map(|(device_jid, has_key)| {
+                        (
+                            sender_key_devices::group_jid.eq(&group_jid),
+                            sender_key_devices::device_jid.eq(device_jid),
+                            sender_key_devices::has_key.eq(i32::from(*has_key)),
+                            sender_key_devices::device_id.eq(device_id),
+                            sender_key_devices::updated_at.eq(now),
+                        )
+                    })
+                    .collect();
 
-            let values: Vec<_> = owned_entries
-                .iter()
-                .map(|(device_jid, has_key)| {
-                    (
-                        sender_key_devices::group_jid.eq(&group_jid),
-                        sender_key_devices::device_jid.eq(device_jid),
-                        sender_key_devices::has_key.eq(i32::from(*has_key)),
-                        sender_key_devices::device_id.eq(device_id),
-                        sender_key_devices::updated_at.eq(now),
-                    )
-                })
-                .collect();
+                const CHUNK_SIZE: usize = 190;
 
-            const CHUNK_SIZE: usize = 190; // SQLite variable limit ~999, 5 cols/row
-
-            for chunk in values.chunks(CHUNK_SIZE) {
-                diesel::insert_into(sender_key_devices::table)
-                    .values(chunk)
-                    .on_conflict((
-                        sender_key_devices::group_jid,
-                        sender_key_devices::device_jid,
-                        sender_key_devices::device_id,
-                    ))
-                    .do_update()
-                    .set((
-                        sender_key_devices::has_key
-                            .eq(diesel::upsert::excluded(sender_key_devices::has_key)),
-                        sender_key_devices::updated_at.eq(now),
-                    ))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            Ok(())
+                for chunk in values.chunks(CHUNK_SIZE) {
+                    diesel::insert_into(sender_key_devices::table)
+                        .values(chunk)
+                        .on_conflict((
+                            sender_key_devices::group_jid,
+                            sender_key_devices::device_jid,
+                            sender_key_devices::device_id,
+                        ))
+                        .do_update()
+                        .set((
+                            sender_key_devices::has_key
+                                .eq(diesel::upsert::excluded(sender_key_devices::has_key)),
+                            sender_key_devices::updated_at.eq(now),
+                        ))
+                        .execute(conn)?;
+                }
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()> {
-        let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(
-                sender_key_devices::table
-                    .filter(sender_key_devices::group_jid.eq(&group_jid))
-                    .filter(sender_key_devices::device_id.eq(device_id)),
-            )
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
+        self.with_retry("clear_sender_key_devices", || {
+            let group_jid = group_jid.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::delete(
+                    sender_key_devices::table
+                        .filter(sender_key_devices::group_jid.eq(&group_jid))
+                        .filter(sender_key_devices::device_id.eq(device_id)),
+                )
+                .execute(conn)?;
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>> {

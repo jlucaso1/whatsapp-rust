@@ -251,8 +251,6 @@ pub trait ProtocolStore: Send + Sync {
     /// Get all known devices for a user.
     async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
 
-    // (sender_key_status methods replaced by unified sender_key_devices above)
-
     // --- TcToken Storage ---
 
     /// Get a trusted contact token for a JID (stored under LID).

@@ -879,7 +879,12 @@ impl Client {
             };
 
             let is_full_distribution = force_skdm || skdm_target_devices.is_none();
-            let devices_receiving_skdm: Vec<Jid> = skdm_target_devices.clone().unwrap_or_default();
+            // Extract the partial device list before moving skdm_target_devices into prepare_group_stanza
+            let partial_skdm_devices: Vec<Jid> = if is_full_distribution {
+                vec![]
+            } else {
+                skdm_target_devices.clone().unwrap_or_default()
+            };
 
             match wacore::send::prepare_group_stanza(
                 &mut stores,
@@ -909,7 +914,7 @@ impl Client {
                             .await
                             .unwrap_or_default()
                     } else {
-                        devices_receiving_skdm
+                        partial_skdm_devices
                     };
                     skdm_update = Some(SkdmUpdate {
                         to_str: to_str.clone(),

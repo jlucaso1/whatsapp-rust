@@ -17,10 +17,13 @@ CREATE INDEX idx_sender_key_devices_group ON sender_key_devices (group_jid, devi
 INSERT OR IGNORE INTO sender_key_devices (group_jid, device_jid, device_id, has_key, updated_at)
     SELECT group_jid, device_jid, device_id, 1, created_at FROM skdm_recipients;
 
--- Migrate forget marks (devices needing fresh SKDM). OR REPLACE ensures
--- forget marks override positive entries for the same device.
+-- Migrate forget marks (devices needing fresh SKDM). Only migrate entries
+-- that look like device JIDs (contain ':' device suffix). Bare user JIDs
+-- from the old participant-level tracking are skipped to avoid stale rows
+-- that would never match concrete device JIDs.
 INSERT OR REPLACE INTO sender_key_devices (group_jid, device_jid, device_id, has_key, updated_at)
-    SELECT group_jid, participant, device_id, 0, marked_at FROM sender_key_status;
+    SELECT group_jid, participant, device_id, 0, marked_at FROM sender_key_status
+    WHERE participant LIKE '%:%';
 
 DROP TABLE skdm_recipients;
 DROP TABLE sender_key_status;
