@@ -322,7 +322,7 @@ impl Client {
         let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
             None
         } else {
-            self.resolve_skdm_targets(&to_str, &group_info.participants)
+            self.resolve_skdm_targets(&to_str, &group_info.participants, &own_jid)
                 .await
         };
 
@@ -433,6 +433,7 @@ impl Client {
         &self,
         group_jid: &str,
         participants: &[Jid],
+        own_sending_jid: &Jid,
     ) -> Option<Vec<Jid>> {
         use std::collections::HashSet;
 
@@ -450,10 +451,9 @@ impl Client {
             });
 
         if device_map.is_empty() {
-            return None; // no tracking data, force full distribution
+            return None;
         }
 
-        // Parse stored JID strings once, reuse for both has_key and forgotten_users lookups
         let parsed: Vec<(Jid, bool)> = device_map
             .iter()
             .filter_map(|(jid_str, has_key)| jid_str.parse::<Jid>().ok().map(|jid| (jid, *has_key)))
@@ -465,8 +465,6 @@ impl Client {
             .map(|(jid, _)| jid.device_key())
             .collect();
 
-        // User-level check: if ANY device of a user has has_key=false,
-        // all devices of that user need SKDM (matches WA Web's getGroupSenderKeyList)
         let forgotten_users: HashSet<&str> = parsed
             .iter()
             .filter(|(_, has)| !*has)
@@ -480,6 +478,17 @@ impl Client {
                 let needs_skdm: Vec<Jid> = all_devices
                     .into_iter()
                     .filter(|device| {
+                        // Skip our own sending device and hosted devices —
+                        // they're excluded from SKDM in prepare_group_stanza
+                        // and would never appear in the sender key map
+                        if device.is_hosted() {
+                            return false;
+                        }
+                        if device.user == own_sending_jid.user
+                            && device.device == own_sending_jid.device
+                        {
+                            return false;
+                        }
                         !has_key_set.contains(&device.device_key())
                             || forgotten_users.contains(device.user.as_str())
                     })
@@ -817,7 +826,7 @@ impl Client {
             let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
                 None
             } else {
-                self.resolve_skdm_targets(&to_str, &group_info.participants)
+                self.resolve_skdm_targets(&to_str, &group_info.participants, &own_sending_jid)
                     .await
             };
 
