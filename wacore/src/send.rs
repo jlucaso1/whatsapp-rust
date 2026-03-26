@@ -76,10 +76,19 @@ fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
     if msg.event_message.is_some() || msg.enc_event_response_message.is_some() {
         return stanza::MSG_TYPE_EVENT;
     }
-    // TODO: secretEncryptedMessage with EVENT_EDIT → "event", POLL_EDIT → "poll"
+    if let Some(ref sec) = msg.secret_encrypted_message {
+        use wa::message::secret_encrypted_message::SecretEncType;
+        match SecretEncType::try_from(sec.secret_enc_type.unwrap_or(0)) {
+            Ok(SecretEncType::EventEdit) => return stanza::MSG_TYPE_EVENT,
+            Ok(SecretEncType::MessageEdit) => return stanza::MSG_TYPE_TEXT,
+            Ok(SecretEncType::PollEdit) => return stanza::MSG_TYPE_POLL,
+            _ => {}
+        }
+    }
     if msg.poll_creation_message.is_some()
         || msg.poll_creation_message_v2.is_some()
         || msg.poll_creation_message_v3.is_some()
+        || msg.poll_creation_message_v5.is_some()
         || msg.poll_update_message.is_some()
     {
         return stanza::MSG_TYPE_POLL;
@@ -97,6 +106,11 @@ fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
         || msg.newsletter_follower_invite_message_v2.is_some()
         || msg.message_history_notice.is_some()
     {
+        return stanza::MSG_TYPE_TEXT;
+    }
+    // pollResultSnapshotMessage maps to "text" by default in WA Web
+    // (gated behind isPollResultSnapshotPollTypeEnvelopeEnabled for "poll")
+    if msg.poll_result_snapshot_message.is_some() || msg.poll_result_snapshot_message_v3.is_some() {
         return stanza::MSG_TYPE_TEXT;
     }
     if let Some(ref ext) = msg.extended_text_message {
