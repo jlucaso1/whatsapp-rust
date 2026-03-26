@@ -314,6 +314,7 @@ impl Client {
                             .await;
                     }
 
+                    self.sender_key_device_cache.invalidate(&group_jid).await;
                     if let Err(e) = self
                         .persistence_manager
                         .clear_sender_key_devices(&group_jid)

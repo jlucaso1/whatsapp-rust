@@ -8,7 +8,9 @@ use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
 use wacore::types::message::AddressingMode;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{DeviceKey, Jid, JidExt as _};
+#[cfg(test)]
+use wacore_binary::jid::DeviceKey;
+use wacore_binary::jid::{Jid, JidExt as _};
 use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 
@@ -365,6 +367,7 @@ impl Client {
                 {
                     log::warn!("No sender key for status broadcast, forcing distribution.");
 
+                    self.sender_key_device_cache.invalidate(&to_str).await;
                     if let Err(e) = self
                         .persistence_manager
                         .clear_sender_key_devices(&to_str)
@@ -435,41 +438,39 @@ impl Client {
         participants: &[Jid],
         own_sending_jid: &Jid,
     ) -> Option<Vec<Jid>> {
-        use std::collections::HashSet;
+        use crate::sender_key_device_cache::SenderKeyDeviceMap;
 
-        let device_map = self
-            .persistence_manager
-            .get_sender_key_devices(group_jid)
-            .await
-            .unwrap_or_else(|e| {
-                log::warn!(
-                    "Failed to read sender key devices for {}: {:?}",
-                    group_jid,
-                    e
-                );
-                vec![]
-            });
+        // L1: in-memory cache (zero-cost on hit)
+        let cached_map = if let Some(map) = self.sender_key_device_cache.get(group_jid).await {
+            if map.is_empty() {
+                return None;
+            }
+            map
+        } else {
+            // L2: DB read + parse + populate cache
+            let db_rows = self
+                .persistence_manager
+                .get_sender_key_devices(group_jid)
+                .await
+                .unwrap_or_else(|e| {
+                    log::warn!(
+                        "Failed to read sender key devices for {}: {:?}",
+                        group_jid,
+                        e
+                    );
+                    vec![]
+                });
 
-        if device_map.is_empty() {
-            return None;
-        }
+            if db_rows.is_empty() {
+                return None;
+            }
 
-        let parsed: Vec<(Jid, bool)> = device_map
-            .iter()
-            .filter_map(|(jid_str, has_key)| jid_str.parse::<Jid>().ok().map(|jid| (jid, *has_key)))
-            .collect();
-
-        let has_key_set: HashSet<DeviceKey<'_>> = parsed
-            .iter()
-            .filter(|(_, has)| *has)
-            .map(|(jid, _)| jid.device_key())
-            .collect();
-
-        let forgotten_users: HashSet<&str> = parsed
-            .iter()
-            .filter(|(_, has)| !*has)
-            .map(|(jid, _)| jid.user.as_str())
-            .collect();
+            let map = std::sync::Arc::new(SenderKeyDeviceMap::from_db_rows(&db_rows));
+            self.sender_key_device_cache
+                .insert(group_jid.to_string(), map.clone())
+                .await;
+            map
+        };
 
         let jids_to_resolve: Vec<Jid> = participants.iter().map(|jid| jid.to_non_ad()).collect();
 
@@ -478,9 +479,6 @@ impl Client {
                 let needs_skdm: Vec<Jid> = all_devices
                     .into_iter()
                     .filter(|device| {
-                        // Skip our own sending device and hosted devices —
-                        // they're excluded from SKDM in prepare_group_stanza
-                        // and would never appear in the sender key map
                         if device.is_hosted() {
                             return false;
                         }
@@ -489,8 +487,11 @@ impl Client {
                         {
                             return false;
                         }
-                        !has_key_set.contains(&device.device_key())
-                            || forgotten_users.contains(device.user.as_str())
+                        // O(1) lookups into pre-indexed cache
+                        !cached_map
+                            .device_has_key(&device.user, device.device)
+                            .unwrap_or(false)
+                            || cached_map.is_user_forgotten(&device.user)
                     })
                     .collect();
 
@@ -522,18 +523,31 @@ impl Client {
     /// for the stanza, avoiding a redundant `resolve_devices` call and preventing
     /// the clear-then-fail race where a transient resolver failure leaves the map empty.
     /// Mark devices as `has_key=true` after successful SKDM distribution.
-    /// Uses upsert — stale entries from removed participants are harmless.
     async fn update_sender_key_devices(&self, group_jid: &str, devices: &[Jid]) {
-        if !devices.is_empty() {
-            let strs: Vec<String> = devices.iter().map(|j| j.to_string()).collect();
-            let entries: Vec<(&str, bool)> = strs.iter().map(|s| (s.as_str(), true)).collect();
-            if let Err(e) = self
-                .persistence_manager
-                .set_sender_key_status(group_jid, &entries)
-                .await
-            {
-                log::warn!("Failed to update sender key devices: {:?}", e);
+        if devices.is_empty() {
+            return;
+        }
+
+        // Write-through: update in-memory cache if present
+        if let Some(existing) = self.sender_key_device_cache.get(group_jid).await {
+            let mut updated = (*existing).clone();
+            for jid in devices {
+                updated.upsert(&jid.user, jid.device, true);
             }
+            self.sender_key_device_cache
+                .insert(group_jid.to_string(), std::sync::Arc::new(updated))
+                .await;
+        }
+
+        // Persist to DB
+        let strs: Vec<String> = devices.iter().map(|j| j.to_string()).collect();
+        let entries: Vec<(&str, bool)> = strs.iter().map(|s| (s.as_str(), true)).collect();
+        if let Err(e) = self
+            .persistence_manager
+            .set_sender_key_status(group_jid, &entries)
+            .await
+        {
+            log::warn!("Failed to update sender key devices: {:?}", e);
         }
     }
 
@@ -860,6 +874,7 @@ impl Client {
                     {
                         log::warn!("No sender key for group {}, forcing distribution.", to);
 
+                        self.sender_key_device_cache.invalidate(&to_str).await;
                         if let Err(e) = self
                             .persistence_manager
                             .clear_sender_key_devices(&to_str)
