@@ -78,7 +78,12 @@ fn infer_stanza_metadata(msg: &wa::Message) -> (Option<EditAttribute>, Option<No
     if msg.enc_event_response_message.is_some() {
         return (None, Some(meta_node("event_type", "response")));
     }
-    // TODO: event_type="edit" for secret_encrypted_message with SecretEncType::EVENT_EDIT
+    if let Some(ref sec) = msg.secret_encrypted_message
+        && sec.secret_enc_type
+            == Some(wa::message::secret_encrypted_message::SecretEncType::EventEdit as i32)
+    {
+        return (None, Some(meta_node("event_type", "edit")));
+    }
 
     (None, None)
 }

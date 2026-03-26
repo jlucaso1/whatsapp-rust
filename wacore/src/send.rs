@@ -76,10 +76,19 @@ fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
     if msg.event_message.is_some() || msg.enc_event_response_message.is_some() {
         return stanza::MSG_TYPE_EVENT;
     }
-    // TODO: secretEncryptedMessage with EVENT_EDIT → "event", POLL_EDIT → "poll"
+    if let Some(ref sec) = msg.secret_encrypted_message {
+        use wa::message::secret_encrypted_message::SecretEncType;
+        match SecretEncType::try_from(sec.secret_enc_type.unwrap_or(0)) {
+            Ok(SecretEncType::EventEdit) => return stanza::MSG_TYPE_EVENT,
+            Ok(SecretEncType::MessageEdit) => return stanza::MSG_TYPE_TEXT,
+            Ok(SecretEncType::PollEdit) => return stanza::MSG_TYPE_POLL,
+            _ => {}
+        }
+    }
     if msg.poll_creation_message.is_some()
         || msg.poll_creation_message_v2.is_some()
         || msg.poll_creation_message_v3.is_some()
+        || msg.poll_creation_message_v5.is_some()
         || msg.poll_update_message.is_some()
     {
         return stanza::MSG_TYPE_POLL;
@@ -97,6 +106,11 @@ fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
         || msg.newsletter_follower_invite_message_v2.is_some()
         || msg.message_history_notice.is_some()
     {
+        return stanza::MSG_TYPE_TEXT;
+    }
+    // pollResultSnapshotMessage maps to "text" by default in WA Web
+    // (gated behind isPollResultSnapshotPollTypeEnvelopeEnabled for "poll")
+    if msg.poll_result_snapshot_message.is_some() || msg.poll_result_snapshot_message_v3.is_some() {
         return stanza::MSG_TYPE_TEXT;
     }
     if let Some(ref ext) = msg.extended_text_message {
@@ -178,6 +192,9 @@ fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
 pub fn should_hide_decrypt_fail(msg: &wa::Message) -> bool {
     let msg = unwrap_message(msg);
 
+    use wa::message::protocol_message::Type as ProtocolType;
+    use wa::message::secret_encrypted_message::SecretEncType;
+
     msg.reaction_message.is_some()
         || msg.enc_reaction_message.is_some()
         || msg.pin_in_chat_message.is_some()
@@ -188,9 +205,27 @@ pub fn should_hide_decrypt_fail(msg: &wa::Message) -> bool {
             .poll_update_message
             .as_ref()
             .is_some_and(|p| p.vote.is_some())
-    // TODO: messageHistoryNotice, secretEncryptedMessage (EVENT_EDIT/POLL_EDIT),
-    //       botInvokeMessage (REQUEST_WELCOME_MESSAGE),
-    //       protocolMessage (EPHEMERAL_SYNC_RESPONSE, GROUP_MEMBER_LABEL_CHANGE)
+        || msg.message_history_notice.is_some()
+        || msg.secret_encrypted_message.as_ref().is_some_and(|s| {
+            matches!(
+                SecretEncType::try_from(s.secret_enc_type.unwrap_or(0)),
+                Ok(SecretEncType::EventEdit | SecretEncType::PollEdit)
+            )
+        })
+        || msg
+            .bot_invoke_message
+            .as_ref()
+            .and_then(|b| b.message.as_ref())
+            .and_then(|m| m.protocol_message.as_ref())
+            .is_some_and(|p| p.r#type == Some(ProtocolType::RequestWelcomeMessage as i32))
+        || msg.protocol_message.as_ref().is_some_and(|p| {
+            matches!(
+                p.r#type,
+                Some(t) if t == ProtocolType::EphemeralSyncResponse as i32
+                    || t == ProtocolType::RequestWelcomeMessage as i32
+                    || t == ProtocolType::GroupMemberLabelChange as i32
+            ) || p.edited_message.is_some()
+        })
 }
 
 pub async fn encrypt_group_message<S, R>(

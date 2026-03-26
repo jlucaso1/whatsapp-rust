@@ -347,14 +347,14 @@ impl Client {
 
         let participants = node.get_optional_child_by_tag(&["participants"]);
         if let Some(participants_node) = participants {
+            let own_jid = self.get_pn().await;
             let to_nodes = participants_node.get_children_by_tag("to");
             for to_node in to_nodes {
                 let to_jid = match to_node.attrs().optional_string("jid") {
                     Some(jid) => jid.to_string(),
                     None => continue,
                 };
-                let own_jid = self.get_pn().await;
-                if let Some(our_jid) = own_jid
+                if let Some(ref our_jid) = own_jid
                     && to_jid == our_jid.to_string()
                 {
                     let enc_children = to_node.get_children_by_tag("enc");
