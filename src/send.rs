@@ -1082,10 +1082,16 @@ impl Client {
         // WA Web fires this concurrently (MsgJob.js: sendTcToken is not awaited),
         // but our send methods take &self not &Arc<Self> so we can't spawn here.
         // Placed last so it doesn't block SKDM or signal-cache flush.
-        if should_issue_tc_token_after_send {
-            self.issue_tc_token_after_send(&tc_issue_target).await;
-        }
-        if let Some(token_key) = used_cached_tc_token_key {
+        //
+        // WA Web only updates tcTokenSenderTimestamp after a successful issuance
+        // (TcTokenChatAction.js), so we gate the sender_timestamp mark on success
+        // to allow retry on the next send if the IQ failed.
+        let issued_ok = if should_issue_tc_token_after_send {
+            self.issue_tc_token_after_send(&tc_issue_target).await
+        } else {
+            false
+        };
+        if issued_ok && let Some(token_key) = used_cached_tc_token_key {
             self.mark_tc_token_used_after_send(&token_key).await;
         }
 
@@ -1176,7 +1182,8 @@ impl Client {
         (should_issue_after_send, None)
     }
 
-    async fn issue_tc_token_after_send(&self, to: &Jid) {
+    /// Returns `true` if the issuance IQ succeeded.
+    async fn issue_tc_token_after_send(&self, to: &Jid) -> bool {
         use wacore::iq::tctoken::IssuePrivacyTokensSpec;
 
         let to_lid = self.resolve_to_lid_jid(to).await;
@@ -1185,10 +1192,11 @@ impl Client {
             .await
         else {
             log::debug!(target: "Client/TcToken", "Failed to issue tc_token for {}", to_lid);
-            return;
+            return false;
         };
 
         self.store_issued_tc_tokens(&response.tokens).await;
+        true
     }
 
     async fn store_issued_tc_tokens(&self, tokens: &[wacore::iq::tctoken::ReceivedTcToken]) {

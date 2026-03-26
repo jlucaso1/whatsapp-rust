@@ -1061,6 +1061,7 @@ impl Client {
     }
 
     async fn cleanup_connection_state(&self) {
+        self.clear_node_waiters();
         self.clear_sent_node_waiters();
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
@@ -3055,14 +3056,28 @@ impl Client {
         }
     }
 
+    fn clear_node_waiters(&self) {
+        let mut waiters = self
+            .node_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let count = waiters.len();
+        if count > 0 {
+            waiters.clear();
+            self.node_waiter_count.fetch_sub(count, Ordering::Release);
+        }
+    }
+
     fn clear_sent_node_waiters(&self) {
         let mut waiters = self
             .sent_node_waiters
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if !waiters.is_empty() {
+        let count = waiters.len();
+        if count > 0 {
             waiters.clear();
-            self.sent_node_waiter_count.store(0, Ordering::Release);
+            self.sent_node_waiter_count
+                .fetch_sub(count, Ordering::Release);
         }
     }
 

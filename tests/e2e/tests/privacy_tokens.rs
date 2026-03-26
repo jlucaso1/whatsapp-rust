@@ -973,6 +973,7 @@ async fn test_restricted_profile_picture_requires_tctoken() -> anyhow::Result<()
         .map_err(|_| anyhow::anyhow!("Timed out waiting for denied profile picture IQ"))?
         .map_err(|_| anyhow::anyhow!("denied profile picture waiter was canceled"))?;
     assert!(!has_descendant(&denied_node, "tctoken"));
+    assert!(!has_descendant(&denied_node, "cstoken"));
     assert!(
         denied.is_none(),
         "restricted profile picture should be hidden without a tc token"
@@ -1005,6 +1006,7 @@ async fn test_restricted_profile_picture_requires_tctoken() -> anyhow::Result<()
         .map_err(|_| anyhow::anyhow!("Timed out waiting for allowed profile picture IQ"))?
         .map_err(|_| anyhow::anyhow!("allowed profile picture waiter was canceled"))?;
     assert!(has_descendant(&allowed_node, "tctoken"));
+    assert!(!has_descendant(&allowed_node, "cstoken"));
     assert!(
         allowed.is_some(),
         "restricted profile picture should be visible once tc token exists"
@@ -1037,6 +1039,7 @@ async fn test_restricted_presence_subscribe_requires_tctoken() -> anyhow::Result
         .map_err(|_| anyhow::anyhow!("Timed out waiting for denied presence subscribe"))?
         .map_err(|_| anyhow::anyhow!("denied presence subscribe waiter was canceled"))?;
     assert!(!has_child(&denied_node, "tctoken"));
+    assert!(!has_child(&denied_node, "cstoken"));
 
     client_a.client.presence().set_unavailable().await?;
     client_b
@@ -1069,6 +1072,7 @@ async fn test_restricted_presence_subscribe_requires_tctoken() -> anyhow::Result
         .map_err(|_| anyhow::anyhow!("Timed out waiting for allowed presence subscribe"))?
         .map_err(|_| anyhow::anyhow!("allowed presence subscribe waiter was canceled"))?;
     assert!(has_child(&allowed_node, "tctoken"));
+    assert!(!has_child(&allowed_node, "cstoken"));
 
     let _ = client_b
         .wait_for_event(
