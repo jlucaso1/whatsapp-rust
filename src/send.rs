@@ -555,17 +555,11 @@ impl Client {
         is_full_distribution: bool,
         all_resolved_devices: &[Jid],
     ) {
+        // On full distribution, use the resolved device list. On partial, use SKDM recipients.
+        // We don't clear old entries — the upsert overwrites matching rows, and stale entries
+        // from removed participants are harmless (they'll never match on the next send).
+        // This avoids the clear-then-fail race where a transient write failure leaves the map empty.
         let device_list: &[Jid] = if is_full_distribution {
-            // Full distribution: clear old state, then record all devices from the stanza.
-            // Clear happens ONLY when we already have the device list to write back,
-            // so a transient failure can't leave the map empty.
-            if let Err(e) = self
-                .persistence_manager
-                .clear_sender_key_devices(to_str)
-                .await
-            {
-                log::warn!("Failed to clear sender key devices: {:?}", e);
-            }
             all_resolved_devices
         } else {
             devices_receiving_skdm
