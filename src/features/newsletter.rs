@@ -19,7 +19,6 @@ use waproto::whatsapp as wa;
 
 // Types
 
-/// Message type in a newsletter (channel).
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum NewsletterMessageType {
     #[str = "text"]
@@ -597,7 +596,7 @@ fn parse_newsletter_messages_response(
             .attrs
             .get("type")
             .map(|v| NewsletterMessageType::from(v.as_str().as_ref()))
-            .unwrap_or(NewsletterMessageType::Other(String::new()));
+            .unwrap_or(NewsletterMessageType::Text);
 
         let is_sender = msg_node.attrs.get("is_sender").is_some_and(|v| v == "true");
 

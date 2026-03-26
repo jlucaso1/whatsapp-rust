@@ -117,7 +117,6 @@ impl IqSpec for PreKeyCountSpec {
     }
 }
 
-/// Why the client is fetching pre-keys for a set of JIDs.
 #[derive(Debug, Clone, PartialEq, Eq, crate::StringEnum)]
 pub enum PreKeyFetchReason {
     #[str = "identity"]

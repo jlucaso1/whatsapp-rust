@@ -47,9 +47,16 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
 
                 let dirty_type = DirtyType::from(dirty_type_str.as_ref());
                 let ts = timestamp_str.and_then(|s| s.parse::<u64>().ok());
+
+                let needs_offline_wait = matches!(
+                    dirty_type,
+                    DirtyType::Groups | DirtyType::NewsletterMetadata
+                );
+                let needs_resync = dirty_type == DirtyType::SyncdAppState;
+
                 let bit = match ts {
-                    Some(t) => DirtyBit::with_timestamp(dirty_type.clone(), t),
-                    None => DirtyBit::new(dirty_type.clone()),
+                    Some(t) => DirtyBit::with_timestamp(dirty_type, t),
+                    None => DirtyBit::new(dirty_type),
                 };
 
                 debug!(
@@ -58,21 +65,14 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
 
                 let client_clone = client.clone();
 
-                // WA Web gates `groups` and `newsletter_metadata` dirty types behind
-                // offlineDeliveryEnd -- only process them after offline sync completes.
-                // `account_sync` and `syncd_app_state` run immediately.
-                // See WAWebHandleDirtyBits in 5Yec01dI04o.js:50765-50782.
+                // Groups/newsletter_metadata: wait for offline sync per WAWebHandleDirtyBits.
                 client
                     .runtime
                     .spawn(Box::pin(async move {
-                        if matches!(
-                            dirty_type,
-                            DirtyType::Groups | DirtyType::NewsletterMetadata
-                        ) {
+                        if needs_offline_wait {
                             client_clone.wait_for_offline_delivery_end().await;
                         }
                         if client_clone.is_shutting_down() {
-                            debug!("Skipping clean dirty bits: client is shutting down");
                             return;
                         }
                         if let Err(e) = client_clone.clean_dirty_bits(bit).await
@@ -81,12 +81,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                             warn!("Failed to send clean dirty bits IQ: {e:?}");
                         }
 
-                        // Re-sync app state collections when notified they are stale.
-                        // Real WA Web re-syncs all collections on syncd_app_state dirty.
-                        // See WAWebHandleDirtyBits -> WAWebSyncdCollectionsStateMachine.
-                        if dirty_type == DirtyType::SyncdAppState
-                            && !client_clone.is_shutting_down()
-                        {
+                        if needs_resync && !client_clone.is_shutting_down() {
                             info!("syncd_app_state dirty -- re-syncing all app state collections");
                             if let Err(e) = client_clone
                                 .sync_collections_batched(vec![

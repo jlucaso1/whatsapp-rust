@@ -53,13 +53,11 @@ pub struct CleanDirtyBitsSpec {
 }
 
 impl CleanDirtyBitsSpec {
-    /// Build a spec from a single typed `DirtyBit`.
     pub fn single(bit: DirtyBit) -> Self {
         Self { bits: vec![bit] }
     }
 
-    /// Parse from raw string attributes (e.g. from a protocol node).
-    /// Returns error if `timestamp` is present but cannot be parsed as `u64`.
+    /// Parse from raw string attributes. Fails if `timestamp` is not valid u64.
     pub fn from_raw(dirty_type: &str, timestamp: Option<&str>) -> Result<Self, anyhow::Error> {
         let bit = if let Some(ts) = timestamp {
             let ts_num: u64 = ts

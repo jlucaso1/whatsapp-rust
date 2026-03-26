@@ -25,7 +25,6 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
-/// Host type classification from WA Web's `mapParsedMediaConn`.
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum HostType {
     #[str = "primary"]

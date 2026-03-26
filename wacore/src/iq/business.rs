@@ -8,9 +8,6 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
 
-/// Day of the week as sent by the WhatsApp Business API.
-///
-/// Values: `"sun"`, `"mon"`, `"tue"`, `"wed"`, `"thu"`, `"fri"`, `"sat"`.
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum DayOfWeek {
     #[str = "sun"]
@@ -37,9 +34,6 @@ impl serde::Serialize for DayOfWeek {
     }
 }
 
-/// Business hours mode.
-///
-/// Values: `"open_24h"`, `"specific_hours"`, `"appointment_only"`.
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum BusinessHourMode {
     #[str = "open_24h"]
