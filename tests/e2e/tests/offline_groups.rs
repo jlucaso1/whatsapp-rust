@@ -329,7 +329,11 @@ async fn test_offline_multi_sender_group_messages() -> anyhow::Result<()> {
     }
     info!("All participants received group creation notifications");
 
-    // Take C offline — triggers auto-reconnect in background
+    // Take C offline. We use reconnect() (NOT reconnect_and_wait()) because we
+    // need C to be offline while messages are sent. reconnect() triggers a
+    // disconnect + background auto-reconnect; the 100ms sleep gives the server
+    // time to detect the TCP close and start queuing messages for C.
+    // This is the standard offline simulation pattern used by all offline tests.
     client_c.client.reconnect().await;
     info!("C disconnected (will auto-reconnect)");
     tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
@@ -415,17 +419,19 @@ async fn test_offline_multi_sender_group_messages() -> anyhow::Result<()> {
     }
     info!("B received {b_received} messages (online observer)");
 
-    // Now wait for C to reconnect and receive ALL messages from the offline queue.
-    // Before the fix, pkmsg messages could be silently dropped during the
-    // semaphore transition (1→64 permits), causing "No sender key state" for
-    // all subsequent skmsg messages from the affected sender.
+    // Wait for C to reconnect and receive ALL messages from the offline queue.
+    // Use an overall deadline rather than fixed attempt count to tolerate
+    // duplicate deliveries, extra notifications, and variable reconnect time.
     let mut received_texts: HashSet<String> = HashSet::new();
     let total_expected = expected_messages.len();
-    let max_attempts = total_expected + 10; // extra room for notifications
+    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(60);
 
-    for _ in 0..max_attempts {
+    while tokio::time::Instant::now() < deadline {
+        let remaining = deadline - tokio::time::Instant::now();
+        let timeout_secs = remaining.as_secs().max(1);
+
         let result = client_c
-            .wait_for_event(30, |e| {
+            .wait_for_event(timeout_secs, |e| {
                 matches!(e, Event::Message(msg, _) if msg.conversation.is_some())
                     || matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
             })
@@ -442,10 +448,10 @@ async fn test_offline_multi_sender_group_messages() -> anyhow::Result<()> {
                 // Group notifications are expected, just skip
             }
             Ok(_) => {}
-            Err(_) => break,
+            Err(_) => break, // no more events within timeout
         }
 
-        // Early exit if we got all expected messages
+        // Early exit once all expected messages are collected
         if received_texts.len() >= total_expected {
             break;
         }

@@ -4746,16 +4746,45 @@ mod tests {
         );
     }
 
-    /// Deterministic test for the semaphore generation transition bug.
-    ///
-    /// Reproduces the exact scenario from the production log: during offline→online
-    /// transition, `swap_message_semaphore(1→64)` used to cause tasks waiting on
-    /// the old semaphore to be silently dropped. If a pkmsg (carrying SKDM) was
-    /// among the dropped tasks, all skmsg from that sender would permanently fail.
-    ///
+    /// Shared helper: the OLD semaphore acquire logic that silently dropped tasks
+    /// on generation mismatch. Used by the bug-demonstration test.
+    async fn acquire_permit_old_behavior(
+        semaphore: &std::sync::Mutex<Arc<async_lock::Semaphore>>,
+        generation: &std::sync::atomic::AtomicU64,
+    ) -> bool {
+        use std::sync::atomic::Ordering;
+        let (snap_gen, snap_sem) = {
+            let guard = semaphore.lock().unwrap();
+            (generation.load(Ordering::SeqCst), guard.clone())
+        };
+        let _permit = snap_sem.acquire_arc().await;
+        // OLD: if generation changed, silently return false (message lost)
+        snap_gen == generation.load(Ordering::SeqCst)
+    }
+
+    /// Shared helper: the FIXED semaphore acquire logic that re-acquires from the
+    /// new semaphore on generation mismatch. Mirrors the production code in
+    /// handle_incoming_message.
+    async fn acquire_permit_with_reacquire(
+        semaphore: &std::sync::Mutex<Arc<async_lock::Semaphore>>,
+        generation: &std::sync::atomic::AtomicU64,
+    ) {
+        use std::sync::atomic::Ordering;
+        loop {
+            let (snap_gen, snap_sem) = {
+                let guard = semaphore.lock().unwrap();
+                (generation.load(Ordering::SeqCst), guard.clone())
+            };
+            let permit = snap_sem.acquire_arc().await;
+            if snap_gen == generation.load(Ordering::SeqCst) {
+                drop(permit);
+                break;
+            }
+            drop(permit);
+        }
+    }
+
     /// Demonstrates the bug: the OLD code silently dropped tasks when generation changed.
-    /// Tasks that were waiting on the old semaphore would acquire a stale permit,
-    /// see the generation mismatch, and return without processing.
     #[tokio::test]
     async fn test_old_behavior_drops_tasks_on_generation_swap() {
         use std::sync::Arc;
@@ -4766,6 +4795,7 @@ mod tests {
         ))));
         let generation = Arc::new(AtomicU64::new(0));
         let completed = Arc::new(AtomicUsize::new(0));
+        let ready = Arc::new(AtomicUsize::new(0));
 
         let blocker_sem = semaphore.lock().unwrap().clone();
         let blocker_permit = blocker_sem.acquire_arc().await;
@@ -4777,23 +4807,21 @@ mod tests {
             let sem = semaphore.clone();
             let gen_counter = generation.clone();
             let done = completed.clone();
+            let ready_counter = ready.clone();
 
             handles.push(tokio::spawn(async move {
-                // OLD behavior: acquire once, check generation, silently return on mismatch
-                let (snap_gen, snap_sem) = {
-                    let guard = sem.lock().unwrap();
-                    (gen_counter.load(Ordering::SeqCst), guard.clone())
-                };
-                let _permit = snap_sem.acquire_arc().await;
-                if snap_gen != gen_counter.load(Ordering::SeqCst) {
-                    // OLD: silently dropped — message lost!
-                    return;
+                // Signal readiness before blocking on semaphore
+                ready_counter.fetch_add(1, Ordering::SeqCst);
+                if acquire_permit_old_behavior(&sem, &gen_counter).await {
+                    done.fetch_add(1, Ordering::SeqCst);
                 }
-                done.fetch_add(1, Ordering::SeqCst);
             }));
         }
 
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // Wait until all waiters have signaled readiness (about to block on semaphore)
+        while ready.load(Ordering::SeqCst) < num_waiters {
+            tokio::task::yield_now().await;
+        }
 
         // Swap semaphore — triggers the bug
         {
@@ -4805,10 +4833,11 @@ mod tests {
         drop(blocker_permit);
 
         for handle in handles {
-            let _ = tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await;
+            let result = tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await;
+            assert!(result.is_ok(), "Waiter task timed out");
+            result.unwrap().unwrap();
         }
 
-        // With old behavior, tasks are DROPPED — fewer than num_waiters complete
         let done = completed.load(Ordering::SeqCst);
         assert!(
             done < num_waiters,
@@ -4818,14 +4847,6 @@ mod tests {
     }
 
     /// Verifies the fix: re-acquire loop ensures NO tasks are dropped on generation swap.
-    ///
-    /// This test controls timing directly:
-    /// 1. Start with 1-permit semaphore (offline sync mode)
-    /// 2. Hold the permit in a "blocker" task (simulates another message processing)
-    /// 3. Spawn N "waiter" tasks that try to acquire the semaphore
-    /// 4. Swap the semaphore to 64 permits (simulates offline sync completion)
-    /// 5. Release the blocker
-    /// 6. Verify ALL waiter tasks proceed (not silently dropped)
     #[tokio::test]
     async fn test_semaphore_generation_swap_does_not_drop_tasks() {
         use std::sync::Arc;
@@ -4836,12 +4857,11 @@ mod tests {
         ))));
         let generation = Arc::new(AtomicU64::new(0));
         let completed = Arc::new(AtomicUsize::new(0));
+        let ready = Arc::new(AtomicUsize::new(0));
 
-        // Step 1: Blocker acquires the single permit
         let blocker_sem = semaphore.lock().unwrap().clone();
         let blocker_permit = blocker_sem.acquire_arc().await;
 
-        // Step 2: Spawn 8 waiter tasks that use the same re-acquire loop as message.rs
         let num_waiters: usize = 8;
         let mut handles = Vec::new();
 
@@ -4849,42 +4869,29 @@ mod tests {
             let sem = semaphore.clone();
             let gen_counter = generation.clone();
             let done = completed.clone();
+            let ready_counter = ready.clone();
 
             handles.push(tokio::spawn(async move {
-                // This is the same logic as handle_incoming_message in message.rs
-                loop {
-                    let (snap_gen, snap_sem) = {
-                        let guard = sem.lock().unwrap();
-                        (gen_counter.load(Ordering::SeqCst), guard.clone())
-                    };
-                    let permit = snap_sem.acquire_arc().await;
-                    if snap_gen == gen_counter.load(Ordering::SeqCst) {
-                        // Generation matches — proceed with processing
-                        done.fetch_add(1, Ordering::SeqCst);
-                        drop(permit);
-                        break;
-                    }
-                    // Re-acquire from new semaphore
-                    drop(permit);
-                }
+                ready_counter.fetch_add(1, Ordering::SeqCst);
+                acquire_permit_with_reacquire(&sem, &gen_counter).await;
+                done.fetch_add(1, Ordering::SeqCst);
             }));
         }
 
-        // Step 3: Give waiters time to block on the semaphore
-        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        // Wait until all waiters have signaled readiness
+        while ready.load(Ordering::SeqCst) < num_waiters {
+            tokio::task::yield_now().await;
+        }
 
-        // Step 4: Swap the semaphore (simulates offline sync completion)
-        // This is exactly what swap_message_semaphore does
+        // Swap semaphore (simulates offline sync completion)
         {
             let mut guard = semaphore.lock().unwrap();
             *guard = Arc::new(async_lock::Semaphore::new(64));
             generation.fetch_add(1, Ordering::SeqCst);
         }
 
-        // Step 5: Release the blocker permit
         drop(blocker_permit);
 
-        // Step 6: Wait for all tasks to complete
         for handle in handles {
             let result = tokio::time::timeout(tokio::time::Duration::from_secs(5), handle).await;
             assert!(
@@ -4894,7 +4901,6 @@ mod tests {
             result.unwrap().unwrap();
         }
 
-        // Step 7: Verify ALL waiters completed
         assert_eq!(
             completed.load(Ordering::SeqCst),
             num_waiters,
