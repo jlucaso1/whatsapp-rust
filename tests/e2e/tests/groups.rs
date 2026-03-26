@@ -617,7 +617,7 @@ async fn test_group_leave() -> anyhow::Result<()> {
 async fn test_per_device_sender_key_tracking() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let client_a = TestClient::connect("e2e_skdev_a").await?;
+    let mut client_a = TestClient::connect("e2e_skdev_a").await?;
     let mut client_b = TestClient::connect("e2e_skdev_b").await?;
     let mut client_c = TestClient::connect("e2e_skdev_c").await?;
 
@@ -655,15 +655,16 @@ async fn test_per_device_sender_key_tracking() -> anyhow::Result<()> {
     client_b.wait_for_group_text(&group_jid, text_2, 10).await?;
     info!("B received second message (sender key reused)");
 
-    // B sends a message — B's own sender key distributed to A
+    // B sends a message — B's sender key distributed to A
     let text_3 = "First from B";
     client_b
         .client
         .send_message(group_jid.clone(), text_msg(text_3))
         .await?;
-    info!("B sent message to group");
+    client_a.wait_for_group_text(&group_jid, text_3, 10).await?;
+    info!("A received B's message (bidirectional sender key exchange)");
 
-    // Add C to the group — forces sender key redistribution on next send
+    // Add C — forces sender key redistribution on next send
     let add_result = client_a
         .client
         .groups()

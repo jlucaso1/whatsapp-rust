@@ -25,14 +25,9 @@ impl Client {
     ) -> Result<()> {
         use anyhow::anyhow;
 
-        let device_store = self.persistence_manager.get_device_arc().await;
-        let device_guard = device_store.read().await;
-        let own_lid_user = device_guard
-            .lid
-            .as_ref()
-            .map(|j| j.user.as_str().to_owned());
-        let own_pn_user = device_guard.pn.as_ref().map(|j| j.user.as_str().to_owned());
-        drop(device_guard);
+        let snapshot = self.persistence_manager.get_device_snapshot().await;
+        let own_lid_user = snapshot.lid.as_ref().map(|j| j.user.as_str().to_owned());
+        let own_pn_user = snapshot.pn.as_ref().map(|j| j.user.as_str().to_owned());
 
         // Filter out own devices using Jid user comparison (no string prefix hacks)
         let filtered: Vec<String> = device_jids

@@ -431,11 +431,24 @@ impl Client {
 
         // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
         // WA Web only calls markHasSenderKey() after the server confirms receipt.
+        // Resolve device list for tracking (only on full distribution)
+        let resolved_for_tracking: Vec<Jid> = if skdm_is_full {
+            let jids: Vec<Jid> = group_info
+                .participants
+                .iter()
+                .map(|j| j.to_non_ad())
+                .collect();
+            SendContextResolver::resolve_devices(self, &jids)
+                .await
+                .unwrap_or_default()
+        } else {
+            devices_receiving_skdm.clone()
+        };
         self.update_sender_key_devices(
             &to_str,
             &devices_receiving_skdm,
             skdm_is_full,
-            &group_info.participants,
+            &resolved_for_tracking,
         )
         .await;
 
@@ -529,17 +542,23 @@ impl Client {
     /// Update sender key device tracking after a successful group/status send.
     ///
     /// Called AFTER `send_node()` succeeds (WA Web: `markHasSenderKey` after server ACK).
-    /// Marks devices that received SKDM as `has_key=true`. On full distribution,
-    /// clears and rebuilds the entire map for the group.
+    /// On full distribution, clears old state and marks the provided device list.
+    /// On partial, marks only the specific SKDM recipients.
+    ///
+    /// The `all_resolved_devices` parameter carries the exact device list resolved
+    /// for the stanza, avoiding a redundant `resolve_devices` call and preventing
+    /// the clear-then-fail race where a transient resolver failure leaves the map empty.
     async fn update_sender_key_devices(
         &self,
         to_str: &str,
         devices_receiving_skdm: &[Jid],
         is_full_distribution: bool,
-        participants: &[Jid],
+        all_resolved_devices: &[Jid],
     ) {
-        if is_full_distribution {
-            // Full distribution: clear old state and record all resolved devices
+        let device_list: &[Jid] = if is_full_distribution {
+            // Full distribution: clear old state, then record all devices from the stanza.
+            // Clear happens ONLY when we already have the device list to write back,
+            // so a transient failure can't leave the map empty.
             if let Err(e) = self
                 .persistence_manager
                 .clear_sender_key_devices(to_str)
@@ -547,31 +566,13 @@ impl Client {
             {
                 log::warn!("Failed to clear sender key devices: {:?}", e);
             }
-            let jids_to_resolve: Vec<Jid> =
-                participants.iter().map(|jid| jid.to_non_ad()).collect();
-            match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
-                Ok(all_devices) => {
-                    let strs: Vec<String> = all_devices.iter().map(|j| j.to_string()).collect();
-                    let entries: Vec<(&str, bool)> =
-                        strs.iter().map(|s| (s.as_str(), true)).collect();
-                    if let Err(e) = self
-                        .persistence_manager
-                        .set_sender_key_status(to_str, &entries)
-                        .await
-                    {
-                        log::warn!("Failed to persist sender key devices: {:?}", e);
-                    }
-                }
-                Err(e) => {
-                    log::warn!("Failed to resolve devices for sender key tracking: {:?}", e);
-                }
-            }
-        } else if !devices_receiving_skdm.is_empty() {
-            // Partial distribution: mark specific devices as has_key=true
-            let strs: Vec<String> = devices_receiving_skdm
-                .iter()
-                .map(|j| j.to_string())
-                .collect();
+            all_resolved_devices
+        } else {
+            devices_receiving_skdm
+        };
+
+        if !device_list.is_empty() {
+            let strs: Vec<String> = device_list.iter().map(|j| j.to_string()).collect();
             let entries: Vec<(&str, bool)> = strs.iter().map(|s| (s.as_str(), true)).collect();
             if let Err(e) = self
                 .persistence_manager
@@ -767,7 +768,6 @@ impl Client {
             to_str: String,
             devices: Vec<Jid>,
             is_full_distribution: bool,
-            participants: Vec<Jid>,
         }
         let mut skdm_update: Option<SkdmUpdate> = None;
         let mut should_issue_tc_token_after_send = false;
@@ -899,11 +899,22 @@ impl Client {
             .await
             {
                 Ok(stanza) => {
+                    let resolved = if is_full_distribution {
+                        let jids: Vec<Jid> = group_info
+                            .participants
+                            .iter()
+                            .map(|j| j.to_non_ad())
+                            .collect();
+                        SendContextResolver::resolve_devices(self, &jids)
+                            .await
+                            .unwrap_or_default()
+                    } else {
+                        devices_receiving_skdm
+                    };
                     skdm_update = Some(SkdmUpdate {
                         to_str: to_str.clone(),
-                        devices: devices_receiving_skdm,
+                        devices: resolved,
                         is_full_distribution,
-                        participants: group_info.participants.clone(),
                     });
                     stanza
                 }
@@ -951,12 +962,18 @@ impl Client {
                         )
                         .await?;
 
-                        // Retry is always full distribution (rotated sender key)
+                        let jids: Vec<Jid> = group_info
+                            .participants
+                            .iter()
+                            .map(|j| j.to_non_ad())
+                            .collect();
+                        let resolved = SendContextResolver::resolve_devices(self, &jids)
+                            .await
+                            .unwrap_or_default();
                         skdm_update = Some(SkdmUpdate {
                             to_str,
-                            devices: vec![],
+                            devices: resolved,
                             is_full_distribution: true,
-                            participants: group_info.participants.clone(),
                         });
                         retry_stanza
                     } else {
@@ -1047,7 +1064,7 @@ impl Client {
                 &update.to_str,
                 &update.devices,
                 update.is_full_distribution,
-                &update.participants,
+                &update.devices,
             )
             .await;
         }
