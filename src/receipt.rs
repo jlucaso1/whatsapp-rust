@@ -3,6 +3,7 @@ use crate::types::events::{Event, Receipt};
 use crate::types::presence::ReceiptType;
 use log::debug;
 use std::sync::Arc;
+use wacore::types::message::MessageCategory;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, JidExt as _};
 
@@ -23,7 +24,7 @@ impl Client {
         // messages (category="peer").  These tell the primary phone that
         // this companion device received the message.
         // For all other messages, skip receipts for our own messages.
-        info.category == "peer" || !info.source.is_from_me
+        info.category == MessageCategory::Peer || !info.source.is_from_me
     }
 
     pub(crate) async fn handle_receipt(self: &Arc<Self>, node: Arc<Node>) {
@@ -133,7 +134,7 @@ impl Client {
 
         // WA Web: peer device messages (category="peer") use type="peer_msg".
         // Normal delivery receipts omit the type attribute (DROP_ATTR).
-        if info.category == "peer" {
+        if info.category == MessageCategory::Peer {
             builder = builder.attr("type", "peer_msg");
         }
 
@@ -145,7 +146,7 @@ impl Client {
         let receipt_node = builder.build();
 
         debug!(target: "Client/Receipt", "Sending {} receipt for message {} to {}",
-            if info.category == "peer" { "peer_msg" } else { "delivery" },
+            if info.category == MessageCategory::Peer { "peer_msg" } else { "delivery" },
             info.id, info.source.sender);
 
         if let Err(e) = self.send_node(receipt_node).await {
@@ -464,7 +465,7 @@ mod tests {
                 is_group: false,
                 ..Default::default()
             },
-            category: "peer".to_string(),
+            category: MessageCategory::Peer,
             ..Default::default()
         };
 

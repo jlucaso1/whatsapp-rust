@@ -269,14 +269,15 @@ impl IqSpec for DigestKeyBundleSpec {
             (0, Vec::new(), Vec::new())
         };
 
-        // Filter children by tag "key" to skip any non-prekey nodes
+        // Parse all children of <list> as 3-byte prekey IDs.
+        // Server sends them as <id> nodes (not <key>), matching WA Web's
+        // mapChildren which iterates all children without tag filtering.
         let prekey_ids = digest_node
             .get_optional_child("list")
             .and_then(|list| list.children())
             .map(|children| {
                 children
                     .iter()
-                    .filter(|child| child.tag == "key")
                     .map(|child| extract_content_uint(Some(child)))
                     .collect()
             })

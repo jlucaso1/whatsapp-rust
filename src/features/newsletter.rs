@@ -592,6 +592,8 @@ fn parse_newsletter_messages_response(
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
 
+        // TODO: verify against WAWeb/Newsletter/MsgParser.js whether the server always sends
+        // a type attribute. If so, this default is moot.
         let message_type = msg_node
             .attrs
             .get("type")

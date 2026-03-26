@@ -58,6 +58,8 @@ impl CleanDirtyBitsSpec {
     }
 
     /// Parse from raw string attributes. Fails if `timestamp` is not valid u64.
+    // TODO: IB handler silently drops unparseable timestamps via .ok(). Consider using
+    // from_raw() there for consistent error reporting.
     pub fn from_raw(dirty_type: &str, timestamp: Option<&str>) -> Result<Self, anyhow::Error> {
         let bit = if let Some(ts) = timestamp {
             let ts_num: u64 = ts

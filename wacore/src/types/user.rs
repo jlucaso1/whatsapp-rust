@@ -61,6 +61,8 @@ pub struct PrivacySettings {
     pub online: Option<PrivacySetting>,
 }
 
+// TODO: consolidate with crate::iq::business::BusinessHoursConfig which uses Option<String>
+// for open_time/close_time instead of plain String.
 #[derive(Debug, Clone)]
 pub struct BusinessHoursConfig {
     pub day_of_week: crate::iq::business::DayOfWeek,

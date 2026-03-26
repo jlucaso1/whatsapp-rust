@@ -52,6 +52,7 @@
 use crate::StringEnum;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
+use crate::types::message::AddressingMode;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{Jid, SERVER_JID};
 use wacore_binary::node::{Node, NodeContent};
@@ -317,7 +318,7 @@ impl IqSpec for SetPrivacySettingSpec {
                 .collect();
 
             category_node = category_node.children(user_nodes);
-            privacy_node = privacy_node.attr("addressing_mode", "lid");
+            privacy_node = privacy_node.attr("addressing_mode", AddressingMode::Lid.as_str());
         }
 
         InfoQuery::set(
