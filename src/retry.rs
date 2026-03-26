@@ -283,7 +283,6 @@ impl Client {
                     // When addressing mode is known, delete only that namespace.
                     // When unknown (group info unavailable), delete both PN and LID
                     // to ensure the active key is removed regardless of mode.
-                    let backend = self.persistence_manager.backend();
                     let addressing_mode = cached_group_info.as_ref().map(|g| g.addressing_mode);
 
                     let jids_to_delete: Vec<_> = match addressing_mode {
@@ -305,10 +304,14 @@ impl Client {
                     };
 
                     for own_jid in jids_to_delete {
-                        let addr = format!("{}:{}", group_jid, own_jid.to_protocol_address());
-                        if let Err(e) = backend.delete_sender_key(&addr).await {
-                            log::warn!("Failed to delete sender key {} for rotation: {}", addr, e);
-                        }
+                        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+                        let sk_name = SenderKeyName::new(
+                            group_jid.clone(),
+                            own_jid.to_protocol_address().to_string(),
+                        );
+                        self.signal_cache
+                            .delete_sender_key(sk_name.cache_key())
+                            .await;
                     }
 
                     if let Err(e) = self

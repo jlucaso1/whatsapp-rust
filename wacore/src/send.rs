@@ -314,7 +314,7 @@ async fn encrypt_for_devices<'a, S, I, P, SP>(
     plaintext_to_encrypt: &[u8],
     hide_decrypt_fail: bool,
     mediatype: Option<&str>,
-) -> Result<(Vec<Node>, bool)>
+) -> Result<(Vec<Node>, bool, Vec<Jid>)>
 where
     S: crate::libsignal::protocol::SessionStore + Send + Sync,
     I: crate::libsignal::protocol::IdentityKeyStore + Send + Sync,
@@ -525,14 +525,12 @@ where
 
     let mut participant_nodes = Vec::with_capacity(devices.len());
     let mut includes_prekey_message = false;
+    let mut encrypted_devices = Vec::with_capacity(devices.len());
 
     for device_jid in devices {
-        // Use the effective encryption JID (may be LID if we found an existing LID session)
         let encryption_jid = jid_to_encryption_jid.get(device_jid).unwrap_or(device_jid);
         let signal_address = encryption_jid.to_protocol_address();
 
-        // Try to encrypt for this device. If it fails (e.g., no session established),
-        // log a warning and skip this device instead of failing the entire operation.
         match message_encrypt(
             plaintext_to_encrypt,
             &signal_address,
@@ -564,18 +562,17 @@ where
                 }
                 let enc_node = enc_builder.bytes(serialized_bytes).build();
 
-                // Pass the Jid directly to avoid device_jid.to_string() allocation —
-                // the encoder writes the JID directly in binary format.
                 participant_nodes.push(
                     NodeBuilder::new("to")
                         .attr("jid", device_jid.clone())
                         .children([enc_node])
                         .build(),
                 );
+                encrypted_devices.push(device_jid.clone());
             }
             Err(e) => {
                 log::warn!(
-                    "Failed to encrypt message for device {}: {}. Skipping this device.",
+                    "Failed to encrypt for device {}: {}. Skipping.",
                     &signal_address,
                     e
                 );
@@ -583,7 +580,11 @@ where
         }
     }
 
-    Ok((participant_nodes, includes_prekey_message))
+    Ok((
+        participant_nodes,
+        includes_prekey_message,
+        encrypted_devices,
+    ))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -656,7 +657,7 @@ pub async fn prepare_dm_stanza<
     let mediatype = media_type_from_message(message);
 
     if !recipient_devices.is_empty() {
-        let (nodes, inc) = encrypt_for_devices(
+        let (nodes, inc, _) = encrypt_for_devices(
             stores,
             resolver,
             &recipient_devices,
@@ -670,7 +671,7 @@ pub async fn prepare_dm_stanza<
     }
 
     if !own_other_devices.is_empty() {
-        let (nodes, inc) = encrypt_for_devices(
+        let (nodes, inc, _) = encrypt_for_devices(
             stores,
             resolver,
             &own_other_devices,
@@ -899,6 +900,7 @@ pub async fn prepare_group_stanza<
     let mut message_children: Vec<Node> = Vec::new();
     let mut includes_prekey_message = false;
     let mut resolved_devices_for_phash: Option<Vec<Jid>> = None;
+    let mut skdm_encrypted_devices: Vec<Jid> = Vec::new();
 
     // Determine if we need to distribute SKDM and to which devices
     let distribution_list: Option<Vec<Jid>> = if let Some(target_devices) = skdm_target_devices {
@@ -1041,8 +1043,7 @@ pub async fn prepare_group_stanza<
         let skdm_plaintext_to_encrypt =
             MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
 
-        // WA Web always sets decrypt-fail="hide" on SKDM stanzas
-        let (participant_nodes, inc) = encrypt_for_devices(
+        let (participant_nodes, inc, actually_encrypted) = encrypt_for_devices(
             stores,
             resolver,
             distribution_list,
@@ -1052,6 +1053,7 @@ pub async fn prepare_group_stanza<
         )
         .await?;
         includes_prekey_message = includes_prekey_message || inc;
+        skdm_encrypted_devices = actually_encrypted;
 
         // Add participants list as part of the single hybrid stanza
         message_children.push(
@@ -1141,7 +1143,7 @@ pub async fn prepare_group_stanza<
 
     Ok(PreparedGroupStanza {
         node: stanza,
-        skdm_devices: distribution_list.unwrap_or_default(),
+        skdm_devices: skdm_encrypted_devices,
     })
 }
 

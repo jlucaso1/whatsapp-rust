@@ -99,6 +99,12 @@ impl SenderKeyStoreState {
         self.dirty.insert(addr.clone());
     }
 
+    fn delete(&mut self, address: &str) {
+        let addr = self.key_for(address);
+        self.cache.insert(addr.clone(), None);
+        self.dirty.insert(addr);
+    }
+
     fn clear(&mut self) {
         self.cache.clear();
         self.dirty.clear();
@@ -281,6 +287,11 @@ impl SignalStoreCache {
         self.sender_keys.lock().await.put(name.cache_key(), record);
     }
 
+    /// Delete a sender key from cache and mark for backend deletion on flush.
+    pub async fn delete_sender_key(&self, cache_key: &str) {
+        self.sender_keys.lock().await.delete(cache_key);
+    }
+
     // === Flush ===
 
     /// Flush all dirty state to the backend in a single batch.
@@ -329,11 +340,18 @@ impl SignalStoreCache {
         }
 
         for name in &sender_key_dirty {
-            if let Some(Some(record)) = sender_keys.cache.get(name.as_ref()) {
-                let bytes = record
-                    .serialize()
-                    .map_err(|e| anyhow::anyhow!("sender key serialize for {name}: {e}"))?;
-                backend.put_sender_key(name, &bytes).await?;
+            match sender_keys.cache.get(name.as_ref()) {
+                Some(Some(record)) => {
+                    let bytes = record
+                        .serialize()
+                        .map_err(|e| anyhow::anyhow!("sender key serialize for {name}: {e}"))?;
+                    backend.put_sender_key(name, &bytes).await?;
+                }
+                Some(None) => {
+                    // Deleted via delete_sender_key — propagate to backend
+                    backend.delete_sender_key(name).await?;
+                }
+                None => {}
             }
         }
 
