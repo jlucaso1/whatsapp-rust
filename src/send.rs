@@ -206,8 +206,7 @@ impl Client {
             use wacore::proto_helpers::MessageExt;
             if !message.set_ephemeral_expiration(exp) {
                 // Bare `conversation` messages have no contextInfo field.
-                // The server still tracks the timer independently.
-                debug!("Could not set contextInfo.expiration on this message type");
+                log::warn!("Could not set contextInfo.expiration on this message type");
             }
         }
 
