@@ -41,16 +41,6 @@ impl SendResult {
             participant: None,
         }
     }
-
-    /// Consuming variant -- avoids cloning `message_id`.
-    pub fn into_message_key(self) -> wa::MessageKey {
-        wa::MessageKey {
-            remote_jid: Some(self.to.to_string()),
-            from_me: Some(true),
-            id: Some(self.message_id),
-            participant: None,
-        }
-    }
 }
 
 /// Duration for pinned messages. Default is 7 days (matches WA Web).
