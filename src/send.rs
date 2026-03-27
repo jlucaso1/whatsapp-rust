@@ -189,8 +189,7 @@ impl Client {
     /// Send a message to a user, group, or newsletter.
     ///
     /// Newsletter messages are sent as plaintext (no E2E encryption).
-    /// Returns the message ID on success. For status/story updates use
-    /// [`Client::status()`] instead.
+    /// For status/story updates use [`Client::status()`] instead.
     pub async fn send_message(
         &self,
         to: Jid,
