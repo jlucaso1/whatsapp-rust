@@ -988,9 +988,8 @@ impl Client {
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             let own_jid = device_snapshot
                 .pn
-                .clone()
+                .as_ref()
                 .ok_or(crate::client::ClientError::NotLoggedIn)?;
-            let account_info = device_snapshot.account.clone();
 
             // Include tctoken in 1:1 messages (matches WhatsApp Web behavior).
             // Skip for newsletters, groups, and own JID.
@@ -1032,8 +1031,9 @@ impl Client {
             wacore::send::prepare_dm_stanza(
                 &mut stores,
                 self,
-                &own_jid,
-                account_info.as_ref(),
+                own_jid,
+                device_snapshot.lid.as_ref(),
+                device_snapshot.account.as_ref(),
                 to,
                 message,
                 request_id,

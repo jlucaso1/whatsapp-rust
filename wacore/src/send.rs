@@ -587,6 +587,35 @@ where
     ))
 }
 
+fn is_exact_dm_sender_device(device_jid: &Jid, own_jid: &Jid, own_lid: Option<&Jid>) -> bool {
+    (device_jid.is_same_user_as(own_jid) && device_jid.device == own_jid.device)
+        || own_lid
+            .is_some_and(|lid| device_jid.is_same_user_as(lid) && device_jid.device == lid.device)
+}
+
+fn partition_dm_devices(
+    all_devices: Vec<Jid>,
+    own_jid: &Jid,
+    own_lid: Option<&Jid>,
+) -> (Vec<Jid>, Vec<Jid>) {
+    let mut recipient_devices = Vec::with_capacity(all_devices.len());
+    let mut own_other_devices = Vec::with_capacity(4);
+
+    for device_jid in all_devices {
+        if is_exact_dm_sender_device(&device_jid, own_jid, own_lid) {
+            continue;
+        }
+
+        if device_jid.matches_user_or_lid(own_jid, own_lid) {
+            own_other_devices.push(device_jid);
+        } else {
+            recipient_devices.push(device_jid);
+        }
+    }
+
+    (recipient_devices, own_other_devices)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_dm_stanza<
     'a,
@@ -598,6 +627,7 @@ pub async fn prepare_dm_stanza<
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
     own_jid: &Jid,
+    own_lid: Option<&Jid>,
     account: Option<&wa::AdvSignedDeviceIdentity>,
     to_jid: Jid,
     message: &wa::Message,
@@ -631,22 +661,11 @@ pub async fn prepare_dm_stanza<
 
     let participants = vec![to_jid.clone(), own_jid.clone()];
     let all_devices = resolver.resolve_devices(&participants).await?;
+    let total_devices = all_devices.len();
+    let (recipient_devices, own_other_devices) =
+        partition_dm_devices(all_devices, own_jid, own_lid);
 
-    let mut recipient_devices = Vec::with_capacity(all_devices.len());
-    let mut own_other_devices = Vec::with_capacity(4);
-    for device_jid in &all_devices {
-        if device_jid.user == own_jid.user && device_jid.device == own_jid.device {
-            continue;
-        }
-
-        if device_jid.user == own_jid.user {
-            own_other_devices.push(device_jid.clone());
-        } else {
-            recipient_devices.push(device_jid.clone());
-        }
-    }
-
-    let mut participant_nodes = Vec::with_capacity(all_devices.len());
+    let mut participant_nodes = Vec::with_capacity(total_devices);
     let mut includes_prekey_message = false;
 
     let hide_decrypt_fail = edit
@@ -1884,23 +1903,8 @@ mod tests {
             Jid::lid_device("987654321".to_string(), 0),          // Recipient
         ];
 
-        // The logic under test (from prepare_dm_stanza):
-        let mut recipient_devices = Vec::new();
-        let mut own_other_devices = Vec::new();
-
-        for device_jid in &all_devices {
-            // Fix check: Skip the current device (sender) to prevent self-encryption loops
-            if device_jid.user == own_jid.user && device_jid.device == own_jid.device {
-                continue;
-            }
-
-            let is_own_device = device_jid.user == own_jid.user;
-            if is_own_device {
-                own_other_devices.push(device_jid.clone());
-            } else {
-                recipient_devices.push(device_jid.clone());
-            }
-        }
+        let (recipient_devices, own_other_devices) =
+            partition_dm_devices(all_devices, &own_jid, None);
 
         // Verifications
 
@@ -1934,6 +1938,46 @@ mod tests {
         );
 
         println!("✅ Self-encryption regression test passed: Sender device correctly excluded.");
+    }
+
+    #[test]
+    fn test_dm_encryption_treats_own_lid_devices_as_self() {
+        let own_pn = Jid::pn_device("559980000001".to_string(), 18);
+        let own_lid = Jid::lid_device("123456789012345".to_string(), 18);
+
+        let all_devices = vec![
+            Jid::lid_device("123456789012345".to_string(), 18), // Exact sender device via LID
+            Jid::lid_device("123456789012345".to_string(), 0),  // Other own device via LID
+            Jid::lid_device("987654321012345".to_string(), 0),  // Recipient
+        ];
+
+        let (recipient_devices, own_other_devices) =
+            partition_dm_devices(all_devices, &own_pn, Some(&own_lid));
+
+        assert!(
+            !own_other_devices
+                .iter()
+                .any(|d| d.user == own_lid.user && d.device == 18),
+            "Exact sender LID device should be excluded from own_other_devices"
+        );
+        assert!(
+            !recipient_devices
+                .iter()
+                .any(|d| d.user == own_lid.user && d.device == 18),
+            "Exact sender LID device should be excluded from recipient_devices"
+        );
+        assert!(
+            own_other_devices
+                .iter()
+                .any(|d| d.user == own_lid.user && d.device == 0),
+            "Other own LID devices should be routed through DSM as own_other_devices"
+        );
+        assert!(
+            recipient_devices
+                .iter()
+                .any(|d| d.user == "987654321012345" && d.device == 0),
+            "Non-self devices must remain in recipient_devices"
+        );
     }
 
     /// Test case: LID Prekey Lookup Normalization
