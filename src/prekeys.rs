@@ -100,7 +100,8 @@ impl Client {
         const MAX_PREKEY_ID: u32 = 16777215;
 
         for i in 0..WANTED_PRE_KEY_COUNT {
-            let pre_key_id = (((start_id as u64 - 1) + i as u64) % (MAX_PREKEY_ID as u64)) as u32 + 1;
+            let pre_key_id =
+                (((start_id as u64 - 1) + i as u64) % (MAX_PREKEY_ID as u64)) as u32 + 1;
 
             let key_pair = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
             let pre_key_record = new_pre_key_record(pre_key_id, &key_pair);
@@ -151,7 +152,13 @@ impl Client {
             log::warn!("Failed to mark prekeys as uploaded: {:?}", e);
         }
 
-        let next_id = (((start_id as u64 - 1) + key_pairs_to_upload.len() as u64) % (MAX_PREKEY_ID as u64)) as u32 + 1;
+        // IDs wrap modulo MAX_PREKEY_ID. If the counter wraps while unconsumed
+        // high-ID prekeys still exist, the upsert (.on_conflict.do_update)
+        // silently overwrites them. Acceptable: the server consumes keys well
+        // before a full 16M cycle completes.
+        let next_id = (((start_id as u64 - 1) + key_pairs_to_upload.len() as u64)
+            % (MAX_PREKEY_ID as u64)) as u32
+            + 1;
         self.persistence_manager
             .process_command(DeviceCommand::SetNextPreKeyId(next_id))
             .await;
