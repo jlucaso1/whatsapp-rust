@@ -194,7 +194,7 @@ impl Client {
                 plaintext_builder = plaintext_builder.attr("mediatype", mt);
             }
             let mut children = vec![plaintext_builder.bytes(message.encode_to_vec()).build()];
-            children.extend(options.extra_stanza_nodes.iter().cloned());
+            children.extend(options.extra_stanza_nodes);
             let stanza = NodeBuilder::new("message")
                 .attr("to", to)
                 .attr("type", stanza_type)
