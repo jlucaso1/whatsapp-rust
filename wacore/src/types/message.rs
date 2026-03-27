@@ -144,6 +144,8 @@ pub struct MessageInfo {
     pub meta_info: MsgMetaInfo,
     pub verified_name: Option<wa::VerifiedNameCertificate>,
     pub device_sent_meta: Option<DeviceSentMeta>,
+    /// Ephemeral duration in seconds, extracted from `contextInfo.expiration`.
+    pub ephemeral_expiration: Option<u32>,
 }
 
 impl MessageInfo {

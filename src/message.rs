@@ -37,19 +37,25 @@ pub(crate) use wacore::protocol::retry::RetryReason;
 impl Client {
     /// Dispatches a successfully parsed message to the event bus and sends a delivery receipt.
     fn dispatch_parsed_message(self: &Arc<Self>, msg: wa::Message, info: &MessageInfo) {
+        use wacore::proto_helpers::MessageExt;
+
+        let mut info = info.clone();
+        if info.ephemeral_expiration.is_none() {
+            info.ephemeral_expiration = msg.get_base_message().get_ephemeral_expiration();
+        }
+
         // Send delivery receipt immediately in the background.
         let client_clone = self.clone();
-        let info_clone = info.clone();
+        let info_for_receipt = info.clone();
         self.runtime
             .spawn(Box::pin(async move {
-                client_clone.send_delivery_receipt(&info_clone).await;
+                client_clone.send_delivery_receipt(&info_for_receipt).await;
             }))
             .detach();
 
-        // Dispatch to event bus
         self.core
             .event_bus
-            .dispatch(&Event::Message(Box::new(msg), info.clone()));
+            .dispatch(&Event::Message(Box::new(msg), info));
     }
 
     /// Handles a newsletter plaintext message.
@@ -3725,6 +3731,7 @@ mod tests {
             meta_info: MsgMetaInfo::default(),
             verified_name: None,
             device_sent_meta: None,
+            ephemeral_expiration: None,
         }
     }
 

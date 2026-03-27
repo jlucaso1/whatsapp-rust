@@ -146,6 +146,14 @@ pub trait MessageExt {
     /// reply.set_context_info(context);
     /// ```
     fn set_context_info(&mut self, context: wa::ContextInfo) -> bool;
+
+    /// Reads `context_info.expiration` from the first message type that has it.
+    fn get_ephemeral_expiration(&self) -> Option<u32>;
+
+    /// Sets `context_info.expiration` on the first message type found.
+    /// Creates a default `context_info` if needed. Returns `false` for
+    /// bare `conversation` messages (use `ExtendedTextMessage` instead).
+    fn set_ephemeral_expiration(&mut self, expiration: u32) -> bool;
 }
 
 impl MessageExt for wa::Message {
@@ -263,6 +271,45 @@ impl MessageExt for wa::Message {
 
     fn set_context_info(&mut self, context: wa::ContextInfo) -> bool {
         set_context_info_on_message!(self, Box::new(context))
+    }
+
+    fn get_ephemeral_expiration(&self) -> Option<u32> {
+        macro_rules! check {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    if let Some(ref m) = self.$field {
+                        if let Some(ref ctx) = m.context_info {
+                            if let Some(exp) = ctx.expiration {
+                                if exp > 0 {
+                                    return Some(exp);
+                                }
+                            }
+                        }
+                    }
+                )+
+            };
+        }
+        with_context_info_fields!(check!());
+        None
+    }
+
+    fn set_ephemeral_expiration(&mut self, expiration: u32) -> bool {
+        if expiration == 0 {
+            return false;
+        }
+        macro_rules! try_set {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    if let Some(ref mut m) = self.$field {
+                        let ctx = m.context_info.get_or_insert_with(|| Box::new(wa::ContextInfo::default()));
+                        ctx.expiration = Some(expiration);
+                        return true;
+                    }
+                )+
+            };
+        }
+        with_context_info_fields!(try_set!());
+        false
     }
 }
 
