@@ -8,6 +8,7 @@ use wacore_binary::jid::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
 use crate::client::Client;
+use crate::send::SendResult;
 
 #[derive(Debug, Clone)]
 pub struct PollOptionResult {
@@ -31,7 +32,7 @@ impl<'a> Polls<'a> {
         name: &str,
         options: &[String],
         selectable_count: u32,
-    ) -> Result<(String, Vec<u8>)> {
+    ) -> Result<(SendResult, Vec<u8>)> {
         if options.len() < 2 {
             return Err(anyhow!("Poll must have at least 2 options"));
         }
@@ -101,7 +102,7 @@ impl<'a> Polls<'a> {
         });
 
         let result = self.client.send_message(to.clone(), message).await?;
-        Ok((result.message_id, message_secret))
+        Ok((result, message_secret))
     }
 
     pub async fn vote(
@@ -111,7 +112,7 @@ impl<'a> Polls<'a> {
         poll_creator_jid: &Jid,
         message_secret: &[u8],
         option_names: &[String],
-    ) -> Result<String> {
+    ) -> Result<SendResult> {
         let my_jid = self
             .client
             .get_pn()
@@ -161,10 +162,7 @@ impl<'a> Polls<'a> {
             ..Default::default()
         };
 
-        self.client
-            .send_message(chat_jid.clone(), message)
-            .await
-            .map(|r| r.message_id)
+        self.client.send_message(chat_jid.clone(), message).await
     }
 
     /// Returns the selected option hashes (each 32 bytes).
