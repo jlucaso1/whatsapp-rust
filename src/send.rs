@@ -157,8 +157,9 @@ fn button_name_to_flow_name(button_name: &str) -> &str {
 }
 
 impl Client {
-    /// Send an end-to-end encrypted message to a user or group.
+    /// Send a message to a user, group, or newsletter.
     ///
+    /// Newsletter messages are sent as plaintext (no E2E encryption).
     /// Returns the message ID on success. For status/story updates use
     /// [`Client::status()`] instead.
     pub async fn send_message(
@@ -182,6 +183,28 @@ impl Client {
             None => self.generate_message_id().await,
         };
         let returned_id = request_id.clone();
+
+        // Newsletters are not E2E encrypted — send as plaintext via SMAX stanza.
+        // Matches WA Web's OutMessagePublishNewsletterRequest + ContentType mixins.
+        if to.is_newsletter() {
+            use prost::Message as _;
+            let stanza_type = wacore::send::stanza_type_from_message(&message);
+            let mut plaintext_builder = NodeBuilder::new("plaintext");
+            if let Some(mt) = wacore::send::media_type_from_message(&message) {
+                plaintext_builder = plaintext_builder.attr("mediatype", mt);
+            }
+            let mut children = vec![plaintext_builder.bytes(message.encode_to_vec()).build()];
+            children.extend(options.extra_stanza_nodes);
+            let stanza = NodeBuilder::new("message")
+                .attr("to", to)
+                .attr("type", stanza_type)
+                .attr("id", &request_id)
+                .children(children)
+                .build();
+            self.send_node(stanza).await?;
+            return Ok(returned_id);
+        }
+
         let (edit, inferred_meta) = infer_stanza_metadata(&message);
         let inferred_biz = infer_biz_node(&message);
 

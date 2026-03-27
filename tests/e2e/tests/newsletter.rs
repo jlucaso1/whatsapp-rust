@@ -1,6 +1,7 @@
 use e2e_tests::TestClient;
 use log::info;
 use wacore::types::events::Event;
+use whatsapp_rust::download::MediaType;
 use whatsapp_rust::waproto::whatsapp as wa;
 
 #[tokio::test]
@@ -207,8 +208,7 @@ async fn test_newsletter_send_and_get_messages() -> anyhow::Result<()> {
     };
     let msg_id = client
         .client
-        .newsletter()
-        .send_message(&created.jid, &message)
+        .send_message(created.jid.clone(), message)
         .await?;
 
     info!("Sent message with id: {}", msg_id);
@@ -249,6 +249,75 @@ async fn test_newsletter_send_and_get_messages() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Verifies that media messages sent to newsletters use the correct
+/// stanza type ("media") and plaintext mediatype attribute.
+#[tokio::test]
+async fn test_newsletter_send_media_message() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client = TestClient::connect("e2e_newsletter_media").await?;
+
+    let created = client
+        .client
+        .newsletter()
+        .create("Media Test Channel", None)
+        .await?;
+    info!("Created newsletter: {}", created.jid);
+
+    // Upload a fake image
+    let data = vec![0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
+    let upload = client.client.upload(data, MediaType::Image).await?;
+
+    // Build and send an image message
+    let message = wa::Message {
+        image_message: Some(Box::new(wa::message::ImageMessage {
+            url: Some(upload.url.clone()),
+            direct_path: Some(upload.direct_path.clone()),
+            media_key: Some(upload.media_key.clone()),
+            file_sha256: Some(upload.file_sha256.clone()),
+            file_enc_sha256: Some(upload.file_enc_sha256.clone()),
+            file_length: Some(upload.file_length),
+            mimetype: Some("image/jpeg".to_string()),
+            caption: Some("Newsletter image test".to_string()),
+            ..Default::default()
+        })),
+        ..Default::default()
+    };
+
+    let msg_id = client
+        .client
+        .send_message(created.jid.clone(), message)
+        .await?;
+    info!("Sent image message: {msg_id}");
+
+    // Fetch and verify the message was stored with media type
+    let messages = client
+        .client
+        .newsletter()
+        .get_messages(&created.jid, 10, None)
+        .await?;
+
+    assert!(!messages.is_empty(), "should have at least one message");
+    let msg = &messages[0];
+    assert_eq!(
+        msg.message_type.as_str(),
+        "media",
+        "newsletter image should have type=media"
+    );
+
+    if let Some(ref decoded) = msg.message {
+        assert!(
+            decoded.image_message.is_some(),
+            "decoded message should contain image_message"
+        );
+    }
+
+    info!("Media message verified: server_id={}", msg.server_id);
+
+    client.disconnect().await;
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_newsletter_message_pagination() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -267,11 +336,7 @@ async fn test_newsletter_message_pagination() -> anyhow::Result<()> {
             conversation: Some(format!("Message {}", i)),
             ..Default::default()
         };
-        client
-            .client
-            .newsletter()
-            .send_message(&created.jid, &msg)
-            .await?;
+        client.client.send_message(created.jid.clone(), msg).await?;
     }
 
     // Fetch all messages
@@ -352,8 +417,7 @@ async fn test_newsletter_reaction_live_update() -> anyhow::Result<()> {
     };
     client_a
         .client
-        .newsletter()
-        .send_message(&created.jid, &msg)
+        .send_message(created.jid.clone(), msg)
         .await?;
 
     // Get the server_id of the message we just sent
