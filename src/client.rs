@@ -1556,7 +1556,7 @@ impl Client {
     }
 
     pub(crate) async fn handle_unimplemented(&self, tag: &str) {
-        warn!("TODO: Implement handler for <{tag}>");
+        log::debug!("Unhandled stanza: <{tag}>");
     }
 
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {

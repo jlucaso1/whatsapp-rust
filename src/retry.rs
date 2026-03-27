@@ -725,10 +725,9 @@ impl Client {
         // WhatsApp Web only includes keys when retryCount >= 2.
         // First retry gives the sender a chance to resend without full key exchange.
         //
-        // Optimization: For NoSession errors (no sender key), include keys on retry#1.
-        // This reduces round-trips from 2 to 1 for skmsg-only message failures, since
-        // the sender needs our fresh prekeys to establish a session and send SKDM.
-        // This is a conservative optimization that only adds information to the retry.
+        // WA Web includes keys at retryCount >= MIN_RETRY_COUNT_FOR_KEYS.
+        // Optimization for NoSession: include keys on retry#1 to reduce round-trips
+        // for skmsg-only failures where the sender needs our prekeys for SKDM.
         let include_keys_early = reason == RetryReason::NoSession;
         let keys_node = if retry_count >= MIN_RETRY_COUNT_FOR_KEYS || include_keys_early {
             let device_store = self.persistence_manager.get_device_arc().await;

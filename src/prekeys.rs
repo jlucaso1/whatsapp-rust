@@ -77,11 +77,10 @@ impl Client {
             device_guard.backend.clone()
         };
 
-        // Determine the starting ID using both the persistent counter AND the store max.
-        // Using max(counter, max_id+1) guards against crash-after-upload-before-persist:
-        // the counter would be stale, but the store already has the generated keys.
+        // Use the persistent counter, falling back to max(store_id)+1 for migration.
+        // The counter is the source of truth after the first upload.
         let max_id = backend.get_max_prekey_id().await?;
-        let start_id = if device_snapshot.next_pre_key_id > 0 {
+        let raw_start = if device_snapshot.next_pre_key_id > 0 {
             std::cmp::max(device_snapshot.next_pre_key_id, max_id + 1)
         } else {
             log::info!(
@@ -92,30 +91,24 @@ impl Client {
             max_id + 1
         };
 
+        // WA Web uses 24-bit PreKey IDs (max 2^24 - 1 = 16777215).
+        // Wrap into valid range so lingering high-ID rows don't pin start_id
+        // above the boundary and cause repeated overwrites of low IDs.
+        const MAX_PREKEY_ID: u32 = 16777215;
+        let start_id = ((raw_start as u64 - 1) % MAX_PREKEY_ID as u64) as u32 + 1;
+
         let mut keys_to_upload = Vec::with_capacity(WANTED_PRE_KEY_COUNT);
         let mut key_pairs_to_upload = Vec::with_capacity(WANTED_PRE_KEY_COUNT);
 
         for i in 0..WANTED_PRE_KEY_COUNT {
-            let pre_key_id = start_id + i as u32;
-
-            if pre_key_id > 16777215 {
-                log::warn!(
-                    "Pre-key ID {} exceeds maximum range, wrapping around",
-                    pre_key_id
-                );
-                break;
-            }
+            let pre_key_id =
+                (((start_id as u64 - 1) + i as u64) % (MAX_PREKEY_ID as u64)) as u32 + 1;
 
             let key_pair = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
             let pre_key_record = new_pre_key_record(pre_key_id, &key_pair);
 
             keys_to_upload.push((pre_key_id, pre_key_record));
             key_pairs_to_upload.push((pre_key_id, key_pair));
-        }
-
-        if keys_to_upload.is_empty() {
-            log::warn!("No pre-keys available to upload");
-            return Ok(());
         }
 
         // Encode once — reused for both pre-upload store and post-upload mark.
@@ -155,8 +148,13 @@ impl Client {
             log::warn!("Failed to mark prekeys as uploaded: {:?}", e);
         }
 
-        // Update the persistent counter so future uploads never reuse these IDs.
-        let next_id = start_id + key_pairs_to_upload.len() as u32;
+        // IDs wrap modulo MAX_PREKEY_ID. If the counter wraps while unconsumed
+        // high-ID prekeys still exist, the upsert (.on_conflict.do_update)
+        // silently overwrites them. Acceptable: the server consumes keys well
+        // before a full 16M cycle completes.
+        let next_id = (((start_id as u64 - 1) + key_pairs_to_upload.len() as u64)
+            % (MAX_PREKEY_ID as u64)) as u32
+            + 1;
         self.persistence_manager
             .process_command(DeviceCommand::SetNextPreKeyId(next_id))
             .await;
