@@ -157,8 +157,9 @@ fn button_name_to_flow_name(button_name: &str) -> &str {
 }
 
 impl Client {
-    /// Send an end-to-end encrypted message to a user or group.
+    /// Send a message to a user, group, or newsletter.
     ///
+    /// Newsletter messages are sent as plaintext (no E2E encryption).
     /// Returns the message ID on success. For status/story updates use
     /// [`Client::status()`] instead.
     pub async fn send_message(
@@ -192,11 +193,13 @@ impl Client {
             if let Some(mt) = wacore::send::media_type_from_message(&message) {
                 plaintext_builder = plaintext_builder.attr("mediatype", mt);
             }
+            let mut children = vec![plaintext_builder.bytes(message.encode_to_vec()).build()];
+            children.extend(options.extra_stanza_nodes.iter().cloned());
             let stanza = NodeBuilder::new("message")
                 .attr("to", to)
                 .attr("type", stanza_type)
                 .attr("id", &request_id)
-                .children([plaintext_builder.bytes(message.encode_to_vec()).build()])
+                .children(children)
                 .build();
             self.send_node(stanza).await?;
             return Ok(returned_id);
