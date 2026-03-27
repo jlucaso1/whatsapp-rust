@@ -77,11 +77,10 @@ impl Client {
             device_guard.backend.clone()
         };
 
-        // Determine the starting ID using both the persistent counter AND the store max.
-        // Using max(counter, max_id+1) guards against crash-after-upload-before-persist:
-        // the counter would be stale, but the store already has the generated keys.
+        // Use the persistent counter, falling back to max(store_id)+1 for migration.
+        // The counter is the source of truth after the first upload.
         let max_id = backend.get_max_prekey_id().await?;
-        let start_id = if device_snapshot.next_pre_key_id > 0 {
+        let raw_start = if device_snapshot.next_pre_key_id > 0 {
             std::cmp::max(device_snapshot.next_pre_key_id, max_id + 1)
         } else {
             log::info!(
@@ -92,12 +91,14 @@ impl Client {
             max_id + 1
         };
 
+        // WA Web uses 24-bit PreKey IDs (max 2^24 - 1 = 16777215).
+        // Wrap into valid range so lingering high-ID rows don't pin start_id
+        // above the boundary and cause repeated overwrites of low IDs.
+        const MAX_PREKEY_ID: u32 = 16777215;
+        let start_id = ((raw_start as u64 - 1) % MAX_PREKEY_ID as u64) as u32 + 1;
+
         let mut keys_to_upload = Vec::with_capacity(WANTED_PRE_KEY_COUNT);
         let mut key_pairs_to_upload = Vec::with_capacity(WANTED_PRE_KEY_COUNT);
-
-        // WA Web uses 24-bit PreKey IDs (max 2^24 - 1 = 16777215).
-        // Wrap around to 1 when exceeding the range (ID 0 is reserved).
-        const MAX_PREKEY_ID: u32 = 16777215;
 
         for i in 0..WANTED_PRE_KEY_COUNT {
             let pre_key_id =

@@ -725,7 +725,7 @@ impl Client {
         // WhatsApp Web only includes keys when retryCount >= 2.
         // First retry gives the sender a chance to resend without full key exchange.
         //
-        // WA Web includes keys only at retryCount >= 2 (RetryReceiptJob.js:9,155).
+        // WA Web includes keys at retryCount >= MIN_RETRY_COUNT_FOR_KEYS.
         // Optimization for NoSession: include keys on retry#1 to reduce round-trips
         // for skmsg-only failures where the sender needs our prekeys for SKDM.
         let include_keys_early = reason == RetryReason::NoSession;
