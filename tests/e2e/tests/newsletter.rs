@@ -207,8 +207,7 @@ async fn test_newsletter_send_and_get_messages() -> anyhow::Result<()> {
     };
     let msg_id = client
         .client
-        .newsletter()
-        .send_message(&created.jid, &message)
+        .send_message(created.jid.clone(), message)
         .await?;
 
     info!("Sent message with id: {}", msg_id);
@@ -267,11 +266,7 @@ async fn test_newsletter_message_pagination() -> anyhow::Result<()> {
             conversation: Some(format!("Message {}", i)),
             ..Default::default()
         };
-        client
-            .client
-            .newsletter()
-            .send_message(&created.jid, &msg)
-            .await?;
+        client.client.send_message(created.jid.clone(), msg).await?;
     }
 
     // Fetch all messages
@@ -352,8 +347,7 @@ async fn test_newsletter_reaction_live_update() -> anyhow::Result<()> {
     };
     client_a
         .client
-        .newsletter()
-        .send_message(&created.jid, &msg)
+        .send_message(created.jid.clone(), msg)
         .await?;
 
     // Get the server_id of the message we just sent

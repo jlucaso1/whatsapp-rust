@@ -182,6 +182,26 @@ impl Client {
             None => self.generate_message_id().await,
         };
         let returned_id = request_id.clone();
+
+        // Newsletters are not E2E encrypted — send as plaintext via SMAX stanza.
+        // Matches WA Web's OutMessagePublishNewsletterRequest + ContentType mixins.
+        if to.is_newsletter() {
+            use prost::Message as _;
+            let stanza_type = wacore::send::stanza_type_from_message(&message);
+            let mut plaintext_builder = NodeBuilder::new("plaintext");
+            if let Some(mt) = wacore::send::media_type_from_message(&message) {
+                plaintext_builder = plaintext_builder.attr("mediatype", mt);
+            }
+            let stanza = NodeBuilder::new("message")
+                .attr("to", to)
+                .attr("type", stanza_type)
+                .attr("id", &request_id)
+                .children([plaintext_builder.bytes(message.encode_to_vec()).build()])
+                .build();
+            self.send_node(stanza).await?;
+            return Ok(returned_id);
+        }
+
         let (edit, inferred_meta) = infer_stanza_metadata(&message);
         let inferred_biz = infer_biz_node(&message);
 

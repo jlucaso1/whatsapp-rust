@@ -359,35 +359,6 @@ impl<'a> Newsletter<'a> {
         Ok(duration)
     }
 
-    // ─── Message operations ────────────────────────────────────────────
-
-    /// Send a message to a newsletter.
-    ///
-    /// Newsletter messages are plaintext (no Signal E2E encryption).
-    /// Returns the message ID assigned by the client.
-    ///
-    /// **Note:** This sends the raw protobuf as plaintext. For media messages
-    /// (images, videos, etc.), the media must be uploaded separately using the
-    /// newsletter-specific upload endpoint first. Text messages work directly.
-    pub async fn send_message(
-        &self,
-        jid: &Jid,
-        message: &wa::Message,
-    ) -> Result<String, anyhow::Error> {
-        let request_id = self.client.generate_message_id().await;
-        let encoded = message.encode_to_vec();
-
-        let stanza = NodeBuilder::new("message")
-            .attr("to", jid.clone())
-            .attr("type", "text")
-            .attr("id", &request_id)
-            .children([NodeBuilder::new("plaintext").bytes(encoded).build()])
-            .build();
-
-        self.client.send_node(stanza).await?;
-        Ok(request_id)
-    }
-
     /// Send a reaction to a newsletter message.
     ///
     /// `server_id` is the server-assigned ID of the message to react to.

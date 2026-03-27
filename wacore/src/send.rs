@@ -67,7 +67,7 @@ fn unwrap_message(msg: &wa::Message) -> &wa::Message {
 }
 
 /// Matches WAWebE2EProtoUtils.typeAttributeFromProtobuf.
-fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
+pub fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
     let msg = unwrap_message(msg);
 
     if msg.reaction_message.is_some() || msg.enc_reaction_message.is_some() {
@@ -128,7 +128,7 @@ fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
 
 /// Matches WAWebBackendJobsCommon.mediaTypeFromProtobuf + encodeMaybeMediaType.
 /// Returns `None` when the attribute should be omitted.
-fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
+pub fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
     let msg = unwrap_message(msg);
 
     if msg.image_message.is_some() {
