@@ -36,7 +36,10 @@ pub struct MessageContext {
 }
 
 impl MessageContext {
-    pub async fn send_message(&self, message: wa::Message) -> Result<String, anyhow::Error> {
+    pub async fn send_message(
+        &self,
+        message: wa::Message,
+    ) -> Result<crate::send::SendResult, anyhow::Error> {
         self.client
             .send_message(self.info.source.chat.clone(), message)
             .await

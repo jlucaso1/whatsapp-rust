@@ -117,6 +117,7 @@ pub static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
         full_sync_days_limit: Some(30),
         inline_initial_payload_in_e2_ee_msg: Some(true),
         storage_quota_mb: Some(10240),
+        support_message_association: Some(true),
         ..Default::default()
     }),
 });

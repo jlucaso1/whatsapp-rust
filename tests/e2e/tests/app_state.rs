@@ -160,7 +160,11 @@ async fn test_cross_collection_mutations() -> anyhow::Result<()> {
         conversation: Some("Cross-collection test".to_string()),
         ..Default::default()
     };
-    let msg_id = client_a.client.send_message(jid_b.clone(), msg).await?;
+    let msg_id = client_a
+        .client
+        .send_message(jid_b.clone(), msg)
+        .await?
+        .message_id;
 
     client_a
         .client

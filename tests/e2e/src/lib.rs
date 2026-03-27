@@ -464,7 +464,7 @@ pub async fn send_and_expect_text(
     text: &str,
     timeout_secs: u64,
 ) -> anyhow::Result<String> {
-    let msg_id = sender.send_message(to.clone(), text_msg(text)).await?;
+    let result = sender.send_message(to.clone(), text_msg(text)).await?;
     receiver.wait_for_text(text, timeout_secs).await?;
-    Ok(msg_id)
+    Ok(result.message_id)
 }

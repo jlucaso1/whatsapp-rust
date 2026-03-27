@@ -24,6 +24,35 @@ pub struct SendOptions {
     pub extra_stanza_nodes: Vec<Node>,
 }
 
+/// Result of a successfully sent message.
+#[derive(Debug, Clone)]
+pub struct SendResult {
+    pub message_id: String,
+    pub to: Jid,
+}
+
+impl SendResult {
+    /// `participant` is `None` -- only valid for the sender's own messages.
+    pub fn message_key(&self) -> wa::MessageKey {
+        wa::MessageKey {
+            remote_jid: Some(self.to.to_string()),
+            from_me: Some(true),
+            id: Some(self.message_id.clone()),
+            participant: None,
+        }
+    }
+
+    /// Consuming variant -- avoids cloning `message_id`.
+    pub fn into_message_key(self) -> wa::MessageKey {
+        wa::MessageKey {
+            remote_jid: Some(self.to.to_string()),
+            from_me: Some(true),
+            id: Some(self.message_id),
+            participant: None,
+        }
+    }
+}
+
 /// Duration for pinned messages. Default is 7 days (matches WA Web).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PinDuration {
@@ -166,7 +195,7 @@ impl Client {
         &self,
         to: Jid,
         message: wa::Message,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<SendResult, anyhow::Error> {
         self.send_message_with_options(to, message, SendOptions::default())
             .await
     }
@@ -177,12 +206,15 @@ impl Client {
         to: Jid,
         message: wa::Message,
         options: SendOptions,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<SendResult, anyhow::Error> {
         let request_id = match options.message_id {
             Some(id) => id,
             None => self.generate_message_id().await,
         };
-        let returned_id = request_id.clone();
+        let result = SendResult {
+            message_id: request_id.clone(),
+            to: to.clone(),
+        };
 
         // Newsletters are not E2E encrypted — send as plaintext via SMAX stanza.
         // Matches WA Web's OutMessagePublishNewsletterRequest + ContentType mixins.
@@ -204,7 +236,7 @@ impl Client {
                 .children(children)
                 .build();
             self.send_node(stanza).await?;
-            return Ok(returned_id);
+            return Ok(result);
         }
 
         let (edit, inferred_meta) = infer_stanza_metadata(&message);
@@ -229,7 +261,7 @@ impl Client {
             extra_nodes,
         )
         .await?;
-        Ok(returned_id)
+        Ok(result)
     }
 
     /// Send a status/story update to the given recipients using sender key encryption.

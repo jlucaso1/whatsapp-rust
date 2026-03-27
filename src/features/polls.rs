@@ -100,8 +100,8 @@ impl<'a> Polls<'a> {
             ..Default::default()
         });
 
-        let msg_id = self.client.send_message(to.clone(), message).await?;
-        Ok((msg_id, message_secret))
+        let result = self.client.send_message(to.clone(), message).await?;
+        Ok((result.message_id, message_secret))
     }
 
     pub async fn vote(
@@ -161,7 +161,10 @@ impl<'a> Polls<'a> {
             ..Default::default()
         };
 
-        self.client.send_message(chat_jid.clone(), message).await
+        self.client
+            .send_message(chat_jid.clone(), message)
+            .await
+            .map(|r| r.message_id)
     }
 
     /// Returns the selected option hashes (each 32 bytes).

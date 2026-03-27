@@ -38,7 +38,8 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(group_jid.clone(), text_msg(text_1))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent group message: {msg_id}");
 
     client_b.wait_for_group_text(&group_jid, text_1, 30).await?;
@@ -68,7 +69,8 @@ async fn test_group_create_send_message_and_add_member() -> anyhow::Result<()> {
     let msg_id_2 = client_a
         .client
         .send_message(group_jid.clone(), text_msg(text_2))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent second group message: {msg_id_2}");
 
     client_b.wait_for_group_text(&group_jid, text_2, 30).await?;
