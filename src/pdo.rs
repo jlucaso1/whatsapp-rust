@@ -306,7 +306,7 @@ impl Client {
         );
 
         // Build MessageInfo from the WebMessageInfo or use the pending request's info
-        let message_info = if let Some(pending) = pending {
+        let mut message_info = if let Some(pending) = pending {
             pending.message_info
         } else {
             // Reconstruct MessageInfo from WebMessageInfo if we don't have it cached
@@ -328,7 +328,12 @@ impl Client {
             return;
         };
 
-        // Dispatch the message as a normal message event
+        if message_info.ephemeral_expiration.is_none() {
+            use wacore::proto_helpers::MessageExt;
+            message_info.ephemeral_expiration =
+                message.get_base_message().get_ephemeral_expiration();
+        }
+
         info!(
             "Dispatching PDO-recovered message {} from {} via phone",
             message_info.id, message_info.source.sender

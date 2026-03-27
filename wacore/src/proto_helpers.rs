@@ -294,6 +294,9 @@ impl MessageExt for wa::Message {
     }
 
     fn set_ephemeral_expiration(&mut self, expiration: u32) -> bool {
+        if expiration == 0 {
+            return false;
+        }
         macro_rules! try_set {
             ($($field:ident),+ $(,)?) => {
                 $(
