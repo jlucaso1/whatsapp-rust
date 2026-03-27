@@ -25,7 +25,7 @@ impl<'a> Polls<'a> {
         Self { client }
     }
 
-    /// Returns `(message_id, message_secret)`. Caller needs `message_secret` to decrypt votes.
+    /// Caller needs the returned `message_secret` to decrypt votes.
     pub async fn create(
         &self,
         to: &Jid,
