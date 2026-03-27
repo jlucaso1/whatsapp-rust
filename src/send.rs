@@ -210,6 +210,7 @@ impl Client {
             Some(id) => id,
             None => self.generate_message_id().await,
         };
+        // Both paths below consume `to` and `request_id`, so save copies for the result.
         let result = SendResult {
             message_id: request_id.clone(),
             to: to.clone(),
