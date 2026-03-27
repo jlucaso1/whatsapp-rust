@@ -3,6 +3,7 @@ use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
 
 use crate::client::Client;
+use crate::send::SendResult;
 use crate::upload::UploadResponse;
 
 /// Privacy setting sent in the `<meta>` node of the status stanza.
@@ -49,7 +50,7 @@ impl<'a> Status<'a> {
         font: i32,
         recipients: Vec<Jid>,
         options: StatusSendOptions,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
             extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
                 text: Some(text.to_string()),
@@ -76,7 +77,7 @@ impl<'a> Status<'a> {
         caption: Option<&str>,
         recipients: Vec<Jid>,
         options: StatusSendOptions,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
             image_message: Some(Box::new(wa::message::ImageMessage {
                 url: Some(upload.url.clone()),
@@ -110,7 +111,7 @@ impl<'a> Status<'a> {
         caption: Option<&str>,
         recipients: Vec<Jid>,
         options: StatusSendOptions,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
             video_message: Some(Box::new(wa::message::VideoMessage {
                 url: Some(upload.url.clone()),
@@ -141,7 +142,7 @@ impl<'a> Status<'a> {
         message: wa::Message,
         recipients: Vec<Jid>,
         options: StatusSendOptions,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<SendResult, anyhow::Error> {
         self.client
             .send_status_message(message, recipients, options)
             .await
@@ -156,7 +157,7 @@ impl<'a> Status<'a> {
         message_id: impl Into<String>,
         recipients: Vec<Jid>,
         options: StatusSendOptions,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<SendResult, anyhow::Error> {
         let message_id = message_id.into();
         let to = Jid::status_broadcast();
 
