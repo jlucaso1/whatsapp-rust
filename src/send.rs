@@ -189,11 +189,13 @@ impl Client {
         if to.is_newsletter() {
             use prost::Message as _;
             let stanza_type = wacore::send::stanza_type_from_message(&message);
+            let (_, meta_node) = infer_stanza_metadata(&message);
             let mut plaintext_builder = NodeBuilder::new("plaintext");
             if let Some(mt) = wacore::send::media_type_from_message(&message) {
                 plaintext_builder = plaintext_builder.attr("mediatype", mt);
             }
             let mut children = vec![plaintext_builder.bytes(message.encode_to_vec()).build()];
+            children.extend(meta_node);
             children.extend(options.extra_stanza_nodes);
             let stanza = NodeBuilder::new("message")
                 .attr("to", to)
