@@ -111,11 +111,6 @@ impl Client {
             key_pairs_to_upload.push((pre_key_id, key_pair));
         }
 
-        if keys_to_upload.is_empty() {
-            log::warn!("No pre-keys available to upload");
-            return Ok(());
-        }
-
         // Encode once — reused for both pre-upload store and post-upload mark.
         let encoded_batch: Vec<(u32, Vec<u8>)> = {
             use prost::Message;
