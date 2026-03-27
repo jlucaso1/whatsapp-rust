@@ -22,6 +22,10 @@ pub struct SendOptions {
     pub message_id: Option<String>,
     /// Extra XML child nodes on the message stanza.
     pub extra_stanza_nodes: Vec<Node>,
+    /// Ephemeral duration in seconds. Sets `contextInfo.expiration` on the
+    /// message (WA Web `EProtoGenerator.js:183` parity).
+    /// Common values: 86400 (24h), 604800 (7d), 7776000 (90d).
+    pub ephemeral_expiration: Option<u32>,
 }
 
 /// Result of a successfully sent message.
@@ -193,9 +197,16 @@ impl Client {
     pub async fn send_message_with_options(
         &self,
         to: Jid,
-        message: wa::Message,
+        mut message: wa::Message,
         options: SendOptions,
     ) -> Result<SendResult, anyhow::Error> {
+        if let Some(exp) = options.ephemeral_expiration
+            && exp > 0
+        {
+            use wacore::proto_helpers::MessageExt;
+            message.set_ephemeral_expiration(exp);
+        }
+
         let request_id = match options.message_id {
             Some(id) => id,
             None => self.generate_message_id().await,

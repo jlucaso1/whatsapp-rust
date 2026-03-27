@@ -408,6 +408,7 @@ impl Client {
             meta_info: MsgMetaInfo::default(),
             verified_name: None,
             device_sent_meta: None,
+            ephemeral_expiration: None,
         })
     }
 
