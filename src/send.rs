@@ -277,7 +277,7 @@ impl Client {
         message: wa::Message,
         recipients: Vec<Jid>,
         options: crate::features::status::StatusSendOptions,
-    ) -> Result<String, anyhow::Error> {
+    ) -> Result<SendResult, anyhow::Error> {
         use wacore::client::context::GroupInfo;
         use wacore_binary::builder::NodeBuilder;
 
@@ -485,7 +485,10 @@ impl Client {
             log::error!("Failed to flush signal cache after send_status_message: {e:?}");
         }
 
-        Ok(request_id)
+        Ok(SendResult {
+            message_id: request_id,
+            to,
+        })
     }
 
     /// Resolve which devices need SKDM by reading the per-device sender key map.
