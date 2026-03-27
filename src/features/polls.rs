@@ -8,6 +8,7 @@ use wacore_binary::jid::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
 use crate::client::Client;
+use crate::send::SendResult;
 
 #[derive(Debug, Clone)]
 pub struct PollOptionResult {
@@ -24,14 +25,14 @@ impl<'a> Polls<'a> {
         Self { client }
     }
 
-    /// Returns `(message_id, message_secret)`. Caller needs `message_secret` to decrypt votes.
+    /// Caller needs the returned `message_secret` to decrypt votes.
     pub async fn create(
         &self,
         to: &Jid,
         name: &str,
         options: &[String],
         selectable_count: u32,
-    ) -> Result<(String, Vec<u8>)> {
+    ) -> Result<(SendResult, Vec<u8>)> {
         if options.len() < 2 {
             return Err(anyhow!("Poll must have at least 2 options"));
         }
@@ -100,8 +101,8 @@ impl<'a> Polls<'a> {
             ..Default::default()
         });
 
-        let msg_id = self.client.send_message(to.clone(), message).await?;
-        Ok((msg_id, message_secret))
+        let result = self.client.send_message(to.clone(), message).await?;
+        Ok((result, message_secret))
     }
 
     pub async fn vote(
@@ -111,7 +112,7 @@ impl<'a> Polls<'a> {
         poll_creator_jid: &Jid,
         message_secret: &[u8],
         option_names: &[String],
-    ) -> Result<String> {
+    ) -> Result<SendResult> {
         let my_jid = self
             .client
             .get_pn()

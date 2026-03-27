@@ -368,7 +368,11 @@ async fn test_send_image_message() -> anyhow::Result<()> {
     // A sends the image to B
     let caption = "Check out this photo!";
     let msg = build_image_message(&upload, Some(caption));
-    let msg_id = client_a.client.send_message(jid_b.clone(), msg).await?;
+    let msg_id = client_a
+        .client
+        .send_message(jid_b.clone(), msg)
+        .await?
+        .message_id;
     info!("Sent image message: {msg_id}");
 
     // B receives the image message

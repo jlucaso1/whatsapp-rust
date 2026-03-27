@@ -447,6 +447,34 @@ pub fn build_quote_context_with_info(
     }
 }
 
+/// Wraps a media message as an album child (WA Web `EProtoGenerator` parity).
+/// Lifts `message_context_info` to the outer message and adds the album association.
+pub fn wrap_as_album_child(
+    mut inner_message: wa::Message,
+    parent_key: wa::MessageKey,
+) -> wa::Message {
+    let existing_context = inner_message.message_context_info.take();
+
+    // WA Web's outgoing association (ProtoUtils.js function m) only sets
+    // associationType + parentMessageKey, not messageIndex.
+    let association = wa::MessageAssociation {
+        association_type: Some(wa::message_association::AssociationType::MediaAlbum as i32),
+        parent_message_key: Some(parent_key),
+        message_index: None,
+    };
+
+    let mut outer_context = existing_context.unwrap_or_default();
+    outer_context.message_association = Some(association);
+
+    wa::Message {
+        associated_child_message: Some(Box::new(wa::message::FutureProofMessage {
+            message: Some(Box::new(inner_message)),
+        })),
+        message_context_info: Some(outer_context),
+        ..Default::default()
+    }
+}
+
 /// Extension trait for wa::Conversation
 pub trait ConversationExt {
     fn subject(&self) -> Option<&str>;
@@ -1510,5 +1538,63 @@ mod tests {
         assert!(inner_ctx.group_mentions.is_empty());
         // The outer context should have no mentions
         assert!(ctx.mentioned_jid.is_empty());
+    }
+
+    fn sample_parent_key() -> wa::MessageKey {
+        wa::MessageKey {
+            remote_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+            from_me: Some(true),
+            id: Some("PARENT_MSG_ID".to_string()),
+            participant: None,
+        }
+    }
+
+    #[test]
+    fn test_wrap_as_album_child_basic() {
+        let inner = wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage {
+                url: Some("https://mmg.whatsapp.net/test".to_string()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let wrapped = wrap_as_album_child(inner, sample_parent_key());
+
+        let future_proof = wrapped.associated_child_message.as_ref().unwrap();
+        let inner_msg = future_proof.message.as_ref().unwrap();
+        assert!(inner_msg.image_message.is_some());
+        assert!(inner_msg.message_context_info.is_none());
+
+        let ctx = wrapped.message_context_info.as_ref().unwrap();
+        let assoc = ctx.message_association.as_ref().unwrap();
+        assert_eq!(
+            assoc.association_type,
+            Some(wa::message_association::AssociationType::MediaAlbum as i32)
+        );
+        assert_eq!(assoc.parent_message_key, Some(sample_parent_key()));
+        assert_eq!(assoc.message_index, None);
+    }
+
+    #[test]
+    fn test_wrap_as_album_child_lifts_existing_context() {
+        let secret = vec![1u8; 32];
+        let inner = wa::Message {
+            video_message: Some(Box::new(wa::message::VideoMessage {
+                url: Some("https://mmg.whatsapp.net/vid".to_string()),
+                ..Default::default()
+            })),
+            message_context_info: Some(wa::MessageContextInfo {
+                message_secret: Some(secret.clone()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let wrapped = wrap_as_album_child(inner, sample_parent_key());
+
+        let ctx = wrapped.message_context_info.as_ref().unwrap();
+        assert_eq!(ctx.message_secret.as_deref(), Some(secret.as_slice()));
+        assert!(ctx.message_association.is_some());
     }
 }

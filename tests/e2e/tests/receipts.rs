@@ -26,7 +26,8 @@ async fn test_delivery_receipt_online() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg("Hello B!"))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent message: {msg_id}");
 
     client_b.wait_for_text("Hello B!", 15).await?;
@@ -64,7 +65,8 @@ async fn test_read_receipt_online() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg("Read me!"))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent message: {msg_id}");
 
     client_b.wait_for_text("Read me!", 15).await?;
@@ -109,7 +111,8 @@ async fn test_delivery_receipt_offline_reconnect() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg("Offline delivery test"))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent message to offline B: {msg_id}");
 
     // No delivery receipt while B is offline
@@ -163,7 +166,8 @@ async fn test_read_receipt_queued_for_offline_sender() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg("Read while I'm away"))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent message: {msg_id}");
 
     client_b.wait_for_text("Read while I'm away", 15).await?;
@@ -226,7 +230,8 @@ async fn test_delivery_receipt_bidirectional_offline() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg("Bidirectional test"))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent to offline B: {msg_id}");
 
     client_a.client.reconnect().await;
@@ -272,7 +277,8 @@ async fn test_no_delivery_receipt_for_fully_offline() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg("No receipt expected"))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent to fully-offline B: {msg_id}");
 
     client_a
@@ -322,7 +328,8 @@ async fn test_group_delivery_receipt() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(group_jid.clone(), text_msg("Group receipt test"))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent group message: {msg_id}");
 
     client_b

@@ -233,7 +233,11 @@ async fn test_star_message() -> anyhow::Result<()> {
         conversation: Some("Star this message!".to_string()),
         ..Default::default()
     };
-    let msg_id = client_a.client.send_message(jid_b.clone(), msg).await?;
+    let msg_id = client_a
+        .client
+        .send_message(jid_b.clone(), msg)
+        .await?
+        .message_id;
     info!("A sent message {msg_id} to B");
 
     // A stars the message (from_me=true since A sent it)
@@ -272,7 +276,11 @@ async fn test_unstar_message() -> anyhow::Result<()> {
         conversation: Some("Star then unstar".to_string()),
         ..Default::default()
     };
-    let msg_id = client_a.client.send_message(jid_b.clone(), msg).await?;
+    let msg_id = client_a
+        .client
+        .send_message(jid_b.clone(), msg)
+        .await?
+        .message_id;
     info!("A sent message {msg_id}");
 
     // Star then unstar
@@ -431,7 +439,11 @@ async fn test_delete_message_for_me() -> anyhow::Result<()> {
         conversation: Some("Delete me locally".to_string()),
         ..Default::default()
     };
-    let msg_id = client_a.client.send_message(jid_b.clone(), msg).await?;
+    let msg_id = client_a
+        .client
+        .send_message(jid_b.clone(), msg)
+        .await?
+        .message_id;
     info!("Sent message {msg_id}");
 
     client_a

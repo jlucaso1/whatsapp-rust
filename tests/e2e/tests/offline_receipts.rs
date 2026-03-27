@@ -20,7 +20,8 @@ async fn test_deferred_delivery_receipt() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg(text))
-        .await?;
+        .await?
+        .message_id;
     info!("Client A sent message to offline B: {msg_id}");
 
     // Sender receipt (type="sender") IS expected — only check that no Delivered arrives.
@@ -65,7 +66,8 @@ async fn test_bidirectional_offline_receipt() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg(text))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent message to offline B: {msg_id}");
 
     client_a.client.reconnect().await;
@@ -115,7 +117,8 @@ async fn test_deferred_delivery_receipt_on_reconnect() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg(text))
-        .await?;
+        .await?
+        .message_id;
     info!("A sent message to offline B: {msg_id}");
 
     // Timeout shorter than reconnect backoff so B is still offline during this window.

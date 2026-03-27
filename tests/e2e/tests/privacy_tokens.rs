@@ -58,7 +58,8 @@ async fn send_message_and_expect_463_with_id(
                 ..Default::default()
             },
         )
-        .await?;
+        .await?
+        .message_id;
     assert_eq!(returned_id, msg_id);
 
     let ack = tokio::time::timeout(tokio::time::Duration::from_secs(15), waiter)

@@ -201,8 +201,8 @@ async fn handle_text_ping(ctx: &MessageContext) {
         ..Default::default()
     };
 
-    let sent_id = match ctx.send_message(reply).await {
-        Ok(id) => id,
+    let sent = match ctx.send_message(reply).await {
+        Ok(r) => r,
         Err(e) => {
             error!("Failed to send pong: {}", e);
             return;
@@ -210,7 +210,10 @@ async fn handle_text_ping(ctx: &MessageContext) {
     };
 
     let duration = format!("{:.2?}", start.elapsed());
-    info!("Send took {}. Editing message {}...", duration, &sent_id);
+    info!(
+        "Send took {}. Editing message {}...",
+        duration, &sent.message_id
+    );
 
     let edit = wa::Message {
         extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
@@ -219,8 +222,8 @@ async fn handle_text_ping(ctx: &MessageContext) {
         })),
         ..Default::default()
     };
-    if let Err(e) = ctx.edit_message(sent_id.clone(), edit).await {
-        error!("Failed to edit message {}: {}", sent_id, e);
+    if let Err(e) = ctx.edit_message(sent.message_id.clone(), edit).await {
+        error!("Failed to edit message {}: {}", sent.message_id, e);
     }
 }
 

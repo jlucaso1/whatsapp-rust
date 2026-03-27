@@ -209,7 +209,8 @@ async fn test_newsletter_send_and_get_messages() -> anyhow::Result<()> {
     let msg_id = client
         .client
         .send_message(created.jid.clone(), message)
-        .await?;
+        .await?
+        .message_id;
 
     info!("Sent message with id: {}", msg_id);
 
@@ -287,7 +288,8 @@ async fn test_newsletter_send_media_message() -> anyhow::Result<()> {
     let msg_id = client
         .client
         .send_message(created.jid.clone(), message)
-        .await?;
+        .await?
+        .message_id;
     info!("Sent image message: {msg_id}");
 
     // Fetch and verify the message was stored with media type

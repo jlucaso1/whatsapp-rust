@@ -17,7 +17,8 @@ async fn test_send_text_message() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg(text))
-        .await?;
+        .await?
+        .message_id;
     info!("Client A sent message with id: {msg_id}");
 
     client_b.wait_for_text(text, 30).await?;
@@ -73,7 +74,8 @@ async fn test_message_revoke() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg("This will be revoked"))
-        .await?;
+        .await?
+        .message_id;
 
     client_b.wait_for_text("This will be revoked", 30).await?;
 

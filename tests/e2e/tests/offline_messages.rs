@@ -21,7 +21,8 @@ async fn test_offline_message_delivery_on_reconnect() -> anyhow::Result<()> {
     let msg_id = client_a
         .client
         .send_message(jid_b.clone(), text_msg(text))
-        .await?;
+        .await?
+        .message_id;
     info!("Client A sent message to reconnecting B: {msg_id}");
 
     // Message should arrive from the offline queue after reconnect
@@ -124,7 +125,8 @@ async fn test_server_accepts_messages_for_offline_recipient() -> anyhow::Result<
         let msg_id = client_a
             .client
             .send_message(jid_b.clone(), text_msg(&text))
-            .await?;
+            .await?
+            .message_id;
         info!("Sent message {} to offline B: {}", i, msg_id);
         msg_ids.push(msg_id);
     }
