@@ -18,7 +18,7 @@ pub use wacore::iq::groups::{
     ParticipantChangeResponse,
 };
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupMetadata {
     pub id: Jid,
     pub subject: String,
@@ -62,7 +62,7 @@ pub struct GroupMetadata {
     pub allow_non_admin_sub_group_creation: bool,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupParticipant {
     pub jid: Jid,
     pub phone_number: Option<Jid>,
@@ -108,7 +108,7 @@ impl From<GroupInfoResponse> for GroupMetadata {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateGroupResult {
     pub gid: Jid,
 }

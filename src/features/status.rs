@@ -9,6 +9,7 @@ use crate::upload::UploadResponse;
 /// Privacy setting sent in the `<meta>` node of the status stanza.
 /// Matches WhatsApp Web's `status_setting` attribute.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[non_exhaustive]
 pub enum StatusPrivacySetting {
     /// Send to all contacts in address book.
     #[string_default]
@@ -48,7 +49,7 @@ impl<'a> Status<'a> {
         text: &str,
         background_argb: u32,
         font: i32,
-        recipients: Vec<Jid>,
+        recipients: &[Jid],
         options: StatusSendOptions,
     ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
@@ -75,7 +76,7 @@ impl<'a> Status<'a> {
         upload: &UploadResponse,
         thumbnail: Vec<u8>,
         caption: Option<&str>,
-        recipients: Vec<Jid>,
+        recipients: &[Jid],
         options: StatusSendOptions,
     ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
@@ -109,7 +110,7 @@ impl<'a> Status<'a> {
         thumbnail: Vec<u8>,
         duration_seconds: u32,
         caption: Option<&str>,
-        recipients: Vec<Jid>,
+        recipients: &[Jid],
         options: StatusSendOptions,
     ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
@@ -140,7 +141,7 @@ impl<'a> Status<'a> {
     pub async fn send_raw(
         &self,
         message: wa::Message,
-        recipients: Vec<Jid>,
+        recipients: &[Jid],
         options: StatusSendOptions,
     ) -> Result<SendResult, anyhow::Error> {
         self.client
@@ -155,7 +156,7 @@ impl<'a> Status<'a> {
     pub async fn revoke(
         &self,
         message_id: impl Into<String>,
-        recipients: Vec<Jid>,
+        recipients: &[Jid],
         options: StatusSendOptions,
     ) -> Result<SendResult, anyhow::Error> {
         let message_id = message_id.into();
@@ -187,10 +188,10 @@ impl Client {
     /// # Example
     /// ```no_run
     /// # async fn example(client: &whatsapp_rust::Client) -> anyhow::Result<()> {
-    /// let recipients = vec![whatsapp_rust::Jid::pn("15551234567")];
+    /// let recipients = [whatsapp_rust::Jid::pn("15551234567")];
     /// let id = client
     ///     .status()
-    ///     .send_text("Hello!", 0xFF1E6E4F, 0, recipients, Default::default())
+    ///     .send_text("Hello!", 0xFF1E6E4F, 0, &recipients, Default::default())
     ///     .await?;
     /// # Ok(())
     /// # }
