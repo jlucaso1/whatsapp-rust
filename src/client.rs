@@ -950,6 +950,11 @@ impl Client {
             return Err(ClientError::AlreadyConnected.into());
         }
 
+        // Drain stale handles from the previous connection cycle. By this
+        // point, cooperative tasks have already received shutdown_notifier and
+        // the generation has been bumped, so abort is safe for any stragglers.
+        self.connection_tasks.abort_all();
+
         // Reset login state for new connection attempt. This ensures that
         // handle_success will properly process the <success> stanza even if
         // a previous connection's post-login task bailed out early.
