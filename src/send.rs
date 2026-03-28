@@ -29,7 +29,7 @@ pub struct SendOptions {
 }
 
 /// Result of a successfully sent message.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SendResult {
     pub message_id: String,
     pub to: Jid,
@@ -49,6 +49,7 @@ impl SendResult {
 
 /// Duration for pinned messages. Default is 7 days (matches WA Web).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum PinDuration {
     Hours24,
     #[default]
@@ -68,6 +69,7 @@ impl PinDuration {
 
 /// Specifies who is revoking (deleting) the message.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
 pub enum RevokeType {
     /// The message sender deleting their own message.
     #[default]
@@ -275,7 +277,7 @@ impl Client {
     pub(crate) async fn send_status_message(
         &self,
         message: wa::Message,
-        recipients: Vec<Jid>,
+        recipients: &[Jid],
         options: crate::features::status::StatusSendOptions,
     ) -> Result<SendResult, anyhow::Error> {
         use wacore::client::context::GroupInfo;
@@ -326,7 +328,7 @@ impl Client {
                     ));
                 }
             } else {
-                resolved_recipients.push(jid);
+                resolved_recipients.push(jid.clone());
             }
         }
 

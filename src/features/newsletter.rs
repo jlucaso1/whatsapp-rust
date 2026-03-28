@@ -40,14 +40,16 @@ pub enum NewsletterMessageType {
 }
 
 /// Newsletter verification status.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NewsletterVerification {
     Verified,
     Unverified,
 }
 
 /// Newsletter state.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NewsletterState {
     Active,
     Suspended,
@@ -55,7 +57,8 @@ pub enum NewsletterState {
 }
 
 /// The viewer's role in a newsletter.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum NewsletterRole {
     Owner,
     Admin,
@@ -64,7 +67,7 @@ pub enum NewsletterRole {
 }
 
 /// Metadata for a newsletter (channel).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewsletterMetadata {
     pub jid: Jid,
     pub name: String,

@@ -20,6 +20,7 @@ use wacore_binary::jid::Jid;
 
 /// Classification of a group within the community hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GroupType {
     /// Regular standalone group (not part of a community).
     Default,
@@ -34,7 +35,7 @@ pub enum GroupType {
 }
 
 /// Options for creating a new community.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateCommunityOptions {
     pub name: String,
     pub description: Option<String>,
@@ -59,14 +60,14 @@ impl CreateCommunityOptions {
 }
 
 /// Result of creating a community.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CreateCommunityResult {
     /// JID of the created community parent group.
     pub gid: Jid,
 }
 
 /// A subgroup within a community.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CommunitySubgroup {
     pub id: Jid,
     pub subject: String,
@@ -76,14 +77,14 @@ pub struct CommunitySubgroup {
 }
 
 /// Result of linking subgroups to a community.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinkSubgroupsResult {
     pub linked_jids: Vec<Jid>,
     pub failed_groups: Vec<(Jid, u32)>,
 }
 
 /// Result of unlinking subgroups from a community.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnlinkSubgroupsResult {
     pub unlinked_jids: Vec<Jid>,
     pub failed_groups: Vec<(Jid, u32)>,

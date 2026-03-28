@@ -17,6 +17,7 @@ pub enum PresenceError {
 
 /// Presence status for online/offline state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[non_exhaustive]
 pub enum PresenceStatus {
     #[str = "available"]
     Available,
