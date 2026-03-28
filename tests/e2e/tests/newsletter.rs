@@ -267,7 +267,10 @@ async fn test_newsletter_send_media_message() -> anyhow::Result<()> {
 
     // Upload a fake image
     let data = vec![0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10];
-    let upload = client.client.upload(data, MediaType::Image).await?;
+    let upload = client
+        .client
+        .upload(data, MediaType::Image, Default::default())
+        .await?;
 
     // Build and send an image message
     let message = wa::Message {

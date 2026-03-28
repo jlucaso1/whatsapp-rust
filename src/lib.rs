@@ -1,4 +1,6 @@
-pub use wacore::{iq::privacy as privacy_settings, proto_helpers, store::traits};
+pub use wacore::{
+    iq::privacy as privacy_settings, proto_helpers, sticker_pack, store::traits, webp,
+};
 pub use wacore_binary::builder::NodeBuilder;
 pub use wacore_binary::jid::Jid;
 pub use waproto;
@@ -43,6 +45,7 @@ pub mod socket;
 pub mod store;
 pub mod transport;
 pub mod upload;
+pub use upload::UploadOptions;
 
 pub mod pdo;
 pub mod prekeys;

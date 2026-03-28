@@ -157,6 +157,9 @@ pub fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
     if msg.sticker_message.is_some() {
         return Some("sticker");
     }
+    if msg.sticker_pack_message.is_some() {
+        return Some("sticker_pack");
+    }
     if let Some(ref loc) = msg.location_message {
         return if loc.is_live == Some(true) {
             Some("livelocation")

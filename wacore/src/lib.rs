@@ -32,10 +32,15 @@ pub mod runtime;
 pub mod send;
 pub mod session;
 pub mod stanza;
+pub mod sticker_pack;
+
 pub mod store;
 pub mod time;
 pub mod types;
 pub mod upload;
 pub mod usync;
+pub mod webp;
+
 pub mod version;
 pub mod xml;
+mod zip;

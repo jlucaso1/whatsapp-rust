@@ -5,7 +5,7 @@ use aes::cipher::{Block, BlockEncrypt, KeyInit};
 use anyhow::Result;
 use rand::RngExt;
 use rand::rng;
-use std::io::{Cursor, Read, Write};
+use std::io::{Read, Write};
 
 const BLOCK: usize = 16;
 
@@ -224,8 +224,22 @@ pub fn encrypt_media_streaming<R: Read, W: Write>(
 
 /// Encrypt media in memory.
 pub fn encrypt_media(plaintext: &[u8], media_type: MediaType) -> Result<EncryptedMedia> {
+    encrypt_media_with_key(plaintext, media_type, None)
+}
+
+/// Like `encrypt_media` but accepts an optional pre-existing key.
+pub fn encrypt_media_with_key(
+    plaintext: &[u8],
+    media_type: MediaType,
+    media_key: Option<&[u8; 32]>,
+) -> Result<EncryptedMedia> {
+    let mut enc = match media_key {
+        Some(key) => MediaEncryptor::with_key(*key, media_type)?,
+        None => MediaEncryptor::new(media_type)?,
+    };
     let mut data_to_upload = Vec::new();
-    let info = encrypt_media_streaming(Cursor::new(plaintext), &mut data_to_upload, media_type)?;
+    enc.update(plaintext, &mut data_to_upload);
+    let info = enc.finalize(&mut data_to_upload)?;
     Ok(EncryptedMedia {
         data_to_upload,
         media_key: info.media_key,
@@ -238,6 +252,7 @@ pub fn encrypt_media(plaintext: &[u8], media_type: MediaType) -> Result<Encrypte
 mod tests {
     use super::*;
     use crate::download::DownloadUtils;
+    use std::io::Cursor;
 
     #[test]
     fn roundtrip_decrypt_stream() {
