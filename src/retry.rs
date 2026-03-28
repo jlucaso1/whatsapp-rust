@@ -126,18 +126,22 @@ impl Client {
             .await;
 
         // Prevent concurrent retries for the same message+participant.
-        if !self.pending_retries.lock().await.insert(dedupe_key.clone()) {
+        if !self
+            .pending_retries
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .insert(dedupe_key.clone())
+        {
             log::debug!("Ignoring retry for {dedupe_key}: a retry is already in progress.");
             return Ok(());
         }
-        let _guard = scopeguard::guard((self.clone(), dedupe_key.clone()), |(client, key)| {
-            // Spawn an async task for cleanup because pending_retries uses an
-            // async mutex which cannot be locked inside a synchronous Drop.
-            let rt = client.runtime.clone();
-            rt.spawn(Box::pin(async move {
-                client.pending_retries.lock().await.remove(&key);
-            }))
-            .detach();
+        let pending = Arc::clone(&self.pending_retries);
+        let guard_key = dedupe_key.clone();
+        let _guard = scopeguard::guard((), move |()| {
+            pending
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .remove(&guard_key);
         });
 
         let original_msg = match self
