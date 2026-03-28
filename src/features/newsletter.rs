@@ -20,6 +20,7 @@ use waproto::whatsapp as wa;
 // Types
 
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+#[non_exhaustive]
 pub enum NewsletterMessageType {
     #[str = "text"]
     Text,
