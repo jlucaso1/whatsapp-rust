@@ -355,7 +355,7 @@ pub struct Client {
 
     pub(crate) sender_key_device_cache: crate::sender_key_device_cache::SenderKeyDeviceCache,
 
-    pub(crate) pending_retries: Arc<async_lock::Mutex<HashSet<String>>>,
+    pub(crate) pending_retries: Arc<std::sync::Mutex<HashSet<String>>>,
 
     /// Track retry attempts per message to prevent infinite retry loops.
     /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
@@ -652,7 +652,7 @@ impl Client {
                 &cache_config.sender_key_devices_cache,
             ),
 
-            pending_retries: Arc::new(async_lock::Mutex::new(HashSet::new())),
+            pending_retries: Arc::new(std::sync::Mutex::new(HashSet::new())),
 
             message_retry_counts: cache_config.message_retry_counts.build_with_ttl(),
 
@@ -854,10 +854,9 @@ impl Client {
         let handlers = self.chatstate_handlers.read().await.clone();
         for handler in handlers {
             let event_clone = event.clone();
-            let handler_clone = handler.clone();
             self.runtime
                 .spawn(Box::pin(async move {
-                    (handler_clone)(event_clone);
+                    (handler)(event_clone);
                 }))
                 .detach();
         }
@@ -1174,6 +1173,11 @@ impl Client {
         let (sig_sessions, sig_identities, sig_sender_keys) =
             self.signal_cache.entry_counts().await;
         let (lid_lid, lid_pn) = self.lid_pn_cache.entry_counts();
+        let pending_retries_count = self
+            .pending_retries
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .len();
 
         MemoryDiagnostics {
             group_cache: self
@@ -1195,7 +1199,7 @@ impl Client {
             message_enqueue_locks: self.message_enqueue_locks.entry_count(),
             response_waiters: self.response_waiters.lock().await.len(),
             node_waiters: self.node_waiter_count.load(Ordering::Relaxed),
-            pending_retries: self.pending_retries.lock().await.len(),
+            pending_retries: pending_retries_count,
             presence_subscriptions: self.presence_subscriptions.lock().await.len(),
             app_state_key_requests: self.app_state_key_requests.lock().await.len(),
             app_state_syncing: self.app_state_syncing.lock().await.len(),
