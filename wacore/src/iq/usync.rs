@@ -184,6 +184,7 @@ fn parse_picture_id_string(user_node: &Node) -> Option<String> {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub struct IsOnWhatsAppResult {
     pub jid: Jid,
     pub lid: Option<Jid>,

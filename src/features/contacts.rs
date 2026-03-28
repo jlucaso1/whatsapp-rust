@@ -174,24 +174,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_on_whatsapp_result_struct() {
-        let jid: Jid = "1234567890@s.whatsapp.net"
-            .parse()
-            .expect("test JID should be valid");
-        let result = IsOnWhatsAppResult {
-            jid,
-            lid: Some(Jid::lid("100000001")),
-            pn_jid: None,
-            is_registered: true,
-            is_business: false,
-        };
-
-        assert!(result.is_registered);
-        assert!(!result.is_business);
-        assert!(result.lid.is_some());
-    }
-
-    #[test]
     fn test_profile_picture_struct() {
         let pic = ProfilePicture {
             id: "123456789".to_string(),
