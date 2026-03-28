@@ -9,7 +9,7 @@ use anyhow::Result;
 use log::debug;
 use std::collections::HashMap;
 use wacore::iq::contacts::{ProfilePictureSpec, ProfilePictureType};
-use wacore::iq::usync::{IsOnWhatsAppSpec, IsOnWhatsAppUser, UserInfoSpec};
+use wacore::iq::usync::{IsOnWhatsAppQueryType, IsOnWhatsAppSpec, IsOnWhatsAppUser, UserInfoSpec};
 use wacore_binary::jid::{Jid, JidExt};
 
 // Re-export types from wacore
@@ -57,6 +57,8 @@ impl<'a> Contacts<'a> {
     /// Check if JIDs are registered on WhatsApp.
     ///
     /// Accepts both PN JIDs (`Jid::pn("1234567890")`) and LID JIDs (`Jid::lid("100000001")`).
+    /// PN and LID queries use different protocols (matching WA Web ExistsJob), so mixed
+    /// inputs are split into separate requests.
     pub async fn is_on_whatsapp(&self, jids: &[Jid]) -> Result<Vec<IsOnWhatsAppResult>> {
         if jids.is_empty() {
             return Ok(Vec::new());
@@ -64,22 +66,36 @@ impl<'a> Contacts<'a> {
 
         debug!("is_on_whatsapp: checking {} JIDs", jids.len());
 
-        let mut users = Vec::with_capacity(jids.len());
+        let mut pn_users = Vec::new();
+        let mut lid_users = Vec::new();
         for jid in jids {
-            let known_lid = if jid.is_pn() {
-                self.client.lid_pn_cache.get_current_lid(&jid.user).await
+            if jid.is_pn() {
+                let known_lid = self.client.lid_pn_cache.get_current_lid(&jid.user).await;
+                pn_users.push(IsOnWhatsAppUser {
+                    jid: jid.to_non_ad(),
+                    known_lid,
+                });
             } else {
-                None
-            };
-            users.push(IsOnWhatsAppUser {
-                jid: jid.to_non_ad(),
-                known_lid,
-            });
+                lid_users.push(IsOnWhatsAppUser {
+                    jid: jid.to_non_ad(),
+                    known_lid: None,
+                });
+            }
         }
 
-        let request_id = self.client.generate_request_id();
-        let spec = IsOnWhatsAppSpec::new(users, request_id);
-        let results = self.client.execute(spec).await?;
+        let mut results = Vec::new();
+
+        if !pn_users.is_empty() {
+            let sid = self.client.generate_request_id();
+            let spec = IsOnWhatsAppSpec::new(pn_users, sid, IsOnWhatsAppQueryType::Pn);
+            results.extend(self.client.execute(spec).await?);
+        }
+
+        if !lid_users.is_empty() {
+            let sid = self.client.generate_request_id();
+            let spec = IsOnWhatsAppSpec::new(lid_users, sid, IsOnWhatsAppQueryType::Lid);
+            results.extend(self.client.execute(spec).await?);
+        }
 
         self.persist_lid_mappings(results.iter().map(|r| (&r.jid, r.lid.as_ref())))
             .await;

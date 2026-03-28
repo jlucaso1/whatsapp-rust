@@ -203,35 +203,83 @@ pub struct UserInfo {
     pub is_business: bool,
 }
 
+/// Whether this is a phone-number or LID-based query.
+/// WA Web uses different query protocols for each (ExistsJob.js:24-43).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IsOnWhatsAppQueryType {
+    /// PN query: includes `<contact/>`, `<lid/>`, `<business>` protocols.
+    Pn,
+    /// LID query: includes only `<business>` protocol (no contact/lid).
+    Lid,
+}
+
 /// Check if JIDs are registered on WhatsApp.
 ///
-/// Mirrors WA Web's ExistsJob: queries `<contact/>`, `<lid/>`, and `<business/>` protocols.
+/// Mirrors WA Web's ExistsJob. Query protocols differ by type:
+/// - PN: `<contact/>`, `<lid/>`, `<business><verified_name/></business>`
+/// - LID: `<business><verified_name/></business>` only
 #[derive(Debug, Clone)]
 pub struct IsOnWhatsAppSpec {
     pub users: Vec<IsOnWhatsAppUser>,
     pub sid: String,
+    pub query_type: IsOnWhatsAppQueryType,
 }
 
 impl IsOnWhatsAppSpec {
-    pub fn new(users: Vec<IsOnWhatsAppUser>, sid: impl Into<String>) -> Self {
+    pub fn new(
+        users: Vec<IsOnWhatsAppUser>,
+        sid: impl Into<String>,
+        query_type: IsOnWhatsAppQueryType,
+    ) -> Self {
         Self {
             users,
             sid: sid.into(),
+            query_type,
         }
     }
+}
+
+fn build_business_query_node() -> Node {
+    NodeBuilder::new("business")
+        .children(vec![NodeBuilder::new("verified_name").build()])
+        .build()
+}
+
+/// Check `<usync><result>` for per-protocol errors (Usync.js:61-72).
+fn check_usync_result_errors(usync: &Node) -> Result<(), anyhow::Error> {
+    let Some(result_node) = usync.get_optional_child("result") else {
+        return Ok(());
+    };
+    for tag in ["contact", "lid", "business"] {
+        if let Some(protocol_node) = result_node.get_optional_child(tag)
+            && let Some(error_node) = protocol_node.get_optional_child("error")
+        {
+            let code = error_node
+                .attrs()
+                .optional_string("code")
+                .unwrap_or_default();
+            let text = error_node
+                .attrs()
+                .optional_string("text")
+                .unwrap_or_default();
+            return Err(anyhow!("usync {tag} error {code}: {text}"));
+        }
+    }
+    Ok(())
 }
 
 impl IqSpec for IsOnWhatsAppSpec {
     type Response = Vec<IsOnWhatsAppResult>;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        let query_node = NodeBuilder::new("query")
-            .children(vec![
-                NodeBuilder::new("contact").build(),
-                NodeBuilder::new("lid").build(),
-                NodeBuilder::new("business").build(),
-            ])
-            .build();
+        let mut query_children = Vec::new();
+        if self.query_type == IsOnWhatsAppQueryType::Pn {
+            query_children.push(NodeBuilder::new("contact").build());
+            query_children.push(NodeBuilder::new("lid").build());
+        }
+        query_children.push(build_business_query_node());
+
+        let query_node = NodeBuilder::new("query").children(query_children).build();
 
         let user_nodes = build_user_nodes(&self.users);
         let list_node = NodeBuilder::new("list").children(user_nodes).build();
@@ -256,6 +304,8 @@ impl IqSpec for IsOnWhatsAppSpec {
         let usync = response
             .get_optional_child("usync")
             .ok_or_else(|| anyhow!("Response missing <usync> node"))?;
+
+        check_usync_result_errors(usync)?;
 
         let list = usync
             .get_optional_child("list")
@@ -284,7 +334,7 @@ impl IqSpec for IsOnWhatsAppSpec {
             });
 
             let contact_node = user_node.get_optional_child("contact");
-            // LID queries without contact protocol: presence in response implies registered (ExistsJob.js:70)
+            // LID queries omit contact protocol; presence in response implies registered (ExistsJob.js:70)
             let is_registered = if jid.is_lid() && contact_node.is_none() {
                 true
             } else {
@@ -596,7 +646,11 @@ mod tests {
 
     #[test]
     fn test_is_on_whatsapp_spec_build_iq() {
-        let spec = IsOnWhatsAppSpec::new(vec![pn_user("1234567890")], "test-sid");
+        let spec = IsOnWhatsAppSpec::new(
+            vec![pn_user("1234567890")],
+            "test-sid",
+            IsOnWhatsAppQueryType::Pn,
+        );
         let iq = spec.build_iq();
 
         assert_eq!(iq.namespace, "usync");
@@ -631,14 +685,20 @@ mod tests {
                 known_lid: None,
             }],
             "test-sid",
+            IsOnWhatsAppQueryType::Lid,
         );
         let iq = spec.build_iq();
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             let usync = &nodes[0];
+            let query = usync.get_optional_child("query").unwrap();
+            // LID queries only include <business>, no <contact/> or <lid/>
+            assert!(query.get_optional_child("contact").is_none());
+            assert!(query.get_optional_child("lid").is_none());
+            assert!(query.get_optional_child("business").is_some());
+
             let list = usync.get_optional_child("list").unwrap();
             let user = list.get_children_by_tag("user").next().unwrap();
-            // LID user nodes use jid attribute, no <contact> child
             assert!(user.attrs.get("jid").is_some_and(|s| s == "100000001@lid"));
             assert!(user.get_optional_child("contact").is_none());
         } else {
@@ -654,6 +714,7 @@ mod tests {
                 known_lid: Some("100000001".to_string()),
             }],
             "sid",
+            IsOnWhatsAppQueryType::Pn,
         );
         let iq = spec.build_iq();
 
@@ -674,7 +735,11 @@ mod tests {
 
     #[test]
     fn test_is_on_whatsapp_spec_parse_response() {
-        let spec = IsOnWhatsAppSpec::new(vec![pn_user("1234567890")], "test-sid");
+        let spec = IsOnWhatsAppSpec::new(
+            vec![pn_user("1234567890")],
+            "test-sid",
+            IsOnWhatsAppQueryType::Pn,
+        );
 
         let response = NodeBuilder::new("iq")
             .attr("type", "result")
@@ -703,7 +768,11 @@ mod tests {
 
     #[test]
     fn test_is_on_whatsapp_spec_parse_not_registered() {
-        let spec = IsOnWhatsAppSpec::new(vec![pn_user("1234567890")], "test-sid");
+        let spec = IsOnWhatsAppSpec::new(
+            vec![pn_user("1234567890")],
+            "test-sid",
+            IsOnWhatsAppQueryType::Pn,
+        );
 
         let response = NodeBuilder::new("iq")
             .attr("type", "result")
@@ -732,6 +801,7 @@ mod tests {
                 known_lid: None,
             }],
             "test-sid",
+            IsOnWhatsAppQueryType::Lid,
         );
 
         let response = NodeBuilder::new("iq")
@@ -814,7 +884,11 @@ mod tests {
     #[test]
     fn test_pn_user_phone_formatting() {
         // PN JIDs always have the user part without +, build_user_nodes adds +
-        let spec = IsOnWhatsAppSpec::new(vec![pn_user("1234567890")], "sid");
+        let spec = IsOnWhatsAppSpec::new(
+            vec![pn_user("1234567890")],
+            "sid",
+            IsOnWhatsAppQueryType::Pn,
+        );
         let iq = spec.build_iq();
 
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
