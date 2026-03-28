@@ -98,7 +98,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                 let generation = client
                     .connection_generation
                     .load(std::sync::atomic::Ordering::SeqCst);
-                client.runtime.spawn(Box::pin(async move {
+                client.connection_tasks.spawn(&*client.runtime, Box::pin(async move {
                     // Check if connection was replaced before starting sync
                     if client_clone
                         .connection_generation
@@ -150,7 +150,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                             );
                         }
                     }
-                })).detach();
+                }));
             }
         }
         "account_sync" => {
@@ -244,9 +244,9 @@ async fn handle_prekey_low(client: &Arc<Client>) {
         .store(false, std::sync::atomic::Ordering::Relaxed);
 
     let client_clone = client.clone();
-    client
-        .runtime
-        .spawn(Box::pin(async move {
+    client.connection_tasks.spawn(
+        &*client.runtime,
+        Box::pin(async move {
             // Wait for offline delivery to complete first (matches WA Web's waitForOfflineDeliveryEnd).
             // Done BEFORE acquiring the lock so the lock isn't held during an
             // indefinite wait that could block digest-key or other upload paths.
@@ -279,8 +279,8 @@ async fn handle_prekey_low(client: &Arc<Client>) {
                     e
                 );
             }
-        }))
-        .detach();
+        }),
+    );
 }
 
 /// Handle encrypt/digest notification (Digest Key validation).
@@ -293,15 +293,15 @@ async fn handle_prekey_low(client: &Arc<Client>) {
 /// preventing concurrent uploads that could race on prekey ID allocation.
 fn handle_digest_key(client: &Arc<Client>) {
     let client_clone = client.clone();
-    client
-        .runtime
-        .spawn(Box::pin(async move {
+    client.connection_tasks.spawn(
+        &*client.runtime,
+        Box::pin(async move {
             let _guard = client_clone.prekey_upload_lock.lock().await;
             if let Err(e) = client_clone.validate_digest_key().await {
                 warn!("Digest key validation failed: {:?}", e);
             }
-        }))
-        .detach();
+        }),
+    );
 }
 
 /// Handle device list change notifications.

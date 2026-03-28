@@ -67,8 +67,9 @@ impl Client {
             let client_clone = Arc::clone(self);
             // Arc clone is cheap - just reference count increment
             let node_clone = Arc::clone(&node);
-            self.runtime
-                .spawn(Box::pin(async move {
+            self.connection_tasks.spawn(
+                &*self.runtime,
+                Box::pin(async move {
                     if let Err(e) = client_clone
                         .handle_retry_receipt(&receipt, &node_clone)
                         .await
@@ -79,8 +80,8 @@ impl Client {
                             e
                         );
                     }
-                }))
-                .detach();
+                }),
+            );
         } else if receipt_type == ReceiptType::EncRekeyRetry {
             // WA Web: both "retry" and "enc_rekey_retry" route through
             // handleMessageRetryRequest, but enc_rekey_retry branches to the

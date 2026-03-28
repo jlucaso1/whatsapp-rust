@@ -67,9 +67,9 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 let client_clone = client.clone();
 
                 // Groups/newsletter_metadata: wait for offline sync per WAWebHandleDirtyBits.
-                client
-                    .runtime
-                    .spawn(Box::pin(async move {
+                client.connection_tasks.spawn(
+                    &*client.runtime,
+                    Box::pin(async move {
                         if needs_offline_wait {
                             client_clone.wait_for_offline_delivery_end().await;
                         }
@@ -98,8 +98,8 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                                 warn!("App state re-sync after dirty notification failed: {e:?}");
                             }
                         }
-                    }))
-                    .detach();
+                    }),
+                );
             }
             "edge_routing" => {
                 // Edge routing info is used for optimized reconnection to WhatsApp servers.

@@ -128,39 +128,42 @@ impl PersistenceManager {
         }
     }
 
-    pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
+    pub fn run_background_saver(
+        self: Arc<Self>,
+        runtime: Arc<dyn Runtime>,
+        interval: Duration,
+    ) -> wacore::runtime::AbortHandle {
         let rt = runtime.clone();
         let weak = Arc::downgrade(&self);
         drop(self); // Release the strong reference; the caller's Arc keeps it alive
-        runtime
-            .spawn(Box::pin(async move {
-                loop {
-                    let Some(this) = weak.upgrade() else {
-                        debug!("PersistenceManager dropped, exiting background saver.");
-                        return;
-                    };
-                    // Create the listener BEFORE the event can fire to avoid missing notifications.
-                    let listener = this.save_notify.listen();
-                    drop(this); // Don't hold strong ref while sleeping
+        let handle = runtime.spawn(Box::pin(async move {
+            loop {
+                let Some(this) = weak.upgrade() else {
+                    debug!("PersistenceManager dropped, exiting background saver.");
+                    return;
+                };
+                // Create the listener BEFORE the event can fire to avoid missing notifications.
+                let listener = this.save_notify.listen();
+                drop(this); // Don't hold strong ref while sleeping
 
-                    futures::select! {
-                        _ = listener.fuse() => {
-                            debug!("Save notification received.");
-                        }
-                        _ = rt.sleep(interval).fuse() => {}
+                futures::select! {
+                    _ = listener.fuse() => {
+                        debug!("Save notification received.");
                     }
-
-                    let Some(this) = weak.upgrade() else {
-                        debug!("PersistenceManager dropped, exiting background saver.");
-                        return;
-                    };
-                    if let Err(e) = this.save_to_disk().await {
-                        error!("Error saving device state in background: {e}");
-                    }
+                    _ = rt.sleep(interval).fuse() => {}
                 }
-            }))
-            .detach();
+
+                let Some(this) = weak.upgrade() else {
+                    debug!("PersistenceManager dropped, exiting background saver.");
+                    return;
+                };
+                if let Err(e) = this.save_to_disk().await {
+                    error!("Error saving device state in background: {e}");
+                }
+            }
+        }));
         debug!("Background saver task started with interval {interval:?}");
+        handle
     }
 }
 

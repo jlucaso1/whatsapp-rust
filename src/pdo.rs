@@ -438,8 +438,9 @@ impl Client {
         let client_clone = Arc::clone(self);
         let info_clone = info.clone();
 
-        self.runtime
-            .spawn(Box::pin(async move {
+        self.connection_tasks.spawn(
+            &*self.runtime,
+            Box::pin(async move {
                 if !immediate {
                     // Add a small delay to allow the retry receipt to be processed first
                     // This avoids overwhelming the phone with simultaneous requests
@@ -455,8 +456,8 @@ impl Client {
                         info_clone.id, info_clone.source.sender, e
                     );
                 }
-            }))
-            .detach();
+            }),
+        );
     }
 
     /// Spawns a PDO request for a message that failed to decrypt.

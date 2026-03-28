@@ -650,7 +650,7 @@ impl BotBuilder<Provided, Provided, Provided, Provided> {
                 .map_err(|e| anyhow::anyhow!("Failed to create persistence manager: {}", e))?,
         );
 
-        persistence_manager
+        let bg_saver_handle = persistence_manager
             .clone()
             .run_background_saver(runtime.clone(), std::time::Duration::from_secs(30));
 
@@ -686,6 +686,9 @@ impl BotBuilder<Provided, Provided, Provided, Provided> {
             self.cache_config,
         )
         .await;
+
+        // Track the background saver on the client's lifetime
+        client.client_tasks.track(bg_saver_handle);
 
         // Register custom enc handlers
         for (enc_type, handler) in self.custom_enc_handlers {

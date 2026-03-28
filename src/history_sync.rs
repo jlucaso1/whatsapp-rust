@@ -180,11 +180,12 @@ impl Client {
                 let _ = result_tx.send(result);
             }));
             // Drive the blocking future to completion in the background
-            self.runtime
-                .spawn(Box::pin(async move {
+            self.connection_tasks.spawn(
+                &*self.runtime,
+                Box::pin(async move {
                     blocking_fut.await;
-                }))
-                .detach();
+                }),
+            );
 
             // Receive and dispatch lazy conversations as they come in
             let mut conv_count = 0usize;

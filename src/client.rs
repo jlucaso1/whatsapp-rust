@@ -156,6 +156,9 @@ pub struct MemoryDiagnostics {
     // -- Misc --
     pub chatstate_handlers: usize,
     pub custom_enc_handlers: usize,
+    // -- Task trackers --
+    pub connection_tasks: usize,
+    pub client_tasks: usize,
 }
 
 #[cfg(feature = "debug-diagnostics")]
@@ -225,6 +228,9 @@ impl std::fmt::Display for MemoryDiagnostics {
         writeln!(f, "--- Misc ---")?;
         writeln!(f, "  chatstate_handlers:     {}", self.chatstate_handlers)?;
         writeln!(f, "  custom_enc_handlers:    {}", self.custom_enc_handlers)?;
+        writeln!(f, "--- Task trackers ---")?;
+        writeln!(f, "  connection_tasks:       {}", self.connection_tasks)?;
+        writeln!(f, "  client_tasks:           {}", self.client_tasks)?;
         Ok(())
     }
 }
@@ -446,6 +452,11 @@ pub struct Client {
     /// Cache configuration for TTL and capacity of all caches.
     /// Stored for use by lazily-initialized caches (group_cache).
     pub(crate) cache_config: CacheConfig,
+
+    /// Tasks aborted on disconnect (keepalive, app state sync, QR rotation, etc.).
+    pub(crate) connection_tasks: wacore::runtime::TaskTracker,
+    /// Tasks that live for the Client's lifetime (persistence saver, device registry cleanup).
+    pub(crate) client_tasks: wacore::runtime::TaskTracker,
 }
 
 impl Client {
@@ -699,27 +710,31 @@ impl Client {
             override_version,
             skip_history_sync: AtomicBool::new(false),
             cache_config,
+            connection_tasks: wacore::runtime::TaskTracker::new(),
+            client_tasks: wacore::runtime::TaskTracker::new(),
         };
 
         let arc = Arc::new(this);
 
         // Warm up the LID-PN cache from persistent storage
         let warm_up_arc = arc.clone();
-        arc.runtime
-            .spawn(Box::pin(async move {
+        arc.client_tasks.spawn(
+            &*arc.runtime,
+            Box::pin(async move {
                 if let Err(e) = warm_up_arc.warm_up_lid_pn_cache().await {
                     warn!("Failed to warm up LID-PN cache: {e}");
                 }
-            }))
-            .detach();
+            }),
+        );
 
         // Start background task to clean up stale device registry entries
         let cleanup_arc = arc.clone();
-        arc.runtime
-            .spawn(Box::pin(async move {
+        arc.client_tasks.spawn(
+            &*arc.runtime,
+            Box::pin(async move {
                 cleanup_arc.device_registry_cleanup_loop().await;
-            }))
-            .detach();
+            }),
+        );
 
         (arc, rx)
     }
@@ -992,9 +1007,10 @@ impl Client {
         self.socket_ready_notifier.notify(usize::MAX);
 
         let client_clone = self.clone();
-        self.runtime
-            .spawn(Box::pin(async move { client_clone.keepalive_loop().await }))
-            .detach();
+        self.connection_tasks.spawn(
+            &*self.runtime,
+            Box::pin(async move { client_clone.keepalive_loop().await }),
+        );
 
         Ok(())
     }
@@ -1092,11 +1108,13 @@ impl Client {
         // sent_node_waiters ARE cleared because they match pre-encryption
         // outgoing stanzas, which are transport-scoped.
         self.clear_sent_node_waiters();
+        // Abort all connection-scoped tasks (keepalive, app state sync, etc.)
+        // before tearing down transport so they don't race on stale state.
+        self.connection_tasks.abort_all();
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
         // Signal the keepalive loop (and any other tasks) to exit promptly.
-        // Without this, a stale keepalive loop can overlap with the next one
-        // after reconnect, causing duplicate pings.
+        // Kept as belt-and-suspenders alongside connection_tasks.abort_all().
         self.shutdown_notifier.notify(usize::MAX);
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
@@ -1106,6 +1124,8 @@ impl Client {
         // checks the socket, but this ordering avoids a confusing state window.
         self.is_connected.store(false, Ordering::Release);
         self.retried_group_messages.invalidate_all();
+        // Drop per-chat message queue senders so workers exit via channel close.
+        self.message_queues.invalidate_all();
         // Clear pending retries so stale keys from detached scopeguard
         // cleanup don't suppress the first retry after reconnect.
         self.pending_retries
@@ -1214,6 +1234,8 @@ impl Client {
             signal_cache_sender_keys: sig_sender_keys,
             chatstate_handlers: self.chatstate_handlers.read().await.len(),
             custom_enc_handlers: self.custom_enc_handlers.read().await.len(),
+            connection_tasks: self.connection_tasks.len(),
+            client_tasks: self.client_tasks.len(),
         }
     }
 
@@ -1282,9 +1304,9 @@ impl Client {
                                             self.process_decrypted_node(node).await;
                                         } else {
                                             let client = self.clone();
-                                            self.runtime.spawn(Box::pin(async move {
+                                            self.connection_tasks.spawn(&*self.runtime, Box::pin(async move {
                                                 client.process_decrypted_node(node).await;
-                                            })).detach();
+                                            }));
                                         }
                                     }
 
@@ -1778,7 +1800,7 @@ impl Client {
 
         let client_clone = self.clone();
         let task_generation = current_generation;
-        self.runtime.spawn(Box::pin(async move {
+        self.connection_tasks.spawn(&*self.runtime, Box::pin(async move {
             // Macro to check if this task is still valid (connection hasn't been replaced)
             macro_rules! check_generation {
                 () => {
@@ -1873,7 +1895,7 @@ impl Client {
             // Background initialization queries (can run in parallel, non-blocking)
             let bg_client = client_clone.clone();
             let bg_generation = task_generation;
-            client_clone.runtime.spawn(Box::pin(async move {
+            client_clone.connection_tasks.spawn(&*client_clone.runtime, Box::pin(async move {
                 // Check connection and generation before starting background queries
                 if bg_client.connection_generation.load(Ordering::SeqCst) != bg_generation {
                     debug!("Skipping background init queries: connection generation changed");
@@ -1919,7 +1941,7 @@ impl Client {
                 {
                     warn!("Background init: Failed to prune expired tc_tokens: {e:?}");
                 }
-            })).detach();
+            }));
 
             check_generation!();
 
@@ -2030,7 +2052,7 @@ impl Client {
                 // Spawn remaining non-critical collections in background
                 let sync_client = client_clone.clone();
                 let sync_generation = task_generation;
-                client_clone.runtime.spawn(Box::pin(async move {
+                client_clone.connection_tasks.spawn(&*client_clone.runtime, Box::pin(async move {
                     if sync_client.connection_generation.load(Ordering::SeqCst) != sync_generation {
                         debug!("App state sync cancelled: connection generation changed");
                         return;
@@ -2051,7 +2073,7 @@ impl Client {
                         .needs_initial_full_sync
                         .store(false, Ordering::Relaxed);
                     debug!(target: "Client/AppState", "Initial App State Sync Completed.");
-                })).detach();
+                }));
             } else {
                 // === Reconnection path ===
                 // Pushname is already known, send presence and Connected immediately.
@@ -2074,7 +2096,7 @@ impl Client {
 
                 client_clone.dispatch_connected();
             }
-        })).detach();
+        }));
     }
 
     /// Handles incoming `<ack/>` stanzas by resolving pending response waiters.
@@ -3341,15 +3363,16 @@ impl Client {
         ));
 
         let client_clone = self.clone();
-        self.runtime
-            .spawn(Box::pin(async move {
+        self.connection_tasks.spawn(
+            &*self.runtime,
+            Box::pin(async move {
                 if let Err(e) = client_clone.presence().set_available().await {
                     log::warn!("Failed to send presence after push name update: {:?}", e);
                 } else {
                     log::debug!("Sent presence after push name update.");
                 }
-            }))
-            .detach();
+            }),
+        );
     }
 
     pub async fn get_push_name(&self) -> String {

@@ -145,11 +145,11 @@ impl Client {
                                 let backend = self.persistence_manager.backend();
                                 let cutoff = wacore::time::now_secs()
                                     - sent_msg_ttl as i64;
-                                self.runtime.spawn(Box::pin(async move {
+                                self.connection_tasks.spawn(&*self.runtime, Box::pin(async move {
                                     if let Err(e) = backend.delete_expired_sent_messages(cutoff).await {
                                         log::debug!(target: "Client/Keepalive", "Sent message cleanup error: {e}");
                                     }
-                                })).detach();
+                                }));
                             }
                         }
                         KeepaliveResult::FatalFailure => {

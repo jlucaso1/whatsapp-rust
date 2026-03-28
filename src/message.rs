@@ -192,7 +192,7 @@ impl Client {
         let client = Arc::clone(self);
         let info = info.clone();
 
-        self.runtime.spawn(Box::pin(async move {
+        self.connection_tasks.spawn(&*self.runtime, Box::pin(async move {
             let cache_key = client
                 .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
                 .await;
@@ -247,7 +247,7 @@ impl Client {
             if retry_count == 1 {
                 client.spawn_pdo_request(&info);
             }
-        })).detach();
+        }));
     }
 
     pub(crate) async fn handle_incoming_message(self: Arc<Self>, node: Arc<Node>) {
@@ -434,8 +434,9 @@ impl Client {
                 let enc_node_clone = Arc::new(enc_node.clone());
                 let enc_type_owned = enc_type.to_string();
 
-                self.runtime
-                    .spawn(Box::pin(async move {
+                self.connection_tasks.spawn(
+                    &*self.runtime,
+                    Box::pin(async move {
                         if let Err(e) = handler_clone
                             .handle(client_clone, &enc_node_clone, &info_arc)
                             .await
@@ -445,8 +446,8 @@ impl Client {
                                 enc_type_owned
                             );
                         }
-                    }))
-                    .detach();
+                    }),
+                );
                 continue;
             }
 

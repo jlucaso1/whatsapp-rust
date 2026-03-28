@@ -64,9 +64,9 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     let codes_clone = codes.clone();
                     let client_clone = client.clone();
 
-                    client
-                        .runtime
-                        .spawn(Box::pin(async move {
+                    client.connection_tasks.spawn(
+                        &*client.runtime,
+                        Box::pin(async move {
                             // The rotation logic is now inside the library
                             let mut is_first = true;
 
@@ -99,8 +99,8 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                             }
                             info!("All QR codes for this session have expired.");
                             client_clone.disconnect().await;
-                        }))
-                        .detach();
+                        }),
+                    );
 
                     *client.pairing_cancellation_tx.lock().await = Some(stop_tx);
 
@@ -291,12 +291,12 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             }
 
             let client_for_unified = client.clone();
-            client
-                .runtime
-                .spawn(Box::pin(async move {
+            client.connection_tasks.spawn(
+                &*client.runtime,
+                Box::pin(async move {
                     client_for_unified.send_unified_session().await;
-                }))
-                .detach();
+                }),
+            );
 
             // --- START: FIX ---
             // Set the flag to trigger a full sync on the next successful connection.

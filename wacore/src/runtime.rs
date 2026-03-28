@@ -64,6 +64,7 @@ pub trait Runtime: Send + Sync + 'static {
 /// Uses `std::sync::Mutex` internally so that the handle is `Send + Sync`,
 /// which is required because it may be stored inside structs shared across
 /// tasks (e.g. `NoiseSocket` behind an `Arc`).
+#[must_use = "dropping an AbortHandle aborts the task; use .detach() for fire-and-forget or track it via TaskTracker"]
 pub struct AbortHandle {
     abort_fn: std::sync::Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
 }
@@ -108,6 +109,81 @@ impl AbortHandle {
 impl Drop for AbortHandle {
     fn drop(&mut self) {
         self.abort();
+    }
+}
+
+/// Tracks spawned tasks and aborts them all on demand or when dropped.
+///
+/// Two intended scopes:
+/// - **Connection-scoped**: aborted on disconnect via `abort_all()`.
+/// - **Client-scoped**: aborted when the owning struct is dropped.
+pub struct TaskTracker {
+    handles: std::sync::Mutex<Vec<AbortHandle>>,
+}
+
+impl TaskTracker {
+    pub fn new() -> Self {
+        Self {
+            handles: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Store an existing `AbortHandle` so it will be aborted on `abort_all()` / drop.
+    pub fn track(&self, handle: AbortHandle) {
+        self.handles
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .push(handle);
+    }
+
+    /// Abort every tracked task and clear the list.
+    pub fn abort_all(&self) {
+        let handles = std::mem::take(&mut *self.handles.lock().unwrap_or_else(|p| p.into_inner()));
+        for handle in handles {
+            handle.abort();
+        }
+    }
+
+    /// Number of tracked handles (includes already-completed tasks).
+    pub fn len(&self) -> usize {
+        self.handles.lock().unwrap_or_else(|p| p.into_inner()).len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+}
+
+impl Default for TaskTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for TaskTracker {
+    fn drop(&mut self) {
+        self.abort_all();
+    }
+}
+
+/// Convenience methods that depend on `Runtime`. Cfg-gated for Send bounds.
+#[cfg(not(target_arch = "wasm32"))]
+impl TaskTracker {
+    /// Spawn a future via the given runtime and track the handle.
+    pub fn spawn(
+        &self,
+        rt: &dyn Runtime,
+        future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
+    ) {
+        self.track(rt.spawn(future));
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl TaskTracker {
+    /// Spawn a future via the given runtime and track the handle.
+    pub fn spawn(&self, rt: &dyn Runtime, future: Pin<Box<dyn Future<Output = ()> + 'static>>) {
+        self.track(rt.spawn(future));
     }
 }
 
