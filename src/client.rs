@@ -1106,6 +1106,10 @@ impl Client {
         // checks the socket, but this ordering avoids a confusing state window.
         self.is_connected.store(false, Ordering::Release);
         self.retried_group_messages.invalidate_all();
+        // Drop per-chat message queue senders so workers exit via channel close.
+        // Without this, stale workers from the old connection survive reconnects
+        // holding outdated signal/crypto state.
+        self.message_queues.invalidate_all();
         // Clear pending retries so stale keys from detached scopeguard
         // cleanup don't suppress the first retry after reconnect.
         self.pending_retries

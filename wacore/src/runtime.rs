@@ -64,6 +64,7 @@ pub trait Runtime: Send + Sync + 'static {
 /// Uses `std::sync::Mutex` internally so that the handle is `Send + Sync`,
 /// which is required because it may be stored inside structs shared across
 /// tasks (e.g. `NoiseSocket` behind an `Arc`).
+#[must_use = "dropping an AbortHandle aborts the task; use .detach() for fire-and-forget"]
 pub struct AbortHandle {
     abort_fn: std::sync::Mutex<Option<Box<dyn FnOnce() + Send + 'static>>>,
 }
