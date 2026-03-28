@@ -1303,10 +1303,12 @@ impl Client {
                                         if process_inline {
                                             self.process_decrypted_node(node).await;
                                         } else {
+                                            // Per-stanza processing: fire-and-forget since
+                                            // the message loop itself exits on disconnect.
                                             let client = self.clone();
-                                            self.connection_tasks.spawn(&*self.runtime, Box::pin(async move {
+                                            self.runtime.spawn(Box::pin(async move {
                                                 client.process_decrypted_node(node).await;
-                                            }));
+                                            })).detach();
                                         }
                                     }
 
