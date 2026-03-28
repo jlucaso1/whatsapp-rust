@@ -132,9 +132,10 @@ impl Client {
     /// Increments the retry count for a message and returns the new count.
     /// Returns `None` if max retries have been reached.
     ///
-    /// Note: get-then-insert has a theoretical TOCTOU window, but messages are
-    /// processed sequentially per-chat (mailbox pattern in MessageHandler), so
-    /// concurrent increments for the same cache_key are practically impossible.
+    /// Note: get-then-insert has a theoretical TOCTOU window since
+    /// `spawn_retry_receipt` detaches. In practice, retries for the same
+    /// message are rare and a double-send is benign (recipients deduplicate
+    /// by message ID).
     async fn increment_retry_count(&self, cache_key: &str) -> Option<u8> {
         let current = self.message_retry_counts.get(&cache_key.to_string()).await;
         match current {

@@ -51,10 +51,9 @@ where
     }
 
     fn remove_key(&mut self, key: &K) -> Option<CacheEntry<V>> {
-        // Lazy deletion: remove from map but leave stale key in insertion_order.
-        // Stale keys are skipped during FIFO eviction (map.remove returns None).
-        // run_pending_tasks() periodically compacts insertion_order.
-        self.map.remove(key)
+        let entry = self.map.remove(key)?;
+        self.insertion_order.retain(|ik| ik != key);
+        Some(entry)
     }
 }
 
