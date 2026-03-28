@@ -251,7 +251,11 @@ impl Client {
             match self.groups().query_info(&receipt.source.chat).await {
                 Ok(info) => Some(info),
                 Err(e) => {
-                    log::warn!("Failed to fetch group info for retry: {e}");
+                    log::warn!(
+                        "Failed to fetch group info for retry of msg {} in {}: {e}",
+                        message_id,
+                        receipt.source.chat
+                    );
                     None
                 }
             }

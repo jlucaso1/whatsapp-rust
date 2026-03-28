@@ -254,7 +254,9 @@ impl Client {
         let info = match self.parse_message_info(&node).await {
             Ok(info) => Arc::new(info),
             Err(e) => {
-                log::warn!("Failed to parse message info: {e:?}");
+                let id = node.attrs.get("id").map(|v| v.as_str());
+                let from = node.attrs.get("from").map(|v| v.as_str());
+                log::warn!("Failed to parse message info (id={id:?}, from={from:?}): {e:?}");
                 return;
             }
         };
@@ -598,7 +600,12 @@ impl Client {
                         // Processed successfully or handled errors (e.g. sent retry receipt)
                     }
                     Err(e) => {
-                        log::warn!("Batch group decrypt encountered error (continuing): {e:?}");
+                        log::warn!(
+                            "[msg:{}] Batch group decrypt from {} in {} failed: {e:?}",
+                            info.id,
+                            info.source.sender,
+                            info.source.chat
+                        );
                     }
                 }
             } else {
@@ -780,7 +787,11 @@ impl Client {
                         )
                         .await
                     {
-                        log::warn!("Failed processing plaintext (batch session): {e:?}");
+                        log::warn!(
+                            "[msg:{}] Failed processing plaintext from {}: {e:?}",
+                            info.id,
+                            info.source.sender
+                        );
                     }
                 }
                 Err(e) => {
