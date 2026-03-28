@@ -100,7 +100,11 @@ fn build_user_nodes(users: &[IsOnWhatsAppUser]) -> Vec<Node> {
         .iter()
         .map(|user| {
             if user.jid.is_pn() {
-                let phone = format!("+{}", user.jid.user);
+                let phone = if user.jid.user.starts_with('+') {
+                    user.jid.user.clone()
+                } else {
+                    format!("+{}", user.jid.user)
+                };
                 let mut children = vec![NodeBuilder::new("contact").string_content(phone).build()];
                 if let Some(lid) = &user.known_lid {
                     children.push(

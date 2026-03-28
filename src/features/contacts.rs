@@ -83,12 +83,13 @@ impl<'a> Contacts<'a> {
 
         self.persist_lid_mappings(results.iter().map(|r| (&r.jid, r.lid.as_ref())))
             .await;
-        self.persist_lid_mappings(
-            results
-                .iter()
-                .filter(|r| r.jid.is_lid() && r.pn_jid.is_some())
-                .map(|r| (r.pn_jid.as_ref().unwrap(), Some(&r.jid))),
-        )
+        self.persist_lid_mappings(results.iter().filter_map(|r| {
+            if r.jid.is_lid() {
+                r.pn_jid.as_ref().map(|pn| (pn, Some(&r.jid)))
+            } else {
+                None
+            }
+        }))
         .await;
 
         Ok(results)
