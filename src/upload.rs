@@ -241,21 +241,61 @@ pub struct UploadResponse {
     pub media_key_timestamp: i64,
 }
 
+impl From<UploadResponse> for wacore::sticker_pack::MediaUploadInfo {
+    fn from(r: UploadResponse) -> Self {
+        Self::new(
+            r.direct_path,
+            r.media_key,
+            r.file_sha256,
+            r.file_enc_sha256,
+            r.file_length,
+            r.media_key_timestamp,
+        )
+    }
+}
+
 #[derive(Deserialize)]
 struct RawUploadResponse {
     url: String,
     direct_path: String,
 }
 
+#[non_exhaustive]
+#[derive(Default, Clone, Debug)]
+pub struct UploadOptions {
+    /// Reuse an existing media key instead of generating a fresh one.
+    pub media_key: Option<Vec<u8>>,
+}
+
+impl UploadOptions {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_media_key(mut self, key: Vec<u8>) -> Self {
+        self.media_key = Some(key);
+        self
+    }
+}
+
 impl Client {
-    /// Encrypts and uploads media to WhatsApp's CDN with a fresh key.
+    /// Encrypts and uploads media to WhatsApp's CDN.
     ///
     /// Only needed for new or modified media. To forward existing media unchanged,
     /// reuse the original message's CDN fields directly, no round-trip required.
-    pub async fn upload(&self, data: Vec<u8>, media_type: MediaType) -> Result<UploadResponse> {
+    pub async fn upload(
+        &self,
+        data: Vec<u8>,
+        media_type: MediaType,
+        options: UploadOptions,
+    ) -> Result<UploadResponse> {
         let file_length = data.len() as u64;
         let enc = wacore::runtime::blocking(&*self.runtime, move || {
-            wacore::upload::encrypt_media(&data, media_type)
+            let key_ref = options
+                .media_key
+                .as_ref()
+                .and_then(|k| <&[u8; 32]>::try_from(k.as_slice()).ok());
+            wacore::upload::encrypt_media_with_key(&data, media_type, key_ref)
         })
         .await?;
 

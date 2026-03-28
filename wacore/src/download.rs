@@ -23,6 +23,7 @@ pub enum MediaDecryptionError {
     Other(#[from] anyhow::Error),
 }
 
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MediaType {
     Image,
@@ -33,6 +34,7 @@ pub enum MediaType {
     AppState,
     Sticker,
     StickerPack,
+    StickerPackThumbnail,
     LinkThumbnail,
     /// Product catalog image — unencrypted, uploads to `/product/image`.
     /// WA Web: CreateMediaKeys.js throws for this type (no encryption).
@@ -50,6 +52,7 @@ impl MediaType {
             MediaType::AppState => "WhatsApp App State Keys",
             MediaType::Sticker => "WhatsApp Image Keys",
             MediaType::StickerPack => "WhatsApp Sticker Pack Keys",
+            MediaType::StickerPackThumbnail => "WhatsApp Sticker Pack Thumbnail Keys",
             MediaType::LinkThumbnail => "WhatsApp Link Thumbnail Keys",
             // Unencrypted: app_info unused, but keep a value for the type system.
             MediaType::ProductCatalogImage => "WhatsApp Image Keys",
@@ -67,6 +70,7 @@ impl MediaType {
             MediaType::History => "md-msg-hist",
             MediaType::AppState => "md-app-state",
             MediaType::StickerPack => "sticker-pack",
+            MediaType::StickerPackThumbnail => "thumbnail-sticker-pack",
             MediaType::LinkThumbnail => "thumbnail-link",
             MediaType::ProductCatalogImage => "product-catalog-image",
         }
@@ -82,6 +86,7 @@ impl MediaType {
             MediaType::History => "/mms/md-msg-hist",
             MediaType::AppState => "/mms/md-app-state",
             MediaType::StickerPack => "/mms/sticker-pack",
+            MediaType::StickerPackThumbnail => "/mms/thumbnail-sticker-pack",
             MediaType::LinkThumbnail => "/mms/thumbnail-link",
             MediaType::ProductCatalogImage => "/product/image",
         }
@@ -196,6 +201,11 @@ impl_downloadable!(
 );
 impl_downloadable!(wa::message::AudioMessage, MediaType::Audio, file_length);
 impl_downloadable!(wa::message::StickerMessage, MediaType::Sticker, file_length);
+impl_downloadable!(
+    wa::message::StickerPackMessage,
+    MediaType::StickerPack,
+    file_length
+);
 impl_downloadable!(ExternalBlobReference, MediaType::AppState, file_size_bytes);
 impl_downloadable!(HistorySyncNotification, MediaType::History, file_length);
 

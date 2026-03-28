@@ -97,7 +97,10 @@ async fn test_upload_image() -> anyhow::Result<()> {
 
     let data = vec![0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10]; // fake JPEG header
 
-    let resp = client.client.upload(data.clone(), MediaType::Image).await?;
+    let resp = client
+        .client
+        .upload(data.clone(), MediaType::Image, Default::default())
+        .await?;
 
     info!(
         "Upload response: url={}, direct_path={}",
@@ -131,7 +134,10 @@ async fn test_upload_video() -> anyhow::Result<()> {
     let client = TestClient::connect("e2e_upload_vid").await?;
 
     let data = vec![0u8; 64]; // fake video bytes
-    let resp = client.client.upload(data.clone(), MediaType::Video).await?;
+    let resp = client
+        .client
+        .upload(data.clone(), MediaType::Video, Default::default())
+        .await?;
 
     assert!(!resp.url.is_empty());
     assert!(!resp.direct_path.is_empty());
@@ -150,7 +156,7 @@ async fn test_upload_document() -> anyhow::Result<()> {
     let data = b"%PDF-1.4 fake pdf content for testing purposes".to_vec();
     let resp = client
         .client
-        .upload(data.clone(), MediaType::Document)
+        .upload(data.clone(), MediaType::Document, Default::default())
         .await?;
 
     assert!(!resp.url.is_empty());
@@ -168,7 +174,10 @@ async fn test_upload_audio() -> anyhow::Result<()> {
     let client = TestClient::connect("e2e_upload_aud").await?;
 
     let data = vec![0u8; 64]; // fake audio bytes
-    let resp = client.client.upload(data.clone(), MediaType::Audio).await?;
+    let resp = client
+        .client
+        .upload(data.clone(), MediaType::Audio, Default::default())
+        .await?;
 
     assert!(!resp.url.is_empty());
     assert!(!resp.direct_path.is_empty());
@@ -189,7 +198,7 @@ async fn test_upload_then_download_image() -> anyhow::Result<()> {
     let original = b"JPEG image content for round-trip test".to_vec();
     let upload = client
         .client
-        .upload(original.clone(), MediaType::Image)
+        .upload(original.clone(), MediaType::Image, Default::default())
         .await?;
 
     info!("Uploaded: direct_path={}", upload.direct_path);
@@ -225,7 +234,7 @@ async fn test_upload_then_download_video() -> anyhow::Result<()> {
     let original = vec![0xAB; 64]; // fake video
     let upload = client
         .client
-        .upload(original.clone(), MediaType::Video)
+        .upload(original.clone(), MediaType::Video, Default::default())
         .await?;
 
     let downloaded = client
@@ -255,7 +264,7 @@ async fn test_upload_then_download_document() -> anyhow::Result<()> {
     let original = b"PDF document content for testing".to_vec();
     let upload = client
         .client
-        .upload(original.clone(), MediaType::Document)
+        .upload(original.clone(), MediaType::Document, Default::default())
         .await?;
 
     let downloaded = client
@@ -285,7 +294,7 @@ async fn test_upload_then_download_via_downloadable_trait() -> anyhow::Result<()
     let original = b"Testing Downloadable trait with ImageMessage".to_vec();
     let upload = client
         .client
-        .upload(original.clone(), MediaType::Image)
+        .upload(original.clone(), MediaType::Image, Default::default())
         .await?;
 
     // Build an ImageMessage (which implements Downloadable)
@@ -319,7 +328,7 @@ async fn test_upload_then_download_to_writer() -> anyhow::Result<()> {
     let original = b"Streaming download test content".to_vec();
     let upload = client
         .client
-        .upload(original.clone(), MediaType::Image)
+        .upload(original.clone(), MediaType::Image, Default::default())
         .await?;
 
     let cursor = std::io::Cursor::new(Vec::<u8>::new());
@@ -362,7 +371,7 @@ async fn test_send_image_message() -> anyhow::Result<()> {
     let original = b"Image bytes sent from A to B".to_vec();
     let upload = client_a
         .client
-        .upload(original.clone(), MediaType::Image)
+        .upload(original.clone(), MediaType::Image, Default::default())
         .await?;
 
     // A sends the image to B
@@ -428,7 +437,7 @@ async fn test_send_video_message() -> anyhow::Result<()> {
     let original = vec![0xBB; 64];
     let upload = client_a
         .client
-        .upload(original.clone(), MediaType::Video)
+        .upload(original.clone(), MediaType::Video, Default::default())
         .await?;
 
     let msg = build_video_message(&upload, Some("Cool video"), 15);
@@ -478,7 +487,7 @@ async fn test_send_document_message() -> anyhow::Result<()> {
     let original = b"Important document content".to_vec();
     let upload = client_a
         .client
-        .upload(original.clone(), MediaType::Document)
+        .upload(original.clone(), MediaType::Document, Default::default())
         .await?;
 
     let msg = build_document_message(&upload, "report.pdf", "application/pdf");
@@ -527,7 +536,7 @@ async fn test_send_audio_message() -> anyhow::Result<()> {
     let original = vec![0xCC; 64];
     let upload = client_a
         .client
-        .upload(original.clone(), MediaType::Audio)
+        .upload(original.clone(), MediaType::Audio, Default::default())
         .await?;
 
     let msg = build_audio_message(&upload, false, 30);
@@ -576,7 +585,7 @@ async fn test_send_ptt_voice_message() -> anyhow::Result<()> {
     let original = vec![0xDD; 64];
     let upload = client_a
         .client
-        .upload(original.clone(), MediaType::Audio)
+        .upload(original.clone(), MediaType::Audio, Default::default())
         .await?;
 
     let msg = build_audio_message(&upload, true, 5);
@@ -635,7 +644,7 @@ async fn test_send_image_bidirectional() -> anyhow::Result<()> {
     let data_a = b"Image from A to B".to_vec();
     let upload_a = client_a
         .client
-        .upload(data_a.clone(), MediaType::Image)
+        .upload(data_a.clone(), MediaType::Image, Default::default())
         .await?;
     let msg_a = build_image_message(&upload_a, Some("From A"));
     client_a.client.send_message(jid_b.clone(), msg_a).await?;
@@ -661,7 +670,7 @@ async fn test_send_image_bidirectional() -> anyhow::Result<()> {
     let data_b = b"Image from B to A".to_vec();
     let upload_b = client_b
         .client
-        .upload(data_b.clone(), MediaType::Image)
+        .upload(data_b.clone(), MediaType::Image, Default::default())
         .await?;
     let msg_b = build_image_message(&upload_b, Some("From B"));
     client_b.client.send_message(jid_a.clone(), msg_b).await?;
@@ -708,7 +717,7 @@ async fn test_send_multiple_media_types() -> anyhow::Result<()> {
     let img_data = b"image data for multi-type test".to_vec();
     let img_upload = client_a
         .client
-        .upload(img_data.clone(), MediaType::Image)
+        .upload(img_data.clone(), MediaType::Image, Default::default())
         .await?;
     let img_msg = build_image_message(&img_upload, Some("Photo"));
     client_a.client.send_message(jid_b.clone(), img_msg).await?;
@@ -732,7 +741,7 @@ async fn test_send_multiple_media_types() -> anyhow::Result<()> {
     let doc_data = b"document data for multi-type test".to_vec();
     let doc_upload = client_a
         .client
-        .upload(doc_data.clone(), MediaType::Document)
+        .upload(doc_data.clone(), MediaType::Document, Default::default())
         .await?;
     let doc_msg = build_document_message(&doc_upload, "file.txt", "text/plain");
     client_a.client.send_message(jid_b.clone(), doc_msg).await?;
@@ -756,7 +765,7 @@ async fn test_send_multiple_media_types() -> anyhow::Result<()> {
     let aud_data = b"audio data for multi-type test".to_vec();
     let aud_upload = client_a
         .client
-        .upload(aud_data.clone(), MediaType::Audio)
+        .upload(aud_data.clone(), MediaType::Audio, Default::default())
         .await?;
     let aud_msg = build_audio_message(&aud_upload, true, 10);
     client_a.client.send_message(jid_b.clone(), aud_msg).await?;
@@ -793,7 +802,7 @@ async fn test_upload_download_large_file() -> anyhow::Result<()> {
     let original = vec![0x42u8; 256];
     let upload = client
         .client
-        .upload(original.clone(), MediaType::Document)
+        .upload(original.clone(), MediaType::Document, Default::default())
         .await?;
 
     let downloaded = client
@@ -826,7 +835,10 @@ async fn test_multiple_uploads_reuse_media_conn() -> anyhow::Result<()> {
     // Upload multiple files in sequence - media_conn should be cached
     for i in 0..3 {
         let data = format!("Upload number {i}").into_bytes();
-        let resp = client.client.upload(data.clone(), MediaType::Image).await?;
+        let resp = client
+            .client
+            .upload(data.clone(), MediaType::Image, Default::default())
+            .await?;
         info!("Upload {i}: direct_path={}", resp.direct_path);
         assert!(!resp.direct_path.is_empty());
 
@@ -868,7 +880,7 @@ async fn test_send_image_no_caption() -> anyhow::Result<()> {
     let original = b"Image without caption".to_vec();
     let upload = client_a
         .client
-        .upload(original.clone(), MediaType::Image)
+        .upload(original.clone(), MediaType::Image, Default::default())
         .await?;
 
     let msg = build_image_message(&upload, None);
