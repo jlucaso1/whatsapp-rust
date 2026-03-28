@@ -433,7 +433,11 @@ impl Client {
                         .clear_sender_key_devices(&to_str)
                         .await
                     {
-                        log::warn!("Failed to clear status SKDM recipients: {:?}", e);
+                        log::warn!(
+                            "Failed to clear status SKDM recipients for {}: {:?}",
+                            to_str,
+                            e
+                        );
                     }
                     self.sender_key_device_cache.invalidate(&to_str).await;
 
@@ -565,7 +569,11 @@ impl Client {
                 }
             }
             Err(e) => {
-                log::warn!("Failed to resolve devices for SKDM check: {:?}", e);
+                log::warn!(
+                    "Failed to resolve devices for SKDM check in {}: {:?}",
+                    group_jid,
+                    e
+                );
                 None
             }
         }
@@ -596,7 +604,11 @@ impl Client {
             .set_sender_key_status(group_jid, &entries)
             .await
         {
-            log::warn!("Failed to update sender key devices: {:?}", e);
+            log::warn!(
+                "Failed to update sender key devices for {}: {:?}",
+                group_jid,
+                e
+            );
         }
         self.sender_key_device_cache.invalidate(group_jid).await;
     }
