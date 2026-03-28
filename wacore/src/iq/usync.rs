@@ -13,7 +13,7 @@
 //!     <query>
 //!       <contact/>
 //!       <lid/>
-//!       <business/>
+//!       <business><verified_name/></business>
 //!     </query>
 //!     <list>
 //!       <user>
@@ -27,9 +27,8 @@
 //! <iq xmlns="usync" type="get" to="s.whatsapp.net" id="...">
 //!   <usync sid="..." mode="query" last="true" index="0" context="interactive">
 //!     <query>
-//!       <contact/>
 //!       <lid/>
-//!       <business/>
+//!       <business><verified_name/></business>
 //!     </query>
 //!     <list>
 //!       <user jid="100000001@lid"/>
@@ -123,6 +122,16 @@ fn build_user_nodes(users: &[IsOnWhatsAppUser]) -> Vec<Node> {
         .collect()
 }
 
+/// Parse LID JID from a `<lid val="..."/>` child node.
+fn parse_lid_jid(user_node: &Node) -> Option<Jid> {
+    user_node.get_optional_child("lid").and_then(|lid_node| {
+        lid_node
+            .attrs()
+            .optional_string("val")
+            .and_then(|val| val.parse::<Jid>().ok())
+    })
+}
+
 /// Common fields parsed from a usync `<user>` node.
 struct ParsedUserFields {
     jid: Jid,
@@ -139,12 +148,7 @@ fn parse_user_common_fields(user_node: &Node) -> Option<ParsedUserFields> {
         .parse::<Jid>()
         .ok()?;
 
-    let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
-        lid_node
-            .attrs()
-            .optional_string("val")
-            .and_then(|val| val.parse::<Jid>().ok())
-    });
+    let lid = parse_lid_jid(user_node);
 
     let status = user_node
         .get_optional_child("status")
@@ -204,21 +208,19 @@ pub struct UserInfo {
     pub is_business: bool,
 }
 
-/// Whether this is a phone-number or LID-based query.
-/// WA Web uses different query protocols for each (ExistsJob.js:24-43).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IsOnWhatsAppQueryType {
-    /// PN query: includes `<contact/>`, `<lid/>`, `<business>` protocols.
+    /// PN query: `<contact/>` + `<lid/>` + `<business><verified_name/></business>`.
     Pn,
-    /// LID query: includes only `<business>` protocol (no contact/lid).
+    /// LID query: `<lid/>` + `<business><verified_name/></business>` (no contact).
     Lid,
 }
 
 /// Check if JIDs are registered on WhatsApp.
 ///
-/// Mirrors WA Web's ExistsJob. Query protocols differ by type:
+/// Query protocols differ by type:
 /// - PN: `<contact/>`, `<lid/>`, `<business><verified_name/></business>`
-/// - LID: `<business><verified_name/></business>` only
+/// - LID: `<lid/>`, `<business><verified_name/></business>`
 #[derive(Debug, Clone)]
 pub struct IsOnWhatsAppSpec {
     pub users: Vec<IsOnWhatsAppUser>,
@@ -246,7 +248,7 @@ fn build_business_query_node() -> Node {
         .build()
 }
 
-/// Check `<usync><result>` for per-protocol errors (Usync.js:61-72).
+/// Check `<usync><result>` for per-protocol errors.
 fn check_usync_result_errors(usync: &Node) -> Result<(), anyhow::Error> {
     let Some(result_node) = usync.get_optional_child("result") else {
         return Ok(());
@@ -276,8 +278,8 @@ impl IqSpec for IsOnWhatsAppSpec {
         let mut query_children = Vec::new();
         if self.query_type == IsOnWhatsAppQueryType::Pn {
             query_children.push(NodeBuilder::new("contact").build());
-            query_children.push(NodeBuilder::new("lid").build());
         }
+        query_children.push(NodeBuilder::new("lid").build());
         query_children.push(build_business_query_node());
 
         let query_node = NodeBuilder::new("query").children(query_children).build();
@@ -327,15 +329,10 @@ impl IqSpec for IsOnWhatsAppSpec {
                 .optional_string("pn_jid")
                 .and_then(|s| s.parse::<Jid>().ok());
 
-            let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
-                lid_node
-                    .attrs()
-                    .optional_string("val")
-                    .and_then(|val| val.parse::<Jid>().ok())
-            });
+            let lid = parse_lid_jid(user_node);
 
             let contact_node = user_node.get_optional_child("contact");
-            // LID queries omit contact protocol; presence in response implies registered (ExistsJob.js:70)
+            // LID queries omit contact protocol; presence in response implies registered
             let is_registered = if jid.is_lid() && contact_node.is_none() {
                 true
             } else {
@@ -693,9 +690,8 @@ mod tests {
         if let Some(NodeContent::Nodes(nodes)) = &iq.content {
             let usync = &nodes[0];
             let query = usync.get_optional_child("query").unwrap();
-            // LID queries only include <business>, no <contact/> or <lid/>
             assert!(query.get_optional_child("contact").is_none());
-            assert!(query.get_optional_child("lid").is_none());
+            assert!(query.get_optional_child("lid").is_some());
             assert!(query.get_optional_child("business").is_some());
 
             let list = usync.get_optional_child("list").unwrap();

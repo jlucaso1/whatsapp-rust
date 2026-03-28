@@ -75,11 +75,13 @@ impl<'a> Contacts<'a> {
                     jid: jid.to_non_ad(),
                     known_lid,
                 });
-            } else {
+            } else if jid.is_lid() {
                 lid_users.push(IsOnWhatsAppUser {
                     jid: jid.to_non_ad(),
                     known_lid: None,
                 });
+            } else {
+                log::warn!("is_on_whatsapp: skipping unsupported JID type: {jid}");
             }
         }
 
