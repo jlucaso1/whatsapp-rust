@@ -24,7 +24,7 @@ pub use community::{
 
 pub use chatstate::{ChatStateType, Chatstate};
 
-pub use contacts::{ContactInfo, Contacts, IsOnWhatsAppResult, ProfilePicture, UserInfo};
+pub use contacts::{Contacts, IsOnWhatsAppResult, ProfilePicture, UserInfo};
 
 pub use groups::{
     CreateGroupResult, GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant,

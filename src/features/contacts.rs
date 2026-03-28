@@ -9,12 +9,12 @@ use anyhow::Result;
 use log::debug;
 use std::collections::HashMap;
 use wacore::iq::contacts::{ProfilePictureSpec, ProfilePictureType};
-use wacore::iq::usync::{ContactInfoSpec, IsOnWhatsAppSpec, UserInfoSpec};
+use wacore::iq::usync::{IsOnWhatsAppSpec, IsOnWhatsAppUser, UserInfoSpec};
 use wacore_binary::jid::{Jid, JidExt};
 
 // Re-export types from wacore
 pub use wacore::iq::contacts::ProfilePicture;
-pub use wacore::iq::usync::{ContactInfo, IsOnWhatsAppResult, UserInfo};
+pub use wacore::iq::usync::{IsOnWhatsAppResult, UserInfo};
 
 pub struct Contacts<'a> {
     client: &'a Client,
@@ -54,35 +54,44 @@ impl<'a> Contacts<'a> {
         }
     }
 
-    pub async fn is_on_whatsapp(&self, phones: &[&str]) -> Result<Vec<IsOnWhatsAppResult>> {
-        if phones.is_empty() {
+    /// Check if JIDs are registered on WhatsApp.
+    ///
+    /// Accepts both PN JIDs (`Jid::pn("1234567890")`) and LID JIDs (`Jid::lid("100000001")`).
+    pub async fn is_on_whatsapp(&self, jids: &[Jid]) -> Result<Vec<IsOnWhatsAppResult>> {
+        if jids.is_empty() {
             return Ok(Vec::new());
         }
 
-        debug!("is_on_whatsapp: checking {} numbers", phones.len());
+        debug!("is_on_whatsapp: checking {} JIDs", jids.len());
 
-        let request_id = self.client.generate_request_id();
-        let phone_strings: Vec<String> = phones.iter().map(|s| s.to_string()).collect();
-        let spec = IsOnWhatsAppSpec::new(phone_strings, request_id);
-
-        Ok(self.client.execute(spec).await?)
-    }
-
-    pub async fn get_info(&self, phones: &[&str]) -> Result<Vec<ContactInfo>> {
-        if phones.is_empty() {
-            return Ok(Vec::new());
+        let mut users = Vec::with_capacity(jids.len());
+        for jid in jids {
+            let known_lid = if jid.is_pn() {
+                self.client.lid_pn_cache.get_current_lid(&jid.user).await
+            } else {
+                None
+            };
+            users.push(IsOnWhatsAppUser {
+                jid: jid.to_non_ad(),
+                known_lid,
+            });
         }
 
-        debug!("get_info: fetching info for {} numbers", phones.len());
-
         let request_id = self.client.generate_request_id();
-        let phone_strings: Vec<String> = phones.iter().map(|s| s.to_string()).collect();
-        let spec = ContactInfoSpec::new(phone_strings, request_id);
+        let spec = IsOnWhatsAppSpec::new(users, request_id);
+        let results = self.client.execute(spec).await?;
 
-        let info = self.client.execute(spec).await?;
-        self.persist_lid_mappings(info.iter().map(|entry| (&entry.jid, entry.lid.as_ref())))
+        self.persist_lid_mappings(results.iter().map(|r| (&r.jid, r.lid.as_ref())))
             .await;
-        Ok(info)
+        self.persist_lid_mappings(
+            results
+                .iter()
+                .filter(|r| r.jid.is_lid() && r.pn_jid.is_some())
+                .map(|r| (r.pn_jid.as_ref().unwrap(), Some(&r.jid))),
+        )
+        .await;
+
+        Ok(results)
     }
 
     pub async fn get_profile_picture(
@@ -148,26 +157,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_contact_info_struct() {
+    fn test_is_on_whatsapp_result_struct() {
         let jid: Jid = "1234567890@s.whatsapp.net"
             .parse()
             .expect("test JID should be valid");
-        let lid: Jid = "12345678@lid".parse().expect("test JID should be valid");
-
-        let info = ContactInfo {
-            jid: jid.clone(),
-            lid: Some(lid.clone()),
+        let result = IsOnWhatsAppResult {
+            jid,
+            lid: Some(Jid::lid("100000001")),
+            pn_jid: None,
             is_registered: true,
             is_business: false,
-            status: Some("Hey there!".to_string()),
-            picture_id: Some(123456789),
         };
 
-        assert!(info.is_registered);
-        assert!(!info.is_business);
-        assert_eq!(info.status, Some("Hey there!".to_string()));
-        assert_eq!(info.picture_id, Some(123456789));
-        assert!(info.lid.is_some());
+        assert!(result.is_registered);
+        assert!(!result.is_business);
+        assert!(result.lid.is_some());
     }
 
     #[test]
@@ -182,18 +186,5 @@ mod tests {
         assert_eq!(pic.id, "123456789");
         assert_eq!(pic.url, "https://example.com/pic.jpg");
         assert!(pic.direct_path.is_some());
-    }
-
-    #[test]
-    fn test_is_on_whatsapp_result_struct() {
-        let jid: Jid = "1234567890@s.whatsapp.net"
-            .parse()
-            .expect("test JID should be valid");
-        let result = IsOnWhatsAppResult {
-            jid,
-            is_registered: true,
-        };
-
-        assert!(result.is_registered);
     }
 }
