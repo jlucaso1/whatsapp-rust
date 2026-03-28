@@ -20,10 +20,12 @@ pub fn is_animated(data: &[u8]) -> bool {
             data[offset + 7],
         ]) as usize;
 
-        if fourcc == b"VP8X" && chunk_size >= 10 && offset + 8 < data.len() {
-            if data[offset + 8] & 0x02 != 0 {
-                return true;
-            }
+        if fourcc == b"VP8X"
+            && chunk_size >= 10
+            && offset + 8 < data.len()
+            && data[offset + 8] & 0x02 != 0
+        {
+            return true;
         }
 
         if fourcc == b"ANIM" || fourcc == b"ANMF" {
