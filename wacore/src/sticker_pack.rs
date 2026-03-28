@@ -130,6 +130,16 @@ pub fn create_sticker_pack_zip(
     stickers: &[StickerInput],
     cover: &[u8],
 ) -> Result<StickerPackZipResult> {
+    if pack_id.is_empty()
+        || pack_id.len() > 128
+        || pack_id
+            .bytes()
+            .any(|b| b == b'/' || b == b'\\' || b == b'.' || b < 0x20)
+    {
+        bail!(
+            "invalid pack_id: must be non-empty, <= 128 bytes, no path separators or control chars"
+        );
+    }
     if stickers.is_empty() {
         bail!("sticker pack must contain at least 1 sticker");
     }
@@ -322,6 +332,20 @@ mod tests {
         let sticker = &result.stickers[0];
         assert_eq!(sticker.emojis, vec!["😀", "🎉"]);
         assert_eq!(sticker.accessibility_label.as_deref(), Some("happy face"));
+    }
+
+    #[test]
+    fn invalid_pack_id_rejected() {
+        let s = dummy_webp(1);
+        let cover = dummy_webp(0);
+        let stickers = vec![StickerInput::new(&s)];
+
+        assert!(create_sticker_pack_zip("", &stickers, &cover).is_err());
+        assert!(create_sticker_pack_zip("../evil", &stickers, &cover).is_err());
+        assert!(create_sticker_pack_zip("a/b", &stickers, &cover).is_err());
+        assert!(create_sticker_pack_zip("a\\b", &stickers, &cover).is_err());
+        assert!(create_sticker_pack_zip("has.dot", &stickers, &cover).is_err());
+        assert!(create_sticker_pack_zip("valid-pack_id", &stickers, &cover).is_ok());
     }
 
     #[test]

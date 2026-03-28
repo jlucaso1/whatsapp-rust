@@ -20,8 +20,7 @@ pub fn is_animated(data: &[u8]) -> bool {
             data[offset + 7],
         ]) as usize;
 
-        if fourcc == b"VP8X" && offset + 8 < data.len() {
-            // Animation flag is bit 1 of the first byte after chunk header
+        if fourcc == b"VP8X" && chunk_size >= 10 && offset + 8 < data.len() {
             if data[offset + 8] & 0x02 != 0 {
                 return true;
             }
@@ -31,7 +30,12 @@ pub fn is_animated(data: &[u8]) -> bool {
             return true;
         }
 
-        offset = match offset.checked_add(8 + chunk_size + (chunk_size & 1)) {
+        // Each addition checked to prevent overflow on 32-bit
+        offset = match offset
+            .checked_add(8)
+            .and_then(|v| v.checked_add(chunk_size))
+            .and_then(|v| v.checked_add(chunk_size & 1))
+        {
             Some(next) => next,
             None => break,
         };

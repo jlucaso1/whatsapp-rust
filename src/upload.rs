@@ -261,10 +261,18 @@ struct RawUploadResponse {
 }
 
 #[non_exhaustive]
-#[derive(Default, Clone, Debug)]
+#[derive(Default, Clone)]
 pub struct UploadOptions {
     /// Reuse an existing media key instead of generating a fresh one.
     pub media_key: Option<Vec<u8>>,
+}
+
+impl std::fmt::Debug for UploadOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UploadOptions")
+            .field("media_key", &self.media_key.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
 }
 
 impl UploadOptions {
