@@ -150,10 +150,10 @@ pub fn create_sticker_pack_zip(
     let mut seen_hashes = std::collections::HashSet::new();
 
     for input in stickers {
-        let hash = Sha256::digest(input.data);
+        let hash: [u8; 32] = Sha256::digest(input.data).into();
         let file_name = format!("{}.webp", base64url_encode(&hash));
 
-        if seen_hashes.insert(hash.to_vec()) {
+        if seen_hashes.insert(hash) {
             zip.add_file(&file_name, input.data);
         }
 
@@ -177,6 +177,7 @@ pub fn create_sticker_pack_zip(
 }
 
 /// Builds a `wa::Message` with `StickerPackMessage` from upload results.
+/// Caller must supply a 252x252 JPEG thumbnail.
 pub fn build_sticker_pack_message(
     zip_result: &StickerPackZipResult,
     zip_upload: &MediaUploadInfo,

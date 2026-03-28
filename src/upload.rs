@@ -291,10 +291,13 @@ impl Client {
     ) -> Result<UploadResponse> {
         let file_length = data.len() as u64;
         let enc = wacore::runtime::blocking(&*self.runtime, move || {
-            let key_ref = options
-                .media_key
-                .as_ref()
-                .and_then(|k| <&[u8; 32]>::try_from(k.as_slice()).ok());
+            let key_ref = match &options.media_key {
+                Some(k) => Some(
+                    <&[u8; 32]>::try_from(k.as_slice())
+                        .map_err(|_| anyhow!("media_key must be exactly 32 bytes"))?,
+                ),
+                None => None,
+            };
             wacore::upload::encrypt_media_with_key(&data, media_type, key_ref)
         })
         .await?;

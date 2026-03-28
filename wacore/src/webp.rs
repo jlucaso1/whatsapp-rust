@@ -31,8 +31,10 @@ pub fn is_animated(data: &[u8]) -> bool {
             return true;
         }
 
-        // Chunks are padded to even size per RIFF spec
-        offset += 8 + chunk_size + (chunk_size & 1);
+        offset = match offset.checked_add(8 + chunk_size + (chunk_size & 1)) {
+            Some(next) => next,
+            None => break,
+        };
     }
 
     false
