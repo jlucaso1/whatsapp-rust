@@ -78,7 +78,7 @@ impl ZipWriter {
             put_u32(&mut self.buf, e.size); // compressed
             put_u32(&mut self.buf, e.size); // uncompressed
             put_u16(&mut self.buf, e.name.len() as u16);
-            put_zero_u16s(&mut self.buf, 5); // extra len, comment len, disk start, internal attrs
+            put_zero_u16s(&mut self.buf, 4); // extra len, comment len, disk start, internal attrs
             put_u32(&mut self.buf, 0); // external attrs
             put_u32(&mut self.buf, e.offset);
             self.buf.extend_from_slice(&e.name);
@@ -164,5 +164,38 @@ mod tests {
             u16::from_le_bytes([zip[eocd_pos + 8], zip[eocd_pos + 9]]),
             3
         );
+    }
+
+    #[test]
+    fn central_directory_offsets_valid() {
+        let data = b"test content here";
+        let mut w = ZipWriter::new();
+        w.add_file("test.bin", data);
+        let zip = w.finish();
+
+        // Parse EOCD to find central directory
+        let eocd_pos = zip.len() - 22;
+        let cd_offset =
+            u32::from_le_bytes(zip[eocd_pos + 16..eocd_pos + 20].try_into().unwrap()) as usize;
+
+        // Central directory entry should start with its signature
+        assert_eq!(
+            &zip[cd_offset..cd_offset + 4],
+            &CENTRAL_DIR_SIG.to_le_bytes()
+        );
+
+        // Parse central directory entry to extract local header offset (at fixed offset 42)
+        let local_offset =
+            u32::from_le_bytes(zip[cd_offset + 42..cd_offset + 46].try_into().unwrap()) as usize;
+        assert_eq!(local_offset, 0);
+
+        // Local header should contain the original data
+        let name_len = u16::from_le_bytes(
+            zip[local_offset + 26..local_offset + 28]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let data_start = local_offset + 30 + name_len;
+        assert_eq!(&zip[data_start..data_start + data.len()], data);
     }
 }
