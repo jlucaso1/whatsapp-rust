@@ -23,7 +23,7 @@
 //! Sticker format requirements (user's responsibility):
 //! - Stickers: 512x512 WebP
 //! - Cover: WebP, stored in ZIP as `{pack_id}.webp`
-//! - Thumbnail: 252x252 JPEG, uploaded separately with the same `media_key`
+//! - Thumbnail: JPEG, uploaded separately with the same `media_key`
 
 use crate::webp;
 use crate::zip::ZipWriter;
@@ -71,6 +71,7 @@ pub struct StickerPackMetadata {
     pub name: String,
     pub publisher: String,
     pub description: Option<String>,
+    pub caption: Option<String>,
 }
 
 impl StickerPackMetadata {
@@ -80,11 +81,17 @@ impl StickerPackMetadata {
             name,
             publisher,
             description: None,
+            caption: None,
         }
     }
 
     pub fn with_description(mut self, desc: String) -> Self {
         self.description = Some(desc);
+        self
+    }
+
+    pub fn with_caption(mut self, caption: String) -> Self {
+        self.caption = Some(caption);
         self
     }
 }
@@ -187,15 +194,15 @@ pub fn create_sticker_pack_zip(
 }
 
 /// Builds a `wa::Message` with `StickerPackMessage` from upload results.
-/// Caller must supply a 252x252 JPEG thumbnail.
+///
+/// Proto fields match WA Web's `GenerateStickerPackMessageProto.js` exactly.
+/// Caller must supply a JPEG thumbnail uploaded separately.
 pub fn build_sticker_pack_message(
     zip_result: &StickerPackZipResult,
     zip_upload: &MediaUploadInfo,
     thumb_upload: &MediaUploadInfo,
     metadata: StickerPackMetadata,
 ) -> wa::Message {
-    use wa::message::sticker_pack_message::StickerPackOrigin;
-
     let pack_msg = wa::message::StickerPackMessage {
         sticker_pack_id: Some(metadata.pack_id),
         name: Some(metadata.name),
@@ -206,19 +213,14 @@ pub fn build_sticker_pack_message(
         file_enc_sha256: Some(zip_upload.file_enc_sha256.clone()),
         media_key: Some(zip_upload.media_key.clone()),
         direct_path: Some(zip_upload.direct_path.clone()),
-        caption: None,
-        context_info: None,
+        caption: metadata.caption,
         pack_description: metadata.description,
-        media_key_timestamp: Some(zip_upload.media_key_timestamp),
-        tray_icon_file_name: Some(zip_result.tray_icon_file_name.clone()),
-        thumbnail_direct_path: Some(thumb_upload.direct_path.clone()),
         thumbnail_sha256: Some(thumb_upload.file_sha256.clone()),
         thumbnail_enc_sha256: Some(thumb_upload.file_enc_sha256.clone()),
-        thumbnail_height: Some(252),
-        thumbnail_width: Some(252),
-        image_data_hash: None,
+        thumbnail_direct_path: Some(thumb_upload.direct_path.clone()),
         sticker_pack_size: Some(zip_result.zip_bytes.len() as u64),
-        sticker_pack_origin: Some(StickerPackOrigin::UserCreated as i32),
+        tray_icon_file_name: Some(zip_result.tray_icon_file_name.clone()),
+        ..Default::default()
     };
 
     wa::Message {
@@ -392,12 +394,12 @@ mod tests {
             pack.thumbnail_direct_path.as_deref(),
             Some("/mms/thumbnail-sticker-pack/def")
         );
-        assert_eq!(pack.thumbnail_height, Some(252));
-        assert_eq!(pack.thumbnail_width, Some(252));
-        assert_eq!(
-            pack.sticker_pack_origin,
-            Some(wa::message::sticker_pack_message::StickerPackOrigin::UserCreated as i32)
-        );
         assert_eq!(pack.tray_icon_file_name.as_deref(), Some("msg-test.webp"));
+        // WA Web doesn't set these on outgoing sticker packs
+        assert_eq!(pack.thumbnail_height, None);
+        assert_eq!(pack.thumbnail_width, None);
+        assert_eq!(pack.sticker_pack_origin, None);
+        assert_eq!(pack.media_key_timestamp, None);
+        assert_eq!(pack.image_data_hash, None);
     }
 }
