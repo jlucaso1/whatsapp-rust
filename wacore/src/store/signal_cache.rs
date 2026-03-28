@@ -295,72 +295,93 @@ impl SignalStoreCache {
     // === Flush ===
 
     /// Flush all dirty state to the backend in a single batch.
-    /// Acquires all 3 mutexes to ensure consistency (matches WhatsApp Web's pattern).
     ///
-    /// Sessions are serialized here (not on every store_session call).
-    /// Dirty sets are only cleared after ALL writes succeed.
+    /// Uses a snapshot-then-release pattern: serialize dirty data under the lock,
+    /// release locks, then write to the backend. This avoids blocking all
+    /// encrypt/decrypt operations for the duration of I/O.
+    ///
+    /// Dirty sets are drained before the write phase. If a write fails, the
+    /// data remains in the cache and will be re-dirtied on the next modification.
     pub async fn flush(&self, backend: &dyn SignalStore) -> Result<()> {
-        let mut sessions = self.sessions.lock().await;
-        let mut identities = self.identities.lock().await;
-        let mut sender_keys = self.sender_keys.lock().await;
-
-        // Snapshot dirty/deleted sets WITHOUT draining — preserve on failure
-        let session_dirty: Vec<_> = sessions.dirty.iter().cloned().collect();
-        let session_deleted: Vec<_> = sessions.deleted.iter().cloned().collect();
-        let identity_dirty: Vec<_> = identities.dirty.iter().cloned().collect();
-        let identity_deleted: Vec<_> = identities.deleted.iter().cloned().collect();
-        let sender_key_dirty: Vec<_> = sender_keys.dirty.iter().cloned().collect();
-
-        // Persist dirty sessions — serialize only here, not on every store_session
-        for address in &session_dirty {
-            if let Some(Some(record)) = sessions.cache.get(address.as_ref()) {
-                let bytes = record
-                    .serialize()
-                    .map_err(|e| anyhow::anyhow!("session serialize for {address}: {e}"))?;
-                backend.put_session(address, &bytes).await?;
+        // Phase 1: snapshot + serialize under lock, then release.
+        // Collect dirty keys first, then clear, then serialize from cache.
+        let (session_writes, session_deletes) = {
+            let mut state = self.sessions.lock().await;
+            let dirty_keys: Vec<_> = state.dirty.drain().collect();
+            let deleted_keys: Vec<_> = state.deleted.drain().collect();
+            let mut writes = Vec::with_capacity(dirty_keys.len());
+            for address in &dirty_keys {
+                if let Some(Some(record)) = state.cache.get(address.as_ref()) {
+                    let bytes = record
+                        .serialize()
+                        .map_err(|e| anyhow::anyhow!("session serialize for {address}: {e}"))?;
+                    writes.push((address.clone(), bytes));
+                }
             }
+            (writes, deleted_keys)
+        };
+
+        let (identity_writes, identity_deletes) = {
+            let mut state = self.identities.lock().await;
+            let dirty_keys: Vec<_> = state.dirty.drain().collect();
+            let deleted_keys: Vec<_> = state.deleted.drain().collect();
+            let mut writes = Vec::with_capacity(dirty_keys.len());
+            for address in &dirty_keys {
+                if let Some(Some(data)) = state.cache.get(address.as_ref()) {
+                    let key: [u8; 32] = data.as_ref().try_into().map_err(|_| {
+                        anyhow::anyhow!(
+                            "Corrupted identity key for {address}: expected 32 bytes, got {}",
+                            data.len()
+                        )
+                    })?;
+                    writes.push((address.clone(), key));
+                }
+            }
+            (writes, deleted_keys)
+        };
+
+        let sender_key_ops = {
+            let mut state = self.sender_keys.lock().await;
+            let dirty_keys: Vec<_> = state.dirty.drain().collect();
+            let mut ops: Vec<(Arc<str>, Option<Vec<u8>>)> = Vec::with_capacity(dirty_keys.len());
+            for name in &dirty_keys {
+                match state.cache.get(name.as_ref()) {
+                    Some(Some(record)) => {
+                        let bytes = record
+                            .serialize()
+                            .map_err(|e| anyhow::anyhow!("sender key serialize for {name}: {e}"))?;
+                        ops.push((name.clone(), Some(bytes)));
+                    }
+                    Some(None) => {
+                        ops.push((name.clone(), None));
+                    }
+                    None => {}
+                }
+            }
+            ops
+        };
+
+        // Phase 2: write to backend without holding any locks.
+        for (address, bytes) in &session_writes {
+            backend.put_session(address, bytes).await?;
         }
-        for address in &session_deleted {
+        for address in &session_deletes {
             backend.delete_session(address).await?;
         }
 
-        for address in &identity_dirty {
-            if let Some(Some(data)) = identities.cache.get(address.as_ref()) {
-                let key: [u8; 32] = data.as_ref().try_into().map_err(|_| {
-                    anyhow::anyhow!(
-                        "Corrupted identity key for {address}: expected 32 bytes, got {}",
-                        data.len()
-                    )
-                })?;
-                backend.put_identity(address, key).await?;
-            }
+        for (address, key) in &identity_writes {
+            backend.put_identity(address, *key).await?;
         }
-        for address in &identity_deleted {
+        for address in &identity_deletes {
             backend.delete_identity(address).await?;
         }
 
-        for name in &sender_key_dirty {
-            match sender_keys.cache.get(name.as_ref()) {
-                Some(Some(record)) => {
-                    let bytes = record
-                        .serialize()
-                        .map_err(|e| anyhow::anyhow!("sender key serialize for {name}: {e}"))?;
-                    backend.put_sender_key(name, &bytes).await?;
-                }
-                Some(None) => {
-                    // Deleted via delete_sender_key — propagate to backend
-                    backend.delete_sender_key(name).await?;
-                }
-                None => {}
+        for (name, bytes_opt) in &sender_key_ops {
+            match bytes_opt {
+                Some(bytes) => backend.put_sender_key(name, bytes).await?,
+                None => backend.delete_sender_key(name).await?,
             }
         }
-
-        // All writes succeeded — clear dirty sets (matches WA Web's clearDirty())
-        sessions.dirty.clear();
-        sessions.deleted.clear();
-        identities.dirty.clear();
-        identities.deleted.clear();
-        sender_keys.dirty.clear();
 
         Ok(())
     }

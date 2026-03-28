@@ -58,9 +58,9 @@ impl StanzaHandler for MessageHandler {
         let tx = client
             .message_queues
             .get_with_by_ref(&chat_id, async {
-                // Create a channel with backpressure
-                // Increased capacity to handle high message rates without blocking
-                let (tx, rx) = async_channel::bounded::<Arc<Node>>(10000);
+                // Bounded capacity provides backpressure to prevent unbounded memory growth.
+                // 500 is enough for burst handling while limiting per-chat memory.
+                let (tx, rx) = async_channel::bounded::<Arc<Node>>(500);
 
                 let client_for_worker = client.clone();
 

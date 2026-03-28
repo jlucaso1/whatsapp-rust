@@ -1255,7 +1255,7 @@ impl Client {
                             Ok(crate::transport::TransportEvent::DataReceived(data)) => {
                                 // Update dead-socket timer (WA Web: deadSocketTimer reset)
                                 self.last_data_received_ms.store(
-                                    wacore::time::now_millis() as u64,
+                                    wacore::time::now_millis().max(0) as u64,
                                     Ordering::Relaxed,
                                 );
 
@@ -1308,8 +1308,7 @@ impl Client {
                                 }
                             },
                             Ok(crate::transport::TransportEvent::Disconnected) | Err(_) => {
-                                self.cleanup_connection_state().await;
-                                 if !self.expected_disconnect.load(Ordering::Relaxed) {
+                                if !self.expected_disconnect.load(Ordering::Relaxed) {
                                     self.core.event_bus.dispatch(&Event::Disconnected(crate::types::events::Disconnected));
                                     debug!("Transport disconnected unexpectedly.");
                                     return Err(anyhow::anyhow!("Transport disconnected unexpectedly"));
@@ -3318,7 +3317,7 @@ impl Client {
 
         // WA Web: callStanza → deadSocketTimer.onOrBefore(deadSocketTime, socketId)
         self.last_data_sent_ms
-            .store(wacore::time::now_millis() as u64, Ordering::Relaxed);
+            .store(wacore::time::now_millis().max(0) as u64, Ordering::Relaxed);
 
         Ok(())
     }
