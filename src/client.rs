@@ -1108,13 +1108,14 @@ impl Client {
         // sent_node_waiters ARE cleared because they match pre-encryption
         // outgoing stanzas, which are transport-scoped.
         self.clear_sent_node_waiters();
-        // Abort all connection-scoped tasks (keepalive, app state sync, etc.)
-        // before tearing down transport so they don't race on stale state.
-        self.connection_tasks.abort_all();
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
         // Signal the keepalive loop (and any other tasks) to exit promptly.
-        // Kept as belt-and-suspenders alongside connection_tasks.abort_all().
+        // Tasks detect staleness cooperatively via connection_generation,
+        // is_shutting_down(), and this notifier. Forceful abort is intentionally
+        // NOT used here — tasks like the post-login sequence must survive 515
+        // reconnect cycles to dispatch Connected. TaskTracker::Drop handles
+        // final cleanup when the Client is dropped.
         self.shutdown_notifier.notify(usize::MAX);
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
