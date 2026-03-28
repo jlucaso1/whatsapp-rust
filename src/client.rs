@@ -1106,6 +1106,12 @@ impl Client {
         // checks the socket, but this ordering avoids a confusing state window.
         self.is_connected.store(false, Ordering::Release);
         self.retried_group_messages.invalidate_all();
+        // Clear pending retries so stale keys from detached scopeguard
+        // cleanup don't suppress the first retry after reconnect.
+        self.pending_retries
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clear();
         // Clear signal cache so stale state doesn't leak across connections
         self.signal_cache.clear().await;
         // Reset semaphore to 1 permit for next offline sync.
