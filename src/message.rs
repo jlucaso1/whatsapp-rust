@@ -132,7 +132,10 @@ impl Client {
     /// Increments the retry count for a message and returns the new count.
     /// Returns `None` if max retries have been reached.
     ///
-    /// Uses get + insert for portability across cache backends.
+    /// Note: get-then-insert has a theoretical TOCTOU window since
+    /// `spawn_retry_receipt` detaches. In practice, retries for the same
+    /// message are rare and a double-send is benign (recipients deduplicate
+    /// by message ID).
     async fn increment_retry_count(&self, cache_key: &str) -> Option<u8> {
         let current = self.message_retry_counts.get(&cache_key.to_string()).await;
         match current {
@@ -537,10 +540,10 @@ impl Client {
             session_enc_nodes.len()
         );
 
-        // Skip session processing for group senders (@c.us, @g.us, @broadcast)
-        // Groups don't use 1:1 Signal Protocol sessions
-        let is_group_sender = sender_encryption_jid.server.contains(".us")
-            || sender_encryption_jid.server.contains("broadcast");
+        // Skip session processing for group/broadcast JIDs — they use sender keys, not 1:1 sessions.
+        let is_group_sender = sender_encryption_jid.is_group()
+            || sender_encryption_jid.is_broadcast_list()
+            || sender_encryption_jid.is_status_broadcast();
 
         let (
             session_decrypted_successfully,
@@ -1034,7 +1037,7 @@ impl Client {
         enc_nodes: &[&wacore_binary::node::Node],
         info: &MessageInfo,
         _sender_encryption_jid: &Jid,
-        _decrypt_fail_mode: crate::types::events::DecryptFailMode,
+        decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> Result<(), DecryptionError> {
         if enc_nodes.is_empty() {
             return Ok(());
@@ -1114,6 +1117,7 @@ impl Client {
                         "No sender key state for group message [msg:{}] from {}: {}. Sending retry receipt.",
                         info.id, info.source.sender, msg
                     );
+                    self.dispatch_undecryptable_event(info, decrypt_fail_mode);
                     self.spawn_retry_receipt(info, RetryReason::NoSession);
                 }
                 Err(e) => {

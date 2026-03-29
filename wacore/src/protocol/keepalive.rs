@@ -23,7 +23,7 @@ pub fn ms_since(timestamp_ms: u64) -> Option<u64> {
     if timestamp_ms == 0 {
         return None;
     }
-    let now = crate::time::now_millis() as u64;
+    let now = crate::time::now_millis().max(0) as u64;
     Some(now.saturating_sub(timestamp_ms))
 }
 
@@ -61,14 +61,14 @@ mod tests {
 
     #[test]
     fn ms_since_recent() {
-        let now_ms = crate::time::now_millis() as u64;
+        let now_ms = crate::time::now_millis().max(0) as u64;
         let elapsed = ms_since(now_ms).unwrap();
         assert!(elapsed < 100, "should be near-zero, got {elapsed}ms");
     }
 
     #[test]
     fn ms_since_stale() {
-        let thirty_sec_ago = (crate::time::now_millis() as u64).saturating_sub(30_000);
+        let thirty_sec_ago = (crate::time::now_millis().max(0) as u64).saturating_sub(30_000);
         let elapsed = ms_since(thirty_sec_ago).unwrap();
         assert!(
             (29_000..=31_000).contains(&elapsed),
@@ -85,33 +85,33 @@ mod tests {
 
     #[test]
     fn dead_socket_received_after_send() {
-        let t = crate::time::now_millis() as u64;
+        let t = crate::time::now_millis().max(0) as u64;
         assert!(!is_dead_socket(t, t + 1));
     }
 
     #[test]
     fn dead_socket_sent_recently() {
-        let now = crate::time::now_millis() as u64;
+        let now = crate::time::now_millis().max(0) as u64;
         assert!(!is_dead_socket(now, 0));
     }
 
     #[test]
     fn dead_socket_sent_long_ago_no_reply() {
-        let thirty_ago = (crate::time::now_millis() as u64).saturating_sub(30_000);
+        let thirty_ago = (crate::time::now_millis().max(0) as u64).saturating_sub(30_000);
         assert!(is_dead_socket(thirty_ago, 0));
     }
 
     #[test]
     fn dead_socket_sent_long_ago_old_reply() {
-        let thirty_ago = (crate::time::now_millis() as u64).saturating_sub(30_000);
+        let thirty_ago = (crate::time::now_millis().max(0) as u64).saturating_sub(30_000);
         let thirty_one_ago = thirty_ago.saturating_sub(1_000);
         assert!(is_dead_socket(thirty_ago, thirty_one_ago));
     }
 
     #[test]
     fn dead_socket_sent_long_ago_recent_reply() {
-        let thirty_ago = (crate::time::now_millis() as u64).saturating_sub(30_000);
-        let one_ago = (crate::time::now_millis() as u64).saturating_sub(1_000);
+        let thirty_ago = (crate::time::now_millis().max(0) as u64).saturating_sub(30_000);
+        let one_ago = (crate::time::now_millis().max(0) as u64).saturating_sub(1_000);
         assert!(!is_dead_socket(thirty_ago, one_ago));
     }
 

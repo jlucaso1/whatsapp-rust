@@ -871,15 +871,15 @@ impl Client {
             }
 
             let force_skdm = {
-                use wacore::libsignal::protocol::SenderKeyStore;
                 use wacore::libsignal::store::sender_key_name::SenderKeyName;
-                let mut device_guard = device_store_arc.write().await;
                 let sender_address = own_sending_jid.to_protocol_address();
                 let sender_key_name =
                     SenderKeyName::new(to_str.clone(), sender_address.to_string());
 
-                let key_exists = device_guard
-                    .load_sender_key(&sender_key_name)
+                let device_guard = device_store_arc.read().await;
+                let key_exists = self
+                    .signal_cache
+                    .get_sender_key(&sender_key_name, &*device_guard.backend)
                     .await?
                     .is_some();
 

@@ -873,25 +873,36 @@ impl Client {
             if let Err(connect_err) = self.connect().await {
                 error!("Failed to connect: {connect_err:#}. Will retry...");
             } else {
-                if self.read_messages_loop().await.is_err() {
+                let unexpected_disconnect = if self.read_messages_loop().await.is_err() {
                     // Check intentional_reconnect AFTER read loop exits — reconnect()
                     // sets this flag while the loop is running, so it must be read here.
                     if self.expected_disconnect.load(Ordering::Relaxed)
                         || self.intentional_reconnect.swap(false, Ordering::Relaxed)
                     {
                         debug!("Message loop exited during expected disconnect.");
+                        false
                     } else {
                         warn!(
                             "Message loop exited with an error. Will attempt to reconnect if enabled."
                         );
+                        true
                     }
                 } else if self.expected_disconnect.load(Ordering::Relaxed) {
                     debug!("Message loop exited gracefully (expected disconnect).");
+                    false
                 } else {
                     info!("Message loop exited gracefully.");
-                }
+                    false
+                };
 
                 self.cleanup_connection_state().await;
+
+                // Dispatch after cleanup so handlers see cleared connection state.
+                if unexpected_disconnect {
+                    self.core
+                        .event_bus
+                        .dispatch(&Event::Disconnected(crate::types::events::Disconnected));
+                }
             }
 
             if !self.enable_auto_reconnect.load(Ordering::Relaxed) {
@@ -1255,7 +1266,7 @@ impl Client {
                             Ok(crate::transport::TransportEvent::DataReceived(data)) => {
                                 // Update dead-socket timer (WA Web: deadSocketTimer reset)
                                 self.last_data_received_ms.store(
-                                    wacore::time::now_millis() as u64,
+                                    wacore::time::now_millis().max(0) as u64,
                                     Ordering::Relaxed,
                                 );
 
@@ -1308,9 +1319,7 @@ impl Client {
                                 }
                             },
                             Ok(crate::transport::TransportEvent::Disconnected) | Err(_) => {
-                                self.cleanup_connection_state().await;
-                                 if !self.expected_disconnect.load(Ordering::Relaxed) {
-                                    self.core.event_bus.dispatch(&Event::Disconnected(crate::types::events::Disconnected));
+                                if !self.expected_disconnect.load(Ordering::Relaxed) {
                                     debug!("Transport disconnected unexpectedly.");
                                     return Err(anyhow::anyhow!("Transport disconnected unexpectedly"));
                                 } else {
@@ -3318,7 +3327,7 @@ impl Client {
 
         // WA Web: callStanza → deadSocketTimer.onOrBefore(deadSocketTime, socketId)
         self.last_data_sent_ms
-            .store(wacore::time::now_millis() as u64, Ordering::Relaxed);
+            .store(wacore::time::now_millis().max(0) as u64, Ordering::Relaxed);
 
         Ok(())
     }
