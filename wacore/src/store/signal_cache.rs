@@ -294,37 +294,48 @@ impl SignalStoreCache {
 
     // === Flush ===
 
-    /// Flush all dirty state to the backend in a single batch.
+    /// Flush all dirty state to the backend.
     ///
-    /// Uses a snapshot-then-release pattern: serialize dirty data under the lock,
-    /// release locks, then write to the backend. This avoids blocking all
-    /// encrypt/decrypt operations for the duration of I/O.
-    ///
-    /// Dirty sets are only cleared after ALL writes succeed, preserving retry
-    /// semantics on partial failure.
+    /// Each store (sessions, identities, sender_keys) is flushed independently
+    /// under its own lock. This means:
+    /// - Only ONE store is locked during its I/O — the other two are free for
+    ///   concurrent encrypt/decrypt operations.
+    /// - No race between snapshot and clear — the lock is held throughout, so
+    ///   mutations to the same store are blocked until the flush completes.
+    /// - Dirty sets are cleared only after successful writes.
     pub async fn flush(&self, backend: &dyn SignalStore) -> Result<()> {
-        // Phase 1: snapshot + serialize under lock, then release.
-        let (session_writes, session_delete_keys, session_dirty_keys) = {
-            let state = self.sessions.lock().await;
+        // Flush sessions
+        {
+            let mut state = self.sessions.lock().await;
             let dirty_keys: Vec<_> = state.dirty.iter().cloned().collect();
             let deleted_keys: Vec<_> = state.deleted.iter().cloned().collect();
-            let mut writes = Vec::with_capacity(dirty_keys.len());
+
             for address in &dirty_keys {
                 if let Some(Some(record)) = state.cache.get(address.as_ref()) {
                     let bytes = record
                         .serialize()
                         .map_err(|e| anyhow::anyhow!("session serialize for {address}: {e}"))?;
-                    writes.push((address.clone(), bytes));
+                    backend.put_session(address, &bytes).await?;
                 }
             }
-            (writes, deleted_keys, dirty_keys)
-        };
+            for address in &deleted_keys {
+                backend.delete_session(address).await?;
+            }
 
-        let (identity_writes, identity_delete_keys, identity_dirty_keys) = {
-            let state = self.identities.lock().await;
+            for key in &dirty_keys {
+                state.dirty.remove(key);
+            }
+            for key in &deleted_keys {
+                state.deleted.remove(key);
+            }
+        }
+
+        // Flush identities
+        {
+            let mut state = self.identities.lock().await;
             let dirty_keys: Vec<_> = state.dirty.iter().cloned().collect();
             let deleted_keys: Vec<_> = state.deleted.iter().cloned().collect();
-            let mut writes = Vec::with_capacity(dirty_keys.len());
+
             for address in &dirty_keys {
                 if let Some(Some(data)) = state.cache.get(address.as_ref()) {
                     let key: [u8; 32] = data.as_ref().try_into().map_err(|_| {
@@ -333,78 +344,42 @@ impl SignalStoreCache {
                             data.len()
                         )
                     })?;
-                    writes.push((address.clone(), key));
+                    backend.put_identity(address, key).await?;
                 }
             }
-            (writes, deleted_keys, dirty_keys)
-        };
+            for address in &deleted_keys {
+                backend.delete_identity(address).await?;
+            }
 
-        let (sender_key_ops, sender_key_dirty_keys) = {
-            let state = self.sender_keys.lock().await;
+            for key in &dirty_keys {
+                state.dirty.remove(key);
+            }
+            for key in &deleted_keys {
+                state.deleted.remove(key);
+            }
+        }
+
+        // Flush sender keys
+        {
+            let mut state = self.sender_keys.lock().await;
             let dirty_keys: Vec<_> = state.dirty.iter().cloned().collect();
-            let mut ops: Vec<(Arc<str>, Option<Vec<u8>>)> = Vec::with_capacity(dirty_keys.len());
+
             for name in &dirty_keys {
                 match state.cache.get(name.as_ref()) {
                     Some(Some(record)) => {
                         let bytes = record
                             .serialize()
                             .map_err(|e| anyhow::anyhow!("sender key serialize for {name}: {e}"))?;
-                        ops.push((name.clone(), Some(bytes)));
+                        backend.put_sender_key(name, &bytes).await?;
                     }
                     Some(None) => {
-                        ops.push((name.clone(), None));
+                        backend.delete_sender_key(name).await?;
                     }
                     None => {}
                 }
             }
-            (ops, dirty_keys)
-        };
 
-        // Phase 2: write to backend without holding any locks.
-        for (address, bytes) in &session_writes {
-            backend.put_session(address, bytes).await?;
-        }
-        for address in &session_delete_keys {
-            backend.delete_session(address).await?;
-        }
-
-        for (address, key) in &identity_writes {
-            backend.put_identity(address, *key).await?;
-        }
-        for address in &identity_delete_keys {
-            backend.delete_identity(address).await?;
-        }
-
-        for (name, bytes_opt) in &sender_key_ops {
-            match bytes_opt {
-                Some(bytes) => backend.put_sender_key(name, bytes).await?,
-                None => backend.delete_sender_key(name).await?,
-            }
-        }
-
-        // Phase 3: all writes succeeded — remove only the flushed keys from dirty sets.
-        // New mutations that occurred during Phase 2 remain in the dirty sets.
-        {
-            let mut state = self.sessions.lock().await;
-            for key in &session_dirty_keys {
-                state.dirty.remove(key);
-            }
-            for key in &session_delete_keys {
-                state.deleted.remove(key);
-            }
-        }
-        {
-            let mut state = self.identities.lock().await;
-            for key in &identity_dirty_keys {
-                state.dirty.remove(key);
-            }
-            for key in &identity_delete_keys {
-                state.deleted.remove(key);
-            }
-        }
-        {
-            let mut state = self.sender_keys.lock().await;
-            for key in &sender_key_dirty_keys {
+            for key in &dirty_keys {
                 state.dirty.remove(key);
             }
         }
