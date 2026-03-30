@@ -1019,14 +1019,7 @@ impl Client {
                 debug!(target: "Client/TcToken", "Scheduled tc token issuance after send for {}", to);
             }
 
-            // Sorted to prevent deadlocks when multiple sends overlap
-            let mut lock_keys: Vec<String> = Vec::with_capacity(all_dm_devices.len());
-            for device_jid in &all_dm_devices {
-                let enc_jid = self.resolve_encryption_jid(device_jid).await;
-                lock_keys.push(enc_jid.to_protocol_address_string());
-            }
-            lock_keys.sort_unstable();
-            lock_keys.dedup();
+            let lock_keys = self.build_session_lock_keys(&all_dm_devices).await;
 
             let mut _session_mutexes = Vec::with_capacity(lock_keys.len());
             for key in &lock_keys {
@@ -1290,6 +1283,20 @@ impl Client {
                 None
             }
         }
+    }
+
+    /// Build sorted, deduplicated per-device session lock keys for a set of device JIDs.
+    /// Keys match the decrypt path's format (message.rs:684) so send and receive
+    /// serialize on the same device's Signal session.
+    pub(crate) async fn build_session_lock_keys(&self, device_jids: &[Jid]) -> Vec<String> {
+        let mut keys = Vec::with_capacity(device_jids.len());
+        for jid in device_jids {
+            let enc_jid = self.resolve_encryption_jid(jid).await;
+            keys.push(enc_jid.to_protocol_address_string());
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        keys
     }
 
     /// Resolve a JID to its LID form for tc_token storage.
@@ -1951,8 +1958,10 @@ mod tests {
     mod session_lock_regression {
         use super::*;
 
-        #[test]
-        fn per_device_lock_keys_cover_all_devices() {
+        #[tokio::test]
+        async fn per_device_lock_keys_cover_all_devices() {
+            let client = crate::test_utils::create_test_client().await;
+
             let devices: Vec<Jid> = [
                 "100000012345678@lid",
                 "100000012345678:5@lid",
@@ -1962,11 +1971,8 @@ mod tests {
             .map(|s| Jid::from_str(s).unwrap())
             .collect();
 
-            let mut send_lock_keys: Vec<String> = devices
-                .iter()
-                .map(|jid| jid.to_protocol_address_string())
-                .collect();
-            send_lock_keys.sort_unstable();
+            // Uses the production helper (resolve_encryption_jid + sort + dedup)
+            let send_lock_keys = client.build_session_lock_keys(&devices).await;
 
             assert_eq!(send_lock_keys.len(), 3);
             assert_eq!(send_lock_keys[0], "100000012345678:33@lid.0");
