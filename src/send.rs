@@ -987,18 +987,9 @@ impl Client {
                 }
             }
         } else {
-            // Direct message: Acquire lock only during encryption
+            // Per-device locking to match decrypt path (message.rs:684),
+            // preventing ratchet desync on concurrent send/receive.
 
-            // Ensure E2E sessions exist before encryption (matches WhatsApp Web)
-            // This deduplicates concurrent prekey fetches for the same recipient
-            let recipient_devices = self.get_user_devices(std::slice::from_ref(&to)).await?;
-            self.ensure_e2e_sessions(recipient_devices).await?;
-
-            // Resolve encryption JID and prepare lock acquisition
-            let encryption_jid = self.resolve_encryption_jid(&to).await;
-            let signal_addr_str = encryption_jid.to_protocol_address_string();
-
-            // Store serialized message bytes for retry (lightweight)
             self.add_recent_message(to.clone(), request_id.clone(), message)
                 .await;
 
@@ -1008,8 +999,12 @@ impl Client {
                 .as_ref()
                 .ok_or(crate::client::ClientError::NotLoggedIn)?;
 
-            // Include tctoken in 1:1 messages (matches WhatsApp Web behavior).
-            // Skip for newsletters, groups, and own JID.
+            // Single device resolution for ensure_e2e_sessions, locking, and encryption
+            let all_dm_devices = self
+                .get_user_devices(&[to.clone(), own_jid.clone()])
+                .await?;
+            self.ensure_e2e_sessions(&all_dm_devices).await?;
+
             let mut extra_stanza_nodes = extra_stanza_nodes;
             if !to.is_group() && !to.is_newsletter() {
                 let (should_issue_after_send, cached_token_key) = self
@@ -1024,14 +1019,22 @@ impl Client {
                 debug!(target: "Client/TcToken", "Scheduled tc token issuance after send for {}", to);
             }
 
-            // Acquire lock only for encryption
-            let session_mutex = self
-                .session_locks
-                .get_with_by_ref(&signal_addr_str, async {
-                    std::sync::Arc::new(async_lock::Mutex::new(()))
-                })
-                .await;
-            let _session_guard = session_mutex.lock().await;
+            let lock_keys = self.build_session_lock_keys(&all_dm_devices).await;
+
+            let mut _session_mutexes = Vec::with_capacity(lock_keys.len());
+            for key in &lock_keys {
+                _session_mutexes.push(
+                    self.session_locks
+                        .get_with_by_ref(key, async {
+                            std::sync::Arc::new(async_lock::Mutex::new(()))
+                        })
+                        .await,
+                );
+            }
+            let mut _session_guards = Vec::with_capacity(_session_mutexes.len());
+            for mutex in &_session_mutexes {
+                _session_guards.push(mutex.lock().await);
+            }
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let mut store_adapter =
@@ -1056,6 +1059,7 @@ impl Client {
                 request_id,
                 edit,
                 &extra_stanza_nodes,
+                all_dm_devices,
             )
             .await?
         };
@@ -1279,6 +1283,20 @@ impl Client {
                 None
             }
         }
+    }
+
+    /// Build sorted, deduplicated per-device session lock keys for a set of device JIDs.
+    /// Keys match the decrypt path's format (message.rs:684) so send and receive
+    /// serialize on the same device's Signal session.
+    pub(crate) async fn build_session_lock_keys(&self, device_jids: &[Jid]) -> Vec<String> {
+        let mut keys = Vec::with_capacity(device_jids.len());
+        for jid in device_jids {
+            let enc_jid = self.resolve_encryption_jid(jid).await;
+            keys.push(enc_jid.to_protocol_address_string());
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        keys
     }
 
     /// Resolve a JID to its LID form for tc_token storage.
@@ -1933,6 +1951,131 @@ mod tests {
             };
             let node = infer_biz_node(&msg).unwrap();
             assert_biz_node(&node, "cta_url");
+        }
+    }
+
+    /// Regression tests for #462: send path session lock keys must match decrypt path.
+    mod session_lock_regression {
+        use super::*;
+
+        #[tokio::test]
+        async fn per_device_lock_keys_cover_all_devices() {
+            let client = crate::test_utils::create_test_client().await;
+
+            let devices: Vec<Jid> = [
+                "100000012345678@lid",
+                "100000012345678:5@lid",
+                "100000012345678:33@lid",
+            ]
+            .iter()
+            .map(|s| Jid::from_str(s).unwrap())
+            .collect();
+
+            // Uses the production helper (resolve_encryption_jid + sort + dedup)
+            let send_lock_keys = client.build_session_lock_keys(&devices).await;
+
+            assert_eq!(send_lock_keys.len(), 3);
+            assert_eq!(send_lock_keys[0], "100000012345678:33@lid.0");
+            assert_eq!(send_lock_keys[1], "100000012345678:5@lid.0");
+            assert_eq!(send_lock_keys[2], "100000012345678@lid.0");
+
+            // Send keys must match what the decrypt path would use
+            for device_jid in &devices {
+                let decrypt_key = device_jid.to_protocol_address().to_string();
+                assert!(
+                    send_lock_keys.contains(&decrypt_key),
+                    "decrypt key {decrypt_key} not in send keys: {send_lock_keys:?}"
+                );
+            }
+
+            // Bare JID key alone wouldn't protect linked devices
+            let bare_key = devices[0].to_protocol_address_string();
+            let device5_key = devices[1].to_protocol_address_string();
+            assert_ne!(bare_key, device5_key);
+        }
+
+        #[tokio::test]
+        async fn per_device_lock_serializes_concurrent_session_access() {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicU32, Ordering};
+
+            let session_locks: crate::cache::Cache<String, Arc<async_lock::Mutex<()>>> =
+                crate::cache::Cache::builder().max_capacity(100).build();
+
+            let lock_key = "100000012345678:5@lid.0".to_string();
+            let access_counter = Arc::new(AtomicU32::new(0));
+            let max_concurrent = Arc::new(AtomicU32::new(0));
+
+            let mut handles = Vec::new();
+            for _ in 0..10 {
+                let locks = session_locks.clone();
+                let key = lock_key.clone();
+                let counter = access_counter.clone();
+                let max = max_concurrent.clone();
+
+                handles.push(tokio::spawn(async move {
+                    let mutex: Arc<async_lock::Mutex<()>> = locks
+                        .get_with_by_ref(&key, async { Arc::new(async_lock::Mutex::new(())) })
+                        .await;
+                    // lock_arc() needed: guard must own the Arc since mutex is a local
+                    // (production uses lock() with a separate Vec keeping Arcs alive)
+                    let _guard = mutex.lock_arc().await;
+
+                    let active = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                    max.fetch_max(active, Ordering::SeqCst);
+                    tokio::task::yield_now().await;
+                    counter.fetch_sub(1, Ordering::SeqCst);
+                }));
+            }
+
+            for handle in handles {
+                handle.await.unwrap();
+            }
+
+            assert_eq!(max_concurrent.load(Ordering::SeqCst), 1);
+        }
+
+        #[tokio::test]
+        async fn different_device_locks_are_independent() {
+            use std::sync::Arc;
+            use std::sync::atomic::{AtomicU32, Ordering};
+
+            let session_locks: crate::cache::Cache<String, Arc<async_lock::Mutex<()>>> =
+                crate::cache::Cache::builder().max_capacity(100).build();
+
+            let max_concurrent = Arc::new(AtomicU32::new(0));
+            let counter = Arc::new(AtomicU32::new(0));
+            let barrier = Arc::new(tokio::sync::Barrier::new(2));
+
+            let keys = ["100000012345678@lid.0", "100000012345678:5@lid.0"];
+
+            let mut handles = Vec::new();
+            for key in keys {
+                let locks = session_locks.clone();
+                let key = key.to_string();
+                let c = counter.clone();
+                let m = max_concurrent.clone();
+                let b = barrier.clone();
+
+                handles.push(tokio::spawn(async move {
+                    let mutex: Arc<async_lock::Mutex<()>> = locks
+                        .get_with_by_ref(&key, async { Arc::new(async_lock::Mutex::new(())) })
+                        .await;
+                    // lock_arc(): same reason as above
+                    let _guard = mutex.lock_arc().await;
+
+                    let active = c.fetch_add(1, Ordering::SeqCst) + 1;
+                    m.fetch_max(active, Ordering::SeqCst);
+                    b.wait().await;
+                    c.fetch_sub(1, Ordering::SeqCst);
+                }));
+            }
+
+            for handle in handles {
+                handle.await.unwrap();
+            }
+
+            assert_eq!(max_concurrent.load(Ordering::SeqCst), 2);
         }
     }
 }

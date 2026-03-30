@@ -143,7 +143,7 @@ impl Client {
 
     /// Ensure E2E sessions exist for the given device JIDs.
     /// Waits for offline delivery, resolves LID mappings, then batches prekey fetches.
-    pub(crate) async fn ensure_e2e_sessions(&self, device_jids: Vec<Jid>) -> Result<()> {
+    pub(crate) async fn ensure_e2e_sessions(&self, device_jids: &[Jid]) -> Result<()> {
         use wacore::types::jid::JidExt;
 
         if device_jids.is_empty() {
@@ -151,7 +151,7 @@ impl Client {
         }
 
         self.wait_for_offline_delivery_end().await;
-        let resolved_jids = self.resolve_lid_mappings(&device_jids).await;
+        let resolved_jids = self.resolve_lid_mappings(device_jids).await;
 
         let device_store = self.persistence_manager.get_device_arc().await;
         let mut jids_needing_sessions = Vec::with_capacity(resolved_jids.len());

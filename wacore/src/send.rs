@@ -637,12 +637,10 @@ pub async fn prepare_dm_stanza<
     request_id: String,
     edit: Option<crate::types::message::EditAttribute>,
     extra_stanza_nodes: &[Node],
+    all_devices: Vec<Jid>,
 ) -> Result<Node> {
-    // Generate reporting token if the message type supports it
-    // For DMs, both sender_jid and remote_jid are the recipient (to_jid) per Baileys implementation
     let reporting_result = generate_reporting_token(message, &request_id, &to_jid, &to_jid, None);
 
-    // Prepare message with MessageContextInfo containing the message secret
     let message_for_encryption = if let Some(ref result) = reporting_result {
         prepare_message_with_context(message, &result.message_secret)
     } else {
@@ -662,8 +660,6 @@ pub async fn prepare_dm_stanza<
 
     let own_devices_plaintext = MessageUtils::pad_message_v2(dsm.encode_to_vec());
 
-    let participants = vec![to_jid.clone(), own_jid.clone()];
-    let all_devices = resolver.resolve_devices(&participants).await?;
     let total_devices = all_devices.len();
     let (recipient_devices, own_other_devices) =
         partition_dm_devices(all_devices, own_jid, own_lid);
