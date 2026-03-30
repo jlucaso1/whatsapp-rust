@@ -4282,7 +4282,7 @@ mod tests {
         let ensure_handle = tokio::spawn(async move {
             // Start with some JIDs - but since we're testing the wait, we use empty
             // to avoid needing actual session establishment
-            client_clone.ensure_e2e_sessions(vec![]).await
+            client_clone.ensure_e2e_sessions(&[]).await
         });
 
         // Wait a bit - ensure_e2e_sessions should return immediately for empty list
@@ -4298,7 +4298,7 @@ mod tests {
         let ensure_handle = tokio::spawn(async move {
             // This will wait for offline sync before proceeding
             let start = std::time::Instant::now();
-            let _ = client_clone.ensure_e2e_sessions(vec![test_jid]).await;
+            let _ = client_clone.ensure_e2e_sessions(&[test_jid]).await;
             start.elapsed()
         });
 

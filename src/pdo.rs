@@ -141,7 +141,7 @@ impl Client {
         );
 
         // Ensure E2E session exists before sending (matches WhatsApp Web behavior)
-        self.ensure_e2e_sessions(vec![primary_phone_jid.clone()])
+        self.ensure_e2e_sessions(std::slice::from_ref(&primary_phone_jid))
             .await?;
 
         // Send the message to our primary phone (device 0)
@@ -213,7 +213,7 @@ impl Client {
             chat_jid, count, primary_phone_jid
         );
 
-        self.ensure_e2e_sessions(vec![primary_phone_jid.clone()])
+        self.ensure_e2e_sessions(std::slice::from_ref(&primary_phone_jid))
             .await?;
         self.send_peer_message(primary_phone_jid, &msg).await
     }

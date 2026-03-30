@@ -990,9 +990,6 @@ impl Client {
             // Per-device locking to match decrypt path (message.rs:684),
             // preventing ratchet desync on concurrent send/receive.
 
-            let recipient_devices = self.get_user_devices(std::slice::from_ref(&to)).await?;
-            self.ensure_e2e_sessions(recipient_devices).await?;
-
             self.add_recent_message(to.clone(), request_id.clone(), message)
                 .await;
 
@@ -1001,6 +998,12 @@ impl Client {
                 .pn
                 .as_ref()
                 .ok_or(crate::client::ClientError::NotLoggedIn)?;
+
+            // Single device resolution for ensure_e2e_sessions, locking, and encryption
+            let all_dm_devices = self
+                .get_user_devices(&[to.clone(), own_jid.clone()])
+                .await?;
+            self.ensure_e2e_sessions(&all_dm_devices).await?;
 
             let mut extra_stanza_nodes = extra_stanza_nodes;
             if !to.is_group() && !to.is_newsletter() {
@@ -1016,10 +1019,6 @@ impl Client {
                 debug!(target: "Client/TcToken", "Scheduled tc token issuance after send for {}", to);
             }
 
-            let all_dm_devices = self
-                .get_user_devices(&[to.clone(), own_jid.clone()])
-                .await?;
-
             // Sorted to prevent deadlocks when multiple sends overlap
             let mut lock_keys: Vec<String> = Vec::with_capacity(all_dm_devices.len());
             for device_jid in &all_dm_devices {
@@ -1029,15 +1028,19 @@ impl Client {
             lock_keys.sort_unstable();
             lock_keys.dedup();
 
-            let mut _session_guards = Vec::with_capacity(lock_keys.len());
+            let mut _session_mutexes = Vec::with_capacity(lock_keys.len());
             for key in &lock_keys {
-                let mutex = self
-                    .session_locks
-                    .get_with_by_ref(key, async {
-                        std::sync::Arc::new(async_lock::Mutex::new(()))
-                    })
-                    .await;
-                _session_guards.push(mutex.lock_arc().await);
+                _session_mutexes.push(
+                    self.session_locks
+                        .get_with_by_ref(key, async {
+                            std::sync::Arc::new(async_lock::Mutex::new(()))
+                        })
+                        .await,
+                );
+            }
+            let mut _session_guards = Vec::with_capacity(_session_mutexes.len());
+            for mutex in &_session_mutexes {
+                _session_guards.push(mutex.lock().await);
             }
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
@@ -1063,6 +1066,7 @@ impl Client {
                 request_id,
                 edit,
                 &extra_stanza_nodes,
+                all_dm_devices,
             )
             .await?
         };
