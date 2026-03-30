@@ -4,5 +4,6 @@ whatsapp.db-wal
 whatsapp.db-shm
 .git/
 docs/
-tests/e2e/src/
-tests/e2e/tests/
+.claude
+/*.db*
+/*.txt
