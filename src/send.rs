@@ -999,11 +999,20 @@ impl Client {
                 .as_ref()
                 .ok_or(crate::client::ClientError::NotLoggedIn)?;
 
-            // Single device resolution for ensure_e2e_sessions, locking, and encryption
-            let all_dm_devices = self
-                .get_user_devices(&[to.clone(), own_jid.clone()])
-                .await?;
-            self.ensure_e2e_sessions(&all_dm_devices).await?;
+            // Bare recipient JID for 1:1 DM Signal session.
+            // WA Web always uses bare addresses for DM recipients
+            // (MsgCreateFanoutStanza.js), and the server delivers with
+            // bare `from`, so the receive path decrypts under bare too.
+            let recipient_bare = self.resolve_encryption_jid(&to).await.to_non_ad();
+
+            // Own devices need device-specific JIDs for DeviceSentMessage
+            let own_devices = self.get_user_devices(std::slice::from_ref(own_jid)).await?;
+
+            let mut all_dm_jids = Vec::with_capacity(1 + own_devices.len());
+            all_dm_jids.push(recipient_bare);
+            all_dm_jids.extend(own_devices);
+
+            self.ensure_e2e_sessions(&all_dm_jids).await?;
 
             let mut extra_stanza_nodes = extra_stanza_nodes;
             if !to.is_group() && !to.is_newsletter() {
@@ -1019,7 +1028,7 @@ impl Client {
                 debug!(target: "Client/TcToken", "Scheduled tc token issuance after send for {}", to);
             }
 
-            let lock_keys = self.build_session_lock_keys(&all_dm_devices).await;
+            let lock_keys = self.build_session_lock_keys(&all_dm_jids).await;
 
             let mut _session_mutexes = Vec::with_capacity(lock_keys.len());
             for key in &lock_keys {
@@ -1059,7 +1068,7 @@ impl Client {
                 request_id,
                 edit,
                 &extra_stanza_nodes,
-                all_dm_devices,
+                all_dm_jids,
             )
             .await?
         };
@@ -2076,6 +2085,62 @@ mod tests {
             }
 
             assert_eq!(max_concurrent.load(Ordering::SeqCst), 2);
+        }
+
+        /// Regression: 1:1 DM recipient must use bare Signal address matching
+        /// the receive path. WA Web strips device IDs from `from` in delivered
+        /// DMs, so both send and receive must use `user@lid.0` (not `user:33@lid.0`).
+        #[tokio::test]
+        async fn dm_recipient_uses_bare_address() {
+            let client = crate::test_utils::create_test_client().await;
+
+            // Simulate: recipient has device 33 (companion), own has device 5
+            let recipient_bare = Jid::from_str("100000012345678@lid").unwrap();
+            let own_device_5 = Jid::from_str("999999999999:5@s.whatsapp.net").unwrap();
+
+            // Build JID list the same way send_message_impl now does:
+            // bare recipient + device-specific own
+            let all_dm_jids = vec![recipient_bare.clone(), own_device_5.clone()];
+            let lock_keys = client.build_session_lock_keys(&all_dm_jids).await;
+
+            // Recipient lock key must be BARE (device 0)
+            let recipient_key = recipient_bare.to_protocol_address_string();
+            assert_eq!(recipient_key, "100000012345678@lid.0");
+            assert!(lock_keys.contains(&recipient_key));
+
+            // Own device lock key must be device-specific
+            let own_key = own_device_5.to_protocol_address_string();
+            assert_eq!(own_key, "999999999999:5@c.us.0");
+            assert!(lock_keys.contains(&own_key));
+
+            // The old bug: using device-specific for recipient would NOT match
+            // the decrypt path's bare address
+            let wrong_key = "100000012345678:33@lid.0";
+            assert!(
+                !lock_keys.contains(&wrong_key.to_string()),
+                "recipient must NOT use device-specific address"
+            );
+        }
+
+        /// Verify bare normalization deduplicates multiple recipient devices.
+        #[test]
+        fn bare_normalization_deduplicates_recipient_devices() {
+            let devices: Vec<Jid> = [
+                "100000012345678@lid",
+                "100000012345678:5@lid",
+                "100000012345678:33@lid",
+            ]
+            .iter()
+            .map(|s| Jid::from_str(s).unwrap())
+            .collect();
+
+            // All collapse to the same bare JID
+            let bare: Vec<Jid> = devices.iter().map(|j| j.to_non_ad()).collect();
+            assert!(bare.windows(2).all(|w| w[0] == w[1]));
+            assert_eq!(
+                bare[0].to_protocol_address_string(),
+                "100000012345678@lid.0"
+            );
         }
     }
 }
