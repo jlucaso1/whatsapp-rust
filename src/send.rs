@@ -2088,36 +2088,36 @@ mod tests {
         }
 
         /// Regression: 1:1 DM recipient must use bare Signal address matching
-        /// the receive path. WA Web strips device IDs from `from` in delivered
-        /// DMs, so both send and receive must use `user@lid.0` (not `user:33@lid.0`).
+        /// the receive path. Starts from device-specific JID and verifies
+        /// to_non_ad() normalization produces the correct bare key.
         #[tokio::test]
         async fn dm_recipient_uses_bare_address() {
             let client = crate::test_utils::create_test_client().await;
 
-            // Simulate: recipient has device 33 (companion), own has device 5
-            let recipient_bare = Jid::from_str("100000012345678@lid").unwrap();
+            // Start from device-specific (what get_user_devices would return)
+            let recipient_device33 = Jid::from_str("100000012345678:33@lid").unwrap();
             let own_device_5 = Jid::from_str("999999999999:5@s.whatsapp.net").unwrap();
 
-            // Build JID list the same way send_message_impl now does:
-            // bare recipient + device-specific own
+            // Normalize recipient to bare — same path as send_message_impl:
+            // resolve_encryption_jid(&to).to_non_ad()
+            let recipient_bare = recipient_device33.to_non_ad();
+
             let all_dm_jids = vec![recipient_bare.clone(), own_device_5.clone()];
             let lock_keys = client.build_session_lock_keys(&all_dm_jids).await;
 
-            // Recipient lock key must be BARE (device 0)
-            let recipient_key = recipient_bare.to_protocol_address_string();
-            assert_eq!(recipient_key, "100000012345678@lid.0");
-            assert!(lock_keys.contains(&recipient_key));
+            // Recipient lock key must be BARE (device 0), matching decrypt path
+            assert_eq!(
+                recipient_bare.to_protocol_address_string(),
+                "100000012345678@lid.0"
+            );
+            assert!(lock_keys.contains(&"100000012345678@lid.0".to_string()));
 
             // Own device lock key must be device-specific
-            let own_key = own_device_5.to_protocol_address_string();
-            assert_eq!(own_key, "999999999999:5@c.us.0");
-            assert!(lock_keys.contains(&own_key));
+            assert!(lock_keys.contains(&"999999999999:5@c.us.0".to_string()));
 
-            // The old bug: using device-specific for recipient would NOT match
-            // the decrypt path's bare address
-            let wrong_key = "100000012345678:33@lid.0";
+            // Device-specific recipient key must NOT be present
             assert!(
-                !lock_keys.contains(&wrong_key.to_string()),
+                !lock_keys.contains(&"100000012345678:33@lid.0".to_string()),
                 "recipient must NOT use device-specific address"
             );
         }
