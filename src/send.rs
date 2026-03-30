@@ -999,12 +999,24 @@ impl Client {
                 .as_ref()
                 .ok_or(crate::client::ClientError::NotLoggedIn)?;
 
-            // Recipient usync refreshes PN→LID mappings (add_lid_pn_mapping),
-            // which resolve_encryption_jid needs below for first-contact chats.
-            let _ = self.get_user_devices(std::slice::from_ref(&to)).await;
+            // Resolve PN→LID before encryption (WA Web: ensurePhoneNumberToLidMapping).
+            if to.is_pn() && self.lid_pn_cache.get_current_lid(&to.user).await.is_none() {
+                let sid = self.generate_request_id();
+                let spec = wacore::iq::usync::LidQuerySpec::new(vec![to.to_non_ad()], sid);
+                if let Ok(resp) = self.execute(spec).await {
+                    for mapping in &resp.lid_mappings {
+                        let _ = self
+                            .add_lid_pn_mapping(
+                                &mapping.lid,
+                                &mapping.phone_number,
+                                crate::lid_pn_cache::LearningSource::Usync,
+                            )
+                            .await;
+                    }
+                }
+            }
 
-            // Bare recipient for 1:1 DM Signal session — WA Web uses bare
-            // (MsgCreateFanoutStanza.js), server delivers with bare `from`.
+            // Bare recipient for 1:1 DM Signal session.
             let recipient_bare = self.resolve_encryption_jid(&to).await.to_non_ad();
 
             // Own devices keep device-specific JIDs for DeviceSentMessage
