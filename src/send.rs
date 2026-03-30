@@ -999,13 +999,15 @@ impl Client {
                 .as_ref()
                 .ok_or(crate::client::ClientError::NotLoggedIn)?;
 
-            // Bare recipient JID for 1:1 DM Signal session.
-            // WA Web always uses bare addresses for DM recipients
-            // (MsgCreateFanoutStanza.js), and the server delivers with
-            // bare `from`, so the receive path decrypts under bare too.
+            // Recipient usync refreshes PN→LID mappings (add_lid_pn_mapping),
+            // which resolve_encryption_jid needs below for first-contact chats.
+            let _ = self.get_user_devices(std::slice::from_ref(&to)).await;
+
+            // Bare recipient for 1:1 DM Signal session — WA Web uses bare
+            // (MsgCreateFanoutStanza.js), server delivers with bare `from`.
             let recipient_bare = self.resolve_encryption_jid(&to).await.to_non_ad();
 
-            // Own devices need device-specific JIDs for DeviceSentMessage
+            // Own devices keep device-specific JIDs for DeviceSentMessage
             let own_devices = self.get_user_devices(std::slice::from_ref(own_jid)).await?;
 
             let mut all_dm_jids = Vec::with_capacity(1 + own_devices.len());
