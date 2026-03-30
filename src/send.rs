@@ -2017,6 +2017,8 @@ mod tests {
                     let mutex: Arc<async_lock::Mutex<()>> = locks
                         .get_with_by_ref(&key, async { Arc::new(async_lock::Mutex::new(())) })
                         .await;
+                    // lock_arc() needed: guard must own the Arc since mutex is a local
+                    // (production uses lock() with a separate Vec keeping Arcs alive)
                     let _guard = mutex.lock_arc().await;
 
                     let active = counter.fetch_add(1, Ordering::SeqCst) + 1;
@@ -2059,11 +2061,11 @@ mod tests {
                     let mutex: Arc<async_lock::Mutex<()>> = locks
                         .get_with_by_ref(&key, async { Arc::new(async_lock::Mutex::new(())) })
                         .await;
+                    // lock_arc(): same reason as above
                     let _guard = mutex.lock_arc().await;
 
                     let active = c.fetch_add(1, Ordering::SeqCst) + 1;
                     m.fetch_max(active, Ordering::SeqCst);
-                    // Barrier proves both tasks run concurrently
                     b.wait().await;
                     c.fetch_sub(1, Ordering::SeqCst);
                 }));
