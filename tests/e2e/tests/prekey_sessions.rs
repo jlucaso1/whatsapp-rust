@@ -158,7 +158,6 @@ async fn test_prekey_collision_regression() -> anyhow::Result<()> {
                 got_connected = true;
             }
             Ok(Ok(_)) => {} // Skip messages, undecryptable, etc.
-            Ok(Err(tokio::sync::broadcast::error::RecvError::Lagged(_))) => continue,
             Ok(Err(_)) => break,
             Err(_) => break,
         }

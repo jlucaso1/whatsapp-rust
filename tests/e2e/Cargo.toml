@@ -12,6 +12,7 @@ dhat-heap = ["dep:dhat"]
 
 [dependencies]
 anyhow = { workspace = true }
+async-channel = { workspace = true }
 dhat = { version = "0.3", optional = true }
 futures = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time"] }

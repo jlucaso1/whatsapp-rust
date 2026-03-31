@@ -171,6 +171,40 @@ pub trait EventHandler: Send + Sync {
     fn handle_event(&self, event: &Event);
 }
 
+/// Event handler that forwards events to an async channel for test assertions.
+///
+/// Uses `async_channel` (runtime-agnostic) so it works with any async executor.
+/// Events are buffered in an unbounded channel, so events fired before the
+/// receiver starts listening are not lost.
+///
+/// # Example
+/// ```ignore
+/// let (handler, mut rx) = ChannelEventHandler::new();
+/// client.register_handler(handler);
+/// // ... start the client ...
+/// // Wait for Connected event
+/// while let Ok(event) = rx.recv().await {
+///     if matches!(event, Event::Connected(_)) { break; }
+/// }
+/// ```
+pub struct ChannelEventHandler {
+    tx: async_channel::Sender<Event>,
+}
+
+impl ChannelEventHandler {
+    /// Create a new handler and its event receiver.
+    pub fn new() -> (Arc<Self>, async_channel::Receiver<Event>) {
+        let (tx, rx) = async_channel::unbounded();
+        (Arc::new(Self { tx }), rx)
+    }
+}
+
+impl EventHandler for ChannelEventHandler {
+    fn handle_event(&self, event: &Event) {
+        let _ = self.tx.try_send(event.clone());
+    }
+}
+
 #[derive(Default, Clone)]
 pub struct CoreEventBus {
     handlers: Arc<RwLock<Vec<Arc<dyn EventHandler>>>>,

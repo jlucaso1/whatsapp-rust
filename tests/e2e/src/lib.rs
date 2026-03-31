@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use wacore::store::traits::TcTokenEntry;
-use wacore::types::events::{Event, EventHandler};
+use wacore::types::events::{ChannelEventHandler, Event};
 use wacore_binary::node::Node;
 use whatsapp_rust::Jid;
 use whatsapp_rust::bot::Bot;
@@ -42,28 +42,10 @@ pub fn scenario_push_name(prefix: &str, flags: &[&str]) -> String {
     format!("scenario:{}:{}", flags.join(","), unique_push_name(prefix))
 }
 
-/// Event handler that sends events to a tokio broadcast channel for test assertions.
-pub struct ChannelEventHandler {
-    tx: tokio::sync::broadcast::Sender<Event>,
-}
-
-impl ChannelEventHandler {
-    pub fn new() -> (Arc<Self>, tokio::sync::broadcast::Receiver<Event>) {
-        let (tx, rx) = tokio::sync::broadcast::channel(1000);
-        (Arc::new(Self { tx }), rx)
-    }
-}
-
-impl EventHandler for ChannelEventHandler {
-    fn handle_event(&self, event: &Event) {
-        let _ = self.tx.send(event.clone());
-    }
-}
-
 /// A connected client ready for testing, with its event receiver and run handle.
 pub struct TestClient {
     pub client: Arc<whatsapp_rust::client::Client>,
-    pub event_rx: tokio::sync::broadcast::Receiver<Event>,
+    pub event_rx: async_channel::Receiver<Event>,
     pub run_handle: whatsapp_rust::bot::BotHandle,
 }
 
@@ -86,7 +68,7 @@ impl TestClient {
         let store = create_test_store(prefix).await?;
         let backend = Arc::new(store) as Arc<dyn Backend>;
         let transport_factory = TokioWebSocketTransportFactory::new().with_url(mock_server_url());
-        let (event_handler, mut event_rx) = ChannelEventHandler::new();
+        let (event_handler, event_rx) = ChannelEventHandler::new();
 
         let mut builder = Bot::builder()
             .with_backend(backend)
@@ -135,15 +117,8 @@ impl TestClient {
                         }
                     }
                     Ok(_) => {}
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        eprintln!(
-                            "WARN: Event channel lagged during connect, {} messages dropped",
-                            n
-                        );
-                        continue;
-                    }
                     Err(e) => {
-                        return Err(anyhow::anyhow!("Event channel error during connect: {e}"));
+                        return Err(anyhow::anyhow!("Event channel closed during connect: {e}"));
                     }
                 }
             }
@@ -323,11 +298,7 @@ impl TestClient {
                 match self.event_rx.recv().await {
                     Ok(event) if predicate(&event) => return Ok(event),
                     Ok(_) => continue,
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        eprintln!("WARN: Event channel lagged, {} messages dropped", n);
-                        continue;
-                    }
-                    Err(e) => return Err(anyhow::anyhow!("Event channel error: {e}")),
+                    Err(e) => return Err(anyhow::anyhow!("Event channel closed: {e}")),
                 }
             }
         })
