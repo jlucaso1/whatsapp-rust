@@ -618,6 +618,82 @@ impl IqSpec for DeviceListSpec {
     }
 }
 
+/// Resolve PN→LID mappings for JIDs without a known LID.
+/// Matches WA Web's `ensurePhoneNumberToLidMapping` (PhoneNumberMappingJob.js).
+/// Uses a separate usync with only `<lid/>` in the query to avoid side effects
+/// on device registries or sender key state.
+#[derive(Debug, Clone)]
+pub struct LidQuerySpec {
+    pub jids: Vec<Jid>,
+    pub sid: String,
+}
+
+impl LidQuerySpec {
+    pub fn new(jids: Vec<Jid>, sid: impl Into<String>) -> Self {
+        Self {
+            jids,
+            sid: sid.into(),
+        }
+    }
+}
+
+/// Response: just the LID mappings learned.
+#[derive(Debug, Clone)]
+pub struct LidQueryResponse {
+    pub lid_mappings: Vec<UsyncLidMapping>,
+}
+
+impl IqSpec for LidQuerySpec {
+    type Response = LidQueryResponse;
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let query_node = NodeBuilder::new("query")
+            .children(vec![NodeBuilder::new("lid").build()])
+            .build();
+
+        let user_nodes: Vec<Node> = self
+            .jids
+            .iter()
+            .map(|jid| {
+                NodeBuilder::new("user")
+                    .attr("jid", jid.to_non_ad().to_string())
+                    .build()
+            })
+            .collect();
+
+        let list_node = NodeBuilder::new("list").children(user_nodes).build();
+
+        let usync_node = NodeBuilder::new("usync")
+            .attr("sid", self.sid.as_str())
+            .attr("mode", UsyncMode::Query.as_str())
+            .attr("last", "true")
+            .attr("index", "0")
+            // WA Web ContactSyncApi uses "background" for LID resolution
+            .attr("context", UsyncContext::Background.as_str())
+            .children(vec![query_node, list_node])
+            .build();
+
+        InfoQuery::get(
+            "usync",
+            Jid::new("", SERVER_JID),
+            Some(NodeContent::Nodes(vec![usync_node])),
+        )
+    }
+
+    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+        let usync = response
+            .get_optional_child("usync")
+            .ok_or_else(|| anyhow!("LID query response missing <usync> node"))?;
+        check_usync_result_errors(usync)?;
+        usync
+            .get_optional_child("list")
+            .ok_or_else(|| anyhow!("LID query response missing <list> node"))?;
+
+        let lid_mappings = crate::usync::parse_lid_mappings_from_response(response);
+        Ok(LidQueryResponse { lid_mappings })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

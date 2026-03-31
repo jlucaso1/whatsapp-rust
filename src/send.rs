@@ -999,11 +999,48 @@ impl Client {
                 .as_ref()
                 .ok_or(crate::client::ClientError::NotLoggedIn)?;
 
-            // Single device resolution for ensure_e2e_sessions, locking, and encryption
-            let all_dm_devices = self
-                .get_user_devices(&[to.clone(), own_jid.clone()])
-                .await?;
-            self.ensure_e2e_sessions(&all_dm_devices).await?;
+            // PN→LID mapping (WA Web: ManagePhoneNumberMappingJob)
+            if to.is_pn() && self.lid_pn_cache.get_current_lid(&to.user).await.is_none() {
+                let sid = self.generate_request_id();
+                let spec = wacore::iq::usync::LidQuerySpec::new(vec![to.to_non_ad()], sid);
+                // Best-effort: WA Web also catches and warns on failure
+                match self.execute(spec).await {
+                    Ok(resp) => {
+                        for mapping in &resp.lid_mappings {
+                            if let Err(e) = self
+                                .add_lid_pn_mapping(
+                                    &mapping.lid,
+                                    &mapping.phone_number,
+                                    crate::lid_pn_cache::LearningSource::Usync,
+                                )
+                                .await
+                            {
+                                log::warn!(
+                                    "Failed to persist LID mapping {} -> {}: {e:?}",
+                                    mapping.phone_number,
+                                    mapping.lid
+                                );
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("LID query failed for {}, falling back to PN: {e:?}", to);
+                    }
+                }
+            }
+
+            // Bare recipient (WA Web: MsgCreateFanoutStanza)
+            let recipient_bare = self.resolve_encryption_jid(&to).await.to_non_ad();
+
+            // Populate device registry for retry handling
+            let _ = self.get_user_devices(std::slice::from_ref(&to)).await;
+            let own_devices = self.get_user_devices(std::slice::from_ref(own_jid)).await?;
+
+            let mut all_dm_jids = Vec::with_capacity(1 + own_devices.len());
+            all_dm_jids.push(recipient_bare);
+            all_dm_jids.extend(own_devices);
+
+            self.ensure_e2e_sessions(&all_dm_jids).await?;
 
             let mut extra_stanza_nodes = extra_stanza_nodes;
             if !to.is_group() && !to.is_newsletter() {
@@ -1019,7 +1056,7 @@ impl Client {
                 debug!(target: "Client/TcToken", "Scheduled tc token issuance after send for {}", to);
             }
 
-            let lock_keys = self.build_session_lock_keys(&all_dm_devices).await;
+            let lock_keys = self.build_session_lock_keys(&all_dm_jids).await;
 
             let mut _session_mutexes = Vec::with_capacity(lock_keys.len());
             for key in &lock_keys {
@@ -1059,7 +1096,7 @@ impl Client {
                 request_id,
                 edit,
                 &extra_stanza_nodes,
-                all_dm_devices,
+                all_dm_jids,
             )
             .await?
         };
@@ -2076,6 +2113,64 @@ mod tests {
             }
 
             assert_eq!(max_concurrent.load(Ordering::SeqCst), 2);
+        }
+
+        /// Regression: 1:1 DM recipient must use bare Signal address matching
+        /// the receive path. Starts from device-specific JID and verifies
+        /// to_non_ad() normalization produces the correct bare key.
+        #[tokio::test]
+        async fn dm_recipient_uses_bare_address() {
+            let client = crate::test_utils::create_test_client().await;
+
+            // Start from device-specific JID, exercise the production path
+            let recipient_device33 = Jid::from_str("100000012345678:33@lid").unwrap();
+            let own_device_5 = Jid::from_str("999999999999:5@s.whatsapp.net").unwrap();
+
+            // Same normalization as send_message_impl
+            let recipient_bare = client
+                .resolve_encryption_jid(&recipient_device33)
+                .await
+                .to_non_ad();
+
+            let all_dm_jids = vec![recipient_bare.clone(), own_device_5.clone()];
+            let lock_keys = client.build_session_lock_keys(&all_dm_jids).await;
+
+            // Recipient lock key must be BARE (device 0), matching decrypt path
+            assert_eq!(
+                recipient_bare.to_protocol_address_string(),
+                "100000012345678@lid.0"
+            );
+            assert!(lock_keys.contains(&"100000012345678@lid.0".to_string()));
+
+            // Own device lock key must be device-specific
+            assert!(lock_keys.contains(&"999999999999:5@c.us.0".to_string()));
+
+            // Device-specific recipient key must NOT be present
+            assert!(
+                !lock_keys.contains(&"100000012345678:33@lid.0".to_string()),
+                "recipient must NOT use device-specific address"
+            );
+        }
+
+        /// Verify bare normalization deduplicates multiple recipient devices.
+        #[test]
+        fn bare_normalization_deduplicates_recipient_devices() {
+            let devices: Vec<Jid> = [
+                "100000012345678@lid",
+                "100000012345678:5@lid",
+                "100000012345678:33@lid",
+            ]
+            .iter()
+            .map(|s| Jid::from_str(s).unwrap())
+            .collect();
+
+            // All collapse to the same bare JID
+            let bare: Vec<Jid> = devices.iter().map(|j| j.to_non_ad()).collect();
+            assert!(bare.windows(2).all(|w| w[0] == w[1]));
+            assert_eq!(
+                bare[0].to_protocol_address_string(),
+                "100000012345678@lid.0"
+            );
         }
     }
 }

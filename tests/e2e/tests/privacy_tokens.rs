@@ -196,7 +196,8 @@ async fn test_reply_to_restricted_contact_uses_received_tc_token() -> anyhow::Re
 async fn test_first_message_to_restricted_contact_receives_463_nack() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let restricted_name = restricted_push_name("e2e_tctok_463_a");
+    // cs_enabled=0: reject cstoken so first-contact triggers 463 even with NCT salt
+    let restricted_name = scenario_push_name("e2e_tctok_463_a", &["restricted", "cs_enabled=0"]);
     let mut client_a = TestClient::connect_as("e2e_tctok_463_a", &restricted_name).await?;
     let client_b = TestClient::connect("e2e_tctok_463_b").await?;
 
