@@ -730,13 +730,14 @@ impl Client {
             .bytes(registration_id_bytes)
             .build();
 
-        // WhatsApp Web only includes keys when retryCount >= 2.
-        // First retry gives the sender a chance to resend without full key exchange.
-        //
-        // WA Web includes keys at retryCount >= MIN_RETRY_COUNT_FOR_KEYS.
-        // Optimization for NoSession: include keys on retry#1 to reduce round-trips
-        // for skmsg-only failures where the sender needs our prekeys for SKDM.
-        let include_keys_early = reason == RetryReason::NoSession;
+        // WA Web includes keys at retryCount >= MIN_RETRY_COUNT_FOR_KEYS (=2).
+        // Optimization: include keys on retry #1 when the sender provably can't
+        // recover without them, to avoid a wasted round-trip:
+        // - NoSession: sender needs our prekeys for SKDM session establishment
+        // - InvalidKeyId: sender's prekey reference is consumed — they'll just
+        //   re-send with the same broken session without fresh keys
+        let include_keys_early =
+            reason == RetryReason::NoSession || reason == RetryReason::InvalidKeyId;
         let keys_node = if retry_count >= MIN_RETRY_COUNT_FOR_KEYS || include_keys_early {
             let device_store = self.persistence_manager.get_device_arc().await;
             let device_guard = device_store.read().await;
@@ -1603,7 +1604,8 @@ mod tests {
 
         for (retry_count, reason, should_include_keys, description) in test_cases {
             // Replicate the logic from send_retry_receipt
-            let include_keys_early = reason == RetryReason::NoSession;
+            let include_keys_early =
+                reason == RetryReason::NoSession || reason == RetryReason::InvalidKeyId;
             let would_include_keys = retry_count >= MIN_RETRY_COUNT_FOR_KEYS || include_keys_early;
 
             assert_eq!(
@@ -1656,7 +1658,8 @@ mod tests {
                 };
 
                 // Apply the optimization logic
-                let include_keys_early = reason == RetryReason::NoSession;
+                let include_keys_early =
+                    reason == RetryReason::NoSession || reason == RetryReason::InvalidKeyId;
                 let would_include_keys =
                     retry_count >= MIN_RETRY_COUNT_FOR_KEYS || include_keys_early;
 
@@ -1714,7 +1717,8 @@ mod tests {
         let reason = RetryReason::NoSession;
 
         // With optimization, we include keys on retry#1
-        let include_keys_early = reason == RetryReason::NoSession;
+        let include_keys_early =
+            reason == RetryReason::NoSession || reason == RetryReason::InvalidKeyId;
         let would_include_keys = retry_count >= MIN_RETRY_COUNT_FOR_KEYS || include_keys_early;
 
         assert!(
