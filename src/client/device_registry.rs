@@ -289,12 +289,26 @@ impl Client {
             "Clearing device record for user {user}: removing {non_primary_count} non-primary device(s) due to raw_id change",
         );
 
-        // Delete Signal sessions for non-primary devices from cache + DB
-        for device in record.devices.iter().filter(|d| d.device_id != 0) {
-            let mut jid = Jid::new(user, server);
-            jid.device = device.device_id as u16;
-            let addr = wacore::types::jid::JidExt::to_protocol_address(&jid);
-            self.signal_cache.delete_session(&addr).await;
+        // Delete Signal sessions under BOTH LID and PN addresses.
+        // The notification may arrive via one address but sessions can exist
+        // under either (encrypt path is LID-first, decrypt stores under sender).
+        let lookup = self.resolve_lookup_keys(user).await;
+        let servers: &[&str] = match &lookup {
+            UserLookupKeys::LidWithPn { .. } | UserLookupKeys::PnWithLid { .. } => &[
+                wacore_binary::jid::HIDDEN_USER_SERVER,
+                wacore_binary::jid::DEFAULT_USER_SERVER,
+            ],
+            UserLookupKeys::Unknown { .. } => std::slice::from_ref(&server),
+        };
+        for &srv in servers {
+            for key in lookup.all_keys() {
+                for device in record.devices.iter().filter(|d| d.device_id != 0) {
+                    let mut jid = Jid::new(key, srv);
+                    jid.device = device.device_id as u16;
+                    let addr = wacore::types::jid::JidExt::to_protocol_address(&jid);
+                    self.signal_cache.delete_session(&addr).await;
+                }
+            }
         }
         if let Err(e) = self.flush_signal_cache().await {
             warn!("clear_device_record: failed to flush session deletions: {e}");
