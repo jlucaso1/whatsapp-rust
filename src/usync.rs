@@ -104,7 +104,10 @@ impl Client {
                     existing_key_indices.clear();
                 }
 
-                // Preserve raw_id from existing only if no mismatch occurred
+                // Preserve raw_id from existing when usync didn't provide one
+                // (no key-index-list) and no mismatch cleared the indices.
+                // existing_key_indices is empty after a mismatch clear, so this
+                // correctly skips preservation after identity change.
                 if raw_id.is_none() && !existing_key_indices.is_empty() {
                     raw_id = existing_record.as_ref().and_then(|r| r.raw_id);
                 }
