@@ -709,7 +709,7 @@ pub async fn prepare_dm_stanza<
     let dsm = wa::Message {
         device_sent_message: Some(Box::new(DeviceSentMessage {
             destination_jid: Some(to_jid.to_string()),
-            message: Some(Box::new(message_for_encryption.clone())),
+            message: Some(Box::new(message_for_encryption)),
             phash: Some("".to_string()),
         })),
         ..Default::default()
@@ -977,7 +977,7 @@ pub async fn prepare_group_stanza<
 
     let mut message_children: Vec<Node> = Vec::new();
     let mut includes_prekey_message = false;
-    let mut resolved_devices_for_phash: Option<Vec<Jid>> = None;
+    let mut phash_for_stanza: Option<String> = None;
     let mut skdm_encrypted_devices: Vec<Jid> = Vec::new();
 
     // Determine if we need to distribute SKDM and to which devices
@@ -1107,7 +1107,10 @@ pub async fn prepare_group_stanza<
     if let Some(ref distribution_list) = distribution_list {
         // WA Web computes phash from the full distribution list (target set at
         // send time), not the actual encrypted outcome
-        resolved_devices_for_phash = Some(distribution_list.clone());
+        match MessageUtils::participant_list_hash(distribution_list) {
+            Ok(phash) => phash_for_stanza = Some(phash),
+            Err(e) => log::warn!("Failed to compute phash for group {}: {:?}", to_jid, e),
+        }
         let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
             stores.sender_key_store,
             &to_jid,
@@ -1227,15 +1230,8 @@ pub async fn prepare_group_stanza<
     }
 
     // Add phash if we distributed keys in this message
-    if let Some(devices) = &resolved_devices_for_phash {
-        match MessageUtils::participant_list_hash(devices) {
-            Ok(phash) => {
-                stanza_builder = stanza_builder.attr("phash", phash);
-            }
-            Err(e) => {
-                log::warn!("Failed to compute phash for group {}: {:?}", to_jid, e);
-            }
-        }
+    if let Some(phash) = phash_for_stanza {
+        stanza_builder = stanza_builder.attr("phash", phash);
     }
 
     // Add any extra stanza nodes provided by the caller

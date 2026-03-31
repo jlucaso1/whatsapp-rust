@@ -73,7 +73,7 @@ impl<'a> Status<'a> {
     /// the `UploadResponse`, JPEG thumbnail bytes, and optional caption.
     pub async fn send_image(
         &self,
-        upload: &UploadResponse,
+        upload: UploadResponse,
         thumbnail: Vec<u8>,
         caption: Option<&str>,
         recipients: &[Jid],
@@ -81,11 +81,11 @@ impl<'a> Status<'a> {
     ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
             image_message: Some(Box::new(wa::message::ImageMessage {
-                url: Some(upload.url.clone()),
-                direct_path: Some(upload.direct_path.clone()),
-                media_key: Some(upload.media_key.clone()),
-                file_sha256: Some(upload.file_sha256.clone()),
-                file_enc_sha256: Some(upload.file_enc_sha256.clone()),
+                url: Some(upload.url),
+                direct_path: Some(upload.direct_path),
+                media_key: Some(upload.media_key.to_vec()),
+                file_sha256: Some(upload.file_sha256.to_vec()),
+                file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
                 file_length: Some(upload.file_length),
                 mimetype: Some("image/jpeg".to_string()),
                 jpeg_thumbnail: Some(thumbnail),
@@ -106,7 +106,7 @@ impl<'a> Status<'a> {
     /// the `UploadResponse`, JPEG thumbnail bytes, duration in seconds, and optional caption.
     pub async fn send_video(
         &self,
-        upload: &UploadResponse,
+        upload: UploadResponse,
         thumbnail: Vec<u8>,
         duration_seconds: u32,
         caption: Option<&str>,
@@ -115,11 +115,11 @@ impl<'a> Status<'a> {
     ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
             video_message: Some(Box::new(wa::message::VideoMessage {
-                url: Some(upload.url.clone()),
-                direct_path: Some(upload.direct_path.clone()),
-                media_key: Some(upload.media_key.clone()),
-                file_sha256: Some(upload.file_sha256.clone()),
-                file_enc_sha256: Some(upload.file_enc_sha256.clone()),
+                url: Some(upload.url),
+                direct_path: Some(upload.direct_path),
+                media_key: Some(upload.media_key.to_vec()),
+                file_sha256: Some(upload.file_sha256.to_vec()),
+                file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
                 file_length: Some(upload.file_length),
                 mimetype: Some("video/mp4".to_string()),
                 jpeg_thumbnail: Some(thumbnail),

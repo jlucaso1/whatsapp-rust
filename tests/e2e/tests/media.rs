@@ -11,9 +11,9 @@ fn build_image_message(upload: &UploadResponse, caption: Option<&str>) -> wa::Me
         image_message: Some(Box::new(wa::message::ImageMessage {
             url: Some(upload.url.clone()),
             direct_path: Some(upload.direct_path.clone()),
-            media_key: Some(upload.media_key.clone()),
-            file_sha256: Some(upload.file_sha256.clone()),
-            file_enc_sha256: Some(upload.file_enc_sha256.clone()),
+            media_key: Some(upload.media_key.to_vec()),
+            file_sha256: Some(upload.file_sha256.to_vec()),
+            file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
             file_length: Some(upload.file_length),
             mimetype: Some("image/jpeg".to_string()),
             caption: caption.map(|c| c.to_string()),
@@ -33,9 +33,9 @@ fn build_video_message(
         video_message: Some(Box::new(wa::message::VideoMessage {
             url: Some(upload.url.clone()),
             direct_path: Some(upload.direct_path.clone()),
-            media_key: Some(upload.media_key.clone()),
-            file_sha256: Some(upload.file_sha256.clone()),
-            file_enc_sha256: Some(upload.file_enc_sha256.clone()),
+            media_key: Some(upload.media_key.to_vec()),
+            file_sha256: Some(upload.file_sha256.to_vec()),
+            file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
             file_length: Some(upload.file_length),
             mimetype: Some("video/mp4".to_string()),
             seconds: Some(seconds),
@@ -52,9 +52,9 @@ fn build_document_message(upload: &UploadResponse, filename: &str, mimetype: &st
         document_message: Some(Box::new(wa::message::DocumentMessage {
             url: Some(upload.url.clone()),
             direct_path: Some(upload.direct_path.clone()),
-            media_key: Some(upload.media_key.clone()),
-            file_sha256: Some(upload.file_sha256.clone()),
-            file_enc_sha256: Some(upload.file_enc_sha256.clone()),
+            media_key: Some(upload.media_key.to_vec()),
+            file_sha256: Some(upload.file_sha256.to_vec()),
+            file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
             file_length: Some(upload.file_length),
             mimetype: Some(mimetype.to_string()),
             file_name: Some(filename.to_string()),
@@ -70,9 +70,9 @@ fn build_audio_message(upload: &UploadResponse, ptt: bool, seconds: u32) -> wa::
         audio_message: Some(Box::new(wa::message::AudioMessage {
             url: Some(upload.url.clone()),
             direct_path: Some(upload.direct_path.clone()),
-            media_key: Some(upload.media_key.clone()),
-            file_sha256: Some(upload.file_sha256.clone()),
-            file_enc_sha256: Some(upload.file_enc_sha256.clone()),
+            media_key: Some(upload.media_key.to_vec()),
+            file_sha256: Some(upload.file_sha256.to_vec()),
+            file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
             file_length: Some(upload.file_length),
             mimetype: Some(if ptt {
                 "audio/ogg; codecs=opus".to_string()
@@ -301,9 +301,9 @@ async fn test_upload_then_download_via_downloadable_trait() -> anyhow::Result<()
     let img_msg = wa::message::ImageMessage {
         url: Some(upload.url.clone()),
         direct_path: Some(upload.direct_path.clone()),
-        media_key: Some(upload.media_key.clone()),
-        file_sha256: Some(upload.file_sha256.clone()),
-        file_enc_sha256: Some(upload.file_enc_sha256.clone()),
+        media_key: Some(upload.media_key.to_vec()),
+        file_sha256: Some(upload.file_sha256.to_vec()),
+        file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
         file_length: Some(upload.file_length),
         mimetype: Some("image/jpeg".to_string()),
         ..Default::default()

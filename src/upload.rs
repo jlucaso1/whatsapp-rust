@@ -156,9 +156,9 @@ where
                             return Ok(UploadResponse {
                                 url,
                                 direct_path,
-                                media_key: enc.media_key.to_vec(),
-                                file_enc_sha256: enc.file_enc_sha256.to_vec(),
-                                file_sha256: enc.file_sha256.to_vec(),
+                                media_key: enc.media_key,
+                                file_enc_sha256: enc.file_enc_sha256,
+                                file_sha256: enc.file_sha256,
                                 file_length,
                                 media_key_timestamp,
                             });
@@ -196,9 +196,9 @@ where
                 return Ok(UploadResponse {
                     url: raw.url,
                     direct_path: raw.direct_path,
-                    media_key: enc.media_key.to_vec(),
-                    file_enc_sha256: enc.file_enc_sha256.to_vec(),
-                    file_sha256: enc.file_sha256.to_vec(),
+                    media_key: enc.media_key,
+                    file_enc_sha256: enc.file_enc_sha256,
+                    file_sha256: enc.file_sha256,
                     file_length,
                     media_key_timestamp,
                 });
@@ -233,9 +233,9 @@ where
 pub struct UploadResponse {
     pub url: String,
     pub direct_path: String,
-    pub media_key: Vec<u8>,
-    pub file_enc_sha256: Vec<u8>,
-    pub file_sha256: Vec<u8>,
+    pub media_key: [u8; 32],
+    pub file_enc_sha256: [u8; 32],
+    pub file_sha256: [u8; 32],
     pub file_length: u64,
     /// Unix timestamp (seconds) when the media key was generated.
     pub media_key_timestamp: i64,
@@ -254,6 +254,19 @@ impl From<UploadResponse> for wacore::sticker_pack::MediaUploadInfo {
     }
 }
 
+impl UploadResponse {
+    /// Convert crypto fields to `Vec<u8>` for protobuf message construction.
+    pub fn media_key_vec(&self) -> Vec<u8> {
+        self.media_key.to_vec()
+    }
+    pub fn file_sha256_vec(&self) -> Vec<u8> {
+        self.file_sha256.to_vec()
+    }
+    pub fn file_enc_sha256_vec(&self) -> Vec<u8> {
+        self.file_enc_sha256.to_vec()
+    }
+}
+
 #[derive(Deserialize)]
 struct RawUploadResponse {
     url: String,
@@ -264,7 +277,7 @@ struct RawUploadResponse {
 #[derive(Default, Clone)]
 pub struct UploadOptions {
     /// Reuse an existing media key instead of generating a fresh one.
-    pub media_key: Option<Vec<u8>>,
+    pub media_key: Option<[u8; 32]>,
 }
 
 impl std::fmt::Debug for UploadOptions {
@@ -280,7 +293,7 @@ impl UploadOptions {
         Self::default()
     }
 
-    pub fn with_media_key(mut self, key: Vec<u8>) -> Self {
+    pub fn with_media_key(mut self, key: [u8; 32]) -> Self {
         self.media_key = Some(key);
         self
     }
@@ -299,14 +312,7 @@ impl Client {
     ) -> Result<UploadResponse> {
         let file_length = data.len() as u64;
         let enc = wacore::runtime::blocking(&*self.runtime, move || {
-            let key_ref = match &options.media_key {
-                Some(k) => Some(
-                    <&[u8; 32]>::try_from(k.as_slice())
-                        .map_err(|_| anyhow!("media_key must be exactly 32 bytes"))?,
-                ),
-                None => None,
-            };
-            wacore::upload::encrypt_media_with_key(&data, media_type, key_ref)
+            wacore::upload::encrypt_media_with_key(&data, media_type, options.media_key.as_ref())
         })
         .await?;
 

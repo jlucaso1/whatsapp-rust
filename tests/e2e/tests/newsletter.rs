@@ -277,9 +277,9 @@ async fn test_newsletter_send_media_message() -> anyhow::Result<()> {
         image_message: Some(Box::new(wa::message::ImageMessage {
             url: Some(upload.url.clone()),
             direct_path: Some(upload.direct_path.clone()),
-            media_key: Some(upload.media_key.clone()),
-            file_sha256: Some(upload.file_sha256.clone()),
-            file_enc_sha256: Some(upload.file_enc_sha256.clone()),
+            media_key: Some(upload.media_key.to_vec()),
+            file_sha256: Some(upload.file_sha256.to_vec()),
+            file_enc_sha256: Some(upload.file_enc_sha256.to_vec()),
             file_length: Some(upload.file_length),
             mimetype: Some("image/jpeg".to_string()),
             caption: Some("Newsletter image test".to_string()),

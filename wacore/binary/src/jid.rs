@@ -313,9 +313,9 @@ impl JidExt for Jid {
 }
 
 impl Jid {
-    pub fn new(user: &str, server: &str) -> Self {
+    pub fn new(user: impl Into<String>, server: &str) -> Self {
         Self {
-            user: user.to_string(),
+            user: user.into(),
             server: cow_server_from_str(server),
             ..Default::default()
         }
