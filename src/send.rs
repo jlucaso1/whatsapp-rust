@@ -1007,13 +1007,20 @@ impl Client {
                 match self.execute(spec).await {
                     Ok(resp) => {
                         for mapping in &resp.lid_mappings {
-                            let _ = self
+                            if let Err(e) = self
                                 .add_lid_pn_mapping(
                                     &mapping.lid,
                                     &mapping.phone_number,
                                     crate::lid_pn_cache::LearningSource::Usync,
                                 )
-                                .await;
+                                .await
+                            {
+                                log::warn!(
+                                    "Failed to persist LID mapping {} -> {}: {e:?}",
+                                    mapping.phone_number,
+                                    mapping.lid
+                                );
+                            }
                         }
                     }
                     Err(e) => {
