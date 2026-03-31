@@ -2042,6 +2042,28 @@ impl ProtocolStore for SqliteStore {
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
+    async fn delete_devices(&self, user: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let user = user.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::delete(
+                device_registry::table
+                    .filter(device_registry::user_id.eq(&user))
+                    .filter(device_registry::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
     async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;

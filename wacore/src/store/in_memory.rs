@@ -427,6 +427,11 @@ impl ProtocolStore for InMemoryBackend {
         Ok(self.state.lock().await.device_lists.get(user).cloned())
     }
 
+    async fn delete_devices(&self, user: &str) -> Result<()> {
+        self.state.lock().await.device_lists.remove(user);
+        Ok(())
+    }
+
     // --- TcToken Storage ---
 
     async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>> {

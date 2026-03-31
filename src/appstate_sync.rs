@@ -188,6 +188,9 @@ mod tests {
         async fn get_devices(&self, _: &str) -> StoreResult<Option<DeviceListRecord>> {
             Ok(None)
         }
+        async fn delete_devices(&self, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
         async fn get_tc_token(
             &self,
             _: &str,

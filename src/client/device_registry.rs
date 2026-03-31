@@ -181,6 +181,11 @@ impl Client {
 
         for key in lookup.all_keys() {
             self.device_registry_cache.invalidate(key).await;
+            // Also delete from DB so get_devices_from_registry doesn't
+            // fall back to stale persisted data — forces a network re-fetch
+            if let Err(e) = self.persistence_manager.backend().delete_devices(key).await {
+                warn!("Failed to delete device registry from DB for {key}: {e}");
+            }
         }
 
         debug!("Invalidated device cache for user: {} ({:?})", user, lookup);
