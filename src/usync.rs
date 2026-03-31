@@ -56,18 +56,16 @@ impl Client {
                 );
             }
 
+            let mut fetched_devices = Vec::new();
+
             for user_list in &response.device_lists {
                 // Update device registry (single source of truth for device lists).
                 // Preserve key_index values from existing records (set via account_sync)
-                let existing_record = self
-                    .persistence_manager
-                    .backend()
-                    .get_devices(&user_list.user.user)
-                    .await
-                    .ok()
-                    .flatten();
+                // Use alias-aware lookup (resolves LID ↔ PN) to find
+                // existing record regardless of which key it was stored under
+                let existing_record = self.load_device_record(&user_list.user.user).await;
 
-                let existing_key_indices: std::collections::HashMap<u32, Option<u32>> =
+                let mut existing_key_indices: std::collections::HashMap<u32, Option<u32>> =
                     existing_record
                         .as_ref()
                         .map(|r| {
@@ -96,12 +94,18 @@ impl Client {
                         user_list.user.user,
                         decoded.raw_id
                     );
-                    self.clear_device_record(&user_list.user.user, existing)
-                        .await;
+                    self.clear_device_record(
+                        &user_list.user.user,
+                        &user_list.user.server,
+                        existing,
+                    )
+                    .await;
+                    // Old key indices are from the previous identity — don't reuse
+                    existing_key_indices.clear();
                 }
 
-                // Preserve raw_id from existing if usync didn't provide one
-                if raw_id.is_none() {
+                // Preserve raw_id from existing only if no mismatch occurred
+                if raw_id.is_none() && !existing_key_indices.is_empty() {
                     raw_id = existing_record.as_ref().and_then(|r| r.raw_id);
                 }
 
@@ -122,6 +126,14 @@ impl Client {
                     devices = wacore::adv::filter_devices_by_key_index(&devices, decoded);
                 }
 
+                // Convert filtered DeviceInfo list back to JIDs for return
+                let user_jid = &user_list.user;
+                for d in &devices {
+                    let mut jid = user_jid.clone();
+                    jid.device = d.device_id as u16;
+                    fetched_devices.push(jid);
+                }
+
                 let device_list = wacore::store::traits::DeviceListRecord {
                     user: user_list.user.user.clone(),
                     devices,
@@ -137,12 +149,6 @@ impl Client {
                 }
             }
 
-            // Collect all devices for return
-            let fetched_devices: Vec<Jid> = response
-                .device_lists
-                .into_iter()
-                .flat_map(|u| u.devices)
-                .collect();
             all_devices.extend(fetched_devices);
         }
 

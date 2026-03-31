@@ -71,6 +71,16 @@ pub fn filter_devices_by_key_index(
         .collect()
 }
 
+/// Check if a key_index is accepted by the decoded ADV list.
+/// Used to validate a newly-notified device before adding it to the registry.
+pub fn is_key_index_valid(key_index: Option<u32>, decoded: &DecodedKeyIndex) -> bool {
+    match key_index {
+        Some(ki) => decoded.valid_indexes.contains(&ki) || ki > decoded.current_index,
+        // No key_index — can't validate, accept to be lenient
+        None => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

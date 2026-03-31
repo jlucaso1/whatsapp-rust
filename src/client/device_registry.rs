@@ -219,7 +219,8 @@ impl Client {
                         "raw_id mismatch for user {user}: stored={stored_raw_id}, received={}. Clearing record.",
                         decoded.raw_id
                     );
-                    self.clear_device_record(user, &record).await;
+                    self.clear_device_record(user, &device.jid.server, &record)
+                        .await;
                     record.devices.clear();
                 }
                 record.raw_id = Some(decoded.raw_id);
@@ -228,8 +229,10 @@ impl Client {
                 record.devices =
                     wacore::adv::filter_devices_by_key_index(&record.devices, &decoded);
 
-                // Add new device if key_index is in valid_indexes
-                if !record.devices.iter().any(|d| d.device_id == device_id) {
+                // Only add the new device if its key_index is accepted by the ADV list
+                if !record.devices.iter().any(|d| d.device_id == device_id)
+                    && wacore::adv::is_key_index_valid(device.key_index, &decoded)
+                {
                     record.devices.push(wacore::store::traits::DeviceInfo {
                         device_id,
                         key_index: device.key_index,
@@ -267,21 +270,33 @@ impl Client {
     /// Clear device record on raw_id mismatch (identity change).
     ///
     /// Matches WA Web's `clearDeviceRecord()` in `IdentityUpdateDeviceTableApi`:
-    /// deletes sender key tracking for all groups so SKDM will be redistributed.
-    /// Signal sessions are re-established naturally via `process_prekey_bundle`'s
-    /// UntrustedIdentity retry path on next send.
+    /// - Deletes Signal sessions for non-primary devices (stale identity)
+    /// - Invalidates sender key device cache so SKDM will be redistributed
+    /// - Flushes cache to persist session deletions
     pub(crate) async fn clear_device_record(
         &self,
         user: &str,
+        server: &str,
         record: &wacore::store::traits::DeviceListRecord,
     ) {
         let non_primary_count = record.devices.iter().filter(|d| d.device_id != 0).count();
         info!(
             "Clearing device record for user {user}: removing {non_primary_count} non-primary device(s) due to raw_id change",
         );
+
+        // Delete Signal sessions for non-primary devices from cache + DB
+        for device in record.devices.iter().filter(|d| d.device_id != 0) {
+            let mut jid = Jid::new(user, server);
+            jid.device = device.device_id as u16;
+            let addr = wacore::types::jid::JidExt::to_protocol_address(&jid);
+            self.signal_cache.delete_session(&addr).await;
+        }
+        if let Err(e) = self.flush_signal_cache().await {
+            warn!("clear_device_record: failed to flush session deletions: {e}");
+        }
+
         // Invalidate sender_key_device_cache so stale SKDM tracking is discarded.
-        // This is a global invalidation because we don't track which groups a user is in.
-        // It's rare (only on identity change) and the cache repopulates on next send.
+        // Global invalidation because we don't track which groups a user is in.
         self.sender_key_device_cache.invalidate_all();
     }
 
@@ -317,7 +332,7 @@ impl Client {
     }
 
     /// Load a `DeviceListRecord` from cache or DB for patching.
-    async fn load_device_record(
+    pub(crate) async fn load_device_record(
         &self,
         user: &str,
     ) -> Option<wacore::store::traits::DeviceListRecord> {
