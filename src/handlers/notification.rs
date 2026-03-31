@@ -349,7 +349,9 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
     match op.operation_type {
         wacore::stanza::devices::DeviceNotificationType::Add => {
             for device in &op.devices {
-                client.patch_device_add(notification.user(), device).await;
+                client
+                    .patch_device_add(notification.user(), device, op.key_index.as_ref())
+                    .await;
             }
         }
         wacore::stanza::devices::DeviceNotificationType::Remove => {
@@ -487,6 +489,12 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
         .map(|v| v as i64)
         .unwrap_or_else(wacore::time::now_secs);
 
+    // Preserve existing raw_id so account_sync doesn't erase it
+    let existing_raw_id = client
+        .load_device_record(&from_jid.user)
+        .await
+        .and_then(|r| r.raw_id);
+
     // Build DeviceListRecord for storage
     // Note: update_device_list() will automatically store under LID if mapping is known
     let device_list = DeviceListRecord {
@@ -500,6 +508,7 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
             .collect(),
         timestamp,
         phash: dhash,
+        raw_id: existing_raw_id,
     };
 
     if let Err(e) = client.update_device_list(device_list).await {

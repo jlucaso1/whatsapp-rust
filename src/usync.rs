@@ -56,40 +56,94 @@ impl Client {
                 );
             }
 
+            let mut fetched_devices = Vec::new();
+
             for user_list in &response.device_lists {
                 // Update device registry (single source of truth for device lists).
                 // Preserve key_index values from existing records (set via account_sync)
-                let existing_key_indices: std::collections::HashMap<u32, Option<u32>> = self
-                    .persistence_manager
-                    .backend()
-                    .get_devices(&user_list.user.user)
-                    .await
-                    .ok()
-                    .flatten()
-                    .map(|r| {
-                        r.devices
-                            .into_iter()
-                            .map(|d| (d.device_id, d.key_index))
-                            .collect()
+                // Use alias-aware lookup (resolves LID ↔ PN) to find
+                // existing record regardless of which key it was stored under
+                let existing_record = self.load_device_record(&user_list.user.user).await;
+
+                let mut existing_key_indices: std::collections::HashMap<u32, Option<u32>> =
+                    existing_record
+                        .as_ref()
+                        .map(|r| {
+                            r.devices
+                                .iter()
+                                .map(|d| (d.device_id, d.key_index))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+
+                // Decode key-index-list if present (WA Web: handleKeyIndexResult)
+                let decoded_key_index = user_list
+                    .key_index_bytes
+                    .as_deref()
+                    .and_then(wacore::adv::decode_key_index_list);
+
+                // Check raw_id mismatch for identity change detection
+                // TODO: also check advAccountType mismatch (see patch_device_add TODO)
+                let mut raw_id = decoded_key_index.as_ref().map(|d| d.raw_id);
+                if let Some(ref decoded) = decoded_key_index
+                    && let Some(ref existing) = existing_record
+                    && let Some(stored_raw_id) = existing.raw_id
+                    && stored_raw_id != decoded.raw_id
+                {
+                    log::info!(
+                        "raw_id mismatch for user {} in usync: stored={stored_raw_id}, received={}. Clearing record.",
+                        user_list.user.user,
+                        decoded.raw_id
+                    );
+                    self.clear_device_record(
+                        &user_list.user.user,
+                        &user_list.user.server,
+                        existing,
+                    )
+                    .await;
+                    // Old key indices are from the previous identity — don't reuse
+                    existing_key_indices.clear();
+                }
+
+                // Preserve raw_id from existing when usync didn't provide one
+                // (no key-index-list) and no mismatch cleared the indices.
+                // existing_key_indices is empty after a mismatch clear, so this
+                // correctly skips preservation after identity change.
+                if raw_id.is_none() && !existing_key_indices.is_empty() {
+                    raw_id = existing_record.as_ref().and_then(|r| r.raw_id);
+                }
+
+                let mut devices: Vec<wacore::store::traits::DeviceInfo> = user_list
+                    .devices
+                    .iter()
+                    .map(|d| wacore::store::traits::DeviceInfo {
+                        device_id: d.device as u32,
+                        key_index: existing_key_indices
+                            .get(&(d.device as u32))
+                            .copied()
+                            .flatten(),
                     })
-                    .unwrap_or_default();
+                    .collect();
+
+                // Apply valid_indexes filtering if key-index-list was decoded
+                if let Some(ref decoded) = decoded_key_index {
+                    devices = wacore::adv::filter_devices_by_key_index(&devices, decoded);
+                }
+
+                // Convert filtered DeviceInfo list back to JIDs for return
+                let user_jid = &user_list.user;
+                for d in &devices {
+                    let mut jid = user_jid.clone();
+                    jid.device = d.device_id as u16;
+                    fetched_devices.push(jid);
+                }
 
                 let device_list = wacore::store::traits::DeviceListRecord {
                     user: user_list.user.user.clone(),
-                    devices: user_list
-                        .devices
-                        .iter()
-                        .map(|d| wacore::store::traits::DeviceInfo {
-                            device_id: d.device as u32,
-                            // Preserve existing key_index if we have it
-                            key_index: existing_key_indices
-                                .get(&(d.device as u32))
-                                .copied()
-                                .flatten(),
-                        })
-                        .collect(),
+                    devices,
                     timestamp: wacore::time::now_secs(),
                     phash: user_list.phash.clone(),
+                    raw_id,
                 };
                 if let Err(e) = self.update_device_list(device_list).await {
                     warn!(
@@ -99,12 +153,6 @@ impl Client {
                 }
             }
 
-            // Collect all devices for return
-            let fetched_devices: Vec<Jid> = response
-                .device_lists
-                .into_iter()
-                .flat_map(|u| u.devices)
-                .collect();
             all_devices.extend(fetched_devices);
         }
 
@@ -139,6 +187,7 @@ mod tests {
             ],
             timestamp: wacore::time::now_secs(),
             phash: None,
+            raw_id: None,
         };
         client.update_device_list(record).await.unwrap();
 
@@ -170,6 +219,7 @@ mod tests {
             ],
             timestamp: wacore::time::now_secs(),
             phash: None,
+            raw_id: None,
         };
         client.update_device_list(record).await.unwrap();
 
@@ -195,6 +245,7 @@ mod tests {
             }],
             timestamp: wacore::time::now_secs(),
             phash: None,
+            raw_id: None,
         };
         client.update_device_list(record).await.unwrap();
 

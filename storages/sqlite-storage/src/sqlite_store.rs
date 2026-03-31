@@ -1727,6 +1727,20 @@ impl ProtocolStore for SqliteStore {
         .await
     }
 
+    async fn clear_all_sender_key_devices(&self) -> Result<()> {
+        let device_id = self.device_id;
+        self.with_retry("clear_all_sender_key_devices", || {
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::delete(
+                    sender_key_devices::table.filter(sender_key_devices::device_id.eq(device_id)),
+                )
+                .execute(conn)?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
@@ -1972,6 +1986,7 @@ impl ProtocolStore for SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let raw_id_i32 = record.raw_id.map(|r| r as i32);
             diesel::insert_into(device_registry::table)
                 .values((
                     device_registry::user_id.eq(&record.user),
@@ -1980,6 +1995,7 @@ impl ProtocolStore for SqliteStore {
                     device_registry::phash.eq(&record.phash),
                     device_registry::device_id.eq(device_id),
                     device_registry::updated_at.eq(now),
+                    device_registry::raw_id.eq(raw_id_i32),
                 ))
                 .on_conflict((device_registry::user_id, device_registry::device_id))
                 .do_update()
@@ -1988,6 +2004,7 @@ impl ProtocolStore for SqliteStore {
                     device_registry::timestamp.eq(record.timestamp as i32),
                     device_registry::phash.eq(&record.phash),
                     device_registry::updated_at.eq(now),
+                    device_registry::raw_id.eq(raw_id_i32),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -2006,20 +2023,22 @@ impl ProtocolStore for SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let row: Option<(String, String, i32, Option<String>)> = device_registry::table
-                .select((
-                    device_registry::user_id,
-                    device_registry::devices_json,
-                    device_registry::timestamp,
-                    device_registry::phash,
-                ))
-                .filter(device_registry::user_id.eq(&user))
-                .filter(device_registry::device_id.eq(device_id))
-                .first(&mut conn)
-                .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let row: Option<(String, String, i32, Option<String>, Option<i32>)> =
+                device_registry::table
+                    .select((
+                        device_registry::user_id,
+                        device_registry::devices_json,
+                        device_registry::timestamp,
+                        device_registry::phash,
+                        device_registry::raw_id,
+                    ))
+                    .filter(device_registry::user_id.eq(&user))
+                    .filter(device_registry::device_id.eq(device_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
             match row {
-                Some((user, devices_json, timestamp, phash)) => {
+                Some((user, devices_json, timestamp, phash, raw_id)) => {
                     let devices: Vec<DeviceInfo> = serde_json::from_str(&devices_json)
                         .map_err(|e| StoreError::Serialization(e.to_string()))?;
                     Ok(Some(DeviceListRecord {
@@ -2027,6 +2046,7 @@ impl ProtocolStore for SqliteStore {
                         devices,
                         timestamp: timestamp as i64,
                         phash,
+                        raw_id: raw_id.map(|r| r as u32),
                     }))
                 }
                 None => Ok(None),
@@ -2034,6 +2054,28 @@ impl ProtocolStore for SqliteStore {
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn delete_devices(&self, user: &str) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let user = user.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::delete(
+                device_registry::table
+                    .filter(device_registry::user_id.eq(&user))
+                    .filter(device_registry::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
     }
 
     async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>> {
@@ -2437,6 +2479,7 @@ mod tests {
             ],
             timestamp: 1234567890,
             phash: Some("2:abcdef".to_string()),
+            raw_id: None,
         };
 
         store.update_device_list(record).await.expect("save failed");
@@ -2466,6 +2509,7 @@ mod tests {
             }],
             timestamp: 1000,
             phash: Some("2:old".to_string()),
+            raw_id: None,
         };
         store
             .update_device_list(record1)
@@ -2486,6 +2530,7 @@ mod tests {
             ],
             timestamp: 2000,
             phash: Some("2:new".to_string()),
+            raw_id: None,
         };
         store
             .update_device_list(record2)

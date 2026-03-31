@@ -44,6 +44,7 @@ diesel::table! {
         phash -> Nullable<Text>,
         device_id -> Integer,
         updated_at -> Integer,
+        raw_id -> Nullable<Integer>,
     }
 }
 

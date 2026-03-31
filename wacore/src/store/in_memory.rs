@@ -335,6 +335,11 @@ impl ProtocolStore for InMemoryBackend {
         Ok(())
     }
 
+    async fn clear_all_sender_key_devices(&self) -> Result<()> {
+        self.state.lock().await.sender_key_devices.clear();
+        Ok(())
+    }
+
     // --- LID-PN Mapping ---
 
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>> {
@@ -425,6 +430,11 @@ impl ProtocolStore for InMemoryBackend {
 
     async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>> {
         Ok(self.state.lock().await.device_lists.get(user).cloned())
+    }
+
+    async fn delete_devices(&self, user: &str) -> Result<()> {
+        self.state.lock().await.device_lists.remove(user);
+        Ok(())
     }
 
     // --- TcToken Storage ---

@@ -181,34 +181,154 @@ impl Client {
 
         for key in lookup.all_keys() {
             self.device_registry_cache.invalidate(key).await;
+            // Also delete from DB so get_devices_from_registry doesn't
+            // fall back to stale persisted data — forces a network re-fetch
+            if let Err(e) = self.persistence_manager.backend().delete_devices(key).await {
+                warn!("Failed to delete device registry from DB for {key}: {e}");
+            }
         }
 
         debug!("Invalidated device cache for user: {} ({:?})", user, lookup);
     }
 
-    /// Granularly patch device registry after a device notification.
+    /// Patch device registry after a device add notification.
     ///
-    /// Matches WA Web's approach: read current → apply diff → write back.
-    /// Looks up the record from cache first, then falls back to the backend
-    /// DB so notifications are never silently dropped.
+    /// Matches WA Web's `handleDeviceAddNotification()` in `AdvDeviceNotificationApi`:
+    /// 1. Decode `key-index-list` signed bytes → `ADVKeyIndexList`
+    /// 2. Filter existing devices by `valid_indexes` (prune stale devices)
+    /// 3. Add the new device
+    /// 4. Replace the full device record
+    ///
+    /// If `signed_bytes` is absent, falls back to simple append (lenient).
     pub(crate) async fn patch_device_add(
         &self,
         user: &str,
         device: &wacore::stanza::devices::DeviceElement,
+        key_index_info: Option<&wacore::stanza::devices::KeyIndexInfo>,
     ) {
         let device_id = device.device_id();
 
-        if let Some(mut record) = self.load_device_record(user).await
-            && !record.devices.iter().any(|d| d.device_id == device_id)
-        {
+        let Some(mut record) = self.load_device_record(user).await else {
+            return;
+        };
+
+        let signed_bytes = key_index_info.and_then(|ki| ki.signed_bytes.as_deref());
+
+        if let Some(bytes) = signed_bytes {
+            if let Some(decoded) = wacore::adv::decode_key_index_list(bytes) {
+                // Check raw_id mismatch (identity change)
+                // TODO: WA Web also triggers clearRecord on advAccountType change
+                // (HOSTED ↔ E2EE), gated behind bizCoexGatingUtils.bizHostedDevicesEnabled().
+                // Add when we implement hosted device coexistence support.
+                if let Some(stored_raw_id) = record.raw_id
+                    && stored_raw_id != decoded.raw_id
+                {
+                    info!(
+                        "raw_id mismatch for user {user}: stored={stored_raw_id}, received={}. Clearing record.",
+                        decoded.raw_id
+                    );
+                    self.clear_device_record(user, &device.jid.server, &record)
+                        .await;
+                    record.devices.clear();
+                }
+                record.raw_id = Some(decoded.raw_id);
+
+                // Filter stale devices by valid_indexes
+                record.devices =
+                    wacore::adv::filter_devices_by_key_index(&record.devices, &decoded);
+
+                // Only add the new device if its key_index is accepted by the ADV list
+                if !record.devices.iter().any(|d| d.device_id == device_id)
+                    && wacore::adv::is_key_index_valid(device.key_index, &decoded)
+                {
+                    record.devices.push(wacore::store::traits::DeviceInfo {
+                        device_id,
+                        key_index: device.key_index,
+                    });
+                }
+            } else {
+                warn!("patch_device_add: failed to decode key-index-list for user {user}");
+                self.append_device_if_new(&mut record, device_id, device.key_index);
+            }
+        } else {
+            // No signed bytes — fall back to simple append
+            self.append_device_if_new(&mut record, device_id, device.key_index);
+        }
+
+        if let Err(e) = self.update_device_list(record).await {
+            warn!("patch_device_add: failed to persist: {e}");
+        }
+    }
+
+    /// Append a device if it doesn't already exist in the record.
+    fn append_device_if_new(
+        &self,
+        record: &mut wacore::store::traits::DeviceListRecord,
+        device_id: u32,
+        key_index: Option<u32>,
+    ) {
+        if !record.devices.iter().any(|d| d.device_id == device_id) {
             record.devices.push(wacore::store::traits::DeviceInfo {
                 device_id,
-                key_index: device.key_index,
+                key_index,
             });
-            if let Err(e) = self.update_device_list(record).await {
-                warn!("patch_device_add: failed to persist: {e}");
+        }
+    }
+
+    /// Clear device record on raw_id mismatch (identity change).
+    ///
+    /// Matches WA Web's `clearDeviceRecord()` in `IdentityUpdateDeviceTableApi`:
+    /// - Deletes Signal sessions for non-primary devices (stale identity)
+    /// - Invalidates sender key device cache so SKDM will be redistributed
+    /// - Flushes cache to persist session deletions
+    pub(crate) async fn clear_device_record(
+        &self,
+        user: &str,
+        server: &str,
+        record: &wacore::store::traits::DeviceListRecord,
+    ) {
+        let non_primary_count = record.devices.iter().filter(|d| d.device_id != 0).count();
+        info!(
+            "Clearing device record for user {user}: removing {non_primary_count} non-primary device(s) due to raw_id change",
+        );
+
+        // Delete Signal sessions under BOTH LID and PN addresses.
+        // The notification may arrive via one address but sessions can exist
+        // under either (encrypt path is LID-first, decrypt stores under sender).
+        let lookup = self.resolve_lookup_keys(user).await;
+        let servers: &[&str] = match &lookup {
+            UserLookupKeys::LidWithPn { .. } | UserLookupKeys::PnWithLid { .. } => &[
+                wacore_binary::jid::HIDDEN_USER_SERVER,
+                wacore_binary::jid::DEFAULT_USER_SERVER,
+            ],
+            UserLookupKeys::Unknown { .. } => std::slice::from_ref(&server),
+        };
+        for &srv in servers {
+            for key in lookup.all_keys() {
+                for device in record.devices.iter().filter(|d| d.device_id != 0) {
+                    let mut jid = Jid::new(key, srv);
+                    jid.device = device.device_id as u16;
+                    let addr = wacore::types::jid::JidExt::to_protocol_address(&jid);
+                    self.signal_cache.delete_session(&addr).await;
+                }
             }
         }
+        if let Err(e) = self.flush_signal_cache().await {
+            warn!("clear_device_record: failed to flush session deletions: {e}");
+        }
+
+        // Clear persisted SKDM tracking across ALL groups so stale has_key=true
+        // rows don't survive restart. Identity changes are rare so the cost is acceptable.
+        if let Err(e) = self
+            .persistence_manager
+            .backend()
+            .clear_all_sender_key_devices()
+            .await
+        {
+            warn!("clear_device_record: failed to clear persisted sender key devices: {e}");
+        }
+        // Also invalidate in-memory cache
+        self.sender_key_device_cache.invalidate_all();
     }
 
     /// Remove a device from the registry after a device remove notification.
@@ -243,7 +363,7 @@ impl Client {
     }
 
     /// Load a `DeviceListRecord` from cache or DB for patching.
-    async fn load_device_record(
+    pub(crate) async fn load_device_record(
         &self,
         user: &str,
     ) -> Option<wacore::store::traits::DeviceListRecord> {
@@ -512,6 +632,7 @@ mod tests {
             }],
             timestamp: 12345,
             phash: None,
+            raw_id: None,
         };
         client
             .device_registry_cache
@@ -546,6 +667,7 @@ mod tests {
             }],
             timestamp: 12345,
             phash: None,
+            raw_id: None,
         };
         client
             .device_registry_cache
@@ -570,6 +692,7 @@ mod tests {
             }],
             timestamp: 12346,
             phash: None,
+            raw_id: None,
         };
         client
             .device_registry_cache
@@ -597,6 +720,7 @@ mod tests {
             }],
             timestamp: 12345,
             phash: None,
+            raw_id: None,
         };
         client
             .device_registry_cache
@@ -655,6 +779,7 @@ mod tests {
             }],
             timestamp: wacore::time::now_secs(),
             phash: None,
+            raw_id: None,
         };
         client
             .device_registry_cache
@@ -663,7 +788,7 @@ mod tests {
 
         // Patch: add device 3
         let elem = make_device_element(3, Some(5));
-        client.patch_device_add("15551234567", &elem).await;
+        client.patch_device_add("15551234567", &elem, None).await;
 
         let updated = client
             .device_registry_cache
@@ -690,6 +815,7 @@ mod tests {
             }],
             timestamp: wacore::time::now_secs(),
             phash: None,
+            raw_id: None,
         };
         client
             .device_registry_cache
@@ -698,7 +824,7 @@ mod tests {
 
         // Patch: add device 3 again — should not duplicate
         let elem = make_device_element(3, None);
-        client.patch_device_add("15551234567", &elem).await;
+        client.patch_device_add("15551234567", &elem, None).await;
 
         let updated = client
             .device_registry_cache
@@ -714,7 +840,7 @@ mod tests {
 
         // No pre-populated cache — patch should be a no-op
         let elem = make_device_element(3, None);
-        client.patch_device_add("15551234567", &elem).await;
+        client.patch_device_add("15551234567", &elem, None).await;
 
         assert!(
             client
@@ -745,6 +871,7 @@ mod tests {
             ],
             timestamp: wacore::time::now_secs(),
             phash: None,
+            raw_id: None,
         };
         client
             .device_registry_cache
@@ -781,6 +908,7 @@ mod tests {
             ],
             timestamp: 1000,
             phash: None,
+            raw_id: None,
         };
         client
             .device_registry_cache
@@ -813,6 +941,7 @@ mod tests {
             }],
             timestamp: 1000,
             phash: None,
+            raw_id: None,
         };
         client
             .device_registry_cache
@@ -821,7 +950,7 @@ mod tests {
 
         // Patch: add device 3
         let elem = make_device_element(3, Some(2));
-        client.patch_device_add("15551234567", &elem).await;
+        client.patch_device_add("15551234567", &elem, None).await;
 
         let updated = client
             .device_registry_cache
@@ -857,6 +986,7 @@ mod tests {
             ],
             timestamp: wacore::time::now_secs(),
             phash: None,
+            raw_id: None,
         };
         client
             .persistence_manager
@@ -917,6 +1047,7 @@ mod tests {
             }],
             timestamp: wacore::time::now_secs(),
             phash: None,
+            raw_id: None,
         };
         client
             .device_registry_cache
@@ -969,6 +1100,7 @@ mod tests {
             }],
             timestamp: wacore::time::now_secs(),
             phash: None,
+            raw_id: None,
         };
         client
             .persistence_manager
@@ -987,7 +1119,7 @@ mod tests {
         );
 
         let elem = make_device_element(3, Some(7));
-        client.patch_device_add("15551234567", &elem).await;
+        client.patch_device_add("15551234567", &elem, None).await;
 
         // Verify patch was applied to DB (not silently dropped)
         let updated = client
@@ -1030,6 +1162,7 @@ mod tests {
             ],
             timestamp: wacore::time::now_secs(),
             phash: None,
+            raw_id: None,
         };
         client
             .persistence_manager

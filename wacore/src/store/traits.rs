@@ -69,6 +69,10 @@ pub struct DeviceListRecord {
     pub timestamp: i64,
     /// Participant hash from usync, if available
     pub phash: Option<String>,
+    /// ADV raw_id from `ADVKeyIndexList` — used to detect identity changes.
+    /// When this changes, all sessions and sender keys for the user must be cleared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_id: Option<u32>,
 }
 
 /// Signal protocol cryptographic storage operations.
@@ -213,6 +217,10 @@ pub trait ProtocolStore: Send + Sync {
     /// Clear all sender key device tracking for a group (on sender key rotation).
     async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()>;
 
+    /// Clear all sender key device tracking across ALL groups.
+    /// Called on identity change (raw_id mismatch) to force SKDM redistribution.
+    async fn clear_all_sender_key_devices(&self) -> Result<()>;
+
     // --- LID-PN Mapping ---
 
     /// Get a mapping by LID.
@@ -250,6 +258,9 @@ pub trait ProtocolStore: Send + Sync {
 
     /// Get all known devices for a user.
     async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
+
+    /// Delete a device list record, forcing a network re-fetch on next query.
+    async fn delete_devices(&self, user: &str) -> Result<()>;
 
     // --- TcToken Storage ---
 
