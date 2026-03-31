@@ -21,6 +21,8 @@ pub struct UserDeviceList {
     pub devices: Vec<Jid>,
     /// Participant hash from device-list node (used for cache validation)
     pub phash: Option<String>,
+    /// Signed key index bytes from `<key-index-list>` (for ADV device filtering)
+    pub key_index_bytes: Option<Vec<u8>>,
 }
 
 pub fn build_get_user_devices_query(jids: &[Jid], sid: &str) -> Node {
@@ -72,6 +74,18 @@ pub fn parse_get_user_devices_response_with_phash(resp_node: &Node) -> Result<Ve
             .optional_string("hash")
             .map(|s| s.to_string());
 
+        // Parse key-index-list from <devices> node (sibling of <device-list>)
+        // WA Web: WAWebUsyncDevice.deviceParser() extracts both deviceList and keyIndex
+        let devices_parent = user_node.get_optional_child("devices");
+        let key_index_bytes = devices_parent
+            .and_then(|dp| dp.get_optional_child("key-index-list"))
+            .and_then(|ki| match &ki.content {
+                Some(wacore_binary::node::NodeContent::Bytes(b)) if !b.is_empty() => {
+                    Some(b.clone())
+                }
+                _ => None,
+            });
+
         let mut devices = Vec::new();
         for device_node in device_list_node.get_children_by_tag("device") {
             let device_id_str = match device_node.attrs().optional_string("id") {
@@ -94,10 +108,22 @@ pub fn parse_get_user_devices_response_with_phash(resp_node: &Node) -> Result<Ve
             devices.push(device_jid);
         }
 
+        // WA Web: WAWebHandleAdvForUsyncApi.handleADVSyncResult() rejects usync results
+        // that have companion devices but no signedKeyIndexBytes.
+        let has_companion = devices.iter().any(|d| d.device != 0);
+        if has_companion && key_index_bytes.is_none() {
+            log::warn!(
+                target: "usync",
+                "User {user_jid} has companion devices but no signedKeyIndexBytes, skipping"
+            );
+            continue;
+        }
+
         result.push(UserDeviceList {
             user: user_jid.to_non_ad(),
             devices,
             phash,
+            key_index_bytes,
         });
     }
 
@@ -181,12 +207,31 @@ mod tests {
     ///     </list>
     ///   </usync>
     /// </iq>
+    /// Build dummy ADV signed key index bytes for tests.
+    fn build_test_key_index_bytes(device_ids: &[u16]) -> Vec<u8> {
+        use prost::Message;
+        let valid_indexes: Vec<u32> = device_ids.iter().map(|&id| id as u32).collect();
+        let key_index = waproto::whatsapp::AdvKeyIndexList {
+            raw_id: Some(1),
+            timestamp: Some(1000),
+            current_index: Some(valid_indexes.iter().copied().max().unwrap_or(0)),
+            valid_indexes,
+            account_type: None,
+        };
+        let signed = waproto::whatsapp::AdvSignedKeyIndexList {
+            details: Some(key_index.encode_to_vec()),
+            account_signature: None,
+            account_signature_key: None,
+        };
+        signed.encode_to_vec()
+    }
+
     fn build_usync_response(users: Vec<(&str, Vec<u16>, Option<&str>)>) -> Node {
         let user_nodes: Vec<Node> = users
             .into_iter()
             .map(|(jid, device_ids, phash)| {
                 let device_nodes: Vec<Node> = device_ids
-                    .into_iter()
+                    .iter()
                     .map(|id| {
                         NodeBuilder::new("device")
                             .attr("id", id.to_string())
@@ -200,7 +245,22 @@ mod tests {
                 }
                 let device_list = device_list_builder.children(device_nodes).build();
 
-                let devices_node = NodeBuilder::new("devices").children([device_list]).build();
+                // Add key-index-list if there are companion devices
+                let has_companion = device_ids.iter().any(|&id| id != 0);
+                let mut devices_children = vec![device_list];
+                if has_companion {
+                    let ki_bytes = build_test_key_index_bytes(&device_ids);
+                    devices_children.push(
+                        NodeBuilder::new("key-index-list")
+                            .attr("ts", "1000")
+                            .bytes(ki_bytes)
+                            .build(),
+                    );
+                }
+
+                let devices_node = NodeBuilder::new("devices")
+                    .children(devices_children)
+                    .build();
 
                 NodeBuilder::new("user")
                     .attr("jid", jid)

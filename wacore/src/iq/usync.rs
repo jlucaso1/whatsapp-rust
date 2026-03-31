@@ -588,6 +588,17 @@ impl IqSpec for DeviceListSpec {
                 .optional_string("hash")
                 .map(|s| s.to_string());
 
+            // Parse key-index-list from <devices> node
+            let devices_parent = user_node.get_optional_child("devices");
+            let key_index_bytes = devices_parent
+                .and_then(|dp| dp.get_optional_child("key-index-list"))
+                .and_then(|ki| match &ki.content {
+                    Some(wacore_binary::node::NodeContent::Bytes(b)) if !b.is_empty() => {
+                        Some(b.clone())
+                    }
+                    _ => None,
+                });
+
             let mut devices = Vec::new();
             for device_node in device_list_node.get_children_by_tag("device") {
                 let Some(device_id_str) = device_node.attrs().optional_string("id") else {
@@ -608,6 +619,7 @@ impl IqSpec for DeviceListSpec {
                 user: user_jid.to_non_ad(),
                 devices,
                 phash,
+                key_index_bytes,
             });
         }
 

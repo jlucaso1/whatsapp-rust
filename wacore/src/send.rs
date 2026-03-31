@@ -310,6 +310,13 @@ pub struct SignalStores<'a, S, I, P, SP> {
     pub signed_prekey_store: &'a SP,
 }
 
+/// Check if an anyhow error is a 406 "not-acceptable" IQ error (device unregistered).
+/// Uses zero-cost downcast — no string formatting or allocation.
+fn is_device_unregistered_error(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<crate::request::IqError>()
+        .is_some_and(|iq| matches!(iq, crate::request::IqError::ServerError { code: 406, .. }))
+}
+
 async fn encrypt_for_devices<'a, S, I, P, SP>(
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
@@ -401,9 +408,27 @@ where
             "Fetching prekeys for {} devices without sessions",
             jids_needing_prekeys.len()
         );
-        let prekey_bundles = resolver
+        // WA Web's fetchPrekeys() collects per-device errors separately and returns
+        // successful bundles. A 406 IQ error (device unregistered) should not kill the
+        // entire encrypt_for_devices call — skip stale devices gracefully.
+        // (WA Web: WAWebEagerlyEstablishE2EeSessionBridge recognizes 406 as "device unregistered")
+        let prekey_bundles = match resolver
             .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
-            .await?;
+            .await
+        {
+            Ok(bundles) => bundles,
+            Err(e) => {
+                if is_device_unregistered_error(&e) {
+                    log::warn!(
+                        "Prekey fetch returned 406 (device unregistered) for {} devices, skipping all: {e}",
+                        jids_needing_prekeys.len()
+                    );
+                    std::collections::HashMap::new()
+                } else {
+                    return Err(e);
+                }
+            }
+        };
 
         for device_jid in &jids_needing_prekeys {
             // Use the LID-normalized encryption JID for session creation
@@ -1061,7 +1086,10 @@ pub async fn prepare_group_stanza<
         let skdm_plaintext_to_encrypt =
             MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
 
-        let (participant_nodes, inc, actually_encrypted) = encrypt_for_devices(
+        // WA Web's GroupSkmsgJob wraps ensureE2ESessions in try/catch — logs error
+        // but does NOT rethrow. SKDM distribution failure must not prevent the group
+        // message from being sent.
+        match encrypt_for_devices(
             stores,
             resolver,
             distribution_list,
@@ -1069,22 +1097,33 @@ pub async fn prepare_group_stanza<
             true,
             None,
         )
-        .await?;
-        includes_prekey_message = includes_prekey_message || inc;
-        skdm_encrypted_devices = actually_encrypted;
+        .await
+        {
+            Ok((participant_nodes, inc, actually_encrypted)) => {
+                includes_prekey_message = includes_prekey_message || inc;
+                skdm_encrypted_devices = actually_encrypted;
 
-        // Add participants list as part of the single hybrid stanza
-        message_children.push(
-            NodeBuilder::new("participants")
-                .children(participant_nodes)
-                .build(),
-        );
-        if includes_prekey_message && let Some(acc) = account {
-            message_children.push(
-                NodeBuilder::new("device-identity")
-                    .bytes(acc.encode_to_vec())
-                    .build(),
-            );
+                if !participant_nodes.is_empty() {
+                    message_children.push(
+                        NodeBuilder::new("participants")
+                            .children(participant_nodes)
+                            .build(),
+                    );
+                    if includes_prekey_message && let Some(acc) = account {
+                        message_children.push(
+                            NodeBuilder::new("device-identity")
+                                .bytes(acc.encode_to_vec())
+                                .build(),
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "SKDM distribution failed for group {}, continuing without it: {e}",
+                    to_jid
+                );
+            }
         }
     }
 

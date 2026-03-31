@@ -69,6 +69,10 @@ pub struct DeviceListRecord {
     pub timestamp: i64,
     /// Participant hash from usync, if available
     pub phash: Option<String>,
+    /// ADV raw_id from `ADVKeyIndexList` — used to detect identity changes.
+    /// When this changes, all sessions and sender keys for the user must be cleared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub raw_id: Option<u32>,
 }
 
 /// Signal protocol cryptographic storage operations.

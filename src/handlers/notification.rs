@@ -349,7 +349,9 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &Node) {
     match op.operation_type {
         wacore::stanza::devices::DeviceNotificationType::Add => {
             for device in &op.devices {
-                client.patch_device_add(notification.user(), device).await;
+                client
+                    .patch_device_add(notification.user(), device, op.key_index.as_ref())
+                    .await;
             }
         }
         wacore::stanza::devices::DeviceNotificationType::Remove => {
@@ -500,6 +502,7 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
             .collect(),
         timestamp,
         phash: dhash,
+        raw_id: None,
     };
 
     if let Err(e) = client.update_device_list(device_list).await {
