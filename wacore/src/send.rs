@@ -891,6 +891,10 @@ pub struct PreparedGroupStanza {
     /// Devices that received SKDM in this stanza. Empty when no SKDM was distributed
     /// (e.g., all devices already have the sender key).
     pub skdm_devices: Vec<Jid>,
+    /// When true, SKDM distribution hit a 406 (device unregistered). The caller
+    /// should invalidate the device registry for the affected group participants
+    /// so the next send gets a fresh device list from the server.
+    pub skdm_had_unregistered_devices: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1067,6 +1071,8 @@ pub async fn prepare_group_stanza<
         None
     };
 
+    let mut had_unregistered_devices = false;
+
     if let Some(ref distribution_list) = distribution_list {
         resolved_devices_for_phash = Some(distribution_list.clone());
         let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
@@ -1101,7 +1107,15 @@ pub async fn prepare_group_stanza<
         {
             Ok((participant_nodes, inc, actually_encrypted)) => {
                 includes_prekey_message = includes_prekey_message || inc;
-                skdm_encrypted_devices = actually_encrypted;
+                // If no devices were actually encrypted (all had missing prekeys / 406),
+                // mark the full distribution list as "sent" to avoid retrying
+                // failing prekey fetches on every subsequent send.
+                if actually_encrypted.is_empty() && !distribution_list.is_empty() {
+                    skdm_encrypted_devices = distribution_list.clone();
+                    had_unregistered_devices = true;
+                } else {
+                    skdm_encrypted_devices = actually_encrypted;
+                }
 
                 if !participant_nodes.is_empty() {
                     message_children.push(
@@ -1123,6 +1137,14 @@ pub async fn prepare_group_stanza<
                     "SKDM distribution failed for group {}, continuing without it: {e}",
                     to_jid
                 );
+                // Mark these devices as "sent" in SKDM tracking to prevent
+                // retrying the failing prekey fetch on every subsequent send.
+                // If the device is truly unregistered (406), it will be pruned
+                // from the registry on the next device list refresh.
+                if is_device_unregistered_error(&e) {
+                    skdm_encrypted_devices = distribution_list.clone();
+                    had_unregistered_devices = true;
+                }
             }
         }
     }
@@ -1201,6 +1223,7 @@ pub async fn prepare_group_stanza<
     Ok(PreparedGroupStanza {
         node: stanza,
         skdm_devices: skdm_encrypted_devices,
+        skdm_had_unregistered_devices: had_unregistered_devices,
     })
 }
 
