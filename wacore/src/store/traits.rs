@@ -217,6 +217,10 @@ pub trait ProtocolStore: Send + Sync {
     /// Clear all sender key device tracking for a group (on sender key rotation).
     async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()>;
 
+    /// Clear all sender key device tracking across ALL groups.
+    /// Called on identity change (raw_id mismatch) to force SKDM redistribution.
+    async fn clear_all_sender_key_devices(&self) -> Result<()>;
+
     // --- LID-PN Mapping ---
 
     /// Get a mapping by LID.

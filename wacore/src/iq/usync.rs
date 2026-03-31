@@ -615,6 +615,17 @@ impl IqSpec for DeviceListSpec {
                 devices.push(device_jid);
             }
 
+            // WA Web: AdvForUsyncApi rejects usync results with companion
+            // devices but no signedKeyIndexBytes
+            let has_companion = devices.iter().any(|d| d.device != 0);
+            if has_companion && key_index_bytes.is_none() {
+                warn!(
+                    target: "usync",
+                    "User {user_jid} has companion devices but no signedKeyIndexBytes, skipping"
+                );
+                continue;
+            }
+
             device_lists.push(UserDeviceList {
                 user: user_jid.to_non_ad(),
                 devices,
@@ -709,6 +720,28 @@ impl IqSpec for LidQuerySpec {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Build a dummy key-index-list node for device IDs (used in test fixtures)
+    fn build_test_key_index_list_node(device_ids: &[u16]) -> Node {
+        use prost::Message;
+        let valid_indexes: Vec<u32> = device_ids.iter().map(|&id| id as u32).collect();
+        let key_index = waproto::whatsapp::AdvKeyIndexList {
+            raw_id: Some(1),
+            timestamp: Some(1000),
+            current_index: Some(valid_indexes.iter().copied().max().unwrap_or(0)),
+            valid_indexes,
+            account_type: None,
+        };
+        let signed = waproto::whatsapp::AdvSignedKeyIndexList {
+            details: Some(key_index.encode_to_vec()),
+            account_signature: None,
+            account_signature_key: None,
+        };
+        NodeBuilder::new("key-index-list")
+            .attr("ts", "1000")
+            .bytes(signed.encode_to_vec())
+            .build()
+    }
 
     #[test]
     fn test_usync_mode() {
@@ -1024,14 +1057,17 @@ mod tests {
                     .children([NodeBuilder::new("user")
                         .attr("jid", "1234567890@s.whatsapp.net")
                         .children([NodeBuilder::new("devices")
-                            .children([NodeBuilder::new("device-list")
-                                .attr("hash", "2:abcdef123456")
-                                .children([
-                                    NodeBuilder::new("device").attr("id", "0").build(),
-                                    NodeBuilder::new("device").attr("id", "1").build(),
-                                    NodeBuilder::new("device").attr("id", "5").build(),
-                                ])
-                                .build()])
+                            .children([
+                                NodeBuilder::new("device-list")
+                                    .attr("hash", "2:abcdef123456")
+                                    .children([
+                                        NodeBuilder::new("device").attr("id", "0").build(),
+                                        NodeBuilder::new("device").attr("id", "1").build(),
+                                        NodeBuilder::new("device").attr("id", "5").build(),
+                                    ])
+                                    .build(),
+                                build_test_key_index_list_node(&[0, 1, 5]),
+                            ])
                             .build()])
                         .build()])
                     .build()])
@@ -1075,13 +1111,16 @@ mod tests {
                         NodeBuilder::new("user")
                             .attr("jid", "2222222222@s.whatsapp.net")
                             .children([NodeBuilder::new("devices")
-                                .children([NodeBuilder::new("device-list")
-                                    .attr("hash", "2:hash2")
-                                    .children([
-                                        NodeBuilder::new("device").attr("id", "0").build(),
-                                        NodeBuilder::new("device").attr("id", "1").build(),
-                                    ])
-                                    .build()])
+                                .children([
+                                    NodeBuilder::new("device-list")
+                                        .attr("hash", "2:hash2")
+                                        .children([
+                                            NodeBuilder::new("device").attr("id", "0").build(),
+                                            NodeBuilder::new("device").attr("id", "1").build(),
+                                        ])
+                                        .build(),
+                                    build_test_key_index_list_node(&[0, 1]),
+                                ])
                                 .build()])
                             .build(),
                     ])

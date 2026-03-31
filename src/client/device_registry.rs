@@ -300,8 +300,17 @@ impl Client {
             warn!("clear_device_record: failed to flush session deletions: {e}");
         }
 
-        // Invalidate sender_key_device_cache so stale SKDM tracking is discarded.
-        // Global invalidation because we don't track which groups a user is in.
+        // Clear persisted SKDM tracking across ALL groups so stale has_key=true
+        // rows don't survive restart. Identity changes are rare so the cost is acceptable.
+        if let Err(e) = self
+            .persistence_manager
+            .backend()
+            .clear_all_sender_key_devices()
+            .await
+        {
+            warn!("clear_device_record: failed to clear persisted sender key devices: {e}");
+        }
+        // Also invalidate in-memory cache
         self.sender_key_device_cache.invalidate_all();
     }
 

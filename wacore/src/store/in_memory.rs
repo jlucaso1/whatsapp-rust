@@ -335,6 +335,11 @@ impl ProtocolStore for InMemoryBackend {
         Ok(())
     }
 
+    async fn clear_all_sender_key_devices(&self) -> Result<()> {
+        self.state.lock().await.sender_key_devices.clear();
+        Ok(())
+    }
+
     // --- LID-PN Mapping ---
 
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>> {

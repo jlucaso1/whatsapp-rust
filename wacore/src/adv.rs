@@ -73,10 +73,12 @@ pub fn filter_devices_by_key_index(
 
 /// Check if a key_index is accepted by the decoded ADV list.
 /// Used to validate a newly-notified device before adding it to the registry.
+///
+/// WA Web `AdvDeviceNotificationApi`: device added only if
+/// `keyIndex != null && (validIndexes.has(keyIndex) || keyIndex > currentIndex)`
 pub fn is_key_index_valid(key_index: Option<u32>, decoded: &DecodedKeyIndex) -> bool {
     match key_index {
         Some(ki) => decoded.valid_indexes.contains(&ki) || ki > decoded.current_index,
-        // WA Web: keyIndex must be non-null and in valid_indexes to be added
         None => false,
     }
 }
@@ -148,6 +150,51 @@ mod tests {
         let result = filter_devices_by_key_index(&devices, &decoded);
         assert_eq!(result.len(), 1); // only primary device kept
         assert_eq!(result[0].device_id, 0);
+    }
+
+    #[test]
+    fn is_key_index_valid_in_valid_set() {
+        let decoded = DecodedKeyIndex {
+            raw_id: 1,
+            timestamp: 100,
+            current_index: 5,
+            valid_indexes: vec![3, 7],
+        };
+        assert!(is_key_index_valid(Some(3), &decoded));
+        assert!(is_key_index_valid(Some(7), &decoded));
+    }
+
+    #[test]
+    fn is_key_index_valid_not_in_valid_set() {
+        let decoded = DecodedKeyIndex {
+            raw_id: 1,
+            timestamp: 100,
+            current_index: 5,
+            valid_indexes: vec![3, 7],
+        };
+        assert!(!is_key_index_valid(Some(4), &decoded));
+    }
+
+    #[test]
+    fn is_key_index_valid_newer_than_current() {
+        let decoded = DecodedKeyIndex {
+            raw_id: 1,
+            timestamp: 100,
+            current_index: 5,
+            valid_indexes: vec![3],
+        };
+        assert!(is_key_index_valid(Some(10), &decoded));
+    }
+
+    #[test]
+    fn is_key_index_valid_none_rejected() {
+        let decoded = DecodedKeyIndex {
+            raw_id: 1,
+            timestamp: 100,
+            current_index: 5,
+            valid_indexes: vec![3, 7],
+        };
+        assert!(!is_key_index_valid(None, &decoded));
     }
 
     #[test]

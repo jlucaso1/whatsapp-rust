@@ -1727,6 +1727,20 @@ impl ProtocolStore for SqliteStore {
         .await
     }
 
+    async fn clear_all_sender_key_devices(&self) -> Result<()> {
+        let device_id = self.device_id;
+        self.with_retry("clear_all_sender_key_devices", || {
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::delete(
+                    sender_key_devices::table.filter(sender_key_devices::device_id.eq(device_id)),
+                )
+                .execute(conn)?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;

@@ -161,6 +161,9 @@ mod tests {
         async fn clear_sender_key_devices(&self, _: &str) -> StoreResult<()> {
             Ok(())
         }
+        async fn clear_all_sender_key_devices(&self) -> StoreResult<()> {
+            Ok(())
+        }
         async fn get_lid_mapping(&self, _: &str) -> StoreResult<Option<LidPnMappingEntry>> {
             Ok(None)
         }
