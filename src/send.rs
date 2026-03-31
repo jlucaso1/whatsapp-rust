@@ -1030,13 +1030,8 @@ impl Client {
             let own_devices = self.get_user_devices(std::slice::from_ref(own_jid)).await?;
 
             let mut all_dm_jids = Vec::with_capacity(1 + own_devices.len());
-            all_dm_jids.push(recipient_bare.clone());
-            // Avoid duplicate if sending to self
-            all_dm_jids.extend(
-                own_devices
-                    .into_iter()
-                    .filter(|d| d.to_non_ad() != recipient_bare),
-            );
+            all_dm_jids.push(recipient_bare);
+            all_dm_jids.extend(own_devices);
 
             self.ensure_e2e_sessions(&all_dm_jids).await?;
 

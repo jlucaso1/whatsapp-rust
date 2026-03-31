@@ -234,10 +234,10 @@ async fn test_session_persistence() -> anyhow::Result<()> {
     // Session may be under PN (c.us) or LID (lid) depending on whether
     // PN→LID mapping was resolved before encryption.
     let mut post_send = scan_sessions(&*backend, &jid_b.user, "c.us").await?;
-    if post_send.is_empty() {
-        if let Some(lid_b) = client_b.client.get_lid().await {
-            post_send = scan_sessions(&*backend, &lid_b.user, "lid").await?;
-        }
+    if post_send.is_empty()
+        && let Some(lid_b) = client_b.client.get_lid().await
+    {
+        post_send = scan_sessions(&*backend, &lid_b.user, "lid").await?;
     }
     assert!(
         !post_send.is_empty(),
