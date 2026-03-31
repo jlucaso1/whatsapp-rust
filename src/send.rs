@@ -486,12 +486,9 @@ impl Client {
         self.update_sender_key_devices(&to_str, &prepared.skdm_devices)
             .await;
 
-        // Invalidate device registry for group participants so the next send
-        // gets a fresh device list (without the stale/unregistered devices)
-        if prepared.skdm_had_unregistered_devices {
-            for participant in &group_info.participants {
-                self.invalidate_device_cache(&participant.user).await;
-            }
+        // Invalidate device registry for users whose devices returned 406
+        for user in &prepared.stale_device_users {
+            self.invalidate_device_cache(user).await;
         }
 
         // Flush cached Signal state to DB after encryption
@@ -806,7 +803,7 @@ impl Client {
         struct SkdmUpdate {
             to_str: String,
             devices: Vec<Jid>,
-            had_unregistered: bool,
+            stale_users: Vec<String>,
         }
         let mut skdm_update: Option<SkdmUpdate> = None;
         let mut should_issue_tc_token_after_send = false;
@@ -938,7 +935,7 @@ impl Client {
                     skdm_update = Some(SkdmUpdate {
                         to_str: to_str.clone(),
                         devices: prepared.skdm_devices,
-                        had_unregistered: prepared.skdm_had_unregistered_devices,
+                        stale_users: prepared.stale_device_users,
                     });
                     prepared.node
                 }
@@ -989,7 +986,7 @@ impl Client {
                         skdm_update = Some(SkdmUpdate {
                             to_str,
                             devices: retry_prepared.skdm_devices,
-                            had_unregistered: retry_prepared.skdm_had_unregistered_devices,
+                            stale_users: retry_prepared.stale_device_users,
                         });
                         retry_prepared.node
                     } else {
@@ -1119,12 +1116,10 @@ impl Client {
         if let Some(update) = skdm_update {
             self.update_sender_key_devices(&update.to_str, &update.devices)
                 .await;
-            // Invalidate device registry for affected users so the next send
-            // gets a fresh device list from the server (without stale devices)
-            if update.had_unregistered {
-                for device in &update.devices {
-                    self.invalidate_device_cache(&device.user).await;
-                }
+            // Invalidate device registry for users whose devices returned 406
+            // so the next send re-fetches from server (without stale devices)
+            for user in &update.stale_users {
+                self.invalidate_device_cache(user).await;
             }
         }
 
