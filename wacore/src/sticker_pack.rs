@@ -12,11 +12,11 @@
 //! let zip_upload = client.upload(zip_result.zip_bytes.clone(), MediaType::StickerPack, Default::default()).await?;
 //! let thumb_upload = client.upload(
 //!     thumbnail_jpeg, MediaType::StickerPackThumbnail,
-//!     UploadOptions::new().with_media_key(zip_upload.media_key.clone()),
+//!     UploadOptions::new().with_media_key(zip_upload.media_key),
 //! ).await?;
 //!
 //! let metadata = StickerPackMetadata::new(pack_id, "My Pack".into(), "Me".into());
-//! let msg = build_sticker_pack_message(&zip_result, &zip_upload.into(), &thumb_upload.into(), metadata);
+//! let msg = build_sticker_pack_message(&zip_result, &zip_upload.into(), &thumb_upload.into(), metadata)?;
 //! client.send_message(jid, msg).await?;
 //! ```
 //!
@@ -101,9 +101,9 @@ impl StickerPackMetadata {
 #[non_exhaustive]
 pub struct MediaUploadInfo {
     pub direct_path: String,
-    pub media_key: Vec<u8>,
-    pub file_sha256: Vec<u8>,
-    pub file_enc_sha256: Vec<u8>,
+    pub media_key: [u8; 32],
+    pub file_sha256: [u8; 32],
+    pub file_enc_sha256: [u8; 32],
     pub file_length: u64,
     pub media_key_timestamp: i64,
 }
@@ -111,9 +111,9 @@ pub struct MediaUploadInfo {
 impl MediaUploadInfo {
     pub fn new(
         direct_path: String,
-        media_key: Vec<u8>,
-        file_sha256: Vec<u8>,
-        file_enc_sha256: Vec<u8>,
+        media_key: [u8; 32],
+        file_sha256: [u8; 32],
+        file_enc_sha256: [u8; 32],
         file_length: u64,
         media_key_timestamp: i64,
     ) -> Self {
@@ -196,37 +196,47 @@ pub fn create_sticker_pack_zip(
 /// Builds a `wa::Message` with `StickerPackMessage` from upload results.
 ///
 /// Proto fields match WA Web's `GenerateStickerPackMessageProto.js` exactly.
-/// Caller must supply a JPEG thumbnail uploaded separately.
+/// Caller must supply a JPEG thumbnail uploaded with the same `media_key` as
+/// the zip (via `UploadOptions::with_media_key(zip_upload.media_key)`).
+///
+/// # Errors
+///
+/// Returns an error if the thumbnail was uploaded with a different media key
+/// than the zip, since the proto only carries one `media_key` for both.
 pub fn build_sticker_pack_message(
     zip_result: &StickerPackZipResult,
     zip_upload: &MediaUploadInfo,
     thumb_upload: &MediaUploadInfo,
     metadata: StickerPackMetadata,
-) -> wa::Message {
+) -> Result<wa::Message> {
+    if zip_upload.media_key != thumb_upload.media_key {
+        bail!("thumbnail must be uploaded with the same media_key as the zip");
+    }
+
     let pack_msg = wa::message::StickerPackMessage {
         sticker_pack_id: Some(metadata.pack_id),
         name: Some(metadata.name),
         publisher: Some(metadata.publisher),
         stickers: zip_result.stickers.clone(),
         file_length: Some(zip_upload.file_length),
-        file_sha256: Some(zip_upload.file_sha256.clone()),
-        file_enc_sha256: Some(zip_upload.file_enc_sha256.clone()),
-        media_key: Some(zip_upload.media_key.clone()),
+        file_sha256: Some(zip_upload.file_sha256.to_vec()),
+        file_enc_sha256: Some(zip_upload.file_enc_sha256.to_vec()),
+        media_key: Some(zip_upload.media_key.to_vec()),
         direct_path: Some(zip_upload.direct_path.clone()),
         caption: metadata.caption,
         pack_description: metadata.description,
-        thumbnail_sha256: Some(thumb_upload.file_sha256.clone()),
-        thumbnail_enc_sha256: Some(thumb_upload.file_enc_sha256.clone()),
+        thumbnail_sha256: Some(thumb_upload.file_sha256.to_vec()),
+        thumbnail_enc_sha256: Some(thumb_upload.file_enc_sha256.to_vec()),
         thumbnail_direct_path: Some(thumb_upload.direct_path.clone()),
         sticker_pack_size: Some(zip_result.zip_bytes.len() as u64),
         tray_icon_file_name: Some(zip_result.tray_icon_file_name.clone()),
         ..Default::default()
     };
 
-    wa::Message {
+    Ok(wa::Message {
         sticker_pack_message: Some(Box::new(pack_msg)),
         ..Default::default()
-    }
+    })
 }
 
 fn base64url_encode(data: &[u8]) -> String {
@@ -359,17 +369,17 @@ mod tests {
 
         let zip_upload = MediaUploadInfo::new(
             "/mms/sticker-pack/abc".into(),
-            vec![0u8; 32],
-            vec![1u8; 32],
-            vec![2u8; 32],
+            [0u8; 32],
+            [1u8; 32],
+            [2u8; 32],
             zip_result.zip_bytes.len() as u64,
             1234567890,
         );
         let thumb_upload = MediaUploadInfo::new(
             "/mms/thumbnail-sticker-pack/def".into(),
-            vec![0u8; 32],
-            vec![3u8; 32],
-            vec![4u8; 32],
+            [0u8; 32],
+            [3u8; 32],
+            [4u8; 32],
             1000,
             1234567890,
         );
@@ -381,7 +391,8 @@ mod tests {
         )
         .with_description("A test pack".into());
 
-        let msg = build_sticker_pack_message(&zip_result, &zip_upload, &thumb_upload, metadata);
+        let msg =
+            build_sticker_pack_message(&zip_result, &zip_upload, &thumb_upload, metadata).unwrap();
         let pack = msg.sticker_pack_message.unwrap();
 
         assert_eq!(pack.sticker_pack_id.as_deref(), Some("msg-test"));
