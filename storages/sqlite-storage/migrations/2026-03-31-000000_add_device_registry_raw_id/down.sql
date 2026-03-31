@@ -11,9 +11,13 @@ CREATE TABLE device_registry (
     timestamp INTEGER NOT NULL,
     phash TEXT,
     device_id INTEGER NOT NULL DEFAULT 1,
-    updated_at INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
     PRIMARY KEY (user_id, device_id)
 );
 
 INSERT INTO device_registry SELECT * FROM device_registry_backup;
 DROP TABLE device_registry_backup;
+
+CREATE INDEX idx_device_registry_timestamp ON device_registry (timestamp);
+CREATE INDEX idx_device_registry_device ON device_registry (device_id);
+CREATE INDEX idx_device_registry_updated_at ON device_registry (updated_at);
