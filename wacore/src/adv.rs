@@ -63,8 +63,8 @@ pub fn filter_devices_by_key_index(
             }
             match d.key_index {
                 Some(ki) => valid_set.contains(&ki) || ki > decoded.current_index,
-                // No key_index stored — can't validate, keep to be safe
-                None => true,
+                // WA Web: h.has(null) → false, null > y → false → device removed
+                None => false,
             }
         })
         .cloned()
@@ -76,8 +76,8 @@ pub fn filter_devices_by_key_index(
 pub fn is_key_index_valid(key_index: Option<u32>, decoded: &DecodedKeyIndex) -> bool {
     match key_index {
         Some(ki) => decoded.valid_indexes.contains(&ki) || ki > decoded.current_index,
-        // No key_index — can't validate, accept to be lenient
-        None => true,
+        // WA Web: keyIndex must be non-null and in valid_indexes to be added
+        None => false,
     }
 }
 
@@ -136,7 +136,8 @@ mod tests {
     }
 
     #[test]
-    fn device_without_key_index_kept() {
+    fn device_without_key_index_removed() {
+        // WA Web: h.has(null) → false, null > y → false → device removed
         let devices = vec![dev(0, None), dev(5, None)];
         let decoded = DecodedKeyIndex {
             raw_id: 1,
@@ -145,7 +146,8 @@ mod tests {
             valid_indexes: vec![7],
         };
         let result = filter_devices_by_key_index(&devices, &decoded);
-        assert_eq!(result.len(), 2); // both kept — no key_index to validate
+        assert_eq!(result.len(), 1); // only primary device kept
+        assert_eq!(result[0].device_id, 0);
     }
 
     #[test]
