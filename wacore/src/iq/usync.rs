@@ -667,7 +667,8 @@ impl IqSpec for LidQuerySpec {
             .attr("mode", UsyncMode::Query.as_str())
             .attr("last", "true")
             .attr("index", "0")
-            .attr("context", UsyncContext::Message.as_str())
+            // WA Web ContactSyncApi uses "background" for LID resolution
+            .attr("context", UsyncContext::Background.as_str())
             .children(vec![query_node, list_node])
             .build();
 
@@ -679,6 +680,14 @@ impl IqSpec for LidQuerySpec {
     }
 
     fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+        // Validate usync envelope before parsing
+        let usync = response
+            .get_optional_child("usync")
+            .ok_or_else(|| anyhow!("LID query response missing <usync> node"))?;
+        usync
+            .get_optional_child("list")
+            .ok_or_else(|| anyhow!("LID query response missing <list> node"))?;
+
         let lid_mappings = crate::usync::parse_lid_mappings_from_response(response);
         Ok(LidQueryResponse { lid_mappings })
     }
