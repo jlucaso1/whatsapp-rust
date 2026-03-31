@@ -1003,15 +1003,21 @@ impl Client {
             if to.is_pn() && self.lid_pn_cache.get_current_lid(&to.user).await.is_none() {
                 let sid = self.generate_request_id();
                 let spec = wacore::iq::usync::LidQuerySpec::new(vec![to.to_non_ad()], sid);
-                if let Ok(resp) = self.execute(spec).await {
-                    for mapping in &resp.lid_mappings {
-                        let _ = self
-                            .add_lid_pn_mapping(
-                                &mapping.lid,
-                                &mapping.phone_number,
-                                crate::lid_pn_cache::LearningSource::Usync,
-                            )
-                            .await;
+                // Best-effort: WA Web also catches and warns on failure
+                match self.execute(spec).await {
+                    Ok(resp) => {
+                        for mapping in &resp.lid_mappings {
+                            let _ = self
+                                .add_lid_pn_mapping(
+                                    &mapping.lid,
+                                    &mapping.phone_number,
+                                    crate::lid_pn_cache::LearningSource::Usync,
+                                )
+                                .await;
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("LID query failed for {}, falling back to PN: {e:?}", to);
                     }
                 }
             }
@@ -1024,8 +1030,13 @@ impl Client {
             let own_devices = self.get_user_devices(std::slice::from_ref(own_jid)).await?;
 
             let mut all_dm_jids = Vec::with_capacity(1 + own_devices.len());
-            all_dm_jids.push(recipient_bare);
-            all_dm_jids.extend(own_devices);
+            all_dm_jids.push(recipient_bare.clone());
+            // Avoid duplicate if sending to self
+            all_dm_jids.extend(
+                own_devices
+                    .into_iter()
+                    .filter(|d| d.to_non_ad() != recipient_bare),
+            );
 
             self.ensure_e2e_sessions(&all_dm_jids).await?;
 
@@ -2109,13 +2120,15 @@ mod tests {
         async fn dm_recipient_uses_bare_address() {
             let client = crate::test_utils::create_test_client().await;
 
-            // Start from device-specific (what get_user_devices would return)
+            // Start from device-specific JID, exercise the production path
             let recipient_device33 = Jid::from_str("100000012345678:33@lid").unwrap();
             let own_device_5 = Jid::from_str("999999999999:5@s.whatsapp.net").unwrap();
 
-            // Normalize recipient to bare — same path as send_message_impl:
-            // resolve_encryption_jid(&to).to_non_ad()
-            let recipient_bare = recipient_device33.to_non_ad();
+            // Same normalization as send_message_impl
+            let recipient_bare = client
+                .resolve_encryption_jid(&recipient_device33)
+                .await
+                .to_non_ad();
 
             let all_dm_jids = vec![recipient_bare.clone(), own_device_5.clone()];
             let lock_keys = client.build_session_lock_keys(&all_dm_jids).await;

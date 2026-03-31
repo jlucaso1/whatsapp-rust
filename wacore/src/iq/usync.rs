@@ -638,6 +638,7 @@ impl LidQuerySpec {
 }
 
 /// Response: just the LID mappings learned.
+#[derive(Debug, Clone)]
 pub struct LidQueryResponse {
     pub lid_mappings: Vec<UsyncLidMapping>,
 }
@@ -680,10 +681,10 @@ impl IqSpec for LidQuerySpec {
     }
 
     fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
-        // Validate usync envelope before parsing
         let usync = response
             .get_optional_child("usync")
             .ok_or_else(|| anyhow!("LID query response missing <usync> node"))?;
+        check_usync_result_errors(usync)?;
         usync
             .get_optional_child("list")
             .ok_or_else(|| anyhow!("LID query response missing <list> node"))?;
