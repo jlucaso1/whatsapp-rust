@@ -83,6 +83,7 @@ impl Client {
                     .and_then(wacore::adv::decode_key_index_list);
 
                 // Check raw_id mismatch for identity change detection
+                // TODO: also check advAccountType mismatch (see patch_device_add TODO)
                 let mut raw_id = decoded_key_index.as_ref().map(|d| d.raw_id);
                 if let Some(ref decoded) = decoded_key_index
                     && let Some(ref existing) = existing_record

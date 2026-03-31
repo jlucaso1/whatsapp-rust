@@ -217,6 +217,9 @@ impl Client {
         if let Some(bytes) = signed_bytes {
             if let Some(decoded) = wacore::adv::decode_key_index_list(bytes) {
                 // Check raw_id mismatch (identity change)
+                // TODO: WA Web also triggers clearRecord on advAccountType change
+                // (HOSTED ↔ E2EE), gated behind bizCoexGatingUtils.bizHostedDevicesEnabled().
+                // Add when we implement hosted device coexistence support.
                 if let Some(stored_raw_id) = record.raw_id
                     && stored_raw_id != decoded.raw_id
                 {

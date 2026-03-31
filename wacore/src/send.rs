@@ -1105,6 +1105,9 @@ pub async fn prepare_group_stanza<
     let mut had_unregistered_devices = false;
 
     if let Some(ref distribution_list) = distribution_list {
+        // WA Web computes phash from the full distribution list (target set at
+        // send time), not the actual encrypted outcome
+        resolved_devices_for_phash = Some(distribution_list.clone());
         let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
             stores.sender_key_store,
             &to_jid,
@@ -1141,8 +1144,6 @@ pub async fn prepare_group_stanza<
                     had_unregistered_devices = true;
                 }
                 skdm_encrypted_devices = result.encrypted_devices;
-                // phash reflects actually-encrypted devices, not the full distribution list
-                resolved_devices_for_phash = Some(skdm_encrypted_devices.clone());
 
                 if !result.participant_nodes.is_empty() {
                     message_children.push(
