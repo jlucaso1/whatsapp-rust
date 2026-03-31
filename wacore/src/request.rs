@@ -94,6 +94,25 @@ pub enum IqError {
     Network(String),
 }
 
+/// Lightweight server error that can be embedded in `anyhow::Error` and
+/// downcast from any crate. Used as a shared type across crate boundaries
+/// when `wacore::request::IqError` isn't directly available (e.g., errors
+/// originating from the high-level crate's own `IqError`).
+///
+/// To check a specific code: `err.downcast_ref::<ServerErrorCode>().is_some_and(|e| e.code == 406)`
+#[derive(Debug, Clone, Error)]
+#[error("server error: code={code}, text='{text}'")]
+pub struct ServerErrorCode {
+    pub code: u16,
+    pub text: String,
+}
+
+impl ServerErrorCode {
+    pub fn from_anyhow(err: &anyhow::Error) -> Option<&Self> {
+        err.downcast_ref::<Self>()
+    }
+}
+
 pub struct RequestUtils {
     unique_id: String,
     id_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,

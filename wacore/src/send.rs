@@ -310,11 +310,11 @@ pub struct SignalStores<'a, S, I, P, SP> {
     pub signed_prekey_store: &'a SP,
 }
 
-/// Check if an anyhow error is a 406 "not-acceptable" IQ error (device unregistered).
-/// Uses zero-cost downcast — no string formatting or allocation.
-fn is_device_unregistered_error(err: &anyhow::Error) -> bool {
-    err.downcast_ref::<crate::request::IqError>()
-        .is_some_and(|iq| matches!(iq, crate::request::IqError::ServerError { code: 406, .. }))
+/// Check if an anyhow error is a 406 "not-acceptable" server error (device unregistered).
+/// Uses typed downcast to `ServerErrorCode` — the shared error type that the
+/// `SendContextResolver` impl wraps server errors in.
+pub(crate) fn is_device_unregistered_error(err: &anyhow::Error) -> bool {
+    crate::request::ServerErrorCode::from_anyhow(err).is_some_and(|e| e.code == 406)
 }
 
 async fn encrypt_for_devices<'a, S, I, P, SP>(
@@ -2459,6 +2459,50 @@ mod tests {
                 ..Default::default()
             };
             assert!(should_hide_decrypt_fail(&msg));
+        }
+    }
+
+    #[cfg(test)]
+    mod device_unregistered_tests {
+        use super::is_device_unregistered_error;
+        use crate::request::ServerErrorCode;
+
+        #[test]
+        fn detects_406_server_error_code() {
+            let err = anyhow::Error::new(ServerErrorCode {
+                code: 406,
+                text: "not-acceptable".to_string(),
+            });
+            assert!(is_device_unregistered_error(&err));
+        }
+
+        #[test]
+        fn rejects_non_406_server_error() {
+            let err = anyhow::Error::new(ServerErrorCode {
+                code: 404,
+                text: "not-found".to_string(),
+            });
+            assert!(!is_device_unregistered_error(&err));
+        }
+
+        #[test]
+        fn rejects_unrelated_error() {
+            let err = anyhow::anyhow!("some random error");
+            assert!(!is_device_unregistered_error(&err));
+        }
+
+        #[test]
+        fn rejects_wacore_iq_error_without_server_error_code_wrapper() {
+            // wacore::IqError::ServerError is NOT the same as ServerErrorCode.
+            // This simulates the old bug: if someone wraps wacore IqError directly
+            // without the ServerErrorCode wrapper, the check should not match.
+            let err = anyhow::Error::new(crate::request::IqError::ServerError {
+                code: 406,
+                text: "not-acceptable".to_string(),
+            });
+            // This would only match if we also checked IqError (we don't — we use ServerErrorCode)
+            // The SendContextResolver impl is responsible for wrapping in ServerErrorCode
+            assert!(!is_device_unregistered_error(&err));
         }
     }
 }

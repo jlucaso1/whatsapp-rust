@@ -26,6 +26,19 @@ impl SendContextResolver for Client {
     ) -> Result<HashMap<Jid, PreKeyBundle>, anyhow::Error> {
         self.fetch_pre_keys(jids, Some(PreKeyFetchReason::Identity))
             .await
+            .map_err(|e| {
+                // Re-wrap server errors as wacore::ServerErrorCode so
+                // encrypt_for_devices can downcast across crate boundaries
+                if let Some(crate::request::IqError::ServerError { code, text }) =
+                    e.downcast_ref::<crate::request::IqError>()
+                {
+                    return anyhow::Error::new(wacore::request::ServerErrorCode {
+                        code: *code,
+                        text: text.clone(),
+                    });
+                }
+                e
+            })
     }
 
     async fn resolve_group_info(&self, jid: &Jid) -> Result<GroupInfo, anyhow::Error> {
