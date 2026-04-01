@@ -1309,8 +1309,7 @@ impl Client {
                 sender_timestamp: Some(now),
             };
 
-            let store_jid = received.jid.user.clone();
-            if let Err(e) = backend.put_tc_token(&store_jid, &entry).await {
+            if let Err(e) = backend.put_tc_token(&received.jid.user, &entry).await {
                 log::warn!(target: "Client/TcToken", "Failed to store issued tc_token: {e}");
             } else {
                 any_stored = true;
@@ -1338,8 +1337,7 @@ impl Client {
                 token_timestamp: received.timestamp,
                 sender_timestamp: Some(sender_ts),
             };
-            let store_jid = received.jid.user.clone();
-            if let Err(e) = backend.put_tc_token(&store_jid, &entry).await {
+            if let Err(e) = backend.put_tc_token(&received.jid.user, &entry).await {
                 log::warn!(target: "Client/TcToken", "Failed to store re-issued tc_token: {e}");
             }
         }

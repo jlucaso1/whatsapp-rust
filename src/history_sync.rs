@@ -329,7 +329,7 @@ impl Client {
         };
 
         let token = match conv.tc_token {
-            Some(ref t) if !t.is_empty() => t,
+            Some(t) if !t.is_empty() => t,
             _ => return,
         };
 
@@ -375,7 +375,7 @@ impl Client {
         };
 
         let entry = TcTokenEntry {
-            token: token.clone(),
+            token,
             token_timestamp: timestamp as i64,
             sender_timestamp: merged_sender_ts,
         };
