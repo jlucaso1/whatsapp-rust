@@ -149,7 +149,9 @@ impl Client {
             if info.category == MessageCategory::Peer { "peer_msg" } else { "delivery" },
             info.id, info.source.sender);
 
-        if let Err(e) = self.send_node(receipt_node).await {
+        if let Err(e) = self.send_node(receipt_node).await
+            && !matches!(e, crate::client::ClientError::NotConnected)
+        {
             log::warn!(target: "Client/Receipt", "Failed to send delivery receipt for message {}: {:?}", info.id, e);
         }
     }
