@@ -855,6 +855,13 @@ impl Client {
     }
 
     /// Send pre-marshaled plaintext bytes through the noise socket.
+    ///
+    /// The bytes must be a valid WABinary-marshaled stanza (as produced by
+    /// `wacore_binary::marshal::marshal_to`). Sending malformed data will
+    /// cause the server to close the connection.
+    ///
+    /// This bypasses node logging and `sent_node_waiter` resolution — use
+    /// [`send_node`](Client::send_node) for normal stanza sending.
     pub async fn send_raw_bytes(&self, plaintext: Vec<u8>) -> Result<(), ClientError> {
         let noise_socket = self.get_noise_socket().await?;
         let encrypted_buf = Vec::with_capacity(plaintext.len() + 32);

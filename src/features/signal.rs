@@ -9,6 +9,7 @@ use wacore::libsignal::protocol::{
     message_encrypt,
 };
 use wacore::libsignal::store::sender_key_name::SenderKeyName;
+use wacore::message_processing::EncType;
 use wacore::messages::MessageUtils;
 use wacore::types::jid::JidExt;
 use wacore_binary::jid::Jid;
@@ -28,20 +29,15 @@ impl<'a> Signal<'a> {
 
     /// Encrypt plaintext for a single recipient using the Signal protocol.
     ///
-    /// Returns `("msg" | "pkmsg", ciphertext_bytes)`. The caller is
-    /// responsible for padding if needed; this method encrypts raw bytes.
+    /// Returns `(EncType, ciphertext_bytes)`. The caller is responsible
+    /// for padding if needed; this method encrypts raw bytes.
     ///
     /// PN JIDs are resolved to LID when a LID session exists, matching
     /// the internal send path.
-    pub async fn encrypt_message(
-        &self,
-        jid: &Jid,
-        plaintext: &[u8],
-    ) -> Result<(&'static str, Vec<u8>)> {
+    pub async fn encrypt_message(&self, jid: &Jid, plaintext: &[u8]) -> Result<(EncType, Vec<u8>)> {
         // Resolve PN→LID to use the correct Signal session (matches send path)
         let encryption_jid = self.client.resolve_encryption_jid(jid).await;
         let signal_addr = encryption_jid.to_protocol_address();
-        // Reuse the pre-cached display string instead of computing it separately
         let signal_addr_str = signal_addr.to_string();
 
         let lock = self.client.session_lock_for(&signal_addr_str).await;
@@ -60,32 +56,39 @@ impl<'a> Signal<'a> {
         self.client.flush_signal_cache().await?;
 
         match encrypted {
-            CiphertextMessage::PreKeySignalMessage(msg) => Ok(("pkmsg", msg.serialized().to_vec())),
-            CiphertextMessage::SignalMessage(msg) => Ok(("msg", msg.serialized().to_vec())),
+            CiphertextMessage::PreKeySignalMessage(msg) => {
+                Ok((EncType::PreKeyMessage, msg.serialized().to_vec()))
+            }
+            CiphertextMessage::SignalMessage(msg) => {
+                Ok((EncType::Message, msg.serialized().to_vec()))
+            }
             _ => Err(anyhow!("unexpected ciphertext variant")),
         }
     }
 
     /// Decrypt a Signal protocol message from a sender.
     ///
-    /// `msg_type` must be `"msg"` or `"pkmsg"`. Returns raw padded plaintext.
-    /// Use [`MessageUtils::unpad_message_ref`] with the stanza's `v` attribute
-    /// if WhatsApp message unpadding is needed.
+    /// Returns raw padded plaintext. Use [`MessageUtils::unpad_message_ref`]
+    /// with the stanza's `v` attribute if WhatsApp message unpadding is needed.
     ///
     /// PN JIDs are resolved to LID when a LID session exists, matching
     /// the internal receive path.
     pub async fn decrypt_message(
         &self,
         jid: &Jid,
-        msg_type: &str,
+        enc_type: EncType,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>> {
-        let parsed = match msg_type {
-            "pkmsg" => {
+        let parsed = match enc_type {
+            EncType::PreKeyMessage => {
                 CiphertextMessage::PreKeySignalMessage(PreKeySignalMessage::try_from(ciphertext)?)
             }
-            "msg" => CiphertextMessage::SignalMessage(SignalMessage::try_from(ciphertext)?),
-            other => return Err(anyhow!("invalid msg_type: {other}")),
+            EncType::Message => {
+                CiphertextMessage::SignalMessage(SignalMessage::try_from(ciphertext)?)
+            }
+            EncType::SenderKey => {
+                return Err(anyhow!("use decrypt_group_message for sender-key messages"));
+            }
         };
 
         let encryption_jid = self.client.resolve_encryption_jid(jid).await;
@@ -117,12 +120,11 @@ impl<'a> Signal<'a> {
 
     /// Encrypt plaintext for a group using sender keys.
     ///
-    /// Returns `(skdm_bytes, ciphertext_bytes)`.
-    ///
-    /// **Warning:** This regenerates the SKDM on every call. Callers must
-    /// distribute the SKDM to participants who don't yet hold the sender key.
-    /// For repeated sends to the same group, prefer using
-    /// `create_participant_nodes` which handles distribution tracking.
+    /// Returns `(Option<skdm_bytes>, ciphertext_bytes)`. The SKDM is `Some`
+    /// only when a new sender key was created (first encrypt for this group
+    /// or after key rotation). Callers must distribute the SKDM to all group
+    /// participants when present. This matches WA Web which only creates
+    /// SKDM on first group encrypt or after sender key rotation.
     ///
     /// Not safe to call concurrently with `decrypt_group_message` for the
     /// same group — sender key state is not internally locked.
@@ -130,18 +132,37 @@ impl<'a> Signal<'a> {
         &self,
         group_jid: &Jid,
         plaintext: &[u8],
-    ) -> Result<(Vec<u8>, Vec<u8>)> {
+    ) -> Result<(Option<Vec<u8>>, Vec<u8>)> {
         let own_jid = self.client.get_own_jid_for_group(group_jid).await?;
+        let sender_addr = own_jid.to_protocol_address();
+        let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_addr.to_string());
+
+        // Only create SKDM when no sender key exists (matches WA Web behavior)
+        let device_store = self.client.persistence_manager.get_device_arc().await;
+        let device_guard = device_store.read().await;
+        let key_exists = self
+            .client
+            .signal_cache
+            .get_sender_key(&sender_key_name, &*device_guard.backend)
+            .await?
+            .is_some();
+        drop(device_guard);
 
         let mut adapter = self.client.signal_adapter().await;
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
-        let skdm_bytes = wacore::send::create_sender_key_distribution_message_for_group(
-            &mut adapter.sender_key_store,
-            group_jid,
-            &own_jid,
-        )
-        .await?;
+        let skdm_bytes = if !key_exists {
+            Some(
+                wacore::send::create_sender_key_distribution_message_for_group(
+                    &mut adapter.sender_key_store,
+                    group_jid,
+                    &own_jid,
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
 
         let ciphertext = wacore::send::encrypt_group_message(
             &mut adapter.sender_key_store,
@@ -190,8 +211,12 @@ impl<'a> Signal<'a> {
     }
 
     /// Check whether a Signal session exists for `jid`.
+    ///
+    /// PN JIDs are resolved to LID when a LID mapping exists, matching
+    /// the encrypt/decrypt paths.
     pub async fn validate_session(&self, jid: &Jid) -> Result<bool> {
-        let signal_addr = jid.to_protocol_address();
+        let resolved = self.client.resolve_encryption_jid(jid).await;
+        let signal_addr = resolved.to_protocol_address();
         let device_store = self.client.persistence_manager.get_device_arc().await;
         let device_guard = device_store.read().await;
         self.client
@@ -201,39 +226,29 @@ impl<'a> Signal<'a> {
             .map_err(|e| anyhow!("session check failed: {e}"))
     }
 
-    /// Delete Signal sessions for the given JIDs (cache + persistent store).
+    /// Delete Signal sessions and identity keys for the given JIDs.
+    ///
+    /// Matches WA Web's `deleteRemoteSession` which removes both session
+    /// and identity as a paired operation. Changes are flushed to the
+    /// persistent backend before returning.
+    ///
+    /// PN JIDs are resolved to LID when a LID mapping exists, matching
+    /// the encrypt/decrypt paths.
     pub async fn delete_sessions(&self, jids: &[Jid]) -> Result<()> {
-        if jids.is_empty() {
-            return Ok(());
-        }
+        for jid in jids {
+            let resolved = self.client.resolve_encryption_jid(jid).await;
+            let addr = resolved.to_protocol_address();
+            let addr_str = addr.to_string();
 
-        // Sort lock keys to match the global ordering used by create_participant_nodes
-        // and the DM send path, preventing AB/BA deadlocks.
-        let mut keyed: Vec<(String, &Jid)> = jids
-            .iter()
-            .map(|jid| (jid.to_protocol_address_string(), jid))
-            .collect();
-        keyed.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
-        keyed.dedup_by(|(a, _), (b, _)| a == b);
+            let lock = self.client.session_lock_for(&addr_str).await;
+            let _guard = lock.lock().await;
 
-        let mut guards = Vec::with_capacity(keyed.len());
-        for (key, _) in &keyed {
-            let lock = self.client.session_lock_for(key).await;
-            guards.push(lock.lock_arc().await);
-        }
-
-        let device_store = self.client.persistence_manager.get_device_arc().await;
-        let device_guard = device_store.read().await;
-
-        for (_, jid) in &keyed {
-            let addr = jid.to_protocol_address();
+            // WA Web removes session + identity together (deleteRemoteSession)
             self.client.signal_cache.delete_session(&addr).await;
-            device_guard
-                .backend
-                .delete_session(addr.as_str())
-                .await
-                .map_err(|e| anyhow!("failed to delete session for {jid}: {e}"))?;
+            self.client.signal_cache.delete_identity(&addr).await;
         }
+
+        self.client.flush_signal_cache().await?;
         Ok(())
     }
 

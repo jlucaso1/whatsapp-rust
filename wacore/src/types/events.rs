@@ -452,9 +452,8 @@ pub enum Event {
     NewsletterLiveUpdate(NewsletterLiveUpdate),
 
     /// Raw decoded stanza, emitted before router dispatch.
-    /// Allows external consumers to observe protocol-level nodes (e.g. for voice calls).
+    /// Library extension — no WA Web equivalent (WA Web has no raw stanza observer).
     /// Gated by `Client::set_raw_node_forwarding(true)` to avoid overhead when unused.
-    /// Serialized manually in the bridge (not via serde).
     #[serde(skip)]
     RawNode(Arc<Node>),
 }
