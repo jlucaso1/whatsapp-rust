@@ -242,9 +242,9 @@ impl Client {
                             signal_address, stored_reg_id, received_reg_id
                         );
                         self.signal_cache.delete_session(&signal_address).await;
-                        self.flush_signal_cache().await.unwrap_or_else(|e| {
+                        if let Err(e) = self.flush_signal_cache().await {
                             log::warn!("Failed to flush session deletion for reg ID mismatch: {e}");
-                        });
+                        }
                     }
                 }
             }
@@ -442,9 +442,7 @@ impl Client {
             // Delete the old session through the signal cache so encryption uses a fresh session.
             // IMPORTANT: Must go through cache, not backend, to avoid stale cached sessions.
             self.signal_cache.delete_session(&signal_address).await;
-            self.flush_signal_cache().await.unwrap_or_else(|e| {
-                log::warn!("Failed to flush signal cache after session delete: {e}");
-            });
+            self.flush_signal_cache().await?;
             info!("Deleted session for {signal_address} due to retry receipt");
         }
 
@@ -491,9 +489,7 @@ impl Client {
             .await?;
 
             self.send_node(stanza).await?;
-            self.flush_signal_cache().await.unwrap_or_else(|e| {
-                log::warn!("Failed to flush signal cache after group retry: {e}");
-            });
+            self.flush_signal_cache().await?;
         } else {
             // DM retry: re-encrypt via normal send path (already targets single recipient)
             self.send_message_impl(

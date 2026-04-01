@@ -155,17 +155,20 @@ impl Client {
         }
     }
 
-    /// Helper to generate consistent cache keys for retry logic.
-    /// Key format: "{chat}:{msg_id}:{sender}"
+    /// Generate consistent cache key for retry logic.
     pub(crate) async fn make_retry_cache_key(
         &self,
         chat: &Jid,
         msg_id: &str,
         sender: &Jid,
     ) -> String {
+        use std::fmt::Write;
         let chat = self.resolve_encryption_jid(chat).await;
         let sender = self.resolve_encryption_jid(sender).await;
-        format!("{}:{}:{}", chat, msg_id, sender)
+        let mut key =
+            String::with_capacity(chat.user.len() + msg_id.len() + sender.user.len() + 20);
+        let _ = write!(key, "{chat}:{msg_id}:{sender}");
+        key
     }
 
     /// Spawns a task that sends a retry receipt for a failed decryption.

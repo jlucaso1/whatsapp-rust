@@ -1073,13 +1073,20 @@ impl Client {
 
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
-        let noise_socket = handshake::do_handshake(
+        let noise_socket = match handshake::do_handshake(
             self.runtime.clone(),
             &device_snapshot,
             transport.clone(),
             &mut transport_events,
         )
-        .await?;
+        .await
+        {
+            Ok(socket) => socket,
+            Err(e) => {
+                transport.disconnect().await;
+                return Err(e.into());
+            }
+        };
 
         *self.transport.lock().await = Some(transport);
         *self.transport_events.lock().await = Some(transport_events);
@@ -1594,7 +1601,7 @@ impl Client {
         }
 
         // Check generic node waiters (zero-cost when none registered)
-        if self.node_waiter_count.load(Ordering::Relaxed) > 0 {
+        if self.node_waiter_count.load(Ordering::Acquire) > 0 {
             self.resolve_node_waiters(&node);
         }
 

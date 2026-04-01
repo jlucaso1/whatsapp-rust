@@ -15,6 +15,8 @@ pub struct PersistenceManager {
     backend: Arc<dyn Backend>,
     dirty: Arc<AtomicBool>,
     save_notify: Arc<Event>,
+    /// Set to true when the background saver halts due to repeated flush failures.
+    saver_halted: Arc<AtomicBool>,
 }
 
 impl PersistenceManager {
@@ -53,6 +55,7 @@ impl PersistenceManager {
             backend,
             dirty: Arc::new(AtomicBool::new(false)),
             save_notify: Arc::new(Event::new()),
+            saver_halted: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -66,6 +69,11 @@ impl PersistenceManager {
 
     pub fn backend(&self) -> Arc<dyn Backend> {
         self.backend.clone()
+    }
+
+    /// Returns true if the background saver halted due to repeated flush failures.
+    pub fn is_saver_halted(&self) -> bool {
+        self.saver_halted.load(Ordering::Acquire)
     }
 
     pub async fn modify_device<F, R>(&self, modifier: F) -> R
@@ -129,24 +137,24 @@ impl PersistenceManager {
     }
 
     pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
+        const MAX_CONSECUTIVE_FAILURES: u32 = 10;
+
         let rt = runtime.clone();
         let weak = Arc::downgrade(&self);
-        drop(self); // Release the strong reference; the caller's Arc keeps it alive
+        drop(self);
         runtime
             .spawn(Box::pin(async move {
+                let mut consecutive_failures: u32 = 0;
                 loop {
                     let Some(this) = weak.upgrade() else {
                         debug!("PersistenceManager dropped, exiting background saver.");
                         return;
                     };
-                    // Create the listener BEFORE the event can fire to avoid missing notifications.
                     let listener = this.save_notify.listen();
-                    drop(this); // Don't hold strong ref while sleeping
+                    drop(this);
 
                     futures::select! {
-                        _ = listener.fuse() => {
-                            debug!("Save notification received.");
-                        }
+                        _ = listener.fuse() => {}
                         _ = rt.sleep(interval).fuse() => {}
                     }
 
@@ -155,7 +163,18 @@ impl PersistenceManager {
                         return;
                     };
                     if let Err(e) = this.save_to_disk().await {
-                        error!("Error saving device state in background: {e}");
+                        consecutive_failures += 1;
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                            this.saver_halted.store(true, Ordering::Release);
+                            error!(
+                                "Background saver: {consecutive_failures} consecutive flush failures, \
+                                 halting to prevent silent data loss. Last error: {e}"
+                            );
+                            return;
+                        }
+                        error!("Background saver flush failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {e}");
+                    } else {
+                        consecutive_failures = 0;
                     }
                 }
             }))
