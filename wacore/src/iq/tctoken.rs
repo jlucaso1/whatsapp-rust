@@ -53,9 +53,6 @@ pub const TC_TOKEN_BUCKET_DURATION: i64 = 604_800;
 /// Default number of buckets — WA Web AB prop `tctoken_num_buckets` (default 4).
 pub const TC_TOKEN_NUM_BUCKETS: i64 = 4;
 
-/// Total rolling window duration in seconds (bucket_duration * num_buckets).
-pub const TC_TOKEN_TOTAL_DURATION: i64 = TC_TOKEN_BUCKET_DURATION * TC_TOKEN_NUM_BUCKETS;
-
 /// Maximum allowed bucket duration (180 days) — matches WA Web's cap.
 pub const TC_TOKEN_MAX_DURATION: i64 = 15_552_000;
 

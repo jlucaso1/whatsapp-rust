@@ -1280,19 +1280,23 @@ impl Client {
             return false;
         };
 
-        self.store_issued_tc_tokens(&response.tokens).await;
-        true
+        self.store_issued_tc_tokens(&response.tokens).await
     }
 
-    async fn store_issued_tc_tokens(&self, tokens: &[wacore::iq::tctoken::ReceivedTcToken]) {
+    /// Returns true if at least one token was persisted.
+    async fn store_issued_tc_tokens(
+        &self,
+        tokens: &[wacore::iq::tctoken::ReceivedTcToken],
+    ) -> bool {
         use wacore::store::traits::TcTokenEntry;
 
         if tokens.is_empty() {
-            return;
+            return false;
         }
 
         let backend = self.persistence_manager.backend();
         let now = wacore::time::now_secs();
+        let mut any_stored = false;
         for received in tokens {
             if received.token.is_empty() {
                 log::warn!(target: "Client/TcToken", "Server returned empty tc_token for {}, skipping", received.jid);
@@ -1308,8 +1312,11 @@ impl Client {
             let store_jid = received.jid.user.clone();
             if let Err(e) = backend.put_tc_token(&store_jid, &entry).await {
                 log::warn!(target: "Client/TcToken", "Failed to store issued tc_token: {e}");
+            } else {
+                any_stored = true;
             }
         }
+        any_stored
     }
 
     /// Variant of [`store_issued_tc_tokens`] that preserves the original
@@ -1519,13 +1526,13 @@ impl Client {
     /// Resolve a JID to its LID form for tc_token storage.
     async fn resolve_to_lid_jid(&self, jid: &Jid) -> Jid {
         if jid.is_lid() {
-            return jid.clone();
+            return jid.to_non_ad();
         }
 
         if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&jid.user).await {
             Jid::new(&lid_user, "lid")
         } else {
-            jid.clone()
+            jid.to_non_ad()
         }
     }
 
