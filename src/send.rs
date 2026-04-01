@@ -1462,11 +1462,12 @@ impl Client {
             .ab_props
             .get_int(config_codes::TCTOKEN_DURATION, TC_TOKEN_BUCKET_DURATION)
             .await
-            .min(TC_TOKEN_MAX_DURATION);
+            .clamp(1, TC_TOKEN_MAX_DURATION);
         let num_buckets = self
             .ab_props
             .get_int(config_codes::TCTOKEN_NUM_BUCKETS, TC_TOKEN_NUM_BUCKETS)
-            .await;
+            .await
+            .max(1);
         let sender_duration = self
             .ab_props
             .get_int(
@@ -1474,15 +1475,15 @@ impl Client {
                 TC_TOKEN_BUCKET_DURATION,
             )
             .await
-            .min(TC_TOKEN_MAX_DURATION);
-
+            .clamp(1, TC_TOKEN_MAX_DURATION);
         let sender_num_buckets = self
             .ab_props
             .get_int(
                 config_codes::TCTOKEN_NUM_BUCKETS_SENDER,
                 TC_TOKEN_NUM_BUCKETS,
             )
-            .await;
+            .await
+            .max(1);
 
         wacore::iq::tctoken::TcTokenConfig {
             bucket_duration: duration,

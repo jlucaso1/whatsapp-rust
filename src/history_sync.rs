@@ -236,24 +236,44 @@ impl Client {
             // Wait for parsing result
             result_rx.await.ok()
         } else {
-            // No listeners - skip conversation processing entirely
-            log::debug!("No event handlers registered, skipping conversation processing");
+            // No event listeners, but still extract tctokens from conversations
+            // so headless/library clients have cached privacy tokens after pairing.
+            log::debug!("No event handlers registered, extracting tctokens only");
 
-            // own_user is moved directly, no clone needed
-            Some(
-                wacore::runtime::blocking(&*self.runtime, move || {
-                    let own_user_ref = own_user.as_deref();
+            let (tx, rx) = async_channel::bounded::<Bytes>(4);
 
-                    // Pass None for callback - conversations are skipped at protobuf level
-                    process_history_sync::<fn(Bytes)>(
-                        compressed_data,
-                        own_user_ref,
-                        None,
-                        compressed_size_hint,
-                    )
-                })
-                .await,
-            )
+            let (result_tx, result_rx) = futures::channel::oneshot::channel();
+            let blocking_fut = self.runtime.spawn_blocking(Box::new(move || {
+                let own_user_ref = own_user.as_deref();
+                let result = process_history_sync(
+                    compressed_data,
+                    own_user_ref,
+                    Some(|raw_bytes: Bytes| {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let _ = tx.send_blocking(raw_bytes);
+                        #[cfg(target_arch = "wasm32")]
+                        let _ = tx.try_send(raw_bytes);
+                    }),
+                    compressed_size_hint,
+                );
+                let _ = result_tx.send(result);
+            }));
+            self.runtime
+                .spawn(Box::pin(async move {
+                    blocking_fut.await;
+                }))
+                .detach();
+
+            while let Ok(raw_bytes) = rx.recv().await {
+                if self.is_shutting_down() {
+                    break;
+                }
+                self.store_tc_token_from_conversation_bytes(&raw_bytes)
+                    .await;
+            }
+            drop(rx);
+
+            result_rx.await.ok()
         };
 
         if self.is_shutting_down() {
