@@ -1,5 +1,4 @@
 use crate::client::Client;
-use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::message::EditAttribute;
 use anyhow::anyhow;
 use log::debug;
@@ -373,15 +372,8 @@ impl Client {
             !key_exists
         };
 
-        let mut store_adapter =
-            SignalProtocolStoreAdapter::new(device_store_arc.clone(), self.signal_cache.clone());
-        let mut stores = wacore::send::SignalStores {
-            session_store: &mut store_adapter.session_store,
-            identity_store: &mut store_adapter.identity_store,
-            prekey_store: &mut store_adapter.pre_key_store,
-            signed_prekey_store: &store_adapter.signed_pre_key_store,
-            sender_key_store: &mut store_adapter.sender_key_store,
-        };
+        let mut store_adapter = self.signal_adapter_from(device_store_arc.clone());
+        let mut stores = store_adapter.as_signal_stores();
 
         // Determine which devices need SKDM using the unified per-device map
         let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
@@ -443,17 +435,9 @@ impl Client {
                     }
                     self.sender_key_device_cache.invalidate(&to_str).await;
 
-                    let mut store_adapter_retry = SignalProtocolStoreAdapter::new(
-                        device_store_arc.clone(),
-                        self.signal_cache.clone(),
-                    );
-                    let mut stores_retry = wacore::send::SignalStores {
-                        session_store: &mut store_adapter_retry.session_store,
-                        identity_store: &mut store_adapter_retry.identity_store,
-                        prekey_store: &mut store_adapter_retry.pre_key_store,
-                        signed_prekey_store: &store_adapter_retry.signed_pre_key_store,
-                        sender_key_store: &mut store_adapter_retry.sender_key_store,
-                    };
+                    let mut store_adapter_retry =
+                        self.signal_adapter_from(device_store_arc.clone());
+                    let mut stores_retry = store_adapter_retry.as_signal_stores();
 
                     wacore::send::prepare_group_stanza(
                         &mut stores_retry,
@@ -816,17 +800,10 @@ impl Client {
             let encryption_jid = self.resolve_encryption_jid(&to).await;
             let signal_addr_str = encryption_jid.to_protocol_address_string();
 
-            let session_mutex = self
-                .session_locks
-                .get_with_by_ref(&signal_addr_str, async {
-                    std::sync::Arc::new(async_lock::Mutex::new(()))
-                })
-                .await;
+            let session_mutex = self.session_lock_for(&signal_addr_str).await;
             let _session_guard = session_mutex.lock().await;
 
-            let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut store_adapter =
-                SignalProtocolStoreAdapter::new(device_store_arc, self.signal_cache.clone());
+            let mut store_adapter = self.signal_adapter().await;
 
             wacore::send::prepare_peer_stanza(
                 &mut store_adapter.session_store,
@@ -892,18 +869,9 @@ impl Client {
                 force_key_distribution || !key_exists
             };
 
-            let mut store_adapter = SignalProtocolStoreAdapter::new(
-                device_store_arc.clone(),
-                self.signal_cache.clone(),
-            );
+            let mut store_adapter = self.signal_adapter_from(device_store_arc.clone());
 
-            let mut stores = wacore::send::SignalStores {
-                session_store: &mut store_adapter.session_store,
-                identity_store: &mut store_adapter.identity_store,
-                prekey_store: &mut store_adapter.pre_key_store,
-                signed_prekey_store: &store_adapter.signed_pre_key_store,
-                sender_key_store: &mut store_adapter.sender_key_store,
-            };
+            let mut stores = store_adapter.as_signal_stores();
 
             // Determine which devices need SKDM distribution using the unified
             // per-device sender key map (matches WA Web's participant.senderKey Map).
@@ -954,17 +922,9 @@ impl Client {
                         }
                         self.sender_key_device_cache.invalidate(&to_str).await;
 
-                        let mut store_adapter_retry = SignalProtocolStoreAdapter::new(
-                            device_store_arc.clone(),
-                            self.signal_cache.clone(),
-                        );
-                        let mut stores_retry = wacore::send::SignalStores {
-                            session_store: &mut store_adapter_retry.session_store,
-                            identity_store: &mut store_adapter_retry.identity_store,
-                            prekey_store: &mut store_adapter_retry.pre_key_store,
-                            signed_prekey_store: &store_adapter_retry.signed_pre_key_store,
-                            sender_key_store: &mut store_adapter_retry.sender_key_store,
-                        };
+                        let mut store_adapter_retry =
+                            self.signal_adapter_from(device_store_arc.clone());
+                        let mut stores_retry = store_adapter_retry.as_signal_stores();
 
                         let retry_prepared = wacore::send::prepare_group_stanza(
                             &mut stores_retry,
@@ -1068,30 +1028,16 @@ impl Client {
 
             let mut _session_mutexes = Vec::with_capacity(lock_keys.len());
             for key in &lock_keys {
-                _session_mutexes.push(
-                    self.session_locks
-                        .get_with_by_ref(key, async {
-                            std::sync::Arc::new(async_lock::Mutex::new(()))
-                        })
-                        .await,
-                );
+                _session_mutexes.push(self.session_lock_for(key).await);
             }
             let mut _session_guards = Vec::with_capacity(_session_mutexes.len());
             for mutex in &_session_mutexes {
                 _session_guards.push(mutex.lock().await);
             }
 
-            let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut store_adapter =
-                SignalProtocolStoreAdapter::new(device_store_arc, self.signal_cache.clone());
+            let mut store_adapter = self.signal_adapter().await;
 
-            let mut stores = wacore::send::SignalStores {
-                session_store: &mut store_adapter.session_store,
-                identity_store: &mut store_adapter.identity_store,
-                prekey_store: &mut store_adapter.pre_key_store,
-                signed_prekey_store: &store_adapter.signed_pre_key_store,
-                sender_key_store: &mut store_adapter.sender_key_store,
-            };
+            let mut stores = store_adapter.as_signal_stores();
 
             wacore::send::prepare_dm_stanza(
                 &mut stores,
@@ -1379,12 +1325,7 @@ impl Client {
 
         // Dedup via session_locks — bare JID won't collide with protocol addresses ("user:device")
         let bare = sender.to_non_ad().to_string();
-        let mutex = self
-            .session_locks
-            .get_with_by_ref(bare.as_str(), async {
-                std::sync::Arc::new(async_lock::Mutex::new(()))
-            })
-            .await;
+        let mutex = self.session_lock_for(&bare).await;
         let Some(_guard) = mutex.try_lock() else {
             return;
         };

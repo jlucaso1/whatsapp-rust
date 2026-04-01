@@ -470,11 +470,7 @@ impl Client {
                 .map(|g| g.addressing_mode)
                 .unwrap_or_default();
 
-            let device_store_arc = self.persistence_manager.get_device_arc().await;
-            let mut store_adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
-                device_store_arc,
-                self.signal_cache.clone(),
-            );
+            let mut store_adapter = self.signal_adapter().await;
 
             let stanza = wacore::send::prepare_group_retry_stanza(
                 &mut store_adapter.session_store,
@@ -634,20 +630,10 @@ impl Client {
 
         // Acquire per-sender session lock to prevent race with concurrent message decryption.
         // This matches the session_locks pattern used in process_session_enc_batch.
-        let session_mutex = self
-            .session_locks
-            .get_with_by_ref(signal_address.as_str(), async {
-                std::sync::Arc::new(async_lock::Mutex::new(()))
-            })
-            .await;
+        let session_mutex = self.session_lock_for(signal_address.as_str()).await;
         let _session_guard = session_mutex.lock().await;
 
-        let device_store = self.persistence_manager.get_device_arc().await;
-
-        let mut adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
-            device_store,
-            self.signal_cache.clone(),
-        );
+        let mut adapter = self.signal_adapter().await;
 
         process_prekey_bundle(
             &signal_address,

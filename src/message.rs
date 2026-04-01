@@ -1,5 +1,4 @@
 use crate::client::Client;
-use crate::store::signal_adapter::SignalProtocolStoreAdapter;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
 use log::{debug, warn};
@@ -683,18 +682,10 @@ impl Client {
         // the SignalProtocolStoreAdapter's per-session locks (prevents ratchet counter races).
         let signal_address = sender_encryption_jid.to_protocol_address();
 
-        let session_mutex = self
-            .session_locks
-            .get_with_by_ref(signal_address.as_str(), async {
-                std::sync::Arc::new(async_lock::Mutex::new(()))
-            })
-            .await;
+        let session_mutex = self.session_lock_for(signal_address.as_str()).await;
         let _session_guard = session_mutex.lock().await;
 
-        let mut adapter = SignalProtocolStoreAdapter::new(
-            self.persistence_manager.get_device_arc().await,
-            self.signal_cache.clone(),
-        );
+        let mut adapter = self.signal_adapter().await;
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let mut any_success = false;
         let mut any_duplicate = false;
@@ -942,11 +933,13 @@ impl Client {
                         let sender_jid = info.source.sender.clone();
                         if !sender_jid.is_bot() && !sender_jid.is_status_broadcast() {
                             let client = self.clone();
-                            tokio::spawn(async move {
-                                client
-                                    .reissue_tc_token_after_identity_change(&sender_jid)
-                                    .await;
-                            });
+                            self.runtime
+                                .spawn(Box::pin(async move {
+                                    client
+                                        .reissue_tc_token_after_identity_change(&sender_jid)
+                                        .await;
+                                }))
+                                .detach();
                         }
 
                         continue;
@@ -1054,10 +1047,9 @@ impl Client {
         if enc_nodes.is_empty() {
             return Ok(());
         }
-        let device_arc = self.persistence_manager.get_device_arc().await;
         // Use the signal cache adapter for group decryption so sender keys are read/written
         // through the cache, keeping it consistent with SKDM processing.
-        let mut adapter = SignalProtocolStoreAdapter::new(device_arc, self.signal_cache.clone());
+        let mut adapter = self.signal_adapter().await;
 
         for enc_node in enc_nodes {
             let ciphertext: &[u8] = match &enc_node.content {
@@ -1399,15 +1391,13 @@ impl Client {
             },
         };
 
-        let device_arc = self.persistence_manager.get_device_arc().await;
-
         let sender_address = sender_jid.to_protocol_address();
 
         let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
 
         // Route through the signal cache adapter so the sender key is immediately visible
         // in the cache for subsequent group_decrypt calls within the same message batch.
-        let mut adapter = SignalProtocolStoreAdapter::new(device_arc, self.signal_cache.clone());
+        let mut adapter = self.signal_adapter().await;
 
         if let Err(e) = process_sender_key_distribution_message(
             &sender_key_name,

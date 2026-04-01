@@ -67,8 +67,8 @@ pub use features::{
     MembershipRequest, Mex, MexError, MexErrorExtensions, MexRequest, MexResponse, Newsletter,
     NewsletterMessage, NewsletterMessageType, NewsletterMetadata, NewsletterReactionCount,
     NewsletterRole, NewsletterState, NewsletterVerification, ParticipantChangeResponse, Presence,
-    PresenceError, PresenceStatus, Profile, ProfilePicture, SetProfilePictureResponse, Status,
-    StatusPrivacySetting, StatusSendOptions, SyncActionMessageRange, TcToken,
+    PresenceError, PresenceStatus, Profile, ProfilePicture, SetProfilePictureResponse, Signal,
+    Status, StatusPrivacySetting, StatusSendOptions, SyncActionMessageRange, TcToken,
     UnlinkSubgroupsResult, UserInfo, group_type, message_key, message_range,
 };
 

@@ -198,11 +198,7 @@ impl Client {
             .fetch_pre_keys(jids, Some(wacore::iq::prekeys::PreKeyFetchReason::Identity))
             .await?;
 
-        let device_store = self.persistence_manager.get_device_arc().await;
-        let mut adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
-            device_store,
-            self.signal_cache.clone(),
-        );
+        let mut adapter = self.signal_adapter().await;
 
         let mut success_count = 0;
         let mut missing_count = 0;
@@ -213,12 +209,7 @@ impl Client {
                 let signal_addr = jid.to_protocol_address();
 
                 // Acquire per-sender session lock to prevent race with concurrent message decryption.
-                let session_mutex = self
-                    .session_locks
-                    .get_with_by_ref(signal_addr.as_str(), async {
-                        std::sync::Arc::new(async_lock::Mutex::new(()))
-                    })
-                    .await;
+                let session_mutex = self.session_lock_for(signal_addr.as_str()).await;
                 let _session_guard = session_mutex.lock().await;
 
                 match process_prekey_bundle(
