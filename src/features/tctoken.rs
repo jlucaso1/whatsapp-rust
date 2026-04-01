@@ -11,10 +11,16 @@
 //! // Prune expired tokens
 //! let count = client.tc_token().prune_expired().await?;
 //! ```
+//!
+//! ## TODO: VoIP call integration
+//! WA Web calls `sendTcToken` for each participant when initiating calls
+//! (WAWeb/Voip/StartCall.js). When a calls/VoIP module is added, it should
+//! call `issue_tc_token_after_send` (or equivalent) for every call participant
+//! — both 1:1 and group calls. This prevents 463 nacks on call offers.
 
 use crate::client::Client;
 use crate::request::IqError;
-use wacore::iq::tctoken::{IssuePrivacyTokensSpec, ReceivedTcToken, tc_token_expiration_cutoff};
+use wacore::iq::tctoken::{IssuePrivacyTokensSpec, ReceivedTcToken};
 use wacore::store::traits::TcTokenEntry;
 use wacore_binary::jid::Jid;
 
@@ -59,11 +65,12 @@ impl<'a> TcToken<'a> {
 
     /// Prune expired tc tokens from the store.
     ///
-    /// Deletes all tokens older than the rolling window (28 days by default).
-    /// Returns the number of tokens deleted.
+    /// Cutoff is AB-prop-aware via [`Client::tc_token_config()`] — the server
+    /// may override the default 28-day window (e.g. 26 buckets = 182 days).
     pub async fn prune_expired(&self) -> Result<u32, anyhow::Error> {
         let backend = self.client.persistence_manager.backend();
-        let cutoff = tc_token_expiration_cutoff();
+        let tc_config = self.client.tc_token_config().await;
+        let cutoff = wacore::iq::tctoken::tc_token_expiration_cutoff_with(&tc_config);
         let deleted = backend.delete_expired_tc_tokens(cutoff).await?;
 
         if deleted > 0 {

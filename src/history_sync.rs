@@ -2,9 +2,24 @@ use crate::types::events::{Event, LazyConversation};
 use bytes::Bytes;
 use std::sync::Arc;
 use wacore::history_sync::process_history_sync;
+use wacore::store::traits::TcTokenEntry;
+use wacore_binary::jid::JidExt;
 use waproto::whatsapp::message::HistorySyncNotification;
 
 use crate::client::Client;
+
+/// Partial Conversation decode — only tctoken fields, skips heavy `messages`.
+#[derive(Clone, PartialEq, prost::Message)]
+struct ConversationTcTokenFields {
+    #[prost(string, required, tag = "1")]
+    pub id: String,
+    #[prost(bytes = "vec", optional, tag = "21")]
+    pub tc_token: Option<Vec<u8>>,
+    #[prost(uint64, optional, tag = "22")]
+    pub tc_token_timestamp: Option<u64>,
+    #[prost(uint64, optional, tag = "28")]
+    pub tc_token_sender_timestamp: Option<u64>,
+}
 
 impl Client {
     pub(crate) async fn handle_history_sync(
@@ -200,6 +215,10 @@ impl Client {
                 if conv_count.is_multiple_of(25) {
                     log::info!("History sync progress: {conv_count} conversations processed...");
                 }
+                // Extract tctokens before dispatching to ensure backfill even if handler drops
+                self.store_tc_token_from_conversation_bytes(&raw_bytes)
+                    .await;
+
                 // Wrap Bytes in LazyConversation using from_bytes (true zero-copy)
                 // Parsing only happens if the event handler calls .conversation() or .get()
                 let lazy_conv = LazyConversation::from_bytes(raw_bytes);
@@ -215,24 +234,44 @@ impl Client {
             // Wait for parsing result
             result_rx.await.ok()
         } else {
-            // No listeners - skip conversation processing entirely
-            log::debug!("No event handlers registered, skipping conversation processing");
+            // No event listeners, but still extract tctokens from conversations
+            // so headless/library clients have cached privacy tokens after pairing.
+            log::debug!("No event handlers registered, extracting tctokens only");
 
-            // own_user is moved directly, no clone needed
-            Some(
-                wacore::runtime::blocking(&*self.runtime, move || {
-                    let own_user_ref = own_user.as_deref();
+            let (tx, rx) = async_channel::bounded::<Bytes>(4);
 
-                    // Pass None for callback - conversations are skipped at protobuf level
-                    process_history_sync::<fn(Bytes)>(
-                        compressed_data,
-                        own_user_ref,
-                        None,
-                        compressed_size_hint,
-                    )
-                })
-                .await,
-            )
+            let (result_tx, result_rx) = futures::channel::oneshot::channel();
+            let blocking_fut = self.runtime.spawn_blocking(Box::new(move || {
+                let own_user_ref = own_user.as_deref();
+                let result = process_history_sync(
+                    compressed_data,
+                    own_user_ref,
+                    Some(|raw_bytes: Bytes| {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let _ = tx.send_blocking(raw_bytes);
+                        #[cfg(target_arch = "wasm32")]
+                        let _ = tx.try_send(raw_bytes);
+                    }),
+                    compressed_size_hint,
+                );
+                let _ = result_tx.send(result);
+            }));
+            self.runtime
+                .spawn(Box::pin(async move {
+                    blocking_fut.await;
+                }))
+                .detach();
+
+            while let Ok(raw_bytes) = rx.recv().await {
+                if self.is_shutting_down() {
+                    break;
+                }
+                self.store_tc_token_from_conversation_bytes(&raw_bytes)
+                    .await;
+            }
+            drop(rx);
+
+            result_rx.await.ok()
         };
 
         if self.is_shutting_down() {
@@ -276,6 +315,84 @@ impl Client {
             None => {
                 log::error!("History sync blocking task was cancelled");
             }
+        }
+    }
+
+    /// Extract and store tctoken data from a raw Conversation protobuf.
+    /// Partial decode — only reads fields 1/21/22/28, skipping messages.
+    async fn store_tc_token_from_conversation_bytes(&self, raw_bytes: &[u8]) {
+        use prost::Message;
+
+        let conv = match ConversationTcTokenFields::decode(raw_bytes) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let token = match conv.tc_token {
+            Some(t) if !t.is_empty() => t,
+            _ => return,
+        };
+
+        let Some(timestamp) = conv.tc_token_timestamp else {
+            return;
+        };
+
+        // Resolve to LID for storage key consistency with notification handler
+        let jid: wacore_binary::jid::Jid = match conv.id.parse() {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+
+        // Only 1:1 conversations carry tctokens
+        if jid.is_group() || jid.is_newsletter() || jid.is_bot() {
+            return;
+        }
+
+        let token_key = if jid.is_lid() {
+            jid.user.clone()
+        } else {
+            self.lid_pn_cache
+                .get_current_lid(&jid.user)
+                .await
+                .unwrap_or_else(|| jid.user.clone())
+        };
+
+        let backend = self.persistence_manager.backend();
+
+        // Avoid clobbering a newer local sender_timestamp from post-send issuance
+        let incoming_sender_ts = conv.tc_token_sender_timestamp.map(|ts| ts as i64);
+        let merged_sender_ts = if let Ok(Some(existing)) = backend.get_tc_token(&token_key).await {
+            if (existing.token_timestamp as u64) > timestamp {
+                return;
+            }
+            match (existing.sender_timestamp, incoming_sender_ts) {
+                (Some(e), Some(i)) => Some(e.max(i)),
+                (Some(e), None) => Some(e),
+                (None, i) => i,
+            }
+        } else {
+            incoming_sender_ts
+        };
+
+        let entry = TcTokenEntry {
+            token,
+            token_timestamp: timestamp as i64,
+            sender_timestamp: merged_sender_ts,
+        };
+
+        if let Err(e) = backend.put_tc_token(&token_key, &entry).await {
+            log::warn!(
+                target: "Client/TcToken",
+                "Failed to store history sync tctoken for {}: {e}",
+                token_key
+            );
+        } else {
+            log::debug!(
+                target: "Client/TcToken",
+                "Stored tctoken from history sync for {} (t={})",
+                token_key,
+                timestamp
+            );
         }
     }
 }

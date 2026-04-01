@@ -1129,20 +1129,22 @@ impl Client {
         }
 
         // Issue new tc token after send if a bucket boundary was crossed.
-        // WA Web fires this concurrently (MsgJob.js: sendTcToken is not awaited),
-        // but our send methods take &self not &Arc<Self> so we can't spawn here.
-        // Placed last so it doesn't block SKDM or signal-cache flush.
-        //
-        // WA Web only updates tcTokenSenderTimestamp after a successful issuance
-        // (TcTokenChatAction.js), so we gate the sender_timestamp mark on success
-        // to allow retry on the next send if the IQ failed.
-        let issued_ok = if should_issue_tc_token_after_send {
-            self.issue_tc_token_after_send(&tc_issue_target).await
-        } else {
-            false
-        };
-        if issued_ok && let Some(token_key) = used_cached_tc_token_key {
-            self.mark_tc_token_used_after_send(&token_key).await;
+        // Fire-and-forget so send_message returns without waiting for the IQ
+        if should_issue_tc_token_after_send {
+            if let Some(client) = self.self_weak.get().and_then(|w| w.upgrade()) {
+                let target = tc_issue_target;
+                let cached_key = used_cached_tc_token_key;
+                self.runtime
+                    .spawn(Box::pin(async move {
+                        let issued_ok = client.issue_tc_token_after_send(&target).await;
+                        if issued_ok && let Some(token_key) = cached_key {
+                            client.mark_tc_token_used_after_send(&token_key).await;
+                        }
+                    }))
+                    .detach();
+            } else {
+                log::debug!(target: "Client/TcToken", "Skipping fire-and-forget issuance: client dropped");
+            }
         }
 
         Ok(())
@@ -1162,9 +1164,10 @@ impl Client {
         to: &Jid,
         extra_nodes: &mut Vec<Node>,
     ) -> (bool, Option<String>) {
+        use wacore::iq::props::config_codes;
         use wacore::iq::tctoken::{
-            build_cs_token_node, build_tc_token_node, compute_cs_token, is_tc_token_expired,
-            should_send_new_tc_token,
+            build_cs_token_node, build_tc_token_node, compute_cs_token, is_tc_token_expired_with,
+            should_send_new_tc_token_with,
         };
 
         // Skip for own JID — no need to send privacy token to ourselves
@@ -1181,9 +1184,13 @@ impl Client {
             return (false, None);
         }
 
+        // Bots and status broadcast don't participate in the privacy token system
+        if to.is_bot() || to.is_status_broadcast() {
+            return (false, None);
+        }
+
         // Resolve the destination to a LID user string once — reused for
         // tctoken lookup, issuance, and cstoken HMAC input.
-        // Returns Some(lid_user) if resolved, None if no LID mapping exists.
         let resolved_lid_user = if to.is_lid() {
             Some(to.user.clone())
         } else {
@@ -1192,6 +1199,7 @@ impl Client {
         let token_jid = resolved_lid_user.as_deref().unwrap_or(&to.user).to_string();
 
         let backend = self.persistence_manager.backend();
+        let tc_config = self.tc_token_config().await;
 
         // Look up existing tctoken
         let existing = match backend.get_tc_token(&token_jid).await {
@@ -1202,29 +1210,49 @@ impl Client {
             }
         };
 
-        let should_issue_after_send =
-            should_send_new_tc_token(existing.as_ref().and_then(|entry| entry.sender_timestamp));
+        // Issuance scheduling is independent of the AB prop — WA Web's sendTcToken
+        // in MsgJob.js fires regardless of whether a token was attached to the stanza
+        let should_issue_after_send = should_send_new_tc_token_with(
+            existing.as_ref().and_then(|entry| entry.sender_timestamp),
+            &tc_config,
+        );
 
-        match existing {
-            Some(entry)
-                if !is_tc_token_expired(entry.token_timestamp) && !entry.token.is_empty() =>
-            {
-                // Valid tctoken — include it in the stanza
-                extra_nodes.push(build_tc_token_node(&entry.token));
-                return (should_issue_after_send, Some(token_jid));
-            }
-            _ => {
-                if let Some(salt) = &snapshot.nct_salt
-                    && let Some(lid_user) = &resolved_lid_user
+        // AB prop gates stanza inclusion only (not issuance scheduling)
+        let token_send_enabled = self
+            .ab_props
+            .is_enabled_or(config_codes::PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES, false)
+            .await;
+
+        if token_send_enabled {
+            match existing {
+                Some(ref entry)
+                    if !is_tc_token_expired_with(entry.token_timestamp, &tc_config)
+                        && !entry.token.is_empty() =>
                 {
-                    // HMAC input is "user@lid" (account LID without device suffix),
-                    // matching WA Web's accountLid.toString()
-                    let recipient_lid = wacore_binary::jid::Jid::new(lid_user, "lid").to_string();
-                    let cs_token = compute_cs_token(salt, &recipient_lid);
-                    extra_nodes.push(build_cs_token_node(&cs_token));
-                    log::debug!(target: "Client/CsToken", "Attached cstoken for {} (NCT fallback)", to);
-                } else {
-                    log::debug!(target: "Client/CsToken", "No tctoken or NCT salt/LID available for {}", to);
+                    extra_nodes.push(build_tc_token_node(&entry.token));
+                    return (should_issue_after_send, Some(token_jid));
+                }
+                _ => {
+                    // cstoken fallback — gated by wa_nct_token_send_enabled
+                    let nct_send_enabled = self
+                        .ab_props
+                        .is_enabled_or(config_codes::NCT_TOKEN_SEND_ENABLED, false)
+                        .await;
+
+                    if nct_send_enabled
+                        && let Some(salt) = &snapshot.nct_salt
+                        && let Some(lid_user) = &resolved_lid_user
+                    {
+                        // HMAC input is "user@lid" (account LID without device suffix),
+                        // matching WA Web's accountLid.toString()
+                        let recipient_lid =
+                            wacore_binary::jid::Jid::new(lid_user, "lid").to_string();
+                        let cs_token = compute_cs_token(salt, &recipient_lid);
+                        extra_nodes.push(build_cs_token_node(&cs_token));
+                        log::debug!(target: "Client/CsToken", "Attached cstoken for {} (NCT fallback)", to);
+                    } else {
+                        log::debug!(target: "Client/CsToken", "No tctoken or NCT salt/LID available for {}", to);
+                    }
                 }
             }
         }
@@ -1236,28 +1264,39 @@ impl Client {
     async fn issue_tc_token_after_send(&self, to: &Jid) -> bool {
         use wacore::iq::tctoken::IssuePrivacyTokensSpec;
 
-        let to_lid = self.resolve_to_lid_jid(to).await;
+        // Bots and status broadcast don't participate in the privacy token system
+        if to.is_bot() || to.is_status_broadcast() {
+            return false;
+        }
+
+        let issuance_jid = self.resolve_issuance_jid(to).await;
         let Ok(response) = self
-            .execute(IssuePrivacyTokensSpec::new(std::slice::from_ref(&to_lid)))
+            .execute(IssuePrivacyTokensSpec::new(std::slice::from_ref(
+                &issuance_jid,
+            )))
             .await
         else {
-            log::debug!(target: "Client/TcToken", "Failed to issue tc_token for {}", to_lid);
+            log::debug!(target: "Client/TcToken", "Failed to issue tc_token for {}", issuance_jid);
             return false;
         };
 
-        self.store_issued_tc_tokens(&response.tokens).await;
-        true
+        self.store_issued_tc_tokens(&response.tokens).await
     }
 
-    async fn store_issued_tc_tokens(&self, tokens: &[wacore::iq::tctoken::ReceivedTcToken]) {
+    /// Returns true if at least one token was persisted.
+    async fn store_issued_tc_tokens(
+        &self,
+        tokens: &[wacore::iq::tctoken::ReceivedTcToken],
+    ) -> bool {
         use wacore::store::traits::TcTokenEntry;
 
         if tokens.is_empty() {
-            return;
+            return false;
         }
 
         let backend = self.persistence_manager.backend();
         let now = wacore::time::now_secs();
+        let mut any_stored = false;
         for received in tokens {
             if received.token.is_empty() {
                 log::warn!(target: "Client/TcToken", "Server returned empty tc_token for {}, skipping", received.jid);
@@ -1270,9 +1309,36 @@ impl Client {
                 sender_timestamp: Some(now),
             };
 
-            let store_jid = received.jid.user.clone();
-            if let Err(e) = backend.put_tc_token(&store_jid, &entry).await {
+            if let Err(e) = backend.put_tc_token(&received.jid.user, &entry).await {
                 log::warn!(target: "Client/TcToken", "Failed to store issued tc_token: {e}");
+            } else {
+                any_stored = true;
+            }
+        }
+        any_stored
+    }
+
+    /// Variant of [`store_issued_tc_tokens`] that preserves the original
+    /// sender_timestamp for identity-change re-issuance (bucket continuity).
+    async fn store_issued_tc_tokens_with_sender_ts(
+        &self,
+        tokens: &[wacore::iq::tctoken::ReceivedTcToken],
+        sender_ts: i64,
+    ) {
+        use wacore::store::traits::TcTokenEntry;
+
+        let backend = self.persistence_manager.backend();
+        for received in tokens {
+            if received.token.is_empty() {
+                continue;
+            }
+            let entry = TcTokenEntry {
+                token: received.token.clone(),
+                token_timestamp: received.timestamp,
+                sender_timestamp: Some(sender_ts),
+            };
+            if let Err(e) = backend.put_tc_token(&received.jid.user, &entry).await {
+                log::warn!(target: "Client/TcToken", "Failed to store re-issued tc_token: {e}");
             }
         }
     }
@@ -1305,11 +1371,83 @@ impl Client {
         }
     }
 
+    /// Re-issue tctoken after a contact's device identity changes.
+    /// Only re-issues if we previously sent a token (sender_timestamp valid).
+    /// Uses session_locks to deduplicate concurrent spawns for the same sender.
+    pub(crate) async fn reissue_tc_token_after_identity_change(&self, sender: &Jid) {
+        use wacore::iq::tctoken::{IssuePrivacyTokensSpec, is_sender_tc_token_expired};
+
+        // Dedup via session_locks — bare JID won't collide with protocol addresses ("user:device")
+        let bare = sender.to_non_ad().to_string();
+        let mutex = self
+            .session_locks
+            .get_with_by_ref(bare.as_str(), async {
+                std::sync::Arc::new(async_lock::Mutex::new(()))
+            })
+            .await;
+        let Some(_guard) = mutex.try_lock() else {
+            return;
+        };
+
+        let token_jid = if sender.is_lid() {
+            sender.user.clone()
+        } else {
+            match self.lid_pn_cache.get_current_lid(&sender.user).await {
+                Some(lid) => lid,
+                None => sender.user.clone(),
+            }
+        };
+
+        let backend = self.persistence_manager.backend();
+        let entry = match backend.get_tc_token(&token_jid).await {
+            Ok(Some(e)) => e,
+            _ => return,
+        };
+
+        let Some(sender_ts) = entry.sender_timestamp else {
+            return;
+        };
+
+        // Sender-side expiration (may use different bucket config than receiver)
+        let tc_config = self.tc_token_config().await;
+        if is_sender_tc_token_expired(sender_ts, &tc_config) {
+            return;
+        }
+
+        // Use stored sender_ts so the bucket window isn't advanced
+        let issuance_jid = self.resolve_issuance_jid(sender).await;
+        match self
+            .execute(IssuePrivacyTokensSpec::with_timestamp(
+                std::slice::from_ref(&issuance_jid),
+                sender_ts,
+            ))
+            .await
+        {
+            Ok(response) => {
+                // Keep original sender_ts so the bucket window isn't advanced
+                self.store_issued_tc_tokens_with_sender_ts(&response.tokens, sender_ts)
+                    .await;
+                log::debug!(
+                    target: "Client/TcToken",
+                    "Re-issued tctoken after identity change for {}",
+                    sender
+                );
+            }
+            Err(e) => {
+                log::debug!(
+                    target: "Client/TcToken",
+                    "Failed to re-issue tctoken after identity change for {}: {e}",
+                    sender
+                );
+            }
+        }
+    }
+
     /// Look up a valid (non-expired) tctoken for a JID. Returns the raw token bytes if found.
     ///
     /// Used by profile picture, presence subscribe, and other features that need tctoken gating.
     pub(crate) async fn lookup_tc_token_for_jid(&self, jid: &Jid) -> Option<Vec<u8>> {
-        use wacore::iq::tctoken::is_tc_token_expired;
+        use wacore::iq::tctoken::is_tc_token_expired_with;
 
         let token_jid = if jid.is_lid() {
             jid.user.clone()
@@ -1320,10 +1458,12 @@ impl Client {
             }
         };
 
+        let tc_config = self.tc_token_config().await;
         let backend = self.persistence_manager.backend();
         match backend.get_tc_token(&token_jid).await {
             Ok(Some(entry))
-                if !entry.token.is_empty() && !is_tc_token_expired(entry.token_timestamp) =>
+                if !entry.token.is_empty()
+                    && !is_tc_token_expired_with(entry.token_timestamp, &tc_config) =>
             {
                 Some(entry.token)
             }
@@ -1349,17 +1489,75 @@ impl Client {
         keys
     }
 
+    /// Build tctoken timing config from AB props, falling back to defaults.
+    pub(crate) async fn tc_token_config(&self) -> wacore::iq::tctoken::TcTokenConfig {
+        use wacore::iq::props::config_codes;
+        use wacore::iq::tctoken::{TC_TOKEN_BUCKET_DURATION, TC_TOKEN_NUM_BUCKETS, TcTokenConfig};
+
+        TcTokenConfig {
+            bucket_duration: self
+                .ab_props
+                .get_int(config_codes::TCTOKEN_DURATION, TC_TOKEN_BUCKET_DURATION)
+                .await,
+            num_buckets: self
+                .ab_props
+                .get_int(config_codes::TCTOKEN_NUM_BUCKETS, TC_TOKEN_NUM_BUCKETS)
+                .await,
+            sender_bucket_duration: self
+                .ab_props
+                .get_int(
+                    config_codes::TCTOKEN_DURATION_SENDER,
+                    TC_TOKEN_BUCKET_DURATION,
+                )
+                .await,
+            sender_num_buckets: self
+                .ab_props
+                .get_int(
+                    config_codes::TCTOKEN_NUM_BUCKETS_SENDER,
+                    TC_TOKEN_NUM_BUCKETS,
+                )
+                .await,
+        }
+        .clamped()
+    }
+
     /// Resolve a JID to its LID form for tc_token storage.
     async fn resolve_to_lid_jid(&self, jid: &Jid) -> Jid {
         if jid.is_lid() {
-            return jid.clone();
+            return jid.to_non_ad();
         }
 
         if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&jid.user).await {
             Jid::new(&lid_user, "lid")
         } else {
-            jid.clone()
+            jid.to_non_ad()
         }
+    }
+
+    /// Resolve the target JID for privacy token issuance.
+    /// Gated by `lid_trusted_token_issue_to_lid` — LID when true, PN when false.
+    async fn resolve_issuance_jid(&self, jid: &Jid) -> Jid {
+        use wacore::iq::props::config_codes;
+
+        // Default true: issue to LID by default (safer — server accepts both)
+        let issue_to_lid = self
+            .ab_props
+            .is_enabled_or(config_codes::LID_TRUSTED_TOKEN_ISSUE_TO_LID, true)
+            .await;
+
+        let resolved = if issue_to_lid {
+            self.resolve_to_lid_jid(jid).await
+        } else if jid.is_lid() {
+            if let Some(pn) = self.lid_pn_cache.get_phone_number(&jid.user).await {
+                Jid::new(&pn, "s.whatsapp.net")
+            } else {
+                jid.to_non_ad()
+            }
+        } else {
+            jid.to_non_ad()
+        };
+        // Issuance targets bare account JIDs, not device-scoped ones
+        resolved.to_non_ad()
     }
 }
 
