@@ -1170,15 +1170,6 @@ impl Client {
             should_send_new_tc_token_with,
         };
 
-        // AB prop gate (default true to avoid 463 before props are fetched)
-        if !self
-            .ab_props
-            .is_enabled_or(config_codes::PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES, false)
-            .await
-        {
-            return (false, None);
-        }
-
         // Skip for own JID — no need to send privacy token to ourselves
         let snapshot = self.persistence_manager.get_device_snapshot().await;
         let is_self = snapshot
@@ -1200,7 +1191,6 @@ impl Client {
 
         // Resolve the destination to a LID user string once — reused for
         // tctoken lookup, issuance, and cstoken HMAC input.
-        // Returns Some(lid_user) if resolved, None if no LID mapping exists.
         let resolved_lid_user = if to.is_lid() {
             Some(to.user.clone())
         } else {
@@ -1220,39 +1210,49 @@ impl Client {
             }
         };
 
+        // Issuance scheduling is independent of the AB prop — WA Web's sendTcToken
+        // in MsgJob.js fires regardless of whether a token was attached to the stanza
         let should_issue_after_send = should_send_new_tc_token_with(
             existing.as_ref().and_then(|entry| entry.sender_timestamp),
             &tc_config,
         );
 
-        match existing {
-            Some(entry)
-                if !is_tc_token_expired_with(entry.token_timestamp, &tc_config)
-                    && !entry.token.is_empty() =>
-            {
-                // Valid tctoken — include it in the stanza
-                extra_nodes.push(build_tc_token_node(&entry.token));
-                return (should_issue_after_send, Some(token_jid));
-            }
-            _ => {
-                // cstoken fallback — gated by wa_nct_token_send_enabled
-                let nct_send_enabled = self
-                    .ab_props
-                    .is_enabled_or(config_codes::NCT_TOKEN_SEND_ENABLED, false)
-                    .await;
+        // AB prop gates stanza inclusion only (not issuance scheduling)
+        let token_send_enabled = self
+            .ab_props
+            .is_enabled_or(config_codes::PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES, false)
+            .await;
 
-                if nct_send_enabled
-                    && let Some(salt) = &snapshot.nct_salt
-                    && let Some(lid_user) = &resolved_lid_user
+        if token_send_enabled {
+            match existing {
+                Some(ref entry)
+                    if !is_tc_token_expired_with(entry.token_timestamp, &tc_config)
+                        && !entry.token.is_empty() =>
                 {
-                    // HMAC input is "user@lid" (account LID without device suffix),
-                    // matching WA Web's accountLid.toString()
-                    let recipient_lid = wacore_binary::jid::Jid::new(lid_user, "lid").to_string();
-                    let cs_token = compute_cs_token(salt, &recipient_lid);
-                    extra_nodes.push(build_cs_token_node(&cs_token));
-                    log::debug!(target: "Client/CsToken", "Attached cstoken for {} (NCT fallback)", to);
-                } else {
-                    log::debug!(target: "Client/CsToken", "No tctoken or NCT salt/LID available for {}", to);
+                    extra_nodes.push(build_tc_token_node(&entry.token));
+                    return (should_issue_after_send, Some(token_jid));
+                }
+                _ => {
+                    // cstoken fallback — gated by wa_nct_token_send_enabled
+                    let nct_send_enabled = self
+                        .ab_props
+                        .is_enabled_or(config_codes::NCT_TOKEN_SEND_ENABLED, false)
+                        .await;
+
+                    if nct_send_enabled
+                        && let Some(salt) = &snapshot.nct_salt
+                        && let Some(lid_user) = &resolved_lid_user
+                    {
+                        // HMAC input is "user@lid" (account LID without device suffix),
+                        // matching WA Web's accountLid.toString()
+                        let recipient_lid =
+                            wacore_binary::jid::Jid::new(lid_user, "lid").to_string();
+                        let cs_token = compute_cs_token(salt, &recipient_lid);
+                        extra_nodes.push(build_cs_token_node(&cs_token));
+                        log::debug!(target: "Client/CsToken", "Attached cstoken for {} (NCT fallback)", to);
+                    } else {
+                        log::debug!(target: "Client/CsToken", "No tctoken or NCT salt/LID available for {}", to);
+                    }
                 }
             }
         }
