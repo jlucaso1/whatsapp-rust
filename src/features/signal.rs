@@ -50,6 +50,9 @@ impl<'a> Signal<'a> {
         )
         .await?;
 
+        drop(_guard);
+        self.client.flush_signal_cache().await?;
+
         match encrypted {
             CiphertextMessage::PreKeySignalMessage(msg) => Ok(("pkmsg", msg.serialized().to_vec())),
             CiphertextMessage::SignalMessage(msg) => Ok(("msg", msg.serialized().to_vec())),
@@ -59,7 +62,9 @@ impl<'a> Signal<'a> {
 
     /// Decrypt a Signal protocol message from a sender.
     ///
-    /// `msg_type` must be `"msg"` or `"pkmsg"`. Returns unpadded plaintext.
+    /// `msg_type` must be `"msg"` or `"pkmsg"`. Returns raw padded plaintext.
+    /// Use [`MessageUtils::unpad_message_ref`] with the stanza's `v` attribute
+    /// if WhatsApp message unpadding is needed.
     pub async fn decrypt_message(
         &self,
         jid: &Jid,
@@ -82,7 +87,7 @@ impl<'a> Signal<'a> {
         let mut adapter = self.client.signal_adapter().await;
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
-        let padded = message_decrypt(
+        let plaintext = message_decrypt(
             &parsed,
             &signal_addr,
             &mut adapter.session_store,
@@ -94,8 +99,10 @@ impl<'a> Signal<'a> {
         )
         .await?;
 
-        let unpadded = MessageUtils::unpad_message_ref(&padded, 2)?;
-        Ok(unpadded.to_vec())
+        drop(_guard);
+        self.client.flush_signal_cache().await?;
+
+        Ok(plaintext.to_vec())
     }
 
     /// Encrypt plaintext for a group using sender keys.
@@ -114,14 +121,7 @@ impl<'a> Signal<'a> {
         group_jid: &Jid,
         plaintext: &[u8],
     ) -> Result<(Vec<u8>, Vec<u8>)> {
-        let own_jid = self
-            .client
-            .persistence_manager
-            .get_device_snapshot()
-            .await
-            .pn
-            .clone()
-            .ok_or_else(|| anyhow!("not logged in"))?;
+        let own_jid = self.client.get_own_jid_for_group(group_jid).await?;
 
         let mut adapter = self.client.signal_adapter().await;
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
@@ -142,10 +142,15 @@ impl<'a> Signal<'a> {
         )
         .await?;
 
+        self.client.flush_signal_cache().await?;
+
         Ok((skdm_bytes, ciphertext.serialized().to_vec()))
     }
 
     /// Decrypt a group (sender-key) message.
+    ///
+    /// Returns raw padded plaintext. Use [`MessageUtils::unpad_message_ref`]
+    /// with the stanza's `v` attribute if WhatsApp message unpadding is needed.
     pub async fn decrypt_group_message(
         &self,
         group_jid: &Jid,
@@ -159,15 +164,16 @@ impl<'a> Signal<'a> {
 
         let mut adapter = self.client.signal_adapter().await;
 
-        let padded = wacore::libsignal::protocol::group_decrypt(
+        let plaintext = wacore::libsignal::protocol::group_decrypt(
             ciphertext,
             &mut adapter.sender_key_store,
             &sender_key_name,
         )
         .await?;
 
-        let unpadded = MessageUtils::unpad_message_ref(&padded, 2)?;
-        Ok(unpadded.to_vec())
+        self.client.flush_signal_cache().await?;
+
+        Ok(plaintext.to_vec())
     }
 
     /// Check whether a Signal session exists for `jid`.
@@ -245,6 +251,9 @@ impl<'a> Signal<'a> {
             mediatype,
         )
         .await?;
+
+        drop(_session_guards);
+        self.client.flush_signal_cache().await?;
 
         Ok((result.participant_nodes, result.includes_prekey_message))
     }

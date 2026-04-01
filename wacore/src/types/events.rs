@@ -380,6 +380,7 @@ pub struct DisappearingModeChanged {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub enum Event {
     Connected(Connected),
     Disconnected(Disconnected),

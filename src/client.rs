@@ -1561,6 +1561,14 @@ impl Client {
         // Prepare deferred ACK cancellation flag (sent after dispatch unless cancelled)
         let mut cancelled = false;
 
+        // Emit raw node before any early returns so all decoded stanzas
+        // (including IQ responses and xmlstreamend) reach external observers
+        if self.raw_node_forwarding.load(Ordering::Relaxed) {
+            self.core
+                .event_bus
+                .dispatch(&Event::RawNode(Arc::clone(&node)));
+        }
+
         if node.tag.as_ref() == "xmlstreamend" {
             if self.expected_disconnect.load(Ordering::Relaxed) {
                 debug!("Received <xmlstreamend/>, expected disconnect.");
@@ -1583,14 +1591,6 @@ impl Client {
             if has_waiter && self.handle_iq_response(Arc::clone(&node)).await {
                 return;
             }
-        }
-
-        // Emit raw node for external observers (e.g. voice call handlers)
-        // Zero-cost when disabled: just an atomic load
-        if self.raw_node_forwarding.load(Ordering::Relaxed) {
-            self.core
-                .event_bus
-                .dispatch(&Event::RawNode(Arc::clone(&node)));
         }
 
         // Dispatch to appropriate handler using the router
