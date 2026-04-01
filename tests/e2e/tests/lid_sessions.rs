@@ -381,9 +381,7 @@ async fn test_lid_session_survives_reconnect() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// The own user's device 0 (primary phone) should have a LID session
-/// established after login, not left as "established on first message".
-/// Also verifies no PN session exists for own device 0.
+/// Own device 0 should have a LID session after login, not PN.
 #[tokio::test]
 async fn test_own_device_0_has_lid_session_after_login() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();

@@ -259,8 +259,8 @@ impl Client {
         Ok(success_count)
     }
 
-    /// Ensure a LID session exists with the primary phone (device 0).
-    /// Migrates stale PN sessions or establishes fresh via prekey fetch.
+    /// Log primary phone (device 0) session state at login.
+    /// Migration is lazy via try_pn_to_lid_migration_decrypt on first message.
     pub(crate) async fn establish_primary_phone_session_immediate(&self) -> Result<()> {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
@@ -277,70 +277,24 @@ impl Client {
         let primary_phone_lid = own_lid.with_device(0);
         let primary_phone_pn = own_pn.with_device(0);
 
-        let lid_session_exists = self
+        let lid_exists = self
             .check_session_exists(&primary_phone_lid)
             .await
-            .map_err(|e| {
-                anyhow::anyhow!(
-                    "Cannot verify LID session for primary phone {}: {}",
-                    primary_phone_lid,
-                    e
-                )
-            })?;
-
-        if lid_session_exists {
-            log::debug!("LID session with {} already exists", primary_phone_lid);
-
-            let pn_session_exists = self
-                .check_session_exists(&primary_phone_pn)
-                .await
-                .unwrap_or(false);
-            if pn_session_exists {
-                log::info!("Cleaning up stale PN session for own device 0 (LID session exists)");
-                self.signal_cache
-                    .delete_session(&primary_phone_pn.to_protocol_address())
-                    .await;
-                let _ = self
-                    .persistence_manager
-                    .backend()
-                    .delete_session(&primary_phone_pn.to_protocol_address_string())
-                    .await;
-            }
-            return Ok(());
-        }
-
-        let pn_session_exists = self
+            .unwrap_or(false);
+        let pn_exists = self
             .check_session_exists(&primary_phone_pn)
             .await
             .unwrap_or(false);
-        if pn_session_exists {
-            log::info!(
-                "Migrating own device 0 session from PN {} to LID {}",
-                primary_phone_pn,
-                primary_phone_lid
-            );
-            self.migrate_signal_sessions_on_lid_discovery(&own_pn.user, &own_lid.user)
-                .await;
 
-            if self
-                .check_session_exists(&primary_phone_lid)
-                .await
-                .unwrap_or(false)
-            {
-                log::info!("Successfully migrated own device 0 session to LID");
-                return Ok(());
+        match (lid_exists, pn_exists) {
+            (true, _) => log::debug!("LID session with {} exists", primary_phone_lid),
+            (false, true) => {
+                log::debug!("PN-only session for own device 0 — will migrate on first message")
             }
-            log::warn!("Migration did not produce a LID session, will establish fresh");
+            (false, false) => {
+                log::debug!("No session with own device 0 — will establish on first message")
+            }
         }
-
-        log::info!(
-            "Establishing LID session with own device 0 {} via prekey fetch",
-            primary_phone_lid
-        );
-        // Call fetch_and_establish_sessions directly to avoid
-        // ensure_e2e_sessions's wait_for_offline_delivery_end (we're at login)
-        self.fetch_and_establish_sessions(std::slice::from_ref(&primary_phone_lid))
-            .await?;
 
         Ok(())
     }

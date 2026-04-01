@@ -193,7 +193,11 @@ impl Client {
         let is_peer = device_snapshot
             .pn
             .as_ref()
-            .is_some_and(|our_pn| participant_jid.user == our_pn.user);
+            .is_some_and(|our_pn| participant_jid.user == our_pn.user)
+            || device_snapshot
+                .lid
+                .as_ref()
+                .is_some_and(|our_lid| participant_jid.user == our_lid.user);
 
         // Process key bundle to establish a pairwise session for the retry.
         // Needed for both DMs and groups (group retries use pairwise, not sender key).
