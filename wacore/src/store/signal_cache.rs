@@ -8,19 +8,51 @@ use crate::libsignal::protocol::{ProtocolAddress, SenderKeyRecord, SessionRecord
 use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::store::traits::SignalStore;
 
-/// In-memory cache for Signal protocol state, matching WhatsApp Web's SignalStoreCache.
-///
-/// Sessions are cached as `SessionRecord` objects (not bytes), matching WA Web's pattern
-/// where the JS object IS the cache. Serialization only happens during `flush()`.
-///
-/// Identity and sender key stores use `Arc<[u8]>` byte caches with dedup checks.
-///
-/// Keys use `Arc<str>` so that cloning a key (needed for both cache and dirty/deleted sets)
-/// is an O(1) refcount bump instead of an O(n) heap allocation.
+/// Evict clean (non-dirty, non-deleted) entries from a cache HashMap.
+/// Negative entries (None values) are evicted first.
+fn evict_clean_entries<V>(
+    cache: &mut HashMap<Arc<str>, Option<V>>,
+    dirty: &HashSet<Arc<str>>,
+    deleted: Option<&HashSet<Arc<str>>>,
+    max_entries: usize,
+) {
+    let overflow = cache.len().saturating_sub(max_entries);
+    if overflow == 0 {
+        return;
+    }
+    let mut negative = Vec::new();
+    let mut positive = Vec::new();
+    for (k, v) in cache.iter() {
+        if dirty.contains(k.as_ref()) {
+            continue;
+        }
+        if let Some(del) = deleted
+            && del.contains(k.as_ref())
+        {
+            continue;
+        }
+        if v.is_none() {
+            negative.push(k.clone());
+        } else {
+            positive.push(k.clone());
+        }
+    }
+    for key in negative.into_iter().chain(positive).take(overflow) {
+        cache.remove(&key);
+    }
+}
+
+/// Default max entries per store before clean entry eviction triggers.
+const DEFAULT_MAX_CACHE_ENTRIES: usize = 10_000;
+
+/// In-memory write-back cache for Signal protocol state.
+/// Keys use `Arc<str>` for O(1) clone. Sessions cached as objects (serialized on flush).
+/// Capacity-bounded: evicts non-dirty entries when max_entries is exceeded.
 pub struct SignalStoreCache {
     sessions: Mutex<SessionStoreState>,
     identities: Mutex<ByteStoreState>,
     sender_keys: Mutex<SenderKeyStoreState>,
+    max_entries: usize,
 }
 
 // === Session object cache (no per-message serialize/deserialize) ===
@@ -69,6 +101,15 @@ impl SessionStoreState {
         self.dirty.clear();
         self.deleted.clear();
     }
+
+    fn evict_if_needed(&mut self, max_entries: usize) {
+        evict_clean_entries(
+            &mut self.cache,
+            &self.dirty,
+            Some(&self.deleted),
+            max_entries,
+        );
+    }
 }
 
 // === Sender key object cache (same pattern as sessions) ===
@@ -108,6 +149,10 @@ impl SenderKeyStoreState {
     fn clear(&mut self) {
         self.cache.clear();
         self.dirty.clear();
+    }
+
+    fn evict_if_needed(&mut self, max_entries: usize) {
+        evict_clean_entries(&mut self.cache, &self.dirty, None, max_entries);
     }
 }
 
@@ -170,6 +215,15 @@ impl ByteStoreState {
         self.dirty.clear();
         self.deleted.clear();
     }
+
+    fn evict_if_needed(&mut self, max_entries: usize) {
+        evict_clean_entries(
+            &mut self.cache,
+            &self.dirty,
+            Some(&self.deleted),
+            max_entries,
+        );
+    }
 }
 
 impl Default for SignalStoreCache {
@@ -180,10 +234,15 @@ impl Default for SignalStoreCache {
 
 impl SignalStoreCache {
     pub fn new() -> Self {
+        Self::with_max_entries(DEFAULT_MAX_CACHE_ENTRIES)
+    }
+
+    pub fn with_max_entries(max_entries: usize) -> Self {
         Self {
             sessions: Mutex::new(SessionStoreState::new()),
             identities: Mutex::new(ByteStoreState::new()),
             sender_keys: Mutex::new(SenderKeyStoreState::new()),
+            max_entries,
         }
     }
 
@@ -204,15 +263,20 @@ impl SignalStoreCache {
             None => None,
         };
         state.cache.insert(Arc::from(key), record.clone());
+        state.evict_if_needed(self.max_entries);
         Ok(record)
     }
 
     pub async fn put_session(&self, address: &ProtocolAddress, record: SessionRecord) {
-        self.sessions.lock().await.put(address.as_str(), record);
+        let mut state = self.sessions.lock().await;
+        state.put(address.as_str(), record);
+        state.evict_if_needed(self.max_entries);
     }
 
     pub async fn delete_session(&self, address: &ProtocolAddress) {
-        self.sessions.lock().await.delete(address.as_str());
+        let mut state = self.sessions.lock().await;
+        state.delete(address.as_str());
+        state.evict_if_needed(self.max_entries);
     }
 
     pub async fn has_session(
@@ -231,6 +295,7 @@ impl SignalStoreCache {
         };
         let exists = record.is_some();
         state.cache.insert(Arc::from(key), record);
+        state.evict_if_needed(self.max_entries);
         Ok(exists)
     }
 
@@ -249,18 +314,20 @@ impl SignalStoreCache {
         let data = backend.load_identity(key).await?;
         let arc_data = data.map(Arc::from);
         state.cache.insert(Arc::from(key), arc_data.clone());
+        state.evict_if_needed(self.max_entries);
         Ok(arc_data)
     }
 
     pub async fn put_identity(&self, address: &ProtocolAddress, data: &[u8]) {
-        self.identities
-            .lock()
-            .await
-            .put_dedup(address.as_str(), data);
+        let mut state = self.identities.lock().await;
+        state.put_dedup(address.as_str(), data);
+        state.evict_if_needed(self.max_entries);
     }
 
     pub async fn delete_identity(&self, address: &ProtocolAddress) {
-        self.identities.lock().await.delete(address.as_str());
+        let mut state = self.identities.lock().await;
+        state.delete(address.as_str());
+        state.evict_if_needed(self.max_entries);
     }
 
     // === Sender Keys ===
@@ -280,16 +347,20 @@ impl SignalStoreCache {
             None => None,
         };
         state.cache.insert(Arc::from(key), record.clone());
+        state.evict_if_needed(self.max_entries);
         Ok(record)
     }
 
     pub async fn put_sender_key(&self, name: &SenderKeyName, record: SenderKeyRecord) {
-        self.sender_keys.lock().await.put(name.cache_key(), record);
+        let mut state = self.sender_keys.lock().await;
+        state.put(name.cache_key(), record);
+        state.evict_if_needed(self.max_entries);
     }
 
-    /// Delete a sender key from cache and mark for backend deletion on flush.
     pub async fn delete_sender_key(&self, cache_key: &str) {
-        self.sender_keys.lock().await.delete(cache_key);
+        let mut state = self.sender_keys.lock().await;
+        state.delete(cache_key);
+        state.evict_if_needed(self.max_entries);
     }
 
     // === Flush ===
@@ -328,6 +399,7 @@ impl SignalStoreCache {
             for key in &deleted_keys {
                 state.deleted.remove(key);
             }
+            state.evict_if_needed(self.max_entries);
         }
 
         // Flush identities
@@ -357,6 +429,7 @@ impl SignalStoreCache {
             for key in &deleted_keys {
                 state.deleted.remove(key);
             }
+            state.evict_if_needed(self.max_entries);
         }
 
         // Flush sender keys
@@ -382,6 +455,7 @@ impl SignalStoreCache {
             for key in &dirty_keys {
                 state.dirty.remove(key);
             }
+            state.evict_if_needed(self.max_entries);
         }
 
         Ok(())

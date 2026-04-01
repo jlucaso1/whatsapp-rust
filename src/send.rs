@@ -1416,9 +1416,10 @@ impl Client {
         }
     }
 
-    /// Build sorted, deduplicated per-device session lock keys for a set of device JIDs.
-    /// Keys match the decrypt path's format (message.rs:684) so send and receive
-    /// serialize on the same device's Signal session.
+    /// Build sorted, deduplicated per-device session lock keys.
+    /// INVARIANT: Keys are sorted to prevent deadlocks when acquiring multiple
+    /// session locks (e.g. DM sends that encrypt for recipient + own devices).
+    /// Keys match the decrypt path format so send and receive serialize correctly.
     pub(crate) async fn build_session_lock_keys(&self, device_jids: &[Jid]) -> Vec<String> {
         let mut keys = Vec::with_capacity(device_jids.len());
         for jid in device_jids {
