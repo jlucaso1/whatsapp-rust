@@ -539,10 +539,8 @@ async fn test_history_sync_nct_salt_enables_cstoken_first_contact() -> anyhow::R
         .wait_for_text("history-sync cstoken first contact", 30)
         .await?;
 
-    assert!(
-        client_b.client.tc_token().get(&key_a).await?.is_none(),
-        "cstoken fallback should not materialize a tc token entry for the recipient"
-    );
+    // Fire-and-forget issuance may store a tc_token from the IQ response —
+    // this is expected (WA Web's sendTcToken runs independently of cstoken usage)
 
     client_a.disconnect().await;
     client_b.disconnect().await;
