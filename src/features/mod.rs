@@ -10,6 +10,7 @@ pub(crate) mod newsletter;
 mod polls;
 mod presence;
 mod profile;
+mod signal;
 pub(crate) mod status;
 mod tctoken;
 
@@ -48,5 +49,8 @@ pub use presence::{Presence, PresenceError, PresenceStatus};
 pub use profile::{Profile, SetProfilePictureResponse};
 
 pub use status::{Status, StatusPrivacySetting, StatusSendOptions};
+
+pub use signal::Signal;
+pub use wacore::message_processing::EncType;
 
 pub use tctoken::TcToken;

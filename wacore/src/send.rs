@@ -317,15 +317,19 @@ pub(crate) fn is_device_unregistered_error(err: &anyhow::Error) -> bool {
     crate::request::ServerErrorCode::from_anyhow(err).is_some_and(|e| e.code == 406)
 }
 
-struct EncryptResult {
-    participant_nodes: Vec<Node>,
-    includes_prekey_message: bool,
-    encrypted_devices: Vec<Jid>,
+pub struct EncryptResult {
+    pub participant_nodes: Vec<Node>,
+    pub includes_prekey_message: bool,
+    pub encrypted_devices: Vec<Jid>,
     /// True if any device returned 406 (unregistered) during prekey fetch.
-    had_unregistered_device: bool,
+    pub had_unregistered_device: bool,
 }
 
-async fn encrypt_for_devices<'a, S, I, P, SP>(
+/// Encrypt padded plaintext for each device JID, producing participant `<to>` nodes.
+///
+/// Callers must hold per-device session locks before calling this function —
+/// concurrent ratchet mutations will corrupt Signal session state.
+pub async fn encrypt_for_devices<'a, S, I, P, SP>(
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
     devices: &[Jid],

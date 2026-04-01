@@ -53,6 +53,24 @@ impl SignalProtocolStoreAdapter {
             sender_key_store: SenderKeyAdapter(shared),
         }
     }
+
+    pub fn as_signal_stores(
+        &mut self,
+    ) -> wacore::send::SignalStores<
+        '_,
+        SessionAdapter,
+        IdentityAdapter,
+        PreKeyAdapter,
+        SignedPreKeyAdapter,
+    > {
+        wacore::send::SignalStores {
+            session_store: &mut self.session_store,
+            identity_store: &mut self.identity_store,
+            prekey_store: &mut self.pre_key_store,
+            signed_prekey_store: &self.signed_pre_key_store,
+            sender_key_store: &mut self.sender_key_store,
+        }
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]

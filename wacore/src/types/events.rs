@@ -380,6 +380,7 @@ pub struct DisappearingModeChanged {
 }
 
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub enum Event {
     Connected(Connected),
     Disconnected(Disconnected),
@@ -449,6 +450,12 @@ pub enum Event {
 
     /// Newsletter live update (reaction counts changed, message updates, etc.).
     NewsletterLiveUpdate(NewsletterLiveUpdate),
+
+    /// Raw decoded stanza, emitted before router dispatch.
+    /// Library extension — no WA Web equivalent (WA Web has no raw stanza observer).
+    /// Gated by `Client::set_raw_node_forwarding(true)` to avoid overhead when unused.
+    #[serde(skip)]
+    RawNode(Arc<Node>),
 }
 
 /// A newsletter live update notification, typically containing updated
