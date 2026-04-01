@@ -269,85 +269,10 @@ impl Client {
             return;
         }
 
-        // Determine the JID to use for end-to-end decryption.
-        // ... (previous JID resolution comments)
-        let sender_encryption_jid = {
-            let sender = &info.source.sender;
-            let alt = info.source.sender_alt.as_ref();
-            let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
-            let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
-
-            if sender.server == lid_server {
-                // Sender is already LID - use it directly for session lookup.
-                // Also cache the LID-to-PN mapping if PN alt is available.
-                if let Some(alt_jid) = alt
-                    && alt_jid.server == pn_server
-                {
-                    if let Err(err) = self
-                        .add_lid_pn_mapping(
-                            &sender.user,
-                            &alt_jid.user,
-                            crate::lid_pn_cache::LearningSource::PeerLidMessage,
-                        )
-                        .await
-                    {
-                        warn!(
-                            "Failed to persist LID-to-PN mapping {} -> {}: {err}",
-                            sender.user, alt_jid.user
-                        );
-                    }
-                    debug!(
-                        "Cached LID-to-PN mapping: {} -> {}",
-                        sender.user, alt_jid.user
-                    );
-                }
-                sender.clone()
-            } else if sender.server == pn_server {
-                // ... (PN to LID resolution logic)
-                if let Some(alt_jid) = alt
-                    && alt_jid.server == lid_server
-                {
-                    if let Err(err) = self
-                        .add_lid_pn_mapping(
-                            &alt_jid.user,
-                            &sender.user,
-                            crate::lid_pn_cache::LearningSource::PeerPnMessage,
-                        )
-                        .await
-                    {
-                        warn!(
-                            "Failed to persist PN-to-LID mapping {} -> {}: {err}",
-                            sender.user, alt_jid.user
-                        );
-                    }
-                    debug!(
-                        "Cached PN-to-LID mapping: {} -> {}",
-                        sender.user, alt_jid.user
-                    );
-
-                    Jid {
-                        user: alt_jid.user.clone(),
-                        server: wacore_binary::jid::cow_server_from_str(lid_server),
-                        device: sender.device,
-                        agent: sender.agent,
-                        integrator: sender.integrator,
-                    }
-                } else if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&sender.user).await
-                {
-                    Jid {
-                        user: lid_user.clone(),
-                        server: wacore_binary::jid::cow_server_from_str(lid_server),
-                        device: sender.device,
-                        agent: sender.agent,
-                        integrator: sender.integrator,
-                    }
-                } else {
-                    sender.clone()
-                }
-            } else {
-                sender.clone()
-            }
-        };
+        // Warm LID-PN cache before resolution so resolve_encryption_jid() finds the mapping
+        self.cache_lid_pn_from_message(&info.source.sender, info.source.sender_alt.as_ref())
+            .await;
+        let sender_encryption_jid = self.resolve_encryption_jid(&info.source.sender).await;
 
         let has_unavailable = node.get_optional_child("unavailable").is_some();
 
@@ -944,13 +869,29 @@ impl Client {
 
                         continue;
                     }
-                    // Handle SessionNotFound gracefully - send retry receipt to request session establishment
+                    // Try PN→LID session migration before sending retry receipt
                     if let SignalProtocolError::SessionNotFound(_) = e {
+                        if self
+                            .try_pn_to_lid_migration_decrypt(
+                                sender_encryption_jid,
+                                &signal_address,
+                                &parsed_message,
+                                &mut adapter,
+                                &mut rng,
+                                &enc_type,
+                                padding_version,
+                                info,
+                            )
+                            .await
+                        {
+                            any_success = true;
+                            continue;
+                        }
+
                         warn!(
                             "[msg:{}] No session found for {} message from {}. Sending retry receipt to request session establishment.",
                             info.id, enc_type, info.source.sender
                         );
-                        // Send retry receipt so the sender resends with a PreKeySignalMessage
                         dispatched_undecryptable = self.handle_decrypt_failure(
                             info,
                             RetryReason::NoSession,
@@ -1226,6 +1167,136 @@ impl Client {
             self.dispatch_parsed_message(msg, info);
         }
         Ok(())
+    }
+
+    /// Attempt PN→LID session migration and retry decryption.
+    /// Returns true if decryption succeeded after migration.
+    #[allow(clippy::too_many_arguments)]
+    async fn try_pn_to_lid_migration_decrypt(
+        self: &Arc<Self>,
+        sender_jid: &Jid,
+        signal_address: &wacore::libsignal::protocol::ProtocolAddress,
+        parsed_message: &wacore::libsignal::protocol::CiphertextMessage,
+        adapter: &mut crate::store::signal_adapter::SignalProtocolStoreAdapter,
+        rng: &mut rand::rngs::StdRng,
+        enc_type: &str,
+        padding_version: u8,
+        info: &MessageInfo,
+    ) -> bool {
+        use wacore::libsignal::protocol::{UsePQRatchet, message_decrypt};
+
+        if !sender_jid.is_lid() {
+            return false;
+        }
+
+        let Some(pn) = self.lid_pn_cache.get_phone_number(&sender_jid.user).await else {
+            return false;
+        };
+
+        self.migrate_signal_sessions_on_lid_discovery(&pn, &sender_jid.user)
+            .await;
+
+        // Reload into cache (replacing negative cache entries)
+        let backend = self.persistence_manager.backend();
+        let addr_key = signal_address.as_str();
+        if let Ok(Some(session_data)) = backend.get_session(addr_key).await
+            && let Ok(record) =
+                wacore::libsignal::protocol::SessionRecord::deserialize(&session_data)
+        {
+            self.signal_cache.put_session(signal_address, record).await;
+        }
+        if let Ok(Some(identity_data)) = backend.load_identity(addr_key).await {
+            self.signal_cache
+                .put_identity(signal_address, &identity_data)
+                .await;
+        }
+
+        match message_decrypt(
+            parsed_message,
+            signal_address,
+            &mut adapter.session_store,
+            &mut adapter.identity_store,
+            &mut adapter.pre_key_store,
+            &adapter.signed_pre_key_store,
+            rng,
+            UsePQRatchet::No,
+        )
+        .await
+        {
+            Ok(padded_plaintext) => {
+                log::info!(
+                    "[msg:{}] Decrypted after PN→LID session migration for {}",
+                    info.id,
+                    info.source.sender
+                );
+                if let Err(e) = self
+                    .clone()
+                    .handle_decrypted_plaintext(enc_type, &padded_plaintext, padding_version, info)
+                    .await
+                {
+                    log::warn!(
+                        "[msg:{}] Failed processing plaintext after migration: {e:?}",
+                        info.id
+                    );
+                }
+                true
+            }
+            Err(SignalProtocolError::DuplicatedMessage(chain, counter)) => {
+                log::debug!(
+                    "[msg:{}] Already processed (chain {chain}, counter {counter}) after migration",
+                    info.id
+                );
+                true
+            }
+            Err(retry_err) => {
+                log::warn!(
+                    "[msg:{}] Decryption still failed after PN→LID migration: {retry_err:?}",
+                    info.id
+                );
+                false
+            }
+        }
+    }
+
+    /// Cache LID-PN mapping from message attributes (before resolve_encryption_jid).
+    async fn cache_lid_pn_from_message(&self, sender: &Jid, alt: Option<&Jid>) {
+        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
+        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
+
+        let (lid_user, pn_user, source) = if sender.server == lid_server {
+            if let Some(alt_jid) = alt
+                && alt_jid.server == pn_server
+            {
+                (
+                    &sender.user,
+                    &alt_jid.user,
+                    crate::lid_pn_cache::LearningSource::PeerLidMessage,
+                )
+            } else {
+                return;
+            }
+        } else if sender.server == pn_server {
+            if let Some(alt_jid) = alt
+                && alt_jid.server == lid_server
+            {
+                (
+                    &alt_jid.user,
+                    &sender.user,
+                    crate::lid_pn_cache::LearningSource::PeerPnMessage,
+                )
+            } else {
+                return;
+            }
+        } else {
+            return;
+        };
+
+        if let Err(err) = self.add_lid_pn_mapping(lid_user, pn_user, source).await {
+            warn!(
+                "Failed to cache LID-PN mapping {} <-> {}: {err}",
+                lid_user, pn_user
+            );
+        }
     }
 
     pub(crate) async fn parse_message_info(
@@ -2872,10 +2943,15 @@ mod tests {
             "Should detect self-sent DM from own LID"
         );
 
-        // 2. sender_alt should be None (peer_recipient_pn is recipient's PN, not sender's)
+        // 2. sender_alt should be own PN (derived from own_jid, not message attrs)
         assert!(
-            info.source.sender_alt.is_none(),
-            "sender_alt should be None for self-sent DMs (peer_recipient_pn is recipient's PN)"
+            info.source.sender_alt.is_some(),
+            "sender_alt should be own PN for self-sent LID messages"
+        );
+        assert_eq!(
+            info.source.sender_alt.as_ref().unwrap().user,
+            "15551234567",
+            "sender_alt should be the own PN user"
         );
 
         assert_eq!(
@@ -3059,8 +3135,13 @@ mod tests {
         );
 
         assert!(
-            info.source.sender_alt.is_none(),
-            "sender_alt should be None for self-sent messages"
+            info.source.sender_alt.is_some(),
+            "sender_alt should be own PN for self-sent LID messages"
+        );
+        assert_eq!(
+            info.source.sender_alt.as_ref().unwrap().user,
+            "15551234567",
+            "sender_alt should match own PN"
         );
 
         assert_eq!(

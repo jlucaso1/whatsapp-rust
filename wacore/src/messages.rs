@@ -194,11 +194,20 @@ pub fn parse_message_info(
             .as_ref()
             .map(|r| r.to_non_ad())
             .unwrap_or_else(|| from.to_non_ad());
+        // Populate sender_alt so LID-PN cache warms from self-messages
+        let sender_alt = if from.server == jid::HIDDEN_USER_SERVER {
+            Some(own_jid.clone())
+        } else if from.server == jid::DEFAULT_USER_SERVER && own_lid.is_some() {
+            own_lid.cloned()
+        } else {
+            None
+        };
         MessageSource {
             chat,
             sender: from.clone(),
             is_from_me: true,
             recipient,
+            sender_alt,
             ..Default::default()
         }
     } else {
