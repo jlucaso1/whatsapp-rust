@@ -951,7 +951,14 @@ impl Client {
             self.expected_disconnect.store(false, Ordering::Relaxed);
 
             if let Err(connect_err) = self.connect().await {
-                error!("Failed to connect: {connect_err:#}. Will retry...");
+                let is_transient = connect_err
+                    .downcast_ref::<crate::handshake::HandshakeError>()
+                    .is_some_and(|e| e.is_transient());
+                if is_transient {
+                    debug!("Transient connect failure, will retry: {connect_err:#}");
+                } else {
+                    error!("Failed to connect: {connect_err:#}. Will retry...");
+                }
             } else {
                 let unexpected_disconnect = if self.read_messages_loop().await.is_err() {
                     // Check intentional_reconnect AFTER read loop exits — reconnect()
@@ -1638,10 +1645,11 @@ impl Client {
             }
         } else {
             let this = self.clone();
-            // Node is already in Arc - just clone the Arc (cheap), not the Node
             self.runtime
                 .spawn(Box::pin(async move {
-                    if let Err(e) = this.send_ack_for(&node).await {
+                    if let Err(e) = this.send_ack_for(&node).await
+                        && !matches!(e, ClientError::NotConnected)
+                    {
                         warn!("Failed to send ack: {e:?}");
                     }
                 }))

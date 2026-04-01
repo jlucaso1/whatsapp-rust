@@ -21,8 +21,20 @@ pub enum HandshakeError {
     Core(#[from] CoreHandshakeError),
     #[error("Timed out waiting for handshake response")]
     Timeout,
+    #[error("Disconnected during handshake")]
+    Disconnected,
     #[error("Unexpected event during handshake: {0}")]
     UnexpectedEvent(String),
+}
+
+impl HandshakeError {
+    /// Transient errors that are expected during reconnect and will resolve on retry.
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Transport(_) | Self::Timeout | Self::Disconnected
+        )
+    }
 }
 
 type Result<T> = std::result::Result<T, HandshakeError>;
@@ -86,9 +98,7 @@ pub async fn do_handshake(
                 continue;
             }
             Ok(Ok(TransportEvent::Disconnected)) => {
-                return Err(HandshakeError::UnexpectedEvent(
-                    "Disconnected during handshake".to_string(),
-                ));
+                return Err(HandshakeError::Disconnected);
             }
             Ok(Err(_)) => return Err(HandshakeError::Timeout), // Channel closed
             Err(_) => return Err(HandshakeError::Timeout),

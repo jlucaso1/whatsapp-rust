@@ -492,42 +492,47 @@ impl Client {
             return Ok((writer, Err(err)));
         }
 
-        if let Err(e) = writer.seek(SeekFrom::Start(0)) {
-            return Ok((writer, Err(DownloadRequestError::other(e))));
-        }
+        let decryption = request.decryption.clone();
 
-        let decryption = &request.decryption;
-        let result = (|| -> std::result::Result<(), DownloadRequestError> {
-            let reader = std::io::Cursor::new(resp.body);
-            match decryption {
-                MediaDecryption::Encrypted {
-                    media_key,
-                    media_type,
-                } => {
-                    DownloadUtils::decrypt_stream_to_writer(
-                        reader,
-                        media_key,
-                        *media_type,
-                        &mut writer,
-                    )
-                    .map_err(DownloadRequestError::other)?;
-                }
-                MediaDecryption::Plaintext { file_sha256 } => {
-                    DownloadUtils::copy_and_validate_plaintext_to_writer(
-                        reader,
-                        file_sha256,
-                        &mut writer,
-                    )
-                    .map_err(DownloadRequestError::other)?;
-                }
+        // Offload blocking decrypt+write to avoid stalling the async executor
+        Ok(wacore::runtime::blocking(&*self.runtime, move || {
+            if let Err(e) = writer.seek(SeekFrom::Start(0)) {
+                return (writer, Err(DownloadRequestError::other(e)));
             }
-            writer
-                .seek(SeekFrom::Start(0))
-                .map_err(DownloadRequestError::other)?;
-            Ok(())
-        })();
 
-        Ok((writer, result))
+            let result = (|| -> std::result::Result<(), DownloadRequestError> {
+                let reader = std::io::Cursor::new(resp.body);
+                match &decryption {
+                    MediaDecryption::Encrypted {
+                        media_key,
+                        media_type,
+                    } => {
+                        DownloadUtils::decrypt_stream_to_writer(
+                            reader,
+                            media_key,
+                            *media_type,
+                            &mut writer,
+                        )
+                        .map_err(DownloadRequestError::other)?;
+                    }
+                    MediaDecryption::Plaintext { file_sha256 } => {
+                        DownloadUtils::copy_and_validate_plaintext_to_writer(
+                            reader,
+                            file_sha256,
+                            &mut writer,
+                        )
+                        .map_err(DownloadRequestError::other)?;
+                    }
+                }
+                writer
+                    .seek(SeekFrom::Start(0))
+                    .map_err(DownloadRequestError::other)?;
+                Ok(())
+            })();
+
+            (writer, result)
+        })
+        .await)
     }
 }
 
