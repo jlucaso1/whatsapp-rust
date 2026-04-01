@@ -392,23 +392,26 @@ impl Client {
         }
     }
 
-    /// Internal: stream download + decrypt to a writer in one blocking thread.
-    /// Always returns the writer (even on failure) so the caller can retry.
+    /// Download + decrypt to a writer. Uses streaming when available,
+    /// falls back to buffered otherwise. Returns writer for retry.
     async fn streaming_download_and_decrypt<W: Write + Seek + Send + 'static>(
         &self,
         request: &wacore::download::DownloadRequest,
         writer: W,
     ) -> Result<(W, std::result::Result<(), DownloadRequestError>)> {
+        if !self.http_client.supports_streaming() {
+            return self.buffered_download_and_decrypt(request, writer).await;
+        }
+
         let http_client = self.http_client.clone();
         let url = request.url.clone();
         let decryption = request.decryption.clone();
 
-        wacore::runtime::blocking(&*self.runtime, move || {
+        Ok(wacore::runtime::blocking(&*self.runtime, move || {
             let mut writer = writer;
 
-            // Seek to start before each attempt so retries start fresh
             if let Err(e) = writer.seek(SeekFrom::Start(0)) {
-                return Ok((writer, Err(DownloadRequestError::other(e))));
+                return (writer, Err(DownloadRequestError::other(e)));
             }
 
             let result = (|| -> std::result::Result<(), DownloadRequestError> {
@@ -458,9 +461,73 @@ impl Client {
                 Ok(())
             })();
 
-            Ok((writer, result))
+            (writer, result)
         })
-        .await
+        .await)
+    }
+
+    /// Buffered fallback when streaming is not available.
+    async fn buffered_download_and_decrypt<W: Write + Seek + Send + 'static>(
+        &self,
+        request: &wacore::download::DownloadRequest,
+        mut writer: W,
+    ) -> Result<(W, std::result::Result<(), DownloadRequestError>)> {
+        let http_request = crate::http::HttpRequest::get(request.url.clone());
+        let resp = match self.http_client.execute(http_request).await {
+            Ok(r) => r,
+            Err(e) => return Ok((writer, Err(DownloadRequestError::other(e)))),
+        };
+
+        if resp.status_code >= 300 {
+            let err = if is_media_auth_error(resp.status_code) {
+                DownloadRequestError::auth(resp.status_code)
+            } else if matches!(resp.status_code, 404 | 410) {
+                DownloadRequestError::not_found(resp.status_code)
+            } else {
+                DownloadRequestError::other(anyhow!(
+                    "Download failed with status: {}",
+                    resp.status_code
+                ))
+            };
+            return Ok((writer, Err(err)));
+        }
+
+        if let Err(e) = writer.seek(SeekFrom::Start(0)) {
+            return Ok((writer, Err(DownloadRequestError::other(e))));
+        }
+
+        let decryption = &request.decryption;
+        let result = (|| -> std::result::Result<(), DownloadRequestError> {
+            let reader = std::io::Cursor::new(resp.body);
+            match decryption {
+                MediaDecryption::Encrypted {
+                    media_key,
+                    media_type,
+                } => {
+                    DownloadUtils::decrypt_stream_to_writer(
+                        reader,
+                        media_key,
+                        *media_type,
+                        &mut writer,
+                    )
+                    .map_err(DownloadRequestError::other)?;
+                }
+                MediaDecryption::Plaintext { file_sha256 } => {
+                    DownloadUtils::copy_and_validate_plaintext_to_writer(
+                        reader,
+                        file_sha256,
+                        &mut writer,
+                    )
+                    .map_err(DownloadRequestError::other)?;
+                }
+            }
+            writer
+                .seek(SeekFrom::Start(0))
+                .map_err(DownloadRequestError::other)?;
+            Ok(())
+        })();
+
+        Ok((writer, result))
     }
 }
 

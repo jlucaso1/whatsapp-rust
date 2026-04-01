@@ -106,11 +106,13 @@ pub trait HttpClient: Send + Sync {
     /// Executes a given HTTP request and returns the response.
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse>;
 
-    /// Synchronous streaming variant. Returns a reader over the response body
-    /// instead of buffering it all in memory.
-    ///
-    /// Must be called from a blocking context (e.g. inside `spawn_blocking`).
-    /// Override to enable streaming downloads.
+    /// Whether this client supports synchronous streaming downloads.
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
+    /// Synchronous streaming variant — returns a reader over the response body.
+    /// Must be called from a blocking context.
     fn execute_streaming(&self, _request: HttpRequest) -> Result<StreamingHttpResponse> {
         Err(anyhow::anyhow!(
             "Streaming not supported by this HTTP client"
