@@ -111,22 +111,23 @@ pub fn is_tc_token_expired(token_timestamp: i64) -> bool {
 
 /// Check if a tcToken has expired using configurable receiver-side timing.
 pub fn is_tc_token_expired_with(token_timestamp: i64, config: &TcTokenConfig) -> bool {
+    let cfg = config.clamped();
     is_tc_token_expired_at(
         token_timestamp,
         unix_now(),
-        config.bucket_duration,
-        config.num_buckets,
+        cfg.bucket_duration,
+        cfg.num_buckets,
     )
 }
 
 /// Check if a sender-side timestamp has expired using sender-specific timing.
-/// Matches WA Web's `isTokenExpired(ts, TcTokenMode.Sender)`.
 pub fn is_sender_tc_token_expired(sender_timestamp: i64, config: &TcTokenConfig) -> bool {
+    let cfg = config.clamped();
     is_tc_token_expired_at(
         sender_timestamp,
         unix_now(),
-        config.sender_bucket_duration,
-        config.sender_num_buckets,
+        cfg.sender_bucket_duration,
+        cfg.sender_num_buckets,
     )
 }
 
@@ -163,7 +164,8 @@ pub fn should_send_new_tc_token_with(
     sender_timestamp: Option<i64>,
     config: &TcTokenConfig,
 ) -> bool {
-    should_send_new_tc_token_at(sender_timestamp, unix_now(), config.sender_bucket_duration)
+    let cfg = config.clamped();
+    should_send_new_tc_token_at(sender_timestamp, unix_now(), cfg.sender_bucket_duration)
 }
 
 fn should_send_new_tc_token_at(
@@ -186,7 +188,8 @@ pub fn tc_token_expiration_cutoff() -> i64 {
 
 /// Compute the expiration cutoff using configurable timing.
 pub fn tc_token_expiration_cutoff_with(config: &TcTokenConfig) -> i64 {
-    expiration_cutoff_at(unix_now(), config.bucket_duration, config.num_buckets)
+    let cfg = config.clamped();
+    expiration_cutoff_at(unix_now(), cfg.bucket_duration, cfg.num_buckets)
 }
 
 /// A token received from the server in an IQ response or notification.
