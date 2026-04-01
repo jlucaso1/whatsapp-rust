@@ -65,8 +65,8 @@ impl<'a> TcToken<'a> {
 
     /// Prune expired tc tokens from the store.
     ///
-    /// Deletes all tokens older than the rolling window (28 days by default).
-    /// Returns the number of tokens deleted.
+    /// Cutoff is AB-prop-aware via [`Client::tc_token_config()`] — the server
+    /// may override the default 28-day window (e.g. 26 buckets = 182 days).
     pub async fn prune_expired(&self) -> Result<u32, anyhow::Error> {
         let backend = self.client.persistence_manager.backend();
         let tc_config = self.client.tc_token_config().await;

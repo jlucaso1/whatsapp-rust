@@ -1129,8 +1129,7 @@ impl Client {
         }
 
         // Issue new tc token after send if a bucket boundary was crossed.
-        // WA Web fires this concurrently (MsgJob.js: sendTcToken is not awaited).
-        // We spawn via self_weak so the issuance doesn't block send_message return.
+        // Fire-and-forget so send_message returns without waiting for the IQ
         if should_issue_tc_token_after_send {
             if let Some(client) = self.self_weak.get().and_then(|w| w.upgrade()) {
                 let target = tc_issue_target;
@@ -1144,7 +1143,6 @@ impl Client {
                     }))
                     .detach();
             } else {
-                // Client already dropped — skip issuance
                 log::debug!(target: "Client/TcToken", "Skipping fire-and-forget issuance: client dropped");
             }
         }
@@ -1172,7 +1170,7 @@ impl Client {
             should_send_new_tc_token_with,
         };
 
-        // AB prop gate — WA Web defaults false but we default true (library-safe)
+        // AB prop gate (default true to avoid 463 before props are fetched)
         if !self
             .ab_props
             .is_enabled_or(config_codes::PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES, true)
@@ -1195,7 +1193,7 @@ impl Client {
             return (false, None);
         }
 
-        // Skip non-regular users (bots, status broadcast) — matches WA Web's isRegularUser()
+        // Bots and status broadcast don't participate in the privacy token system
         if to.is_bot() || to.is_status_broadcast() {
             return (false, None);
         }
@@ -1237,7 +1235,7 @@ impl Client {
                 return (should_issue_after_send, Some(token_jid));
             }
             _ => {
-                // cstoken fallback — gated by AB prop wa_nct_token_send_enabled (24941)
+                // cstoken fallback — gated by wa_nct_token_send_enabled
                 let nct_send_enabled = self
                     .ab_props
                     .is_enabled_or(config_codes::NCT_TOKEN_SEND_ENABLED, false)
@@ -1266,7 +1264,7 @@ impl Client {
     async fn issue_tc_token_after_send(&self, to: &Jid) -> bool {
         use wacore::iq::tctoken::IssuePrivacyTokensSpec;
 
-        // Skip non-regular users — matches WA Web's `!isRegularUser()` guard
+        // Bots and status broadcast don't participate in the privacy token system
         if to.is_bot() || to.is_status_broadcast() {
             return false;
         }
@@ -1314,6 +1312,32 @@ impl Client {
         }
     }
 
+    /// Variant of [`store_issued_tc_tokens`] that preserves the original
+    /// sender_timestamp for identity-change re-issuance (bucket continuity).
+    async fn store_issued_tc_tokens_with_sender_ts(
+        &self,
+        tokens: &[wacore::iq::tctoken::ReceivedTcToken],
+        sender_ts: i64,
+    ) {
+        use wacore::store::traits::TcTokenEntry;
+
+        let backend = self.persistence_manager.backend();
+        for received in tokens {
+            if received.token.is_empty() {
+                continue;
+            }
+            let entry = TcTokenEntry {
+                token: received.token.clone(),
+                token_timestamp: received.timestamp,
+                sender_timestamp: Some(sender_ts),
+            };
+            let store_jid = received.jid.user.clone();
+            if let Err(e) = backend.put_tc_token(&store_jid, &entry).await {
+                log::warn!(target: "Client/TcToken", "Failed to store re-issued tc_token: {e}");
+            }
+        }
+    }
+
     async fn mark_tc_token_used_after_send(&self, token_key: &str) {
         use wacore::store::traits::TcTokenEntry;
 
@@ -1343,10 +1367,7 @@ impl Client {
     }
 
     /// Re-issue tctoken after a contact's device identity changes.
-    ///
-    /// Matches WA Web's `sendTcTokenWhenDeviceIdentityChange`: checks if we
-    /// previously issued a token (sender_timestamp exists and is not expired),
-    /// then fire-and-forget re-issues with the stored timestamp.
+    /// Only re-issues if we previously sent a token (sender_timestamp valid).
     pub(crate) async fn reissue_tc_token_after_identity_change(&self, sender: &Jid) {
         use wacore::iq::tctoken::{IssuePrivacyTokensSpec, is_sender_tc_token_expired};
 
@@ -1369,14 +1390,13 @@ impl Client {
             return;
         };
 
-        // Use sender-side expiration — matches WA Web's TcTokenMode.Sender
+        // Sender-side expiration (may use different bucket config than receiver)
         let tc_config = self.tc_token_config().await;
         if is_sender_tc_token_expired(sender_ts, &tc_config) {
             return;
         }
 
-        // Re-issue with the stored sender_timestamp, matching WA Web's
-        // `castToUnixTime(a)` in sendTcTokenWhenDeviceIdentityChange.
+        // Use stored sender_ts so the bucket window isn't advanced
         let issuance_jid = self.resolve_issuance_jid(sender).await;
         match self
             .execute(IssuePrivacyTokensSpec::with_timestamp(
@@ -1386,7 +1406,9 @@ impl Client {
             .await
         {
             Ok(response) => {
-                self.store_issued_tc_tokens(&response.tokens).await;
+                // Keep original sender_ts so the bucket window isn't advanced
+                self.store_issued_tc_tokens_with_sender_ts(&response.tokens, sender_ts)
+                    .await;
                 log::debug!(
                     target: "Client/TcToken",
                     "Re-issued tctoken after identity change for {}",
@@ -1450,8 +1472,6 @@ impl Client {
     }
 
     /// Build tctoken timing config from AB props, falling back to defaults.
-    ///
-    /// Matches WA Web's `getTcTokenDuration` / `tctoken_num_buckets` config reads.
     pub(crate) async fn tc_token_config(&self) -> wacore::iq::tctoken::TcTokenConfig {
         use wacore::iq::props::config_codes;
         use wacore::iq::tctoken::{
@@ -1507,12 +1527,7 @@ impl Client {
     }
 
     /// Resolve the target JID for privacy token issuance.
-    ///
-    /// Gated by AB prop 14303 (`lid_trusted_token_issue_to_lid`):
-    /// - When true (or before props are fetched): resolve to LID
-    /// - When false: resolve to PN
-    ///
-    /// Matches WA Web's `resolveIssuanceJid`.
+    /// Gated by `lid_trusted_token_issue_to_lid` — LID when true, PN when false.
     async fn resolve_issuance_jid(&self, jid: &Jid) -> Jid {
         use wacore::iq::props::config_codes;
 
@@ -1522,18 +1537,19 @@ impl Client {
             .is_enabled_or(config_codes::LID_TRUSTED_TOKEN_ISSUE_TO_LID, true)
             .await;
 
-        if issue_to_lid {
+        let resolved = if issue_to_lid {
             self.resolve_to_lid_jid(jid).await
         } else if jid.is_lid() {
-            // Need to resolve LID → PN
             if let Some(pn) = self.lid_pn_cache.get_phone_number(&jid.user).await {
                 Jid::new(&pn, "s.whatsapp.net")
             } else {
-                jid.clone()
+                jid.to_non_ad()
             }
         } else {
-            jid.clone()
-        }
+            jid.to_non_ad()
+        };
+        // Issuance targets bare account JIDs, not device-scoped ones
+        resolved.to_non_ad()
     }
 }
 

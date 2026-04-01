@@ -938,8 +938,7 @@ impl Client {
                             }
                         }
 
-                        // Re-issue tctoken after identity change if we previously issued one.
-                        // Matches WA Web's sendTcTokenWhenDeviceIdentityChange.
+                        // Re-issue tctoken so the contact still has a valid token for us
                         let sender_jid = info.source.sender.clone();
                         if !sender_jid.is_bot() && !sender_jid.is_status_broadcast() {
                             let client = self.clone();

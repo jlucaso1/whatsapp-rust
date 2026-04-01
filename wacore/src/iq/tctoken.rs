@@ -59,13 +59,26 @@ pub const TC_TOKEN_TOTAL_DURATION: i64 = TC_TOKEN_BUCKET_DURATION * TC_TOKEN_NUM
 /// Maximum allowed bucket duration (180 days) — matches WA Web's cap.
 pub const TC_TOKEN_MAX_DURATION: i64 = 15_552_000;
 
-/// Runtime-configurable tctoken timing parameters read from AB props.
+/// Runtime-configurable tctoken timing from AB props.
+/// All fields must be >= 1 (division-by-zero guard in bucket math).
 #[derive(Debug, Clone, Copy)]
 pub struct TcTokenConfig {
     pub bucket_duration: i64,
     pub num_buckets: i64,
     pub sender_bucket_duration: i64,
     pub sender_num_buckets: i64,
+}
+
+impl TcTokenConfig {
+    /// Clamp all fields to >= 1 to prevent division-by-zero.
+    pub fn clamped(self) -> Self {
+        Self {
+            bucket_duration: self.bucket_duration.max(1),
+            num_buckets: self.num_buckets.max(1),
+            sender_bucket_duration: self.sender_bucket_duration.max(1),
+            sender_num_buckets: self.sender_num_buckets.max(1),
+        }
+    }
 }
 
 impl Default for TcTokenConfig {

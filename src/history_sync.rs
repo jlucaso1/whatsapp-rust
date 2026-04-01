@@ -8,8 +8,7 @@ use waproto::whatsapp::message::HistorySyncNotification;
 
 use crate::client::Client;
 
-/// Minimal proto decode struct for extracting tctoken fields from Conversation.
-/// Avoids decoding the full Conversation (which includes heavy `messages` field).
+/// Partial Conversation decode — only tctoken fields, skips heavy `messages`.
 #[derive(Clone, PartialEq, prost::Message)]
 struct ConversationTcTokenFields {
     #[prost(string, required, tag = "1")]
@@ -216,8 +215,7 @@ impl Client {
                 if conv_count.is_multiple_of(25) {
                     log::info!("History sync progress: {conv_count} conversations processed...");
                 }
-                // Extract tctoken data before dispatching (lightweight partial decode).
-                // Matches WA Web's storeTcTokensFromHistorySync / bulkCreateOrMerge.
+                // Extract tctokens before dispatching to ensure backfill even if handler drops
                 self.store_tc_token_from_conversation_bytes(&raw_bytes)
                     .await;
 
@@ -321,11 +319,7 @@ impl Client {
     }
 
     /// Extract and store tctoken data from a raw Conversation protobuf.
-    ///
-    /// Matches WA Web's `storeTcTokensFromHistorySync` / Baileys'
-    /// `storeTcTokensFromHistorySync`. Uses a lightweight partial decode
-    /// that only reads fields 1 (id), 21 (tcToken), 22 (tcTokenTimestamp),
-    /// and 28 (tcTokenSenderTimestamp) — skipping the heavy messages field.
+    /// Partial decode — only reads fields 1/21/22/28, skipping messages.
     async fn store_tc_token_from_conversation_bytes(&self, raw_bytes: &[u8]) {
         use prost::Message;
 
@@ -343,13 +337,13 @@ impl Client {
             return;
         };
 
-        // Resolve conversation JID to LID for storage key
+        // Resolve to LID for storage key consistency with notification handler
         let jid: wacore_binary::jid::Jid = match conv.id.parse() {
             Ok(j) => j,
             Err(_) => return,
         };
 
-        // Only store for user JIDs (not groups, newsletters, etc.)
+        // Only 1:1 conversations carry tctokens
         if jid.is_group() || jid.is_newsletter() || jid.is_bot() {
             return;
         }
@@ -365,17 +359,25 @@ impl Client {
 
         let backend = self.persistence_manager.backend();
 
-        // Monotonicity guard: only store if incoming timestamp >= existing
-        if let Ok(Some(existing)) = backend.get_tc_token(&token_key).await
-            && (existing.token_timestamp as u64) > timestamp
-        {
-            return;
-        }
+        // Avoid clobbering a newer local sender_timestamp from post-send issuance
+        let incoming_sender_ts = conv.tc_token_sender_timestamp.map(|ts| ts as i64);
+        let merged_sender_ts = if let Ok(Some(existing)) = backend.get_tc_token(&token_key).await {
+            if (existing.token_timestamp as u64) > timestamp {
+                return;
+            }
+            match (existing.sender_timestamp, incoming_sender_ts) {
+                (Some(e), Some(i)) => Some(e.max(i)),
+                (Some(e), None) => Some(e),
+                (None, i) => i,
+            }
+        } else {
+            incoming_sender_ts
+        };
 
         let entry = TcTokenEntry {
             token: token.clone(),
             token_timestamp: timestamp as i64,
-            sender_timestamp: conv.tc_token_sender_timestamp.map(|ts| ts as i64),
+            sender_timestamp: merged_sender_ts,
         };
 
         if let Err(e) = backend.put_tc_token(&token_key, &entry).await {

@@ -131,9 +131,7 @@ impl<'a> Contacts<'a> {
         };
         let mut spec = ProfilePictureSpec::new(jid, picture_type);
 
-        // Include tctoken for user JIDs — gated by AB prop 9666, skip groups/newsletters/bots.
-        // Also skip own JID: including tctoken for self causes server to never respond.
-        // Matches WA Web's isProfilePicIQPrivacyTokenEnabled() + Chat model self check.
+        // Skip own JID: server never responds when tctoken is sent for self
         let is_own_jid = {
             let snap = self.client.persistence_manager.get_device_snapshot().await;
             snap.pn.as_ref().is_some_and(|pn| pn.is_same_user_as(jid))
@@ -145,6 +143,8 @@ impl<'a> Contacts<'a> {
         if !jid.is_group()
             && !jid.is_newsletter()
             && !jid.is_bot()
+            && !jid.is_broadcast_list()
+            && !jid.is_status_broadcast()
             && !is_own_jid
             && self
                 .client

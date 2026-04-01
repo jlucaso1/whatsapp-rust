@@ -206,4 +206,40 @@ mod tests {
         assert!(!cache.is_enabled(9).await);
         assert!(!cache.is_enabled(999).await); // absent
     }
+
+    #[tokio::test]
+    async fn is_enabled_or_returns_default_when_absent() {
+        let cache = AbPropsCache::new();
+        cache
+            .apply_response(&make_response(false, vec![experiment(1, "1")]))
+            .await;
+
+        // Present and truthy
+        assert!(cache.is_enabled_or(1, false).await);
+        // Absent — returns custom default
+        assert!(cache.is_enabled_or(999, true).await);
+        assert!(!cache.is_enabled_or(999, false).await);
+    }
+
+    #[tokio::test]
+    async fn get_int_returns_default_when_absent_or_unparseable() {
+        let cache = AbPropsCache::new();
+        cache
+            .apply_response(&make_response(
+                false,
+                vec![
+                    experiment(1, "42"),
+                    experiment(2, "notanint"),
+                    experiment(3, ""),
+                    experiment(4, "-7"),
+                ],
+            ))
+            .await;
+
+        assert_eq!(cache.get_int(1, 0).await, 42);
+        assert_eq!(cache.get_int(2, 99).await, 99); // unparseable
+        assert_eq!(cache.get_int(3, 99).await, 99); // empty
+        assert_eq!(cache.get_int(4, 0).await, -7); // negative
+        assert_eq!(cache.get_int(999, 100).await, 100); // absent
+    }
 }

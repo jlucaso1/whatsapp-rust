@@ -2101,7 +2101,7 @@ impl Client {
     /// If an ack with an ID that matches a pending task in `response_waiters`,
     /// the task is resolved and the function returns `true`. Otherwise, returns `false`.
     pub(crate) async fn handle_ack_response(&self, node: Node) -> bool {
-        // Log specific nack error codes that indicate privacy token issues
+        // Surface privacy-token nack codes for diagnosability
         if let Some(error_code) = node.attrs.get("error") {
             let code = error_code.as_str();
             let id = node.attrs.get("id").map(|v| v.as_str().into_owned());
