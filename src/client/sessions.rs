@@ -259,15 +259,8 @@ impl Client {
         Ok(success_count)
     }
 
-    /// Establish session with primary phone (device 0) immediately for PDO.
-    ///
-    /// Called during login BEFORE offline messages arrive. Checks both PN and LID
-    /// sessions but does NOT establish PN sessions proactively. The primary phone's
-    /// PN session will be established via LID pkmsg when needed, which prevents
-    /// dual-session conflicts where both PN and LID sessions exist for the same user.
-    /// This matches WhatsApp Web's `prekey_fetch_iq_pnh_lid_enabled: false` behavior.
-    ///
-    /// Returns error if session check fails (fail-safe to prevent replacing existing sessions).
+    /// Ensure a LID session exists with the primary phone (device 0).
+    /// Migrates stale PN sessions or establishes fresh via prekey fetch.
     pub(crate) async fn establish_primary_phone_session_immediate(&self) -> Result<()> {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
@@ -276,48 +269,78 @@ impl Client {
             .clone()
             .ok_or_else(|| anyhow::Error::from(crate::client::ClientError::NotLoggedIn))?;
 
+        let Some(ref own_lid) = device_snapshot.lid else {
+            log::debug!("No own LID yet, skipping primary phone session check");
+            return Ok(());
+        };
+
+        let primary_phone_lid = own_lid.with_device(0);
         let primary_phone_pn = own_pn.with_device(0);
-        let primary_phone_lid = device_snapshot.lid.as_ref().map(|lid| lid.with_device(0));
 
-        let pn_session_exists =
-            self.check_session_exists(&primary_phone_pn)
+        let lid_session_exists = self
+            .check_session_exists(&primary_phone_lid)
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Cannot verify LID session for primary phone {}: {}",
+                    primary_phone_lid,
+                    e
+                )
+            })?;
+
+        if lid_session_exists {
+            log::debug!("LID session with {} already exists", primary_phone_lid);
+
+            let pn_session_exists = self
+                .check_session_exists(&primary_phone_pn)
                 .await
-                .map_err(|e| {
-                    anyhow::anyhow!(
-                        "Cannot verify PN session existence for primary phone {}: {}. \
-                     Refusing to establish session to prevent potential MAC failures.",
-                        primary_phone_pn,
-                        e
-                    )
-                })?;
-
-        // Don't proactively establish PN session - matches WhatsApp Web's
-        // prekey_fetch_iq_pnh_lid_enabled: false behavior. The primary phone will
-        // establish the session via pkmsg from LID address, which prevents dual-session
-        // conflicts where both PN and LID sessions exist for the same user.
-        if pn_session_exists {
-            log::debug!(
-                "PN session with primary phone {} already exists",
-                primary_phone_pn
-            );
-        } else {
-            log::debug!(
-                "No PN session with primary phone {} - will be established via LID pkmsg",
-                primary_phone_pn
-            );
-        }
-
-        // Check LID session existence (don't establish - primary phone does that via pkmsg)
-        if let Some(ref lid_jid) = primary_phone_lid {
-            match self.check_session_exists(lid_jid).await {
-                Ok(true) => log::debug!("LID session with {} already exists", lid_jid),
-                Ok(false) => log::debug!(
-                    "No LID session with {} - established on first message",
-                    lid_jid
-                ),
-                Err(e) => log::debug!("Could not check LID session for {}: {}", lid_jid, e),
+                .unwrap_or(false);
+            if pn_session_exists {
+                log::info!("Cleaning up stale PN session for own device 0 (LID session exists)");
+                self.signal_cache
+                    .delete_session(&primary_phone_pn.to_protocol_address())
+                    .await;
+                let _ = self
+                    .persistence_manager
+                    .backend()
+                    .delete_session(&primary_phone_pn.to_protocol_address_string())
+                    .await;
             }
+            return Ok(());
         }
+
+        let pn_session_exists = self
+            .check_session_exists(&primary_phone_pn)
+            .await
+            .unwrap_or(false);
+        if pn_session_exists {
+            log::info!(
+                "Migrating own device 0 session from PN {} to LID {}",
+                primary_phone_pn,
+                primary_phone_lid
+            );
+            self.migrate_signal_sessions_on_lid_discovery(&own_pn.user, &own_lid.user)
+                .await;
+
+            if self
+                .check_session_exists(&primary_phone_lid)
+                .await
+                .unwrap_or(false)
+            {
+                log::info!("Successfully migrated own device 0 session to LID");
+                return Ok(());
+            }
+            log::warn!("Migration did not produce a LID session, will establish fresh");
+        }
+
+        log::info!(
+            "Establishing LID session with own device 0 {} via prekey fetch",
+            primary_phone_lid
+        );
+        // Call fetch_and_establish_sessions directly to avoid
+        // ensure_e2e_sessions's wait_for_offline_delivery_end (we're at login)
+        self.fetch_and_establish_sessions(std::slice::from_ref(&primary_phone_lid))
+            .await?;
 
         Ok(())
     }

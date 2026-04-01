@@ -175,8 +175,9 @@ impl Client {
             .parse::<wacore_binary::jid::Jid>()
             .unwrap_or_else(|_| receipt.source.sender.clone());
 
-        // Device existence check (matches WhatsApp Web's WAWebApiDeviceList.hasDevice).
-        // This prevents processing retry receipts from unknown/stale devices.
+        // Resolve PN→LID so all session operations use the correct address
+        let participant_jid = self.resolve_encryption_jid(&participant_jid).await;
+
         let sender_device_id = participant_jid.device() as u32;
         let sender_user = participant_jid.user.clone();
         if !self.has_device(&sender_user, sender_device_id).await {
@@ -548,7 +549,8 @@ impl Client {
             return Err(anyhow::anyhow!("Invalid registration ID in retry receipt"));
         }
 
-        let signal_address = requester_jid.to_protocol_address();
+        let resolved_jid = self.resolve_encryption_jid(requester_jid).await;
+        let signal_address = resolved_jid.to_protocol_address();
 
         // Check if the registration ID changed (indicates device reinstall).
         // Read session through cache for consistent state.

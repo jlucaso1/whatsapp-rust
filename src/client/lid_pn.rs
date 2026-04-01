@@ -83,9 +83,11 @@ impl Client {
             .await
             .map_err(|e| anyhow!("persisting LID-PN mapping: {e}"))?;
 
-        // If this is a new LID mapping, migrate any existing PN-keyed device registry entries
+        // If this is a new LID mapping, migrate any existing PN-keyed entries to LID
         if is_new_mapping {
             self.migrate_device_registry_on_lid_discovery(phone_number, lid)
+                .await;
+            self.migrate_signal_sessions_on_lid_discovery(phone_number, lid)
                 .await;
         }
 
@@ -163,6 +165,64 @@ impl Client {
         } else {
             // Other server type - use as-is
             target.clone()
+        }
+    }
+
+    /// Migrate Signal sessions and identity keys from PN to LID address.
+    /// WA Web never stores sessions under PN when a LID mapping is known.
+    pub(crate) async fn migrate_signal_sessions_on_lid_discovery(&self, pn: &str, lid: &str) {
+        use log::{info, warn};
+        use wacore::types::jid::JidExt;
+
+        let backend = self.persistence_manager.backend();
+
+        for device_id in 0..=99u16 {
+            let pn_jid = Jid::pn_device(pn.to_string(), device_id);
+            let lid_jid = Jid::lid_device(lid.to_string(), device_id);
+
+            let pn_proto = pn_jid.to_protocol_address();
+            let lid_proto = lid_jid.to_protocol_address();
+            let pn_addr_key = pn_proto.as_str();
+            let lid_addr_key = lid_proto.as_str();
+
+            // Migrate session if PN session exists
+            if let Ok(Some(session_data)) = backend.get_session(pn_addr_key).await {
+                match backend.get_session(lid_addr_key).await {
+                    Ok(Some(_)) => {
+                        if let Err(e) = backend.delete_session(pn_addr_key).await {
+                            warn!("Failed to delete stale PN session {pn_addr_key}: {e}");
+                        }
+                        self.signal_cache.delete_session(&pn_proto).await;
+                        info!("Deleted stale PN session {pn_addr_key} (LID exists)");
+                    }
+                    Ok(None) => {
+                        if let Err(e) = backend.put_session(lid_addr_key, &session_data).await {
+                            warn!("Failed to write LID session {lid_addr_key}: {e}");
+                        } else {
+                            if let Err(e) = backend.delete_session(pn_addr_key).await {
+                                warn!("Failed to delete PN session {pn_addr_key}: {e}");
+                            }
+                            self.signal_cache.delete_session(&pn_proto).await;
+                            info!("Migrated session {pn_addr_key} -> {lid_addr_key}");
+                        }
+                    }
+                    Err(e) => warn!("Failed to check LID session {lid_addr_key}: {e}"),
+                }
+            }
+
+            // Migrate identity independently of session (can outlive deleted sessions)
+            if let Ok(Some(identity_data)) = backend.load_identity(pn_addr_key).await
+                && let Ok(None) = backend.load_identity(lid_addr_key).await
+            {
+                let Ok(key): Result<[u8; 32], _> = identity_data.as_slice().try_into() else {
+                    continue;
+                };
+                if let Err(e) = backend.put_identity(lid_addr_key, key).await {
+                    warn!("Failed to migrate identity {pn_addr_key} -> {lid_addr_key}: {e}");
+                } else if let Err(e) = backend.delete_identity(pn_addr_key).await {
+                    warn!("Failed to delete PN identity {pn_addr_key}: {e}");
+                }
+            }
         }
     }
 
