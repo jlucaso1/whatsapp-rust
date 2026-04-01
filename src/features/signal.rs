@@ -30,13 +30,19 @@ impl<'a> Signal<'a> {
     ///
     /// Returns `("msg" | "pkmsg", ciphertext_bytes)`. The caller is
     /// responsible for padding if needed; this method encrypts raw bytes.
+    ///
+    /// PN JIDs are resolved to LID when a LID session exists, matching
+    /// the internal send path.
     pub async fn encrypt_message(
         &self,
         jid: &Jid,
         plaintext: &[u8],
     ) -> Result<(&'static str, Vec<u8>)> {
-        let signal_addr = jid.to_protocol_address();
-        let signal_addr_str = jid.to_protocol_address_string();
+        // Resolve PN→LID to use the correct Signal session (matches send path)
+        let encryption_jid = self.client.resolve_encryption_jid(jid).await;
+        let signal_addr = encryption_jid.to_protocol_address();
+        // Reuse the pre-cached display string instead of computing it separately
+        let signal_addr_str = signal_addr.to_string();
 
         let lock = self.client.session_lock_for(&signal_addr_str).await;
         let _guard = lock.lock().await;
@@ -65,15 +71,15 @@ impl<'a> Signal<'a> {
     /// `msg_type` must be `"msg"` or `"pkmsg"`. Returns raw padded plaintext.
     /// Use [`MessageUtils::unpad_message_ref`] with the stanza's `v` attribute
     /// if WhatsApp message unpadding is needed.
+    ///
+    /// PN JIDs are resolved to LID when a LID session exists, matching
+    /// the internal receive path.
     pub async fn decrypt_message(
         &self,
         jid: &Jid,
         msg_type: &str,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>> {
-        let signal_addr = jid.to_protocol_address();
-        let signal_addr_str = jid.to_protocol_address_string();
-
         let parsed = match msg_type {
             "pkmsg" => {
                 CiphertextMessage::PreKeySignalMessage(PreKeySignalMessage::try_from(ciphertext)?)
@@ -81,6 +87,10 @@ impl<'a> Signal<'a> {
             "msg" => CiphertextMessage::SignalMessage(SignalMessage::try_from(ciphertext)?),
             other => return Err(anyhow!("invalid msg_type: {other}")),
         };
+
+        let encryption_jid = self.client.resolve_encryption_jid(jid).await;
+        let signal_addr = encryption_jid.to_protocol_address();
+        let signal_addr_str = signal_addr.to_string();
 
         let lock = self.client.session_lock_for(&signal_addr_str).await;
         let _guard = lock.lock().await;
@@ -151,6 +161,9 @@ impl<'a> Signal<'a> {
     ///
     /// Returns raw padded plaintext. Use [`MessageUtils::unpad_message_ref`]
     /// with the stanza's `v` attribute if WhatsApp message unpadding is needed.
+    ///
+    /// Not safe to call concurrently with `encrypt_group_message` for the
+    /// same group — sender key state is not internally locked.
     pub async fn decrypt_group_message(
         &self,
         group_jid: &Jid,
@@ -159,7 +172,7 @@ impl<'a> Signal<'a> {
     ) -> Result<Vec<u8>> {
         let sender_key_name = SenderKeyName::new(
             group_jid.to_string(),
-            sender_jid.to_protocol_address().to_string(),
+            sender_jid.to_protocol_address_string(),
         );
 
         let mut adapter = self.client.signal_adapter().await;
@@ -190,18 +203,31 @@ impl<'a> Signal<'a> {
 
     /// Delete Signal sessions for the given JIDs (cache + persistent store).
     pub async fn delete_sessions(&self, jids: &[Jid]) -> Result<()> {
-        for jid in jids {
+        if jids.is_empty() {
+            return Ok(());
+        }
+
+        // Sort lock keys to match the global ordering used by create_participant_nodes
+        // and the DM send path, preventing AB/BA deadlocks.
+        let mut keyed: Vec<(String, &Jid)> = jids
+            .iter()
+            .map(|jid| (jid.to_protocol_address_string(), jid))
+            .collect();
+        keyed.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        keyed.dedup_by(|(a, _), (b, _)| a == b);
+
+        let mut guards = Vec::with_capacity(keyed.len());
+        for (key, _) in &keyed {
+            let lock = self.client.session_lock_for(key).await;
+            guards.push(lock.lock_arc().await);
+        }
+
+        let device_store = self.client.persistence_manager.get_device_arc().await;
+        let device_guard = device_store.read().await;
+
+        for (_, jid) in &keyed {
             let addr = jid.to_protocol_address();
-            let signal_addr_str = jid.to_protocol_address_string();
-
-            // Session lock first, then device lock — matches encrypt/decrypt ordering
-            let lock = self.client.session_lock_for(&signal_addr_str).await;
-            let _guard = lock.lock().await;
-
             self.client.signal_cache.delete_session(&addr).await;
-
-            let device_store = self.client.persistence_manager.get_device_arc().await;
-            let device_guard = device_store.read().await;
             device_guard
                 .backend
                 .delete_session(addr.as_str())
