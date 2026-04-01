@@ -446,6 +446,10 @@ pub struct Client {
     /// Cache configuration for TTL and capacity of all caches.
     /// Stored for use by lazily-initialized caches (group_cache).
     pub(crate) cache_config: CacheConfig,
+
+    /// Weak self-reference for spawning background tasks from `&self` methods.
+    /// Initialized after `Arc::new(this)` in the constructor.
+    pub(crate) self_weak: std::sync::OnceLock<std::sync::Weak<Client>>,
 }
 
 impl Client {
@@ -699,9 +703,11 @@ impl Client {
             override_version,
             skip_history_sync: AtomicBool::new(false),
             cache_config,
+            self_weak: std::sync::OnceLock::new(),
         };
 
         let arc = Arc::new(this);
+        let _ = arc.self_weak.set(Arc::downgrade(&arc));
 
         // Warm up the LID-PN cache from persistent storage
         let warm_up_arc = arc.clone();
@@ -2095,6 +2101,32 @@ impl Client {
     /// If an ack with an ID that matches a pending task in `response_waiters`,
     /// the task is resolved and the function returns `true`. Otherwise, returns `false`.
     pub(crate) async fn handle_ack_response(&self, node: Node) -> bool {
+        // Log specific nack error codes that indicate privacy token issues
+        if let Some(error_code) = node.attrs.get("error") {
+            let code = error_code.as_str();
+            let id = node.attrs.get("id").map(|v| v.as_str().into_owned());
+            match &*code {
+                "463" => {
+                    warn!(
+                        target: "Client/Ack",
+                        "Received 463 (MissingTcToken) nack for msg {:?}. \
+                         The recipient requires a valid tctoken or cstoken. \
+                         This may indicate a reachout timelock on the account.",
+                        id
+                    );
+                }
+                "479" => {
+                    warn!(
+                        target: "Client/Ack",
+                        "Received 479 (SmaxInvalid) nack for msg {:?}. \
+                         A stanza field has an incorrect format (e.g. wrong JID format or content type).",
+                        id
+                    );
+                }
+                _ => {}
+            }
+        }
+
         let id_opt = node.attrs.get("id").map(|v| v.as_str().into_owned());
         if let Some(id) = id_opt
             && let Some(waiter) = self.response_waiters.lock().await.remove(&id)

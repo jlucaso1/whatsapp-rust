@@ -47,55 +47,133 @@ use wacore_binary::node::{Node, NodeContent};
 
 use super::privacy::PRIVACY_NAMESPACE;
 
-/// 7 days in seconds — matches WA Web AB prop `tctoken_duration`.
+/// Default bucket duration in seconds — WA Web AB prop `tctoken_duration` (default 604800 = 7 days).
 pub const TC_TOKEN_BUCKET_DURATION: i64 = 604_800;
 
-/// Number of buckets in the rolling window — matches WA Web `tctoken_num_buckets`.
+/// Default number of buckets — WA Web AB prop `tctoken_num_buckets` (default 4).
 pub const TC_TOKEN_NUM_BUCKETS: i64 = 4;
 
 /// Total rolling window duration in seconds (bucket_duration * num_buckets).
 pub const TC_TOKEN_TOTAL_DURATION: i64 = TC_TOKEN_BUCKET_DURATION * TC_TOKEN_NUM_BUCKETS;
+
+/// Maximum allowed bucket duration (180 days) — matches WA Web's cap.
+pub const TC_TOKEN_MAX_DURATION: i64 = 15_552_000;
+
+/// Runtime-configurable tctoken timing parameters read from AB props.
+#[derive(Debug, Clone, Copy)]
+pub struct TcTokenConfig {
+    pub bucket_duration: i64,
+    pub num_buckets: i64,
+    pub sender_bucket_duration: i64,
+    pub sender_num_buckets: i64,
+}
+
+impl Default for TcTokenConfig {
+    fn default() -> Self {
+        Self {
+            bucket_duration: TC_TOKEN_BUCKET_DURATION,
+            num_buckets: TC_TOKEN_NUM_BUCKETS,
+            sender_bucket_duration: TC_TOKEN_BUCKET_DURATION,
+            sender_num_buckets: TC_TOKEN_NUM_BUCKETS,
+        }
+    }
+}
 
 /// Get the current unix timestamp in seconds.
 fn unix_now() -> i64 {
     crate::time::now_secs()
 }
 
-/// Check if a tcToken has expired (older than the rolling window).
+/// Check if a tcToken has expired using default constants.
+///
+/// For AB-prop-aware expiration, use [`is_tc_token_expired_with`].
 pub fn is_tc_token_expired(token_timestamp: i64) -> bool {
-    is_tc_token_expired_at(token_timestamp, unix_now())
+    is_tc_token_expired_at(
+        token_timestamp,
+        unix_now(),
+        TC_TOKEN_BUCKET_DURATION,
+        TC_TOKEN_NUM_BUCKETS,
+    )
 }
 
-fn is_tc_token_expired_at(token_timestamp: i64, now: i64) -> bool {
-    now - token_timestamp >= TC_TOKEN_TOTAL_DURATION
+/// Check if a tcToken has expired using configurable receiver-side timing.
+pub fn is_tc_token_expired_with(token_timestamp: i64, config: &TcTokenConfig) -> bool {
+    is_tc_token_expired_at(
+        token_timestamp,
+        unix_now(),
+        config.bucket_duration,
+        config.num_buckets,
+    )
+}
+
+/// Check if a sender-side timestamp has expired using sender-specific timing.
+/// Matches WA Web's `isTokenExpired(ts, TcTokenMode.Sender)`.
+pub fn is_sender_tc_token_expired(sender_timestamp: i64, config: &TcTokenConfig) -> bool {
+    is_tc_token_expired_at(
+        sender_timestamp,
+        unix_now(),
+        config.sender_bucket_duration,
+        config.sender_num_buckets,
+    )
+}
+
+fn is_tc_token_expired_at(
+    token_timestamp: i64,
+    now: i64,
+    bucket_duration: i64,
+    num_buckets: i64,
+) -> bool {
+    token_timestamp < expiration_cutoff_at(now, bucket_duration, num_buckets)
 }
 
 /// Compute the bucket index for a given timestamp.
-fn bucket_index(timestamp: i64) -> i64 {
-    timestamp / TC_TOKEN_BUCKET_DURATION
+fn bucket_index(timestamp: i64, bucket_duration: i64) -> i64 {
+    timestamp / bucket_duration
 }
 
-/// Check if we should issue a new tcToken to a contact.
+/// Bucket-aligned expiration cutoff matching WA Web's `tokenExpirationCutoff`.
+fn expiration_cutoff_at(now: i64, bucket_duration: i64, num_buckets: i64) -> i64 {
+    let current_bucket = bucket_index(now, bucket_duration);
+    let expired_bucket = current_bucket - (num_buckets - 1);
+    expired_bucket * bucket_duration
+}
+
+/// Check if we should issue a new tcToken to a contact (default constants).
 ///
-/// Returns true if:
-/// - We have never issued a token (`sender_timestamp` is None)
-/// - The current bucket is ahead of the sender_timestamp bucket
-///   (meaning a bucket boundary has been crossed)
+/// For AB-prop-aware check, use [`should_send_new_tc_token_with`].
 pub fn should_send_new_tc_token(sender_timestamp: Option<i64>) -> bool {
-    should_send_new_tc_token_at(sender_timestamp, unix_now())
+    should_send_new_tc_token_at(sender_timestamp, unix_now(), TC_TOKEN_BUCKET_DURATION)
 }
 
-fn should_send_new_tc_token_at(sender_timestamp: Option<i64>, now: i64) -> bool {
+/// Check if we should issue a new tcToken using configurable sender bucket duration.
+pub fn should_send_new_tc_token_with(
+    sender_timestamp: Option<i64>,
+    config: &TcTokenConfig,
+) -> bool {
+    should_send_new_tc_token_at(sender_timestamp, unix_now(), config.sender_bucket_duration)
+}
+
+fn should_send_new_tc_token_at(
+    sender_timestamp: Option<i64>,
+    now: i64,
+    bucket_duration: i64,
+) -> bool {
     match sender_timestamp {
         None => true,
-        Some(ts) => bucket_index(now) > bucket_index(ts),
+        Some(ts) => bucket_index(now, bucket_duration) > bucket_index(ts, bucket_duration),
     }
 }
 
-/// Compute the expiration cutoff timestamp for pruning.
-/// Tokens with `token_timestamp < cutoff` should be deleted.
+/// Compute the expiration cutoff timestamp for pruning (default constants).
+///
+/// For AB-prop-aware cutoff, use [`tc_token_expiration_cutoff_with`].
 pub fn tc_token_expiration_cutoff() -> i64 {
-    unix_now() - TC_TOKEN_TOTAL_DURATION
+    expiration_cutoff_at(unix_now(), TC_TOKEN_BUCKET_DURATION, TC_TOKEN_NUM_BUCKETS)
+}
+
+/// Compute the expiration cutoff using configurable timing.
+pub fn tc_token_expiration_cutoff_with(config: &TcTokenConfig) -> i64 {
+    expiration_cutoff_at(unix_now(), config.bucket_duration, config.num_buckets)
 }
 
 /// A token received from the server in an IQ response or notification.
@@ -133,6 +211,17 @@ impl IssuePrivacyTokensSpec {
         Self {
             jids: jids.to_vec(),
             timestamp: unix_now(),
+        }
+    }
+
+    /// Create a spec with a specific timestamp (for identity change re-issuance).
+    ///
+    /// WA Web passes the stored senderTimestamp when re-issuing after identity change
+    /// (`sendTcTokenWhenDeviceIdentityChange`), preserving the original issuance epoch.
+    pub fn with_timestamp(jids: &[Jid], timestamp: i64) -> Self {
+        Self {
+            jids: jids.to_vec(),
+            timestamp,
         }
     }
 }
@@ -287,65 +376,102 @@ pub fn build_tc_token_node_with_timestamp(token: &[u8], timestamp: i64) -> Node 
 mod tests {
     use super::*;
 
+    const DUR: i64 = TC_TOKEN_BUCKET_DURATION;
+    const BUCKETS: i64 = TC_TOKEN_NUM_BUCKETS;
+
     #[test]
     fn test_bucket_index() {
-        assert_eq!(bucket_index(0), 0);
-        assert_eq!(bucket_index(604799), 0);
-        assert_eq!(bucket_index(604800), 1);
-        assert_eq!(bucket_index(1209599), 1);
-        assert_eq!(bucket_index(1209600), 2);
+        assert_eq!(bucket_index(0, DUR), 0);
+        assert_eq!(bucket_index(604799, DUR), 0);
+        assert_eq!(bucket_index(604800, DUR), 1);
+        assert_eq!(bucket_index(1209599, DUR), 1);
+        assert_eq!(bucket_index(1209600, DUR), 2);
     }
 
     #[test]
     fn test_should_send_new_tc_token_none() {
-        assert!(should_send_new_tc_token_at(None, 1_000_000));
+        assert!(should_send_new_tc_token_at(None, 1_000_000, DUR));
     }
 
     #[test]
     fn test_should_send_new_tc_token_same_bucket() {
-        let now = 2 * TC_TOKEN_BUCKET_DURATION + 100;
-        let same_bucket_ts = 2 * TC_TOKEN_BUCKET_DURATION;
-        assert!(!should_send_new_tc_token_at(Some(same_bucket_ts), now));
+        let now = 2 * DUR + 100;
+        let same_bucket_ts = 2 * DUR;
+        assert!(!should_send_new_tc_token_at(Some(same_bucket_ts), now, DUR));
     }
 
     #[test]
     fn test_should_send_new_tc_token_different_bucket() {
-        let now = 3 * TC_TOKEN_BUCKET_DURATION + 100;
-        let old_ts = TC_TOKEN_BUCKET_DURATION + 50;
-        assert!(should_send_new_tc_token_at(Some(old_ts), now));
+        let now = 3 * DUR + 100;
+        let old_ts = DUR + 50;
+        assert!(should_send_new_tc_token_at(Some(old_ts), now, DUR));
     }
 
     #[test]
     fn test_should_send_new_tc_token_clock_backward_no_reissue() {
-        // If clock goes backwards, should NOT trigger re-issuance (> not !=)
-        let future_ts = 5 * TC_TOKEN_BUCKET_DURATION + 100;
-        let now = 3 * TC_TOKEN_BUCKET_DURATION + 100;
-        assert!(!should_send_new_tc_token_at(Some(future_ts), now));
+        let future_ts = 5 * DUR + 100;
+        let now = 3 * DUR + 100;
+        assert!(!should_send_new_tc_token_at(Some(future_ts), now, DUR));
     }
 
     #[test]
     fn test_is_tc_token_expired() {
-        let now = 10 * TC_TOKEN_BUCKET_DURATION;
+        let now = 10 * DUR;
+        // cutoff = (10 - 3) * dur = 7 * dur — buckets 7..=10 are valid
 
-        // Recent token should not be expired
-        assert!(!is_tc_token_expired_at(now - 100, now));
+        assert!(!is_tc_token_expired_at(now - 100, now, DUR, BUCKETS));
+        assert!(!is_tc_token_expired_at(7 * DUR, now, DUR, BUCKETS));
+        assert!(is_tc_token_expired_at(7 * DUR - 1, now, DUR, BUCKETS));
+        assert!(is_tc_token_expired_at(6 * DUR, now, DUR, BUCKETS));
+    }
 
-        // Token older than total window should be expired
-        assert!(is_tc_token_expired_at(
-            now - TC_TOKEN_TOTAL_DURATION - 1,
-            now
-        ));
+    #[test]
+    fn test_is_tc_token_expired_mid_bucket() {
+        let now = 10 * DUR + DUR / 2;
+        // cutoff = (10 - 3) * dur = 7 * dur (bucket-aligned, doesn't change mid-bucket)
 
-        // Token at exact boundary
-        assert!(is_tc_token_expired_at(now - TC_TOKEN_TOTAL_DURATION, now));
+        assert!(!is_tc_token_expired_at(7 * DUR, now, DUR, BUCKETS));
+        assert!(is_tc_token_expired_at(7 * DUR - 1, now, DUR, BUCKETS));
+    }
+
+    #[test]
+    fn test_expiration_cutoff_is_bucket_aligned() {
+        let now = 10 * DUR + 12345;
+        let cutoff = expiration_cutoff_at(now, DUR, BUCKETS);
+        assert_eq!(cutoff % DUR, 0);
+        assert_eq!(cutoff, 7 * DUR);
     }
 
     #[test]
     fn test_tc_token_expiration_cutoff() {
         let now = unix_now();
         let cutoff = tc_token_expiration_cutoff();
-        let expected = now - TC_TOKEN_TOTAL_DURATION;
+        let expected = expiration_cutoff_at(now, DUR, BUCKETS);
         assert!((cutoff - expected).abs() <= 1);
+    }
+
+    #[test]
+    fn test_custom_config_shorter_duration() {
+        let config = TcTokenConfig {
+            bucket_duration: 3600, // 1 hour
+            num_buckets: 3,
+            sender_bucket_duration: 3600,
+            sender_num_buckets: 3,
+        };
+        let now = 10 * 3600;
+        // cutoff = (10 - 2) * 3600 = 8 * 3600
+        assert!(!is_tc_token_expired_at(
+            8 * 3600,
+            now,
+            config.bucket_duration,
+            config.num_buckets
+        ));
+        assert!(is_tc_token_expired_at(
+            8 * 3600 - 1,
+            now,
+            config.bucket_duration,
+            config.num_buckets
+        ));
     }
 
     #[test]

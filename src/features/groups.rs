@@ -551,11 +551,13 @@ impl<'a> Groups<'a> {
 
     /// Returns the tc_token if present and not expired.
     async fn lookup_valid_token(&self, token_key: &str) -> Option<Vec<u8>> {
-        use wacore::iq::tctoken::is_tc_token_expired;
+        use wacore::iq::tctoken::is_tc_token_expired_with;
+        let tc_config = self.client.tc_token_config().await;
         let backend = self.client.persistence_manager.backend();
         match backend.get_tc_token(token_key).await {
             Ok(Some(entry))
-                if !entry.token.is_empty() && !is_tc_token_expired(entry.token_timestamp) =>
+                if !entry.token.is_empty()
+                    && !is_tc_token_expired_with(entry.token_timestamp, &tc_config) =>
             {
                 Some(entry.token)
             }

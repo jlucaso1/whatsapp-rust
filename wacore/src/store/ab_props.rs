@@ -55,14 +55,28 @@ impl AbPropsCache {
     }
 
     /// True when the prop value is truthy (`"1"`, `"true"`, or `"enabled"`).
+    /// Returns `false` if the prop is absent.
     pub async fn is_enabled(&self, config_code: u32) -> bool {
+        self.is_enabled_or(config_code, false).await
+    }
+
+    /// Like [`is_enabled`] but returns `default` when the prop is absent (not yet fetched).
+    pub async fn is_enabled_or(&self, config_code: u32, default: bool) -> bool {
         match self.props.read().await.get(&config_code) {
             Some(value) => {
                 value == "1"
                     || value.eq_ignore_ascii_case("true")
                     || value.eq_ignore_ascii_case("enabled")
             }
-            None => false,
+            None => default,
+        }
+    }
+
+    /// Get the prop value as an integer, returning `default` if absent or unparseable.
+    pub async fn get_int(&self, config_code: u32, default: i64) -> i64 {
+        match self.props.read().await.get(&config_code) {
+            Some(value) => value.parse().unwrap_or(default),
+            None => default,
         }
     }
 }

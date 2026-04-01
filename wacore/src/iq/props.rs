@@ -35,10 +35,29 @@ pub const PROPS_NAMESPACE: &str = "abt";
 
 /// Well-known AB prop config codes from WhatsApp Web's ABPropConfigs.
 pub mod config_codes {
+    // --- Privacy token gating ---
     pub const PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES: u32 = 10_518;
     pub const PRIVACY_TOKEN_ON_GROUP_CREATE: u32 = 11_261;
     pub const PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD: u32 = 11_262;
     pub const PRIVACY_TOKEN_ONLY_CHECK_LID: u32 = 15_491;
+    /// Gates tctoken inclusion in profile picture IQ requests.
+    pub const PROFILE_PIC_PRIVACY_TOKEN: u32 = 9_666;
+    /// When true, issue privacy tokens to LID JIDs instead of PN JIDs.
+    pub const LID_TRUSTED_TOKEN_ISSUE_TO_LID: u32 = 14_303;
+
+    // --- tctoken timing (int props, not booleans) ---
+    /// Receiver-side bucket duration in seconds (default 604800 = 7 days).
+    pub const TCTOKEN_DURATION: u32 = 865;
+    /// Sender-side bucket duration in seconds (default 604800 = 7 days).
+    pub const TCTOKEN_DURATION_SENDER: u32 = 996;
+    /// Receiver-side number of buckets in the rolling window (default 4).
+    pub const TCTOKEN_NUM_BUCKETS: u32 = 909;
+    /// Sender-side number of buckets (default 4).
+    pub const TCTOKEN_NUM_BUCKETS_SENDER: u32 = 997;
+
+    // --- NCT / cstoken ---
+    /// Gates cstoken (HMAC fallback) inclusion in outgoing messages.
+    pub const NCT_TOKEN_SEND_ENABLED: u32 = 24_941;
 }
 
 /// Protocol version for props requests.

@@ -937,6 +937,19 @@ impl Client {
                                 }
                             }
                         }
+
+                        // Re-issue tctoken after identity change if we previously issued one.
+                        // Matches WA Web's sendTcTokenWhenDeviceIdentityChange.
+                        let sender_jid = info.source.sender.clone();
+                        if !sender_jid.is_bot() && !sender_jid.is_status_broadcast() {
+                            let client = self.clone();
+                            tokio::spawn(async move {
+                                client
+                                    .reissue_tc_token_after_identity_change(&sender_jid)
+                                    .await;
+                            });
+                        }
+
                         continue;
                     }
                     // Handle SessionNotFound gracefully - send retry receipt to request session establishment

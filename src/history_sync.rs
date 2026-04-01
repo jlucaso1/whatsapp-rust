@@ -2,9 +2,25 @@ use crate::types::events::{Event, LazyConversation};
 use bytes::Bytes;
 use std::sync::Arc;
 use wacore::history_sync::process_history_sync;
+use wacore::store::traits::TcTokenEntry;
+use wacore_binary::jid::JidExt;
 use waproto::whatsapp::message::HistorySyncNotification;
 
 use crate::client::Client;
+
+/// Minimal proto decode struct for extracting tctoken fields from Conversation.
+/// Avoids decoding the full Conversation (which includes heavy `messages` field).
+#[derive(Clone, PartialEq, prost::Message)]
+struct ConversationTcTokenFields {
+    #[prost(string, required, tag = "1")]
+    pub id: String,
+    #[prost(bytes = "vec", optional, tag = "21")]
+    pub tc_token: Option<Vec<u8>>,
+    #[prost(uint64, optional, tag = "22")]
+    pub tc_token_timestamp: Option<u64>,
+    #[prost(uint64, optional, tag = "28")]
+    pub tc_token_sender_timestamp: Option<u64>,
+}
 
 impl Client {
     pub(crate) async fn handle_history_sync(
@@ -200,6 +216,11 @@ impl Client {
                 if conv_count.is_multiple_of(25) {
                     log::info!("History sync progress: {conv_count} conversations processed...");
                 }
+                // Extract tctoken data before dispatching (lightweight partial decode).
+                // Matches WA Web's storeTcTokensFromHistorySync / bulkCreateOrMerge.
+                self.store_tc_token_from_conversation_bytes(&raw_bytes)
+                    .await;
+
                 // Wrap Bytes in LazyConversation using from_bytes (true zero-copy)
                 // Parsing only happens if the event handler calls .conversation() or .get()
                 let lazy_conv = LazyConversation::from_bytes(raw_bytes);
@@ -276,6 +297,80 @@ impl Client {
             None => {
                 log::error!("History sync blocking task was cancelled");
             }
+        }
+    }
+
+    /// Extract and store tctoken data from a raw Conversation protobuf.
+    ///
+    /// Matches WA Web's `storeTcTokensFromHistorySync` / Baileys'
+    /// `storeTcTokensFromHistorySync`. Uses a lightweight partial decode
+    /// that only reads fields 1 (id), 21 (tcToken), 22 (tcTokenTimestamp),
+    /// and 28 (tcTokenSenderTimestamp) — skipping the heavy messages field.
+    async fn store_tc_token_from_conversation_bytes(&self, raw_bytes: &[u8]) {
+        use prost::Message;
+
+        let conv = match ConversationTcTokenFields::decode(raw_bytes) {
+            Ok(c) => c,
+            Err(_) => return,
+        };
+
+        let token = match conv.tc_token {
+            Some(ref t) if !t.is_empty() => t,
+            _ => return,
+        };
+
+        let Some(timestamp) = conv.tc_token_timestamp else {
+            return;
+        };
+
+        // Resolve conversation JID to LID for storage key
+        let jid: wacore_binary::jid::Jid = match conv.id.parse() {
+            Ok(j) => j,
+            Err(_) => return,
+        };
+
+        // Only store for user JIDs (not groups, newsletters, etc.)
+        if jid.is_group() || jid.is_newsletter() || jid.is_bot() {
+            return;
+        }
+
+        let token_key = if jid.is_lid() {
+            jid.user.clone()
+        } else {
+            self.lid_pn_cache
+                .get_current_lid(&jid.user)
+                .await
+                .unwrap_or_else(|| jid.user.clone())
+        };
+
+        let backend = self.persistence_manager.backend();
+
+        // Monotonicity guard: only store if incoming timestamp >= existing
+        if let Ok(Some(existing)) = backend.get_tc_token(&token_key).await
+            && (existing.token_timestamp as u64) > timestamp
+        {
+            return;
+        }
+
+        let entry = TcTokenEntry {
+            token: token.clone(),
+            token_timestamp: timestamp as i64,
+            sender_timestamp: conv.tc_token_sender_timestamp.map(|ts| ts as i64),
+        };
+
+        if let Err(e) = backend.put_tc_token(&token_key, &entry).await {
+            log::warn!(
+                target: "Client/TcToken",
+                "Failed to store history sync tctoken for {}: {e}",
+                token_key
+            );
+        } else {
+            log::debug!(
+                target: "Client/TcToken",
+                "Stored tctoken from history sync for {} (t={})",
+                token_key,
+                timestamp
+            );
         }
     }
 }
