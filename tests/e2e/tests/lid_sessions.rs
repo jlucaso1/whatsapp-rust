@@ -192,10 +192,7 @@ async fn test_multiple_sends_stay_lid_only() -> anyhow::Result<()> {
     // Count LID sessions — should be exactly 1 primary device session
     // (not 5 sessions from 5 sends)
     let lid_sessions = scan_sessions(&*backend_a, &lid_b.user, "lid").await?;
-    info!(
-        "LID session count after 5 sends: {} ({lid_sessions:?})",
-        lid_sessions.len()
-    );
+    info!("LID session count after 5 sends: {}", lid_sessions.len());
 
     client_a.disconnect().await;
     client_b.disconnect().await;
@@ -245,7 +242,7 @@ async fn test_stale_pn_session_does_not_break_lid_messaging() -> anyhow::Result<
     // Inject a copy under the PN address (simulates legacy database state)
     let pn_addr = format!("{}@c.us.0", jid_b.user);
     backend_a.put_session(&pn_addr, &lid_session_data).await?;
-    info!("Injected PN session at {pn_addr}");
+    info!("Injected stale PN session at {}", mask_addr(&pn_addr));
 
     // Verify both exist before migration
     assert!(
@@ -408,7 +405,7 @@ async fn test_own_device_0_has_lid_session_after_login() -> anyhow::Result<()> {
         lid_session.is_some(),
         "Should have LID session with own device 0 ({lid_addr}) after login"
     );
-    info!("Own device 0 LID session exists: {lid_addr}");
+    info!("Own device 0 LID session exists: {}", mask_addr(&lid_addr));
 
     // No PN session should exist for own device 0
     let pn_addr = format!("{}@c.us.0", own_pn.user);
@@ -525,15 +522,12 @@ async fn test_pn_only_session_causes_undecryptable_on_lid_lookup() -> anyhow::Re
         .get_session(&lid_addr)
         .await?
         .expect("LID session should exist in backend");
-    info!(
-        "Read LID session from {lid_addr} ({} bytes)",
-        lid_session_data.len()
-    );
+    info!("Read LID session ({} bytes)", lid_session_data.len());
 
     // Copy to PN address, then delete LID — simulates legacy state
     backend_a.put_session(&pn_addr, &lid_session_data).await?;
     backend_a.delete_session(&lid_addr).await?;
-    info!("Moved session: {lid_addr} -> {pn_addr} (simulating legacy DB)");
+    info!("Moved session to PN (simulating legacy DB)");
 
     // Verify backend state is now PN-only
     assert!(

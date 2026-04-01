@@ -175,8 +175,8 @@ impl Client {
             .parse::<wacore_binary::jid::Jid>()
             .unwrap_or_else(|_| receipt.source.sender.clone());
 
-        // Resolve PN→LID so all session operations use the correct address
-        let participant_jid = self.resolve_encryption_jid(&participant_jid).await;
+        // Resolved JID for session operations; keep original for stanza addressing
+        let resolved_jid = self.resolve_encryption_jid(&participant_jid).await;
 
         let sender_device_id = participant_jid.device() as u32;
         let sender_user = participant_jid.user.clone();
@@ -193,11 +193,11 @@ impl Client {
         let is_peer = device_snapshot
             .pn
             .as_ref()
-            .is_some_and(|our_pn| participant_jid.user == our_pn.user)
+            .is_some_and(|our_pn| participant_jid.is_same_user_as(our_pn))
             || device_snapshot
                 .lid
                 .as_ref()
-                .is_some_and(|our_lid| participant_jid.user == our_lid.user);
+                .is_some_and(|our_lid| participant_jid.is_same_user_as(our_lid));
 
         // Process key bundle to establish a pairwise session for the retry.
         // Needed for both DMs and groups (group retries use pairwise, not sender key).
@@ -205,7 +205,7 @@ impl Client {
         if !receipt.source.chat.is_status_broadcast() {
             // Try to process key bundle if present
             let key_bundle_result = self
-                .process_retry_key_bundle(node, &participant_jid, is_peer)
+                .process_retry_key_bundle(node, &resolved_jid, is_peer)
                 .await;
 
             if let Err(e) = &key_bundle_result {
@@ -218,7 +218,7 @@ impl Client {
                 // session, delete the session to force re-establishment.
                 // This handles the case where the requester reinstalled but didn't include keys.
                 if let Some(received_reg_id) = extract_registration_id_from_node(node) {
-                    let signal_address = participant_jid.to_protocol_address();
+                    let signal_address = resolved_jid.to_protocol_address();
                     let device_store = self.persistence_manager.get_device_arc().await;
                     let device_guard = device_store.read().await;
 
@@ -367,7 +367,7 @@ impl Client {
             // For DMs, handle base key tracking for collision detection (matches WhatsApp Web).
             // This detects when we haven't regenerated our session despite receiving retry receipts,
             // which can cause infinite retry loops where both sides are stuck with stale keys.
-            let signal_address = participant_jid.to_protocol_address();
+            let signal_address = resolved_jid.to_protocol_address();
             let device_store = self.persistence_manager.get_device_arc().await;
 
             // Check for base key collision before deleting the session.
@@ -467,7 +467,6 @@ impl Client {
         if receipt.source.chat.is_group() {
             // Group retry: pairwise encrypt to failing device only (RetryMsgJob.js:71).
             // Using sender-key broadcast would resend to ALL participants → duplicates.
-            let encryption_jid = self.resolve_encryption_jid(&participant_jid).await;
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
             let addressing_mode = cached_group_info
@@ -482,7 +481,7 @@ impl Client {
                 &mut store_adapter.identity_store,
                 receipt.source.chat.clone(),
                 participant_jid,
-                encryption_jid,
+                resolved_jid.clone(),
                 &original_msg,
                 message_id,
                 retry_count,
