@@ -610,13 +610,16 @@ impl IqSpec for DeviceListSpec {
                     continue;
                 };
 
-                let mut device_jid = user_jid.clone();
-                device_jid.device = device_id;
-                devices.push(device_jid);
+                let key_index = device_node
+                    .attrs()
+                    .optional_string("key-index")
+                    .and_then(|s| s.parse::<u32>().ok());
+                devices.push(crate::usync::UsyncDevice {
+                    device: device_id,
+                    key_index,
+                });
             }
 
-            // WA Web: AdvForUsyncApi rejects usync results with companion
-            // devices but no signedKeyIndexBytes
             let has_companion = devices.iter().any(|d| d.device != 0);
             if has_companion && key_index_bytes.is_none() {
                 warn!(

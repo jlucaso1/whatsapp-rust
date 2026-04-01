@@ -12,16 +12,17 @@ pub struct UsyncLidMapping {
     pub lid: String,
 }
 
-/// Device list with optional phash from usync response
+#[derive(Debug, Clone)]
+pub struct UsyncDevice {
+    pub device: u16,
+    pub key_index: Option<u32>,
+}
+
 #[derive(Debug, Clone)]
 pub struct UserDeviceList {
-    /// The user JID (without device suffix)
     pub user: Jid,
-    /// List of device JIDs for this user
-    pub devices: Vec<Jid>,
-    /// Participant hash from device-list node (used for cache validation)
+    pub devices: Vec<UsyncDevice>,
     pub phash: Option<String>,
-    /// Signed key index bytes from `<key-index-list>` (for ADV device filtering)
     pub key_index_bytes: Option<Vec<u8>>,
 }
 
@@ -103,9 +104,14 @@ pub fn parse_get_user_devices_response_with_phash(resp_node: &Node) -> Result<Ve
                 }
             };
 
-            let mut device_jid = user_jid.clone();
-            device_jid.device = device_id;
-            devices.push(device_jid);
+            let key_index = device_node
+                .attrs()
+                .optional_string("key-index")
+                .and_then(|s| s.parse::<u32>().ok());
+            devices.push(UsyncDevice {
+                device: device_id,
+                key_index,
+            });
         }
 
         // WA Web: WAWebHandleAdvForUsyncApi.handleADVSyncResult() rejects usync results
@@ -135,7 +141,14 @@ pub fn parse_get_user_devices_response_with_phash(resp_node: &Node) -> Result<Ve
 pub fn parse_get_user_devices_response(resp_node: &Node) -> Result<Vec<Jid>> {
     Ok(parse_get_user_devices_response_with_phash(resp_node)?
         .into_iter()
-        .flat_map(|u| u.devices)
+        .flat_map(|u| {
+            let user_jid = u.user;
+            u.devices.into_iter().map(move |d| {
+                let mut jid = user_jid.clone();
+                jid.device = d.device;
+                jid
+            })
+        })
         .collect())
 }
 
@@ -414,5 +427,67 @@ mod tests {
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].devices.len(), 0);
         assert_eq!(result[0].phash, Some("2:empty".to_string()));
+    }
+
+    #[test]
+    fn test_server_returned_key_index_is_parsed() {
+        // Build a response where devices have key-index attributes
+        // (matches real server: <device id="4" key-index="93"/>)
+        let device_nodes: Vec<Node> = vec![
+            NodeBuilder::new("device").attr("id", "0").build(),
+            NodeBuilder::new("device")
+                .attr("id", "4")
+                .attr("key-index", "93")
+                .build(),
+            NodeBuilder::new("device")
+                .attr("id", "24")
+                .attr("key-index", "113")
+                .build(),
+        ];
+
+        let ki_bytes = build_test_key_index_bytes(&[0, 4, 24]);
+        let device_list = NodeBuilder::new("device-list")
+            .children(device_nodes)
+            .build();
+        let devices_node = NodeBuilder::new("devices")
+            .children(vec![
+                device_list,
+                NodeBuilder::new("key-index-list")
+                    .attr("ts", "1000")
+                    .bytes(ki_bytes)
+                    .build(),
+            ])
+            .build();
+
+        let user_node = NodeBuilder::new("user")
+            .attr("jid", "559900001111@s.whatsapp.net")
+            .children(vec![devices_node])
+            .build();
+
+        let response = NodeBuilder::new("iq")
+            .children(vec![
+                NodeBuilder::new("usync")
+                    .children(vec![
+                        NodeBuilder::new("list").children(vec![user_node]).build(),
+                    ])
+                    .build(),
+            ])
+            .build();
+
+        let result = parse_get_user_devices_response_with_phash(&response).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].devices.len(), 3);
+
+        // Device 0: no key-index attribute → None
+        assert_eq!(result[0].devices[0].device, 0);
+        assert_eq!(result[0].devices[0].key_index, None);
+
+        // Device 4: key-index="93"
+        assert_eq!(result[0].devices[1].device, 4);
+        assert_eq!(result[0].devices[1].key_index, Some(93));
+
+        // Device 24: key-index="113"
+        assert_eq!(result[0].devices[2].device, 24);
+        assert_eq!(result[0].devices[2].key_index, Some(113));
     }
 }

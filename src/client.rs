@@ -1944,8 +1944,12 @@ impl Client {
                 // Don't fail login - PDO will retry via ensure_e2e_sessions fallback
             }
 
-            // === Passive Tasks (mimics WhatsApp Web's PassiveTaskManager) ===
-            // WhatsApp Web executes passive tasks (like PreKey upload) BEFORE sending the active IQ.
+            // Sync own device list so DM fan-out includes all companions
+            check_generation!();
+            if let Err(e) = client_clone.sync_own_device_list().await {
+                client_clone.log_sync_error("sync own device list", &e);
+            }
+
             check_generation!();
             if !client_clone.is_connected() {
                 debug!("Skipping passive tasks: connection closed");
