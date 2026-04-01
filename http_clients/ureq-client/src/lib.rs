@@ -87,6 +87,10 @@ impl HttpClient for UreqHttpClient {
         .await?
     }
 
+    fn supports_streaming(&self) -> bool {
+        true
+    }
+
     fn execute_streaming(&self, request: HttpRequest) -> Result<StreamingHttpResponse> {
         // Note: no spawn_blocking here — this is called FROM within spawn_blocking
         // by the streaming download code. The entire HTTP fetch + decrypt happens
