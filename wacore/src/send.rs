@@ -325,6 +325,10 @@ pub struct EncryptResult {
     pub had_unregistered_device: bool,
 }
 
+/// Encrypt padded plaintext for each device JID, producing participant `<to>` nodes.
+///
+/// Callers must hold per-device session locks before calling this function —
+/// concurrent ratchet mutations will corrupt Signal session state.
 pub async fn encrypt_for_devices<'a, S, I, P, SP>(
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,

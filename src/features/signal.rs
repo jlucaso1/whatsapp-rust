@@ -106,6 +106,9 @@ impl<'a> Signal<'a> {
     /// distribute the SKDM to participants who don't yet hold the sender key.
     /// For repeated sends to the same group, prefer using
     /// `create_participant_nodes` which handles distribution tracking.
+    ///
+    /// Not safe to call concurrently with `decrypt_group_message` for the
+    /// same group — sender key state is not internally locked.
     pub async fn encrypt_group_message(
         &self,
         group_jid: &Jid,
@@ -181,18 +184,18 @@ impl<'a> Signal<'a> {
 
     /// Delete Signal sessions for the given JIDs (cache + persistent store).
     pub async fn delete_sessions(&self, jids: &[Jid]) -> Result<()> {
-        let device_store = self.client.persistence_manager.get_device_arc().await;
-        let device_guard = device_store.read().await;
-
         for jid in jids {
             let addr = jid.to_protocol_address();
             let signal_addr_str = jid.to_protocol_address_string();
 
-            // Acquire per-address session lock to prevent races with encrypt/decrypt
+            // Session lock first, then device lock — matches encrypt/decrypt ordering
             let lock = self.client.session_lock_for(&signal_addr_str).await;
             let _guard = lock.lock().await;
 
             self.client.signal_cache.delete_session(&addr).await;
+
+            let device_store = self.client.persistence_manager.get_device_arc().await;
+            let device_guard = device_store.read().await;
             device_guard
                 .backend
                 .delete_session(addr.as_str())
@@ -215,6 +218,17 @@ impl<'a> Signal<'a> {
     ) -> Result<(Vec<Node>, bool)> {
         let device_jids = self.client.get_user_devices(recipient_jids).await?;
         self.client.ensure_e2e_sessions(&device_jids).await?;
+
+        // Acquire per-device session locks before encrypting (matches DM send path)
+        let lock_keys = self.client.build_session_lock_keys(&device_jids).await;
+        let mut session_mutexes = Vec::with_capacity(lock_keys.len());
+        for key in &lock_keys {
+            session_mutexes.push(self.client.session_lock_for(key).await);
+        }
+        let mut _session_guards = Vec::with_capacity(session_mutexes.len());
+        for mutex in &session_mutexes {
+            _session_guards.push(mutex.lock().await);
+        }
 
         let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
         let mut adapter = self.client.signal_adapter().await;
