@@ -1173,7 +1173,7 @@ impl Client {
         // AB prop gate (default true to avoid 463 before props are fetched)
         if !self
             .ab_props
-            .is_enabled_or(config_codes::PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES, true)
+            .is_enabled_or(config_codes::PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES, false)
             .await
         {
             return (false, None);
