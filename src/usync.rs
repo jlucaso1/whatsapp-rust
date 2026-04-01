@@ -118,10 +118,13 @@ impl Client {
                     .iter()
                     .map(|d| wacore::store::traits::DeviceInfo {
                         device_id: d.device as u32,
-                        key_index: existing_key_indices
-                            .get(&(d.device as u32))
-                            .copied()
-                            .flatten(),
+                        // Server-returned key_index takes priority over cached
+                        key_index: d.key_index.or_else(|| {
+                            existing_key_indices
+                                .get(&(d.device as u32))
+                                .copied()
+                                .flatten()
+                        }),
                     })
                     .collect();
 
@@ -157,6 +160,35 @@ impl Client {
         }
 
         Ok(all_devices)
+    }
+
+    /// Sync own device list from the server, bypassing cache.
+    /// Matches WA Web's `syncMyDeviceList()` called during bootstrap.
+    pub(crate) async fn sync_own_device_list(&self) -> Result<(), anyhow::Error> {
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+
+        let mut jids = Vec::with_capacity(2);
+        if let Some(ref pn) = device_snapshot.pn {
+            let pn_bare = pn.to_non_ad();
+            self.invalidate_device_cache(&pn_bare.user).await;
+            jids.push(pn_bare);
+        }
+        if let Some(ref lid) = device_snapshot.lid {
+            let lid_bare = lid.to_non_ad();
+            self.invalidate_device_cache(&lid_bare.user).await;
+            jids.push(lid_bare);
+        }
+
+        if jids.is_empty() {
+            return Ok(());
+        }
+
+        let devices = self.get_user_devices(&jids).await?;
+        log::info!(
+            "Synced own device list from server: {} devices",
+            devices.len()
+        );
+        Ok(())
     }
 }
 
