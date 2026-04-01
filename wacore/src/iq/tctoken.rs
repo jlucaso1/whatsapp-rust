@@ -70,12 +70,12 @@ pub struct TcTokenConfig {
 }
 
 impl TcTokenConfig {
-    /// Clamp all fields to >= 1 to prevent division-by-zero.
+    /// Clamp fields to safe ranges: durations to [1, MAX], counts to >= 1.
     pub fn clamped(self) -> Self {
         Self {
-            bucket_duration: self.bucket_duration.max(1),
+            bucket_duration: self.bucket_duration.clamp(1, TC_TOKEN_MAX_DURATION),
             num_buckets: self.num_buckets.max(1),
-            sender_bucket_duration: self.sender_bucket_duration.max(1),
+            sender_bucket_duration: self.sender_bucket_duration.clamp(1, TC_TOKEN_MAX_DURATION),
             sender_num_buckets: self.sender_num_buckets.max(1),
         }
     }

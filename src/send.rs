@@ -1368,8 +1368,21 @@ impl Client {
 
     /// Re-issue tctoken after a contact's device identity changes.
     /// Only re-issues if we previously sent a token (sender_timestamp valid).
+    /// Uses session_locks to deduplicate concurrent spawns for the same sender.
     pub(crate) async fn reissue_tc_token_after_identity_change(&self, sender: &Jid) {
         use wacore::iq::tctoken::{IssuePrivacyTokensSpec, is_sender_tc_token_expired};
+
+        // Dedup via session_locks — bare JID won't collide with protocol addresses ("user:device")
+        let bare = sender.to_non_ad().to_string();
+        let mutex = self
+            .session_locks
+            .get_with_by_ref(bare.as_str(), async {
+                std::sync::Arc::new(async_lock::Mutex::new(()))
+            })
+            .await;
+        let Some(_guard) = mutex.try_lock() else {
+            return;
+        };
 
         let token_jid = if sender.is_lid() {
             sender.user.clone()
@@ -1474,43 +1487,33 @@ impl Client {
     /// Build tctoken timing config from AB props, falling back to defaults.
     pub(crate) async fn tc_token_config(&self) -> wacore::iq::tctoken::TcTokenConfig {
         use wacore::iq::props::config_codes;
-        use wacore::iq::tctoken::{
-            TC_TOKEN_BUCKET_DURATION, TC_TOKEN_MAX_DURATION, TC_TOKEN_NUM_BUCKETS,
-        };
+        use wacore::iq::tctoken::{TC_TOKEN_BUCKET_DURATION, TC_TOKEN_NUM_BUCKETS, TcTokenConfig};
 
-        let duration = self
-            .ab_props
-            .get_int(config_codes::TCTOKEN_DURATION, TC_TOKEN_BUCKET_DURATION)
-            .await
-            .clamp(1, TC_TOKEN_MAX_DURATION);
-        let num_buckets = self
-            .ab_props
-            .get_int(config_codes::TCTOKEN_NUM_BUCKETS, TC_TOKEN_NUM_BUCKETS)
-            .await
-            .max(1);
-        let sender_duration = self
-            .ab_props
-            .get_int(
-                config_codes::TCTOKEN_DURATION_SENDER,
-                TC_TOKEN_BUCKET_DURATION,
-            )
-            .await
-            .clamp(1, TC_TOKEN_MAX_DURATION);
-        let sender_num_buckets = self
-            .ab_props
-            .get_int(
-                config_codes::TCTOKEN_NUM_BUCKETS_SENDER,
-                TC_TOKEN_NUM_BUCKETS,
-            )
-            .await
-            .max(1);
-
-        wacore::iq::tctoken::TcTokenConfig {
-            bucket_duration: duration,
-            num_buckets,
-            sender_bucket_duration: sender_duration,
-            sender_num_buckets,
+        TcTokenConfig {
+            bucket_duration: self
+                .ab_props
+                .get_int(config_codes::TCTOKEN_DURATION, TC_TOKEN_BUCKET_DURATION)
+                .await,
+            num_buckets: self
+                .ab_props
+                .get_int(config_codes::TCTOKEN_NUM_BUCKETS, TC_TOKEN_NUM_BUCKETS)
+                .await,
+            sender_bucket_duration: self
+                .ab_props
+                .get_int(
+                    config_codes::TCTOKEN_DURATION_SENDER,
+                    TC_TOKEN_BUCKET_DURATION,
+                )
+                .await,
+            sender_num_buckets: self
+                .ab_props
+                .get_int(
+                    config_codes::TCTOKEN_NUM_BUCKETS_SENDER,
+                    TC_TOKEN_NUM_BUCKETS,
+                )
+                .await,
         }
+        .clamped()
     }
 
     /// Resolve a JID to its LID form for tc_token storage.
