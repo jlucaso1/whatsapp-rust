@@ -1005,11 +1005,11 @@ impl Client {
             };
             let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
 
-            // CRITICAL: Use info.source.sender (display JID) for sender key operations, NOT sender_encryption_jid.
-            // The sender key is stored under the sender's display JID (e.g., LID), while sender_encryption_jid
-            // is the phone number used for E2E session decryption only.
-            // Using sender_encryption_jid here causes "No sender key state" errors for self-sent LID messages.
-            let sender_address = info.source.sender.to_protocol_address();
+            // Always use bare sender for sender key operations. Real WA delivers
+            // skmsg with bare participant but pkmsg (SKDM) with device-qualified
+            // participant — normalizing to bare ensures consistent lookup.
+            let sender_for_sk = info.source.sender.to_non_ad();
+            let sender_address = sender_for_sk.to_protocol_address();
             let sender_key_name =
                 SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
 
@@ -1497,7 +1497,9 @@ impl Client {
             },
         };
 
-        let sender_address = sender_jid.to_protocol_address();
+        // Normalize to bare sender for consistent sender key addressing.
+        let sender_bare = sender_jid.to_non_ad();
+        let sender_address = sender_bare.to_protocol_address();
 
         let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
 
