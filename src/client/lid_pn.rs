@@ -169,7 +169,10 @@ impl Client {
     }
 
     /// Migrate Signal sessions and identity keys from PN to LID address.
-    /// WA Web never stores sessions under PN when a LID mapping is known.
+    ///
+    /// All reads/writes go through `signal_cache` to avoid reading stale data
+    /// from the backend when the cache has unflushed mutations (e.g., after
+    /// SKDM encryption ratcheted the session).
     pub(crate) async fn migrate_signal_sessions_on_lid_discovery(&self, pn: &str, lid: &str) {
         use log::{info, warn};
         use wacore::types::jid::JidExt;
@@ -182,47 +185,56 @@ impl Client {
 
             let pn_proto = pn_jid.to_protocol_address();
             let lid_proto = lid_jid.to_protocol_address();
-            let pn_addr_key = pn_proto.as_str();
-            let lid_addr_key = lid_proto.as_str();
 
-            // Migrate session if PN session exists
-            if let Ok(Some(session_data)) = backend.get_session(pn_addr_key).await {
-                match backend.get_session(lid_addr_key).await {
-                    Ok(Some(_)) => {
-                        if let Err(e) = backend.delete_session(pn_addr_key).await {
-                            warn!("Failed to delete stale PN session {pn_addr_key}: {e}");
-                        }
-                        self.signal_cache.delete_session(&pn_proto).await;
-                        info!("Deleted stale PN session {pn_addr_key} (LID exists)");
-                    }
-                    Ok(None) => {
-                        if let Err(e) = backend.put_session(lid_addr_key, &session_data).await {
-                            warn!("Failed to write LID session {lid_addr_key}: {e}");
-                        } else {
-                            if let Err(e) = backend.delete_session(pn_addr_key).await {
-                                warn!("Failed to delete PN session {pn_addr_key}: {e}");
-                            }
-                            self.signal_cache.delete_session(&pn_proto).await;
-                            info!("Migrated session {pn_addr_key} -> {lid_addr_key}");
-                        }
-                    }
-                    Err(e) => warn!("Failed to check LID session {lid_addr_key}: {e}"),
-                }
-            }
-
-            // Migrate identity independently of session (can outlive deleted sessions)
-            if let Ok(Some(identity_data)) = backend.load_identity(pn_addr_key).await
-                && let Ok(None) = backend.load_identity(lid_addr_key).await
+            // Migrate session: read from cache (authoritative), write to cache
+            if let Ok(Some(session)) = self
+                .signal_cache
+                .get_session(&pn_proto, backend.as_ref())
+                .await
             {
-                let Ok(key): Result<[u8; 32], _> = identity_data.as_slice().try_into() else {
-                    continue;
-                };
-                if let Err(e) = backend.put_identity(lid_addr_key, key).await {
-                    warn!("Failed to migrate identity {pn_addr_key} -> {lid_addr_key}: {e}");
-                } else if let Err(e) = backend.delete_identity(pn_addr_key).await {
-                    warn!("Failed to delete PN identity {pn_addr_key}: {e}");
+                if self
+                    .signal_cache
+                    .get_session(&lid_proto, backend.as_ref())
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_some()
+                {
+                    self.signal_cache.delete_session(&pn_proto).await;
+                    info!("Deleted stale PN session {} (LID exists)", pn_proto);
+                } else {
+                    self.signal_cache.put_session(&lid_proto, session).await;
+                    self.signal_cache.delete_session(&pn_proto).await;
+                    info!("Migrated session {} -> {}", pn_proto, lid_proto);
                 }
             }
+
+            // Migrate identity: same cache-first pattern
+            if let Ok(Some(identity_data)) = self
+                .signal_cache
+                .get_identity(&pn_proto, backend.as_ref())
+                .await
+            {
+                if self
+                    .signal_cache
+                    .get_identity(&lid_proto, backend.as_ref())
+                    .await
+                    .ok()
+                    .flatten()
+                    .is_none()
+                {
+                    self.signal_cache
+                        .put_identity(&lid_proto, &identity_data)
+                        .await;
+                    info!("Migrated identity {} -> {}", pn_proto, lid_proto);
+                }
+                self.signal_cache.delete_identity(&pn_proto).await;
+            }
+        }
+
+        // Flush migrated state to backend so it survives restarts
+        if let Err(e) = self.signal_cache.flush(backend.as_ref()).await {
+            warn!("Failed to flush signal cache after migration: {e:?}");
         }
     }
 

@@ -1244,20 +1244,7 @@ impl Client {
         self.migrate_signal_sessions_on_lid_discovery(&pn, &sender_jid.user)
             .await;
 
-        // Reload into cache (replacing negative cache entries)
-        let backend = self.persistence_manager.backend();
-        let addr_key = signal_address.as_str();
-        if let Ok(Some(session_data)) = backend.get_session(addr_key).await
-            && let Ok(record) =
-                wacore::libsignal::protocol::SessionRecord::deserialize(&session_data)
-        {
-            self.signal_cache.put_session(signal_address, record).await;
-        }
-        if let Ok(Some(identity_data)) = backend.load_identity(addr_key).await {
-            self.signal_cache
-                .put_identity(signal_address, &identity_data)
-                .await;
-        }
+        // Migration now goes through signal_cache, so no manual reload needed
 
         match message_decrypt(
             parsed_message,
