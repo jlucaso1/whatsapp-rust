@@ -146,6 +146,8 @@ pub struct MessageInfo {
     pub device_sent_meta: Option<DeviceSentMeta>,
     /// Ephemeral duration in seconds, extracted from `contextInfo.expiration`.
     pub ephemeral_expiration: Option<u32>,
+    /// Whether this message was delivered during offline sync.
+    pub is_offline: bool,
 }
 
 impl MessageInfo {

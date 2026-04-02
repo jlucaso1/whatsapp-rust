@@ -190,6 +190,40 @@ impl Client {
         );
         Ok(())
     }
+
+    /// WA Web: `doPendingDeviceSync()` — flush batched unknown-device users.
+    pub(crate) async fn flush_pending_device_sync(&self) {
+        let pending = self.pending_device_sync.take_all().await;
+        if pending.is_empty() {
+            return;
+        }
+
+        debug!("Flushing pending device sync for {} users", pending.len());
+
+        // Invalidate stale records so get_user_devices hits the network
+        for jid in &pending {
+            self.invalidate_device_cache(&jid.user).await;
+        }
+
+        match self.get_user_devices(&pending).await {
+            Ok(devices) => {
+                debug!(
+                    "Pending device sync completed: {} devices across {} users",
+                    devices.len(),
+                    pending.len()
+                );
+            }
+            Err(e) => {
+                warn!(
+                    "Pending device sync failed, re-enqueueing {} users: {e:?}",
+                    pending.len()
+                );
+                for jid in pending {
+                    self.pending_device_sync.add(jid).await;
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]

@@ -1025,6 +1025,17 @@ impl Client {
 
             match decrypt_result {
                 Ok(padded_plaintext) => {
+                    // WA Web: isFromKnownDevice() in preProcessMsg
+                    if !self.is_from_known_device(&info.source.sender).await {
+                        warn!(
+                            "[msg:{}] Unknown device {}, triggering device sync",
+                            info.id, info.source.sender
+                        );
+                        self.handle_unknown_device_sync(info).await;
+                        self.spawn_retry_receipt(info, RetryReason::UnknownCompanionNoPrekey);
+                        continue;
+                    }
+
                     if let Err(e) = self
                         .clone()
                         .handle_decrypted_plaintext(
@@ -1058,15 +1069,24 @@ impl Client {
                         continue;
                     }
 
-                    // No sender key for this group/sender — the SKDM was never received
-                    // (sender thinks we have it from a previous status/session).
-                    // Send retry receipt to ask sender to re-distribute SKDM.
+                    let is_unknown_device = !self.is_from_known_device(&info.source.sender).await;
+                    let retry_reason = if is_unknown_device {
+                        RetryReason::UnknownCompanionNoPrekey
+                    } else {
+                        RetryReason::NoSession
+                    };
+
                     warn!(
                         "No sender key state for group message [msg:{}] from {}: {}. Sending retry receipt.",
                         info.id, info.source.sender, msg
                     );
+
+                    if is_unknown_device {
+                        self.handle_unknown_device_sync(info).await;
+                    }
+
                     self.dispatch_undecryptable_event(info, decrypt_fail_mode);
-                    self.spawn_retry_receipt(info, RetryReason::NoSession);
+                    self.spawn_retry_receipt(info, retry_reason);
                 }
                 Err(e) => {
                     if info.is_expired_status() {
@@ -1090,6 +1110,31 @@ impl Client {
             }
         }
         Ok(())
+    }
+
+    /// WA Web: online → `syncDeviceListJob`, offline → `OfflinePendingDeviceCache`.
+    async fn handle_unknown_device_sync(self: &Arc<Self>, info: &MessageInfo) {
+        let user_jid = info.source.sender.to_non_ad();
+
+        // Dedup: skip if we already have a sync pending/in-flight for this user
+        if !self.pending_device_sync.add(user_jid.clone()).await {
+            return;
+        }
+
+        if info.is_offline {
+            log::debug!("Queueing {} for pending device sync (offline)", user_jid);
+        } else {
+            log::debug!("Triggering immediate device sync for {}", user_jid);
+            let client = Arc::clone(self);
+            self.runtime
+                .spawn(Box::pin(async move {
+                    client.invalidate_device_cache(&user_jid.user).await;
+                    if let Err(e) = client.get_user_devices(&[user_jid]).await {
+                        log::warn!("Immediate device sync failed: {e:?}");
+                    }
+                }))
+                .detach();
+        }
     }
 
     async fn handle_decrypted_plaintext(
@@ -3833,6 +3878,7 @@ mod tests {
             verified_name: None,
             device_sent_meta: None,
             ephemeral_expiration: None,
+            is_offline: false,
         }
     }
 
