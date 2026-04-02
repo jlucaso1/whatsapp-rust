@@ -15,8 +15,9 @@ impl PendingDeviceSync {
         }
     }
 
-    pub(crate) async fn add(&self, jid: Jid) {
-        self.pending.lock().await.insert(jid);
+    /// Insert a user. Returns `true` if newly inserted, `false` if already present.
+    pub(crate) async fn add(&self, jid: Jid) -> bool {
+        self.pending.lock().await.insert(jid)
     }
 
     pub(crate) async fn take_all(&self) -> Vec<Jid> {

@@ -48,11 +48,6 @@ fn extract_registration_id_from_node(node: &Node) -> Option<u32> {
 /// We refuse to resend if the requester has already retried this many times.
 const MAX_RETRY_COUNT: u8 = 5;
 
-/// Minimum retry count before we include keys in retry receipts.
-/// WhatsApp Web only includes keys when retryCount >= 2, giving the first
-/// retry a chance to succeed without key exchange overhead.
-const MIN_RETRY_COUNT_FOR_KEYS: u8 = 2;
-
 /// Minimum retry count before we start tracking base keys.
 /// WhatsApp Web saves base key on retry 2, checks on retry > 2.
 const MIN_RETRY_FOR_BASE_KEY_CHECK: u8 = 2;
@@ -717,15 +712,7 @@ impl Client {
             .bytes(registration_id_bytes)
             .build();
 
-        // WhatsApp Web only includes keys when retryCount >= 2.
-        // First retry gives the sender a chance to resend without full key exchange.
-        //
-        // WA Web includes keys at retryCount >= MIN_RETRY_COUNT_FOR_KEYS.
-        // Optimization for NoSession: include keys on retry#1 to reduce round-trips
-        // for skmsg-only failures where the sender needs our prekeys for SKDM.
-        let include_keys_early =
-            reason == RetryReason::NoSession || reason == RetryReason::UnknownCompanionNoPrekey;
-        let keys_node = if retry_count >= MIN_RETRY_COUNT_FOR_KEYS || include_keys_early {
+        let keys_node = if wacore::protocol::retry::should_include_keys(retry_count, reason) {
             let device_store = self.persistence_manager.get_device_arc().await;
             let device_guard = device_store.read().await;
 
