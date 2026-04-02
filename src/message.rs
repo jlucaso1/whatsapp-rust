@@ -1026,12 +1026,9 @@ impl Client {
             match decrypt_result {
                 Ok(padded_plaintext) => {
                     // WA Web: isFromKnownDevice() in preProcessMsg
-                    // Normalize to bare JID — device-qualified participant (e.g., sender:33@lid)
-                    // should check user existence, not specific device number.
-                    if !self
-                        .is_from_known_device(&info.source.sender.to_non_ad())
-                        .await
-                    {
+                    // Uses the actual device ID from the participant JID
+                    // (e.g., device 33 for sender:33@lid, device 0 for bare sender@lid).
+                    if !self.is_from_known_device(&info.source.sender).await {
                         warn!(
                             "[msg:{}] Unknown device {}, triggering device sync",
                             info.id, info.source.sender
@@ -1074,9 +1071,7 @@ impl Client {
                         continue;
                     }
 
-                    let is_unknown_device = !self
-                        .is_from_known_device(&info.source.sender.to_non_ad())
-                        .await;
+                    let is_unknown_device = !self.is_from_known_device(&info.source.sender).await;
                     let retry_reason = if is_unknown_device {
                         RetryReason::UnknownCompanionNoPrekey
                     } else {
