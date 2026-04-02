@@ -3884,7 +3884,8 @@ mod tests {
 
     /// Helper to create a test client for retry tests with a unique database
     async fn create_test_client_for_retry_with_id(test_id: &str) -> Arc<Client> {
-        use std::sync::atomic::{AtomicU64, Ordering};
+        use portable_atomic::AtomicU64;
+        use std::sync::atomic::Ordering;
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -4904,7 +4905,7 @@ mod tests {
     /// on generation mismatch. Used by the bug-demonstration test.
     async fn acquire_permit_old_behavior(
         semaphore: &std::sync::Mutex<Arc<async_lock::Semaphore>>,
-        generation: &std::sync::atomic::AtomicU64,
+        generation: &portable_atomic::AtomicU64,
     ) -> bool {
         use std::sync::atomic::Ordering;
         let (snap_gen, snap_sem) = {
@@ -4921,7 +4922,7 @@ mod tests {
     /// handle_incoming_message.
     async fn acquire_permit_with_reacquire(
         semaphore: &std::sync::Mutex<Arc<async_lock::Semaphore>>,
-        generation: &std::sync::atomic::AtomicU64,
+        generation: &portable_atomic::AtomicU64,
     ) {
         use std::sync::atomic::Ordering;
         loop {
@@ -4941,8 +4942,9 @@ mod tests {
     /// Demonstrates the bug: the OLD code silently dropped tasks when generation changed.
     #[tokio::test]
     async fn test_old_behavior_drops_tasks_on_generation_swap() {
+        use portable_atomic::AtomicU64;
         use std::sync::Arc;
-        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         let semaphore = Arc::new(std::sync::Mutex::new(Arc::new(async_lock::Semaphore::new(
             1,
@@ -5003,8 +5005,9 @@ mod tests {
     /// Verifies the fix: re-acquire loop ensures NO tasks are dropped on generation swap.
     #[tokio::test]
     async fn test_semaphore_generation_swap_does_not_drop_tasks() {
+        use portable_atomic::AtomicU64;
         use std::sync::Arc;
-        use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+        use std::sync::atomic::{AtomicUsize, Ordering};
 
         let semaphore = Arc::new(std::sync::Mutex::new(Arc::new(async_lock::Semaphore::new(
             1,

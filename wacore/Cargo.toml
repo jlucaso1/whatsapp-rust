@@ -38,6 +38,7 @@ log = { workspace = true }
 md5 = "0.8.0"
 once_cell = { version = "1.21", default-features = false, features = ["std"] }
 pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+portable-atomic = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }

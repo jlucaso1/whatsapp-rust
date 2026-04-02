@@ -32,8 +32,9 @@ use rand::{Rng, RngExt};
 use scopeguard;
 use wacore_binary::jid::Jid;
 
+use portable_atomic::AtomicU64;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 
 /// Filter for matching incoming stanzas (nodes) by tag and attributes.
 ///

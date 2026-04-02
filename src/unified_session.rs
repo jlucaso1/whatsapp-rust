@@ -5,8 +5,9 @@
 
 use async_lock::Mutex;
 use log::debug;
+use portable_atomic::{AtomicI64, AtomicU64};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::Ordering;
 use wacore::ib::{IbStanza, UnifiedSession};
 use wacore::protocol::ProtocolNode;
 use wacore_binary::node::Node;
