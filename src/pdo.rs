@@ -414,6 +414,7 @@ impl Client {
             verified_name: None,
             device_sent_meta: None,
             ephemeral_expiration: None,
+            offline: None,
         })
     }
 

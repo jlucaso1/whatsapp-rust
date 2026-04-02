@@ -244,6 +244,8 @@ pub fn parse_message_info(
         source.chat.agent = 0;
     }
 
+    let offline = attrs.optional_string("offline").map(|_| true);
+
     Ok(MessageInfo {
         source,
         id,
@@ -259,6 +261,7 @@ pub fn parse_message_info(
             .optional_string("edit")
             .map(|s| EditAttribute::from(s.to_string()))
             .unwrap_or_default(),
+        offline,
         ..Default::default()
     })
 }

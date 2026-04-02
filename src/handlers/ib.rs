@@ -160,6 +160,14 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
 
                 debug!(target: "Client/OfflineSync", "Offline sync completed, received {} items", count);
                 client.complete_offline_sync(count);
+
+                let client_clone = Arc::clone(&client);
+                client
+                    .runtime
+                    .spawn(Box::pin(async move {
+                        client_clone.flush_pending_device_sync().await;
+                    }))
+                    .detach();
             }
             "thread_metadata" => {
                 // Present in some sessions; safe to ignore for now until feature implemented.

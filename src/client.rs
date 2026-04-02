@@ -355,6 +355,8 @@ pub struct Client {
 
     pub(crate) sender_key_device_cache: crate::sender_key_device_cache::SenderKeyDeviceCache,
 
+    pub(crate) pending_device_sync: crate::pending_device_sync::PendingDeviceSync,
+
     pub(crate) pending_retries: Arc<std::sync::Mutex<HashSet<String>>>,
 
     /// Track retry attempts per message to prevent infinite retry loops.
@@ -659,6 +661,8 @@ impl Client {
             sender_key_device_cache: crate::sender_key_device_cache::SenderKeyDeviceCache::new(
                 &cache_config.sender_key_devices_cache,
             ),
+
+            pending_device_sync: crate::pending_device_sync::PendingDeviceSync::new(),
 
             pending_retries: Arc::new(std::sync::Mutex::new(HashSet::new())),
 
@@ -1229,6 +1233,7 @@ impl Client {
         // connection don't trigger an immediate reconnect on the next one.
         self.last_data_received_ms.store(0, Ordering::Relaxed);
         self.last_data_sent_ms.store(0, Ordering::Relaxed);
+        self.pending_device_sync.clear().await;
         // Reset offline sync state for next connection
         self.offline_sync_completed.store(false, Ordering::Relaxed);
         self.offline_sync_metrics

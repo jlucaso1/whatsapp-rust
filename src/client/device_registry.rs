@@ -96,6 +96,12 @@ impl Client {
             .collect()
     }
 
+    /// WA Web: `isFromKnownDevice(author)` — local check only, no network.
+    pub(crate) async fn is_from_known_device(&self, sender: &wacore_binary::jid::Jid) -> bool {
+        let device_id = sender.device as u32;
+        self.has_device(&sender.user, device_id).await
+    }
+
     /// Check if a device exists for a user.
     /// Returns true for device_id 0 (primary device always exists).
     pub(crate) async fn has_device(&self, user: &str, device_id: u32) -> bool {
