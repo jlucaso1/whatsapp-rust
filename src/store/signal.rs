@@ -233,16 +233,14 @@ impl IdentityKeyStore for Device {
 
     async fn is_trusted_identity(
         &self,
-        address: &ProtocolAddress,
-        identity_key: &IdentityKey,
+        _address: &ProtocolAddress,
+        _identity_key: &IdentityKey,
         _direction: Direction,
     ) -> SignalResult<bool> {
-        // Trust on first use: if we don't have an identity stored, trust this one
-        // If we have one stored, it must match
-        match self.get_identity(address).await? {
-            None => Ok(true), // Trust on first use
-            Some(stored_identity) => Ok(&stored_identity == identity_key),
-        }
+        // WA Web: ProtocolStoreUnifiedApi.js — isTrustedIdentity always returns true.
+        // Identity changes are handled in save_identity (safety number change
+        // notification), not by rejecting messages.
+        Ok(true)
     }
 
     async fn get_identity(&self, address: &ProtocolAddress) -> SignalResult<Option<IdentityKey>> {
