@@ -173,8 +173,11 @@ impl Client {
         // Resolved JID for session operations; keep original for stanza addressing
         let resolved_jid = self.resolve_encryption_jid(&participant_jid).await;
 
-        let sender_device_id = participant_jid.device() as u32;
-        let sender_user = participant_jid.user.clone();
+        // Normalize to bare user for device lookup — device-qualified participants
+        // (e.g., sender:33@lid) should check user existence with device 0 (always known).
+        let sender_bare = participant_jid.to_non_ad();
+        let sender_device_id = sender_bare.device() as u32;
+        let sender_user = sender_bare.user.clone();
         if !self.has_device(&sender_user, sender_device_id).await {
             warn!(
                 "handle_retry_receipt: device not found for device={}, user={}",
