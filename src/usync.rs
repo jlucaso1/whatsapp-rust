@@ -200,6 +200,11 @@ impl Client {
 
         debug!("Flushing pending device sync for {} users", pending.len());
 
+        // Invalidate stale records so get_user_devices hits the network
+        for jid in &pending {
+            self.invalidate_device_cache(&jid.user).await;
+        }
+
         match self.get_user_devices(&pending).await {
             Ok(devices) => {
                 debug!(
@@ -209,7 +214,13 @@ impl Client {
                 );
             }
             Err(e) => {
-                warn!("Pending device sync failed: {e:?}");
+                warn!(
+                    "Pending device sync failed, re-enqueueing {} users: {e:?}",
+                    pending.len()
+                );
+                for jid in pending {
+                    self.pending_device_sync.add(jid).await;
+                }
             }
         }
     }

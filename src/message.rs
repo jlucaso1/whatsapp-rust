@@ -1116,7 +1116,7 @@ impl Client {
     async fn handle_unknown_device_sync(self: &Arc<Self>, info: &MessageInfo) {
         let user_jid = info.source.sender.to_non_ad();
 
-        if info.offline.is_some() {
+        if info.is_offline {
             log::debug!("Queueing {} for pending device sync (offline)", user_jid);
             self.pending_device_sync.add(user_jid).await;
         } else {
@@ -1124,6 +1124,8 @@ impl Client {
             let client = Arc::clone(self);
             self.runtime
                 .spawn(Box::pin(async move {
+                    // Invalidate stale record so get_user_devices hits the network
+                    client.invalidate_device_cache(&user_jid.user).await;
                     if let Err(e) = client.get_user_devices(&[user_jid]).await {
                         log::warn!("Immediate device sync failed: {e:?}");
                     }
@@ -3873,7 +3875,7 @@ mod tests {
             verified_name: None,
             device_sent_meta: None,
             ephemeral_expiration: None,
-            offline: None,
+            is_offline: false,
         }
     }
 

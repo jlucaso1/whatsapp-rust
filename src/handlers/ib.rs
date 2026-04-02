@@ -165,6 +165,11 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 client
                     .runtime
                     .spawn(Box::pin(async move {
+                        // WA Web: OFFLINE_DEVICE_SYNC_DELAY = 2000ms
+                        client_clone
+                            .runtime
+                            .sleep(std::time::Duration::from_secs(2))
+                            .await;
                         client_clone.flush_pending_device_sync().await;
                     }))
                     .detach();

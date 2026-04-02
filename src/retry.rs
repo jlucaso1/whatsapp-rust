@@ -723,7 +723,8 @@ impl Client {
         // WA Web includes keys at retryCount >= MIN_RETRY_COUNT_FOR_KEYS.
         // Optimization for NoSession: include keys on retry#1 to reduce round-trips
         // for skmsg-only failures where the sender needs our prekeys for SKDM.
-        let include_keys_early = reason == RetryReason::NoSession;
+        let include_keys_early =
+            reason == RetryReason::NoSession || reason == RetryReason::UnknownCompanionNoPrekey;
         let keys_node = if retry_count >= MIN_RETRY_COUNT_FOR_KEYS || include_keys_early {
             let device_store = self.persistence_manager.get_device_arc().await;
             let device_guard = device_store.read().await;
@@ -1590,8 +1591,8 @@ mod tests {
 
         for (retry_count, reason, should_include_keys, description) in test_cases {
             // Replicate the logic from send_retry_receipt
-            let include_keys_early = reason == RetryReason::NoSession;
-            let would_include_keys = retry_count >= MIN_RETRY_COUNT_FOR_KEYS || include_keys_early;
+            let would_include_keys =
+                wacore::protocol::retry::should_include_keys(retry_count, reason);
 
             assert_eq!(
                 would_include_keys, should_include_keys,
@@ -1642,10 +1643,8 @@ mod tests {
                     RetryReason::NoSession
                 };
 
-                // Apply the optimization logic
-                let include_keys_early = reason == RetryReason::NoSession;
                 let would_include_keys =
-                    retry_count >= MIN_RETRY_COUNT_FOR_KEYS || include_keys_early;
+                    wacore::protocol::retry::should_include_keys(retry_count, reason);
 
                 if would_include_keys {
                     keys_included.fetch_add(1, Ordering::SeqCst);
@@ -1701,8 +1700,7 @@ mod tests {
         let reason = RetryReason::NoSession;
 
         // With optimization, we include keys on retry#1
-        let include_keys_early = reason == RetryReason::NoSession;
-        let would_include_keys = retry_count >= MIN_RETRY_COUNT_FOR_KEYS || include_keys_early;
+        let would_include_keys = wacore::protocol::retry::should_include_keys(retry_count, reason);
 
         assert!(
             would_include_keys,
