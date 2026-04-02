@@ -115,20 +115,20 @@ impl ServerErrorCode {
 
 pub struct RequestUtils {
     unique_id: String,
-    id_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    id_counter: std::sync::Arc<portable_atomic::AtomicU64>,
 }
 
 impl RequestUtils {
     pub fn new(unique_id: String) -> Self {
         Self {
             unique_id,
-            id_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            id_counter: std::sync::Arc::new(portable_atomic::AtomicU64::new(0)),
         }
     }
 
     pub fn with_counter(
         unique_id: String,
-        id_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        id_counter: std::sync::Arc<portable_atomic::AtomicU64>,
     ) -> Self {
         Self {
             unique_id,

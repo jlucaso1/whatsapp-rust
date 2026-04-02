@@ -60,6 +60,7 @@ hkdf = { version = "0.12.3", default-features = false }
 hmac = { version = "0.12.1", default-features = false, features = ["reset"] }
 iai-callgrind = "0.16"
 log = "0.4"
+portable-atomic = { version = "1", default-features = false, features = ["fallback"] }
 prost = { version = "0.14.3", default-features = false, features = ["std"] }
 prost-build = { version = "0.14.3", default-features = false }
 rand = "0.10"
@@ -118,6 +119,7 @@ futures = { workspace = true, features = ["std"] }
 hex = { workspace = true }
 log = { workspace = true }
 moka = { version = "0.12.12", features = ["future"], optional = true }
+portable-atomic = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
 scopeguard = "1.2"

@@ -36,7 +36,8 @@ pub async fn create_test_client() -> Arc<Client> {
 }
 
 pub async fn create_test_client_with_name(name: &str) -> Arc<Client> {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use portable_atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -72,7 +73,8 @@ pub async fn create_test_client_with_name(name: &str) -> Arc<Client> {
 }
 
 pub async fn create_test_client_with_failing_http(name: &str) -> Arc<Client> {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use portable_atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -108,7 +110,8 @@ pub async fn create_test_client_with_failing_http(name: &str) -> Arc<Client> {
 }
 
 pub async fn create_test_backend() -> Arc<dyn Backend> {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use portable_atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);

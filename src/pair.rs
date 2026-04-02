@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::lid_pn_cache::LearningSource;
 use crate::types::events::{Event, PairError, PairSuccess};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use prost::Message;
 
 use std::sync::Arc;
@@ -67,10 +67,16 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     client
                         .runtime
                         .spawn(Box::pin(async move {
-                            // The rotation logic is now inside the library
                             let mut is_first = true;
 
                             for code in codes_clone {
+                                // Guard: pairing may complete before this task gets polled
+                                // (single-threaded runtimes, fast auto-pair, mock servers)
+                                if client_clone.is_logged_in() {
+                                    info!("Already logged in, stopping QR rotation.");
+                                    return;
+                                }
+
                                 let timeout = if is_first {
                                     is_first = false;
                                     std::time::Duration::from_secs(60)
@@ -78,27 +84,35 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                                     std::time::Duration::from_secs(20)
                                 };
 
-                                // Dispatch the new, simple event for each code
                                 client_clone
                                     .core
                                     .event_bus
                                     .dispatch(&Event::PairingQrCode { code, timeout });
 
-                                // Wait for the timeout OR a stop signal
                                 let sleep = client_clone.runtime.sleep(timeout);
                                 let stop = stop_rx.recv();
                                 futures::pin_mut!(sleep);
                                 futures::pin_mut!(stop);
                                 match futures::future::select(sleep, stop).await {
-                                    futures::future::Either::Left(_) => {} // timeout elapsed
+                                    futures::future::Either::Left(_) => {
+                                        if client_clone.is_logged_in() {
+                                            info!(
+                                                "Logged in during QR timeout, stopping rotation."
+                                            );
+                                            return;
+                                        }
+                                    }
                                     futures::future::Either::Right(_) => {
                                         info!("Pairing complete. Stopping QR code rotation.");
                                         return;
                                     }
                                 }
                             }
-                            info!("All QR codes for this session have expired.");
-                            client_clone.disconnect().await;
+
+                            if !client_clone.is_logged_in() {
+                                info!("All QR codes for this session have expired.");
+                                client_clone.disconnect().await;
+                            }
                         }))
                         .detach();
 
@@ -124,9 +138,11 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
 }
 
 async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_node: &Node) {
-    // Cancel QR code rotation if active
     if let Some(tx) = client.pairing_cancellation_tx.lock().await.take() {
         let _ = tx.try_send(());
+        debug!("Sent QR rotation stop signal");
+    } else {
+        debug!("QR rotation channel not yet stored — is_logged_in guard will stop the task");
     }
 
     // Clear pair code state if active

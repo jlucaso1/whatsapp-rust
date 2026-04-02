@@ -2399,7 +2399,8 @@ mod tests {
     use super::*;
 
     async fn create_test_store() -> SqliteStore {
-        use std::sync::atomic::{AtomicU64, Ordering};
+        use portable_atomic::AtomicU64;
+        use std::sync::atomic::Ordering;
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let db_name = format!(
