@@ -193,7 +193,7 @@ impl<'a> Signal<'a> {
     ) -> Result<Vec<u8>> {
         let sender_key_name = SenderKeyName::new(
             group_jid.to_string(),
-            sender_jid.to_protocol_address_string(),
+            sender_jid.to_non_ad().to_protocol_address_string(),
         );
 
         let mut adapter = self.client.signal_adapter().await;

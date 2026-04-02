@@ -999,7 +999,10 @@ impl Client {
 
             // Encrypt for all recipient devices (WA Web: MsgCreateFanoutStanza /
             // DeviceListFanout.js — encrypts for device 0 + all companions).
-            let recipient_devices = self.get_user_devices(std::slice::from_ref(&to)).await?;
+            let recipient_devices = self
+                .get_user_devices(std::slice::from_ref(&to))
+                .await
+                .unwrap_or_default();
             let own_devices = self.get_user_devices(std::slice::from_ref(own_jid)).await?;
 
             let mut all_dm_jids = Vec::with_capacity(recipient_devices.len() + own_devices.len());
