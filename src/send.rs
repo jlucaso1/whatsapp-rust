@@ -997,15 +997,22 @@ impl Client {
                 }
             }
 
-            // Bare recipient (WA Web: MsgCreateFanoutStanza)
-            let recipient_bare = self.resolve_encryption_jid(&to).await.to_non_ad();
-
-            // Populate device registry for retry handling
-            let _ = self.get_user_devices(std::slice::from_ref(&to)).await;
+            // Encrypt for all recipient devices (WA Web: MsgCreateFanoutStanza /
+            // DeviceListFanout.js — encrypts for device 0 + all companions).
+            let recipient_devices = self
+                .get_user_devices(std::slice::from_ref(&to))
+                .await
+                .unwrap_or_default();
             let own_devices = self.get_user_devices(std::slice::from_ref(own_jid)).await?;
 
-            let mut all_dm_jids = Vec::with_capacity(1 + own_devices.len());
-            all_dm_jids.push(recipient_bare);
+            let mut all_dm_jids = Vec::with_capacity(recipient_devices.len() + own_devices.len());
+            if recipient_devices.is_empty() {
+                // Fallback to bare JID if no devices known (first contact)
+                let recipient_bare = self.resolve_encryption_jid(&to).await.to_non_ad();
+                all_dm_jids.push(recipient_bare);
+            } else {
+                all_dm_jids.extend(recipient_devices);
+            }
             all_dm_jids.extend(own_devices);
 
             self.ensure_e2e_sessions(&all_dm_jids).await?;
