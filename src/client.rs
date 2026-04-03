@@ -1417,6 +1417,17 @@ impl Client {
                                         yield_fut.await;
                                     }
                                 }
+
+                                // Refresh timestamp after processing the entire batch so
+                                // the keepalive loop sees the batch completion time, not
+                                // just the arrival time. Prevents stale reads when a
+                                // large batch (e.g. offline sync) takes seconds to drain.
+                                if frames_in_batch > 1 {
+                                    self.last_data_received_ms.store(
+                                        wacore::time::now_millis().max(0) as u64,
+                                        Ordering::Relaxed,
+                                    );
+                                }
                             },
                             Ok(crate::transport::TransportEvent::Disconnected) | Err(_) => {
                                 if !self.expected_disconnect.load(Ordering::Relaxed) {

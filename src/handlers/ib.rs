@@ -112,13 +112,20 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                                 "Received edge routing info ({} bytes), storing for reconnection",
                                 routing_bytes.len()
                             );
+                            // Spawn to avoid blocking the read loop on Device write lock.
                             let routing_bytes = routing_bytes.clone();
+                            let client_clone = client.clone();
                             client
-                                .persistence_manager
-                                .modify_device(|device| {
-                                    device.edge_routing_info = Some(routing_bytes);
-                                })
-                                .await;
+                                .runtime
+                                .spawn(Box::pin(async move {
+                                    client_clone
+                                        .persistence_manager
+                                        .modify_device(|device| {
+                                            device.edge_routing_info = Some(routing_bytes);
+                                        })
+                                        .await;
+                                }))
+                                .detach();
                         } else {
                             debug!("Received empty edge routing info, ignoring");
                         }
