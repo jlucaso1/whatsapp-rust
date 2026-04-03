@@ -159,22 +159,26 @@ impl Client {
                         KeepaliveResult::TransientFailure => {
                             error_count += 1;
                             warn!(target: "Client/Keepalive", "Keepalive timeout, error count: {error_count}");
-
-                            // Dead-socket check after a failed ping.  Re-read
-                            // timestamps because send_keepalive updated last_sent.
-                            let last_sent = self.last_data_sent_ms.load(Ordering::Relaxed);
-                            let last_recv = self.last_data_received_ms.load(Ordering::Relaxed);
-                            if is_dead_socket(last_sent, last_recv) {
-                                let elapsed = ms_since(last_sent).unwrap_or(0);
-                                warn!(
-                                    target: "Client/Keepalive",
-                                    "No data received for {:.1}s after send (dead socket), forcing reconnect.",
-                                    elapsed as f64 / 1000.0
-                                );
-                                self.reconnect_immediately().await;
-                                return;
-                            }
                         }
+                    }
+
+                    // WA Web: deadSocketTimer is an independent 20s watchdog armed on
+                    // every send and cancelled on every receive. We approximate this by
+                    // checking is_dead_socket on EVERY keepalive tick — not just after
+                    // a failed ping. This catches scenarios where pending IQs caused
+                    // the ping to be skipped, or where the ping "succeeded" but the
+                    // connection died immediately after.
+                    let last_sent = self.last_data_sent_ms.load(Ordering::Relaxed);
+                    let last_recv = self.last_data_received_ms.load(Ordering::Relaxed);
+                    if is_dead_socket(last_sent, last_recv) {
+                        let elapsed = ms_since(last_sent).unwrap_or(0);
+                        warn!(
+                            target: "Client/Keepalive",
+                            "No data received for {:.1}s after send (dead socket), forcing reconnect.",
+                            elapsed as f64 / 1000.0
+                        );
+                        self.reconnect_immediately().await;
+                        return;
                     }
                 },
                 _ = shutdown.fuse() => {

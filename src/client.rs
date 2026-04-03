@@ -1417,6 +1417,17 @@ impl Client {
                                         yield_fut.await;
                                     }
                                 }
+
+                                // Refresh timestamp after processing the entire batch so
+                                // the keepalive loop sees the batch completion time, not
+                                // just the arrival time. Prevents stale reads when a
+                                // large batch (e.g. offline sync) takes seconds to drain.
+                                if frames_in_batch > 1 {
+                                    self.last_data_received_ms.store(
+                                        wacore::time::now_millis().max(0) as u64,
+                                        Ordering::Relaxed,
+                                    );
+                                }
                             },
                             Ok(crate::transport::TransportEvent::Disconnected) | Err(_) => {
                                 if !self.expected_disconnect.load(Ordering::Relaxed) {
@@ -1614,8 +1625,13 @@ impl Client {
         if node.tag.as_ref() == "iq"
             && let Some(id) = node.attrs.get("id").map(|v| v.as_str())
         {
-            let has_waiter = self.response_waiters.lock().await.contains_key(id.as_ref());
-            if has_waiter && self.handle_iq_response(Arc::clone(&node)).await {
+            // Single lock acquisition: try to remove the waiter directly.
+            let waiter = self.response_waiters.lock().await.remove(id.as_ref());
+            if let Some(waiter) = waiter {
+                let owned_node = Arc::try_unwrap(node).unwrap_or_else(|arc| (*arc).clone());
+                if waiter.send(owned_node).is_err() {
+                    warn!(target: "Client/IQ", "Failed to send IQ response to waiter. Receiver was likely dropped.");
+                }
                 return;
             }
         }
@@ -1881,25 +1897,37 @@ impl Client {
 
         self.update_server_time_offset(node);
 
-        if let Some(lid_value) = node.attrs.get("lid") {
-            if let Some(lid) = lid_value.to_jid() {
-                let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-                if device_snapshot.lid.as_ref() != Some(&lid) {
-                    debug!("Updating LID from server to '{lid}'");
-                    self.persistence_manager
-                        .process_command(DeviceCommand::SetLid(Some(lid)))
-                        .await;
+        // Extract LID from the node before spawning (node isn't Send).
+        let lid_from_server = match node.attrs.get("lid") {
+            Some(lid_value) => match lid_value.to_jid() {
+                Some(lid) => Some(lid),
+                None => {
+                    warn!("Failed to parse LID from success stanza: {lid_value}");
+                    None
                 }
-            } else {
-                warn!("Failed to parse LID from success stanza: {lid_value}");
+            },
+            None => {
+                warn!("LID not found in <success> stanza. Group messaging may fail.");
+                None
             }
-        } else {
-            warn!("LID not found in <success> stanza. Group messaging may fail.");
-        }
+        };
 
         let client_clone = self.clone();
         let task_generation = current_generation;
         self.runtime.spawn(Box::pin(async move {
+            // Update LID if changed (moved here to avoid blocking the read loop
+            // on Device snapshot + write lock).
+            if let Some(lid) = lid_from_server {
+                let device_snapshot =
+                    client_clone.persistence_manager.get_device_snapshot().await;
+                if device_snapshot.lid.as_ref() != Some(&lid) {
+                    debug!("Updating LID from server to '{lid}'");
+                    client_clone
+                        .persistence_manager
+                        .process_command(DeviceCommand::SetLid(Some(lid)))
+                        .await;
+                }
+            }
             // Macro to check if this task is still valid (connection hasn't been replaced)
             macro_rules! check_generation {
                 () => {
@@ -2931,10 +2959,6 @@ impl Client {
         }
     }
 
-    async fn expect_disconnect(&self) {
-        self.expected_disconnect.store(true, Ordering::Relaxed);
-    }
-
     pub(crate) async fn handle_stream_error(&self, node: &wacore_binary::node::Node) {
         self.is_logged_in.store(false, Ordering::Relaxed);
 
@@ -2952,12 +2976,15 @@ impl Client {
             })
             .unwrap_or_default();
 
+        // Whether to proactively disconnect the transport after handling.
+        let mut should_disconnect = false;
+
         if !conflict_type.is_empty() {
             info!(
                 "Got stream error indicating client was removed or replaced (conflict={}). Logging out.",
                 conflict_type
             );
-            self.expect_disconnect().await;
+            self.expected_disconnect.store(true, Ordering::Relaxed);
             self.enable_auto_reconnect.store(false, Ordering::Relaxed);
 
             let event = if conflict_type == "replaced" {
@@ -2969,40 +2996,19 @@ impl Client {
                 })
             };
             self.core.event_bus.dispatch(&event);
-
-            let transport_opt = self.transport.lock().await.clone();
-            if let Some(transport) = transport_opt {
-                self.runtime
-                    .spawn(Box::pin(async move {
-                        info!("Disconnecting transport after conflict");
-                        transport.disconnect().await;
-                    }))
-                    .detach();
-            }
+            should_disconnect = true;
         } else {
             match code {
                 "515" => {
-                    // 515 is expected during registration/pairing phase - server closes stream after pairing
                     info!(
                         "Got 515 stream error, server is closing stream (expected after pairing). Will auto-reconnect."
                     );
-                    self.expect_disconnect().await;
-                    // Proactively disconnect transport since server may not close the connection
-                    // Clone the transport Arc before spawning to avoid holding the lock
-                    let transport_opt = self.transport.lock().await.clone();
-                    if let Some(transport) = transport_opt {
-                        // Spawn disconnect in background so we don't block the message loop
-                        self.runtime
-                            .spawn(Box::pin(async move {
-                                info!("Disconnecting transport after 515");
-                                transport.disconnect().await;
-                            }))
-                            .detach();
-                    }
+                    self.expected_disconnect.store(true, Ordering::Relaxed);
+                    should_disconnect = true;
                 }
                 "516" => {
                     info!("Got 516 stream error (device removed). Logging out.");
-                    self.expect_disconnect().await;
+                    self.expected_disconnect.store(true, Ordering::Relaxed);
                     self.enable_auto_reconnect.store(false, Ordering::Relaxed);
                     self.core.event_bus.dispatch(&Event::LoggedOut(
                         crate::types::events::LoggedOut {
@@ -3010,22 +3016,11 @@ impl Client {
                             reason: ConnectFailureReason::LoggedOut,
                         },
                     ));
-
-                    let transport_opt = self.transport.lock().await.clone();
-                    if let Some(transport) = transport_opt {
-                        self.runtime
-                            .spawn(Box::pin(async move {
-                                info!("Disconnecting transport after 516");
-                                transport.disconnect().await;
-                            }))
-                            .detach();
-                    }
+                    should_disconnect = true;
                 }
                 "401" => {
-                    // 401: unauthorized — session invalid, needs re-authentication.
-                    // Matches WA Web's handling of unauthorized stream errors.
                     info!("Got 401 stream error (unauthorized). Logging out.");
-                    self.expect_disconnect().await;
+                    self.expected_disconnect.store(true, Ordering::Relaxed);
                     self.enable_auto_reconnect.store(false, Ordering::Relaxed);
                     self.core.event_bus.dispatch(&Event::LoggedOut(
                         crate::types::events::LoggedOut {
@@ -3033,40 +3028,18 @@ impl Client {
                             reason: ConnectFailureReason::LoggedOut,
                         },
                     ));
-
-                    let transport_opt = self.transport.lock().await.clone();
-                    if let Some(transport) = transport_opt {
-                        self.runtime
-                            .spawn(Box::pin(async move {
-                                info!("Disconnecting transport after 401");
-                                transport.disconnect().await;
-                            }))
-                            .detach();
-                    }
+                    should_disconnect = true;
                 }
                 "409" => {
-                    // 409: conflict — another client instance connected.
-                    // Same semantics as conflict child element but via code.
                     info!("Got 409 stream error (conflict). Another session replaced this one.");
-                    self.expect_disconnect().await;
+                    self.expected_disconnect.store(true, Ordering::Relaxed);
                     self.enable_auto_reconnect.store(false, Ordering::Relaxed);
                     self.core
                         .event_bus
                         .dispatch(&Event::StreamReplaced(crate::types::events::StreamReplaced));
-
-                    let transport_opt = self.transport.lock().await.clone();
-                    if let Some(transport) = transport_opt {
-                        self.runtime
-                            .spawn(Box::pin(async move {
-                                info!("Disconnecting transport after 409");
-                                transport.disconnect().await;
-                            }))
-                            .detach();
-                    }
+                    should_disconnect = true;
                 }
                 "429" => {
-                    // 429: rate limited — server is throttling connections.
-                    // Auto-reconnect with extended backoff.
                     warn!(
                         "Got 429 stream error (rate limited). Will auto-reconnect with extended backoff."
                     );
@@ -3077,7 +3050,7 @@ impl Client {
                 }
                 _ => {
                     error!("Unknown stream error: {}", DisplayableNode(node));
-                    self.expect_disconnect().await;
+                    self.expected_disconnect.store(true, Ordering::Relaxed);
                     self.core.event_bus.dispatch(&Event::StreamError(
                         crate::types::events::StreamError {
                             code: code.to_string(),
@@ -3085,6 +3058,18 @@ impl Client {
                         },
                     ));
                 }
+            }
+        }
+
+        // Single transport lock acquisition for all branches that need disconnect.
+        if should_disconnect {
+            let transport_opt = self.transport.lock().await.clone();
+            if let Some(transport) = transport_opt {
+                self.runtime
+                    .spawn(Box::pin(async move {
+                        transport.disconnect().await;
+                    }))
+                    .detach();
             }
         }
 

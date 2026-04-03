@@ -5,6 +5,9 @@ use log::warn;
 use std::sync::Arc;
 use wacore_binary::node::Node;
 
+/// WA Web: `WAWebMessageQueue` uses `promiseTimeout(r(), 2e4)` per queued handler.
+const MAX_MESSAGE_DELAY_MS: u64 = 20_000;
+
 /// Handler for `<message>` stanzas.
 ///
 /// Processes incoming WhatsApp messages, including:
@@ -58,9 +61,9 @@ impl StanzaHandler for MessageHandler {
         let tx = client
             .message_queues
             .get_with_by_ref(&chat_id, async {
-                // Bounded capacity provides backpressure to prevent unbounded memory growth.
-                // 500 is enough for burst handling while limiting per-chat memory.
-                let (tx, rx) = async_channel::bounded::<Arc<Node>>(500);
+                // Unbounded so the read loop never blocks on a full channel.
+                // WA Web uses unbounded promise chains for the same reason.
+                let (tx, rx) = async_channel::unbounded::<Arc<Node>>();
 
                 let client_for_worker = client.clone();
 
@@ -73,8 +76,18 @@ impl StanzaHandler for MessageHandler {
                     .runtime
                     .spawn(Box::pin(async move {
                         while let Ok(msg_node) = rx.recv().await {
+                            let start = wacore::time::now_millis() as u64;
                             let client = client_for_worker.clone();
                             Box::pin(client.handle_incoming_message(msg_node)).await;
+                            let elapsed = (wacore::time::now_millis() as u64).saturating_sub(start);
+                            if elapsed > MAX_MESSAGE_DELAY_MS {
+                                warn!(
+                                    target: "MessageQueue",
+                                    "Message processing took {:.1}s (MAX_MESSAGE_DELAY is {}s)",
+                                    elapsed as f64 / 1000.0,
+                                    MAX_MESSAGE_DELAY_MS / 1000
+                                );
+                            }
                         }
                     }))
                     .detach();
@@ -83,8 +96,8 @@ impl StanzaHandler for MessageHandler {
             })
             .await;
 
-        // Send the message to the queue - just clones the Arc, not the Node!
-        if let Err(e) = tx.send(node).await {
+        // Synchronous enqueue — try_send on unbounded never fails due to capacity.
+        if let Err(e) = tx.try_send(node) {
             warn!("Failed to enqueue message for processing: {e}");
         }
 
