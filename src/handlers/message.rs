@@ -5,6 +5,9 @@ use log::warn;
 use std::sync::Arc;
 use wacore_binary::node::Node;
 
+/// WA Web: `WAWebMessageQueue` uses `promiseTimeout(r(), 2e4)` per queued handler.
+const MAX_MESSAGE_DELAY_MS: u64 = 20_000;
+
 /// Handler for `<message>` stanzas.
 ///
 /// Processes incoming WhatsApp messages, including:
@@ -73,8 +76,18 @@ impl StanzaHandler for MessageHandler {
                     .runtime
                     .spawn(Box::pin(async move {
                         while let Ok(msg_node) = rx.recv().await {
+                            let start = wacore::time::now_millis() as u64;
                             let client = client_for_worker.clone();
                             Box::pin(client.handle_incoming_message(msg_node)).await;
+                            let elapsed = (wacore::time::now_millis() as u64).saturating_sub(start);
+                            if elapsed > MAX_MESSAGE_DELAY_MS {
+                                warn!(
+                                    target: "MessageQueue",
+                                    "Message processing took {:.1}s (MAX_MESSAGE_DELAY is {}s)",
+                                    elapsed as f64 / 1000.0,
+                                    MAX_MESSAGE_DELAY_MS / 1000
+                                );
+                            }
                         }
                     }))
                     .detach();
