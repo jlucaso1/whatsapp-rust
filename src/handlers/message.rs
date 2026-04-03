@@ -58,9 +58,9 @@ impl StanzaHandler for MessageHandler {
         let tx = client
             .message_queues
             .get_with_by_ref(&chat_id, async {
-                // Bounded capacity provides backpressure to prevent unbounded memory growth.
-                // 500 is enough for burst handling while limiting per-chat memory.
-                let (tx, rx) = async_channel::bounded::<Arc<Node>>(500);
+                // Unbounded so the read loop never blocks on a full channel.
+                // WA Web uses unbounded promise chains for the same reason.
+                let (tx, rx) = async_channel::unbounded::<Arc<Node>>();
 
                 let client_for_worker = client.clone();
 
@@ -83,8 +83,8 @@ impl StanzaHandler for MessageHandler {
             })
             .await;
 
-        // Send the message to the queue - just clones the Arc, not the Node!
-        if let Err(e) = tx.send(node).await {
+        // Synchronous enqueue — try_send on unbounded never fails due to capacity.
+        if let Err(e) = tx.try_send(node) {
             warn!("Failed to enqueue message for processing: {e}");
         }
 
