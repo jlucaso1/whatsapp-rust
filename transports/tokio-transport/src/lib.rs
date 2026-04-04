@@ -120,8 +120,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> WsTransport<S> {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[async_trait]
 impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Transport for WsTransport<S> {
     async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error> {
         let mut guard = self.sink.lock().await;
@@ -241,8 +240,7 @@ impl Default for TokioWebSocketTransportFactory {
     }
 }
 
-#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
-#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+#[async_trait]
 impl TransportFactory for TokioWebSocketTransportFactory {
     async fn create_transport(
         &self,
