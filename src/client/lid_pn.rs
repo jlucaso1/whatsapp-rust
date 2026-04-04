@@ -238,24 +238,18 @@ impl Client {
         }
     }
 
-    /// Get the phone number (user part) for a given LID.
-    /// Looks up the LID-PN mapping from the in-memory cache.
+    /// Look up the LID↔phone mapping for a JID.
     ///
-    /// # Arguments
-    ///
-    /// * `lid` - The LID user part (e.g., "100000012345678") or full JID (e.g., "100000012345678@lid")
-    ///
-    /// # Returns
-    ///
-    /// The phone number user part if a mapping exists, None otherwise.
-    pub async fn get_phone_number_from_lid(&self, lid: &str) -> Option<String> {
-        // Handle both full JID (e.g., "100000012345678@lid") and user part only
-        let lid_user = if lid.contains('@') {
-            lid.split('@').next().unwrap_or(lid)
+    /// Routes automatically: LID JIDs search by LID, PN JIDs search by phone.
+    /// Returns `None` for non-user JIDs (groups, newsletters, etc.).
+    pub async fn get_lid_pn_entry(&self, jid: &Jid) -> Option<LidPnEntry> {
+        if jid.is_lid() {
+            self.lid_pn_cache.get_entry_by_lid(&jid.user).await
+        } else if jid.is_pn() {
+            self.lid_pn_cache.get_entry_by_phone(&jid.user).await
         } else {
-            lid
-        };
-        self.lid_pn_cache.get_phone_number(lid_user).await
+            None
+        }
     }
 }
 
@@ -306,5 +300,41 @@ mod tests {
         let resolved = client.resolve_encryption_jid(&pn_jid).await;
 
         assert_eq!(resolved, pn_jid);
+    }
+
+    #[tokio::test]
+    async fn test_get_lid_pn_entry_from_pn() {
+        let client: Arc<Client> = create_test_client().await;
+        let pn = "55999999999";
+        let lid = "100000012345678";
+
+        assert!(client.get_lid_pn_entry(&Jid::pn(pn)).await.is_none());
+
+        client
+            .add_lid_pn_mapping(lid, pn, LearningSource::Usync)
+            .await
+            .unwrap();
+
+        let entry = client.get_lid_pn_entry(&Jid::pn(pn)).await.unwrap();
+        assert_eq!(entry.lid, lid);
+        assert_eq!(entry.phone_number, pn);
+    }
+
+    #[tokio::test]
+    async fn test_get_lid_pn_entry_from_lid() {
+        let client: Arc<Client> = create_test_client().await;
+        let pn = "55999999999";
+        let lid = "100000012345678";
+
+        assert!(client.get_lid_pn_entry(&Jid::lid(lid)).await.is_none());
+
+        client
+            .add_lid_pn_mapping(lid, pn, LearningSource::Usync)
+            .await
+            .unwrap();
+
+        let entry = client.get_lid_pn_entry(&Jid::lid(lid)).await.unwrap();
+        assert_eq!(entry.lid, lid);
+        assert_eq!(entry.phone_number, pn);
     }
 }
