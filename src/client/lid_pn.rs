@@ -241,11 +241,14 @@ impl Client {
     /// Look up the LID↔phone mapping for a JID.
     ///
     /// Routes automatically: LID JIDs search by LID, PN JIDs search by phone.
+    /// Returns `None` for non-user JIDs (groups, newsletters, etc.).
     pub async fn get_lid_pn_entry(&self, jid: &Jid) -> Option<LidPnEntry> {
         if jid.is_lid() {
             self.lid_pn_cache.get_entry_by_lid(&jid.user).await
-        } else {
+        } else if jid.is_pn() {
             self.lid_pn_cache.get_entry_by_phone(&jid.user).await
+        } else {
+            None
         }
     }
 }
