@@ -7,7 +7,6 @@ use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, trace, warn};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Once};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
@@ -109,7 +108,6 @@ type Sink<S> = SplitSink<WebSocketStream<S>, Message>;
 
 struct WsTransport<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> {
     sink: Arc<Mutex<Option<Sink<S>>>>,
-    connected: Arc<AtomicBool>,
     shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
@@ -117,7 +115,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> WsTransport<S> {
     fn new(sink: Sink<S>, shutdown_tx: tokio::sync::watch::Sender<bool>) -> Self {
         Self {
             sink: Arc::new(Mutex::new(Some(sink))),
-            connected: Arc::new(AtomicBool::new(true)),
             shutdown_tx,
         }
     }
@@ -140,7 +137,6 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Transport for WsTranspo
 
     async fn disconnect(&self) {
         let _ = self.shutdown_tx.send(true);
-        self.connected.store(false, Ordering::Release);
         if let Some(mut sink) = self.sink.lock().await.take() {
             let _ = sink
                 .send(Message::close(
@@ -156,7 +152,6 @@ async fn read_pump<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
     mut stream: SplitStream<WebSocketStream<S>>,
     tx: async_channel::Sender<TransportEvent>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
-    connected: Arc<AtomicBool>,
 ) {
     loop {
         tokio::select! {
@@ -194,7 +189,6 @@ async fn read_pump<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
         }
     }
 
-    connected.store(false, Ordering::Release);
     let _ = tx.send(TransportEvent::Disconnected).await;
 }
 
@@ -216,12 +210,7 @@ where
     // Enqueue Connected before spawning so it precedes any DataReceived.
     let _ = event_tx.try_send(TransportEvent::Connected);
 
-    tokio::task::spawn(read_pump(
-        stream,
-        event_tx,
-        shutdown_rx,
-        transport.connected.clone(),
-    ));
+    tokio::task::spawn(read_pump(stream, event_tx, shutdown_rx));
 
     (transport, event_rx)
 }
