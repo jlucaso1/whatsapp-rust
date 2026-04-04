@@ -238,14 +238,15 @@ impl Client {
         }
     }
 
-    /// Get the phone number for a given LID JID.
-    pub async fn get_phone_number_from_lid(&self, lid: &Jid) -> Option<String> {
-        self.lid_pn_cache.get_phone_number(&lid.user).await
-    }
-
-    /// Get the current LID for a given phone number JID.
-    pub async fn get_lid_from_phone_number(&self, phone: &Jid) -> Option<String> {
-        self.lid_pn_cache.get_current_lid(&phone.user).await
+    /// Look up the LID↔phone mapping for a JID.
+    ///
+    /// Routes automatically: LID JIDs search by LID, PN JIDs search by phone.
+    pub async fn get_lid_pn_entry(&self, jid: &Jid) -> Option<LidPnEntry> {
+        if jid.is_lid() {
+            self.lid_pn_cache.get_entry_by_lid(&jid.user).await
+        } else {
+            self.lid_pn_cache.get_entry_by_phone(&jid.user).await
+        }
     }
 }
 
@@ -299,56 +300,38 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_get_lid_from_phone_number() {
+    async fn test_get_lid_pn_entry_from_pn() {
         let client: Arc<Client> = create_test_client().await;
         let pn = "55999999999";
         let lid = "100000012345678";
 
-        assert!(
-            client
-                .get_lid_from_phone_number(&Jid::pn(pn))
-                .await
-                .is_none()
-        );
+        assert!(client.get_lid_pn_entry(&Jid::pn(pn)).await.is_none());
 
         client
             .add_lid_pn_mapping(lid, pn, LearningSource::Usync)
             .await
             .unwrap();
 
-        assert_eq!(
-            client
-                .get_lid_from_phone_number(&Jid::pn(pn))
-                .await
-                .as_deref(),
-            Some(lid),
-        );
+        let entry = client.get_lid_pn_entry(&Jid::pn(pn)).await.unwrap();
+        assert_eq!(entry.lid, lid);
+        assert_eq!(entry.phone_number, pn);
     }
 
     #[tokio::test]
-    async fn test_get_phone_number_from_lid() {
+    async fn test_get_lid_pn_entry_from_lid() {
         let client: Arc<Client> = create_test_client().await;
         let pn = "55999999999";
         let lid = "100000012345678";
 
-        assert!(
-            client
-                .get_phone_number_from_lid(&Jid::lid(lid))
-                .await
-                .is_none()
-        );
+        assert!(client.get_lid_pn_entry(&Jid::lid(lid)).await.is_none());
 
         client
             .add_lid_pn_mapping(lid, pn, LearningSource::Usync)
             .await
             .unwrap();
 
-        assert_eq!(
-            client
-                .get_phone_number_from_lid(&Jid::lid(lid))
-                .await
-                .as_deref(),
-            Some(pn),
-        );
+        let entry = client.get_lid_pn_entry(&Jid::lid(lid)).await.unwrap();
+        assert_eq!(entry.lid, lid);
+        assert_eq!(entry.phone_number, pn);
     }
 }
