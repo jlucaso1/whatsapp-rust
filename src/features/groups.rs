@@ -191,7 +191,7 @@ impl<'a> Groups<'a> {
             let resolved = if participant.jid.is_lid() && participant.phone_number.is_none() {
                 let phone_number = self
                     .client
-                    .get_phone_number_from_lid(&participant.jid.user)
+                    .get_phone_number_from_lid(&participant.jid)
                     .await
                     .ok_or_else(|| {
                         anyhow::anyhow!("Missing phone number mapping for LID {}", participant.jid)
