@@ -49,26 +49,58 @@ impl Client {
         Ok(response.count)
     }
 
-    /// Ensure the server has at least MIN_PRE_KEY_COUNT pre-keys, and upload a batch of
-    /// WANTED_PRE_KEY_COUNT new pre-keys. Uses a persistent monotonic counter
-    /// (Device::next_pre_key_id) to avoid ID collisions — matching WhatsApp Web's
-    /// NEXT_PK_ID / FIRST_UNUPLOAD_PK_ID pattern from WAWebSignalStoreApi.
-    ///
-    /// When `force` is true, skips the count guard and always uploads. This is used
-    /// by the digest key repair path (WA Web's `_uploadPreKeys` does NOT check count).
-    pub(crate) async fn upload_pre_keys(&self, force: bool) -> Result<(), anyhow::Error> {
-        let server_count = match self.get_server_pre_key_count().await {
-            Ok(c) => c,
-            Err(e) => return Err(anyhow::anyhow!(e)),
-        };
+    /// Upload prekeys at login if the persisted flag indicates they're needed.
+    /// Matches WA Web's PassiveTasks.js:30 which checks `getServerHasPreKeys()`.
+    pub(crate) async fn upload_pre_keys_at_login(&self) -> Result<(), anyhow::Error> {
+        let has_prekeys = self
+            .persistence_manager
+            .get_device_snapshot()
+            .await
+            .server_has_prekeys;
 
-        if !force && server_count >= MIN_PRE_KEY_COUNT {
-            log::debug!("Server has {} pre-keys, no upload needed.", server_count);
+        if has_prekeys {
+            log::debug!("Server has prekeys (persisted flag), skipping login upload.");
             return Ok(());
         }
 
-        log::debug!("Server has {} pre-keys, uploading more.", server_count);
+        // Serialize with prekey-low/digest paths to avoid duplicate uploads
+        let _guard = self.prekey_upload_lock.lock().await;
 
+        // Re-check after acquiring lock (another task may have uploaded)
+        if self
+            .persistence_manager
+            .get_device_snapshot()
+            .await
+            .server_has_prekeys
+        {
+            return Ok(());
+        }
+
+        log::info!("Server missing prekeys (persisted flag), uploading.");
+        self.upload_pre_keys_inner().await
+    }
+
+    /// Ensure the server has enough pre-keys, uploading if below threshold.
+    /// When `force` is true, skips the count guard (used by digest key repair).
+    pub(crate) async fn upload_pre_keys(&self, force: bool) -> Result<(), anyhow::Error> {
+        let server_count = self
+            .get_server_pre_key_count()
+            .await
+            .map_err(|e| anyhow::anyhow!(e))?;
+
+        if !force && server_count >= MIN_PRE_KEY_COUNT {
+            log::debug!("Server has {server_count} pre-keys, no upload needed.");
+            return Ok(());
+        }
+
+        log::debug!("Server has {server_count} pre-keys, uploading.");
+        self.upload_pre_keys_inner().await
+    }
+
+    /// Generate and upload WANTED_PRE_KEY_COUNT pre-keys. Shared by
+    /// `upload_pre_keys` and `upload_pre_keys_at_login` to avoid
+    /// redundant server count queries.
+    async fn upload_pre_keys_inner(&self) -> Result<(), anyhow::Error> {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let device_store = self.persistence_manager.get_device_arc().await;
 
@@ -159,7 +191,10 @@ impl Client {
             .process_command(DeviceCommand::SetNextPreKeyId(next_id))
             .await;
 
-        self.server_has_prekeys.store(true, Ordering::Relaxed);
+        // Persist flag matching WA Web's setServerHasPreKeys(true) (PreKeysJob.js:79)
+        self.persistence_manager
+            .modify_device(|d| d.server_has_prekeys = true)
+            .await;
 
         log::debug!(
             "Successfully uploaded {} new pre-keys with sequential IDs starting from {}.",

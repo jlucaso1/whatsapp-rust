@@ -378,9 +378,6 @@ pub struct Client {
     pub(crate) initial_keys_synced_notifier: Arc<event_listener::Event>,
     pub(crate) initial_app_state_keys_received: Arc<AtomicBool>,
 
-    /// Tracks whether the server has our prekeys (matches WA Web's `setServerHasPreKeys`).
-    /// Set to `false` when encrypt/count notification arrives, `true` after successful upload.
-    pub(crate) server_has_prekeys: Arc<AtomicBool>,
     /// Prevents concurrent prekey upload operations (matches WA Web's dedup set in `handlePreKeyLow`).
     pub(crate) prekey_upload_lock: Arc<async_lock::Mutex<()>>,
     /// Notifier for when offline sync (ib offline stanza) is received.
@@ -686,7 +683,6 @@ impl Client {
             app_state_syncing: Arc::new(Mutex::new(HashSet::new())),
             initial_keys_synced_notifier: Arc::new(event_listener::Event::new()),
             initial_app_state_keys_received: Arc::new(AtomicBool::new(false)),
-            server_has_prekeys: Arc::new(AtomicBool::new(true)),
             prekey_upload_lock: Arc::new(async_lock::Mutex::new(())),
             offline_sync_notifier: Arc::new(event_listener::Event::new()),
             offline_sync_completed: Arc::new(AtomicBool::new(false)),
@@ -1045,7 +1041,6 @@ impl Client {
         self.is_ready.store(false, Ordering::Relaxed);
         self.is_connected.store(false, Ordering::Relaxed);
         self.offline_sync_completed.store(false, Ordering::Relaxed);
-        self.server_has_prekeys.store(true, Ordering::Relaxed);
 
         // WA Web: both MQTT and DGW transports use a 20s connect timeout.
         // Without this, a dead network blocks on the OS TCP SYN timeout (~60-75s).
@@ -1250,7 +1245,6 @@ impl Client {
             Ok(mut guard) => *guard = None,
             Err(poison) => *poison.into_inner() = None,
         }
-        self.server_has_prekeys.store(true, Ordering::Relaxed);
         self.history_sync_tasks_in_flight
             .store(0, Ordering::Relaxed);
         self.history_sync_idle_notifier.notify(usize::MAX);
@@ -1989,7 +1983,7 @@ impl Client {
                 debug!("Skipping passive tasks: connection closed");
                 return;
             }
-            if let Err(e) = client_clone.upload_pre_keys(false).await
+            if let Err(e) = client_clone.upload_pre_keys_at_login().await
                 && !client_clone.is_shutting_down()
             {
                 warn!("Failed to upload pre-keys during startup: {e:?}");

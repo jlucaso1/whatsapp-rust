@@ -245,21 +245,19 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
 /// 3. Acquire dedup lock (prevents concurrent uploads)
 /// 4. Upload prekeys with Fibonacci retry
 async fn handle_prekey_low(client: &Arc<Client>) {
-    // Mark server as not having our prekeys
+    // Persist flag matching WA Web's setServerHasPreKeys(false) (PreKeyLow.js:43)
     client
-        .server_has_prekeys
-        .store(false, std::sync::atomic::Ordering::Relaxed);
+        .persistence_manager
+        .modify_device(|d| d.server_has_prekeys = false)
+        .await;
 
     let client_clone = client.clone();
     client
         .runtime
         .spawn(Box::pin(async move {
-            // Wait for offline delivery to complete first (matches WA Web's waitForOfflineDeliveryEnd).
-            // Done BEFORE acquiring the lock so the lock isn't held during an
-            // indefinite wait that could block digest-key or other upload paths.
+            // Wait for offline delivery first (matches WA Web's waitForOfflineDeliveryEnd)
             client_clone.wait_for_offline_delivery_end().await;
 
-            // Bail if disconnected during offline delivery wait
             if !client_clone
                 .is_logged_in
                 .load(std::sync::atomic::Ordering::Relaxed)
@@ -268,13 +266,14 @@ async fn handle_prekey_low(client: &Arc<Client>) {
                 return;
             }
 
-            // Serialize upload — prevents concurrent uploads from count + digest paths
             let _guard = client_clone.prekey_upload_lock.lock().await;
 
-            // Dedup: if a previous upload already succeeded, skip
+            // Dedup: check persisted flag in case another task already uploaded
             if client_clone
+                .persistence_manager
+                .get_device_snapshot()
+                .await
                 .server_has_prekeys
-                .load(std::sync::atomic::Ordering::Relaxed)
             {
                 debug!("Pre-key upload already completed by another task, skipping");
                 return;

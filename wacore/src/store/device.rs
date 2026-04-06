@@ -159,9 +159,10 @@ pub struct Device {
     /// Prevents prekey ID collisions when prekeys are consumed non-sequentially.
     #[serde(default)]
     pub next_pre_key_id: u32,
+    /// Persisted flag matching WA Web's `signal_sever_has_pre_keys` metadata.
+    #[serde(default)]
+    pub server_has_prekeys: bool,
     /// NCT salt provisioned by the server via app state sync or history sync.
-    /// Used to compute cstoken = HMAC-SHA256(salt, recipient_lid) as a fallback
-    /// when no tctoken is available for first-contact messaging.
     #[serde(default)]
     pub nct_salt: Option<Vec<u8>>,
     /// Runtime-only marker that an authoritative nct_salt_sync mutation was seen.
@@ -219,6 +220,7 @@ impl Device {
             edge_routing_info: None,
             props_hash: None,
             next_pre_key_id: 1,
+            server_has_prekeys: false,
             nct_salt: None,
             nct_salt_sync_seen: false,
         }
