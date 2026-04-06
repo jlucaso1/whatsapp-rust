@@ -2101,15 +2101,19 @@ mod tests {
         handle_notification_impl(&client, &node).await;
 
         let backend = client.persistence_manager.backend();
-        let has = client
+        let has_session = client
             .signal_cache
             .has_session(&addr, &*backend)
             .await
             .unwrap();
-        assert!(
-            !has,
-            "primary session should be deleted after identity change"
-        );
+        assert!(!has_session, "primary session should be deleted");
+
+        let has_identity = client
+            .signal_cache
+            .get_identity(&addr, &*backend)
+            .await
+            .unwrap();
+        assert!(has_identity.is_none(), "identity key should be deleted");
     }
 
     #[tokio::test]
