@@ -33,23 +33,11 @@ pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
 
     for (i, &b) in bytes.iter().enumerate() {
         match b {
-            b'@' => {
-                if at_pos.is_none() {
-                    at_pos = Some(i);
-                }
-            }
-            b':' => {
-                // Only track colon in user part (before @)
-                if at_pos.is_none() {
-                    colon_pos = Some(i);
-                }
-            }
-            b'.' => {
-                // Only track dots in user part (before @ and before :)
-                if at_pos.is_none() && colon_pos.is_none() {
-                    last_dot_pos = Some(i);
-                }
-            }
+            b'@' if at_pos.is_none() => at_pos = Some(i),
+            // Only track colon in user part (before @)
+            b':' if at_pos.is_none() => colon_pos = Some(i),
+            // Only track dots in user part (before @ and before :)
+            b'.' if at_pos.is_none() && colon_pos.is_none() => last_dot_pos = Some(i),
             _ => {}
         }
     }
