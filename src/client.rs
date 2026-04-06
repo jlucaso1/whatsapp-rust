@@ -3428,6 +3428,20 @@ impl Client {
         self.send_raw_bytes(plaintext_buf).await
     }
 
+    /// Register a oneshot waiter for a server ack by message ID.
+    /// Returns the receiver — caller sends the node separately and awaits this in background.
+    pub(crate) async fn register_ack_waiter(
+        &self,
+        message_id: &str,
+    ) -> futures::channel::oneshot::Receiver<wacore_binary::Node> {
+        let (tx, rx) = futures::channel::oneshot::channel();
+        self.response_waiters
+            .lock()
+            .await
+            .insert(message_id.to_string(), tx);
+        rx
+    }
+
     pub(crate) async fn update_push_name_and_notify(self: &Arc<Self>, new_name: String) {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let old_name = device_snapshot.push_name.clone();

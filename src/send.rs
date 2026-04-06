@@ -465,17 +465,29 @@ impl Client {
             .ensure_status_participants(prepared.node, &group_info)
             .await?;
 
+        let our_phash = stanza
+            .attrs()
+            .optional_string("phash")
+            .map(|s| s.into_owned());
+        let ack_rx = if our_phash.is_some() {
+            Some(self.register_ack_waiter(&request_id).await)
+        } else {
+            None
+        };
+
         self.send_node(stanza).await?;
+
+        if let Some(rx) = ack_rx {
+            self.spawn_phash_validation(rx, our_phash.unwrap(), to.clone(), false);
+        }
 
         self.update_sender_key_devices(&to_str, &prepared.skdm_devices)
             .await;
 
-        // Invalidate device registry for users whose devices returned 406
         for user in &prepared.stale_device_users {
             self.invalidate_device_cache(user).await;
         }
 
-        // Flush cached Signal state to DB after encryption
         if let Err(e) = self.flush_signal_cache().await {
             log::error!("Failed to flush signal cache after send_status_message: {e:?}");
         }
@@ -602,6 +614,47 @@ impl Client {
             );
         }
         self.sender_key_device_cache.invalidate(group_jid).await;
+    }
+
+    /// Spawn a background task to validate phash from server ack.
+    /// On mismatch, invalidates sender key device cache and group info cache.
+    fn spawn_phash_validation(
+        &self,
+        rx: futures::channel::oneshot::Receiver<wacore_binary::Node>,
+        our_phash: String,
+        jid: Jid,
+        invalidate_group_cache: bool,
+    ) {
+        let Some(client) = self.self_weak.get().and_then(|w| w.upgrade()) else {
+            return;
+        };
+        self.runtime
+            .spawn(Box::pin(async move {
+                let ack = match tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    rx,
+                )
+                .await
+                {
+                    Ok(Ok(node)) => node,
+                    _ => return,
+                };
+                if let Some(server) = ack.attrs().optional_string("phash")
+                    && *server != our_phash
+                {
+                    log::warn!(
+                        "Phash mismatch for {jid}: ours={our_phash}, server={server}. Invalidating caches."
+                    );
+                    client
+                        .sender_key_device_cache
+                        .invalidate(&jid.to_string())
+                        .await;
+                    if invalidate_group_cache {
+                        client.get_group_cache().await.invalidate(&jid).await;
+                    }
+                }
+            }))
+            .detach();
     }
 
     /// Ensure the status stanza has a <participants> node listing all recipient
@@ -1059,15 +1112,29 @@ impl Client {
             .await?
         };
 
+        let our_phash = stanza_to_send
+            .attrs()
+            .optional_string("phash")
+            .map(|s| s.into_owned());
+        let ack_rx = if our_phash.is_some() {
+            let msg_id = stanza_to_send.attrs().optional_string("id");
+            Some(
+                self.register_ack_waiter(msg_id.as_deref().unwrap_or_default())
+                    .await,
+            )
+        } else {
+            None
+        };
+
         self.send_node(stanza_to_send).await?;
 
-        // Update SKDM recipient cache AFTER server ACK (matches WhatsApp Web behavior).
-        // WA Web only calls markHasSenderKey() after the server confirms receipt.
+        if let Some(rx) = ack_rx {
+            self.spawn_phash_validation(rx, our_phash.unwrap(), tc_issue_target.clone(), true);
+        }
+
         if let Some(update) = skdm_update {
             self.update_sender_key_devices(&update.to_str, &update.devices)
                 .await;
-            // Invalidate device registry for users whose devices returned 406
-            // so the next send re-fetches from server (without stale devices)
             for user in &update.stale_users {
                 self.invalidate_device_cache(user).await;
             }
