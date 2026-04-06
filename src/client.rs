@@ -1337,6 +1337,13 @@ impl Client {
             .map_err(|e| anyhow::anyhow!("Failed to flush signal cache: {e}"))
     }
 
+    /// [`flush_signal_cache`](Self::flush_signal_cache) with error logging instead of propagation.
+    pub(crate) async fn flush_signal_cache_logged(&self, context: &str) {
+        if let Err(e) = self.flush_signal_cache().await {
+            log::error!("Failed to flush signal cache ({context}): {e:?}");
+        }
+    }
+
     async fn read_messages_loop(self: &Arc<Self>) -> Result<(), anyhow::Error> {
         debug!("Starting message processing loop...");
 
