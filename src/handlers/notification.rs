@@ -364,23 +364,18 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
             .await;
     }
 
-    // Delete primary device session + identity key so a fresh session can be established
+    // Delete primary session + identity so a fresh session can be established,
+    // and rotate status sender key for forward secrecy (clear_device_record only
+    // cleared device tracking, not the key itself). Single flush covers both.
     {
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
         use wacore::types::jid::JidExt;
+
         let resolved = client.resolve_encryption_jid(&from_jid).await;
         let addr = resolved.to_protocol_address();
         client.signal_cache.delete_session(&addr).await;
         client.signal_cache.delete_identity(&addr).await;
-        if let Err(e) = client.flush_signal_cache().await {
-            warn!("Identity change: failed to flush after primary session deletion: {e}");
-        }
-    }
 
-    // Force status sender key rotation for forward secrecy (clear_device_record
-    // only cleared device tracking, not the key itself)
-    {
-        use wacore::libsignal::store::sender_key_name::SenderKeyName;
-        use wacore::types::jid::JidExt;
         let status_group = "status@broadcast";
         for own_jid in device_snapshot.pn.iter().chain(device_snapshot.lid.iter()) {
             let sk_name = SenderKeyName::new(
@@ -391,6 +386,10 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
                 .signal_cache
                 .delete_sender_key(sk_name.cache_key())
                 .await;
+        }
+
+        if let Err(e) = client.flush_signal_cache().await {
+            warn!("Identity change: failed to flush signal cache: {e}");
         }
     }
 
