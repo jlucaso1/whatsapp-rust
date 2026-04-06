@@ -46,6 +46,8 @@ pub struct GroupMetadata {
     pub is_announcement: bool,
     /// Ephemeral message expiration in seconds (0 = disabled).
     pub ephemeral_expiration: u32,
+    /// Disappearing mode trigger (from `trigger` attribute on `<ephemeral>`).
+    pub ephemeral_trigger: Option<u32>,
     /// Whether membership approval is required to join.
     pub membership_approval: bool,
     /// Who can add members to the group.
@@ -101,6 +103,7 @@ impl From<GroupInfoResponse> for GroupMetadata {
             is_locked: group.is_locked,
             is_announcement: group.is_announcement,
             ephemeral_expiration: group.ephemeral_expiration,
+            ephemeral_trigger: group.ephemeral_trigger,
             membership_approval: group.membership_approval,
             member_add_mode: group.member_add_mode,
             member_link_mode: group.member_link_mode,

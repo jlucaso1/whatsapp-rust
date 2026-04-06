@@ -420,6 +420,8 @@ pub struct GroupInfoResponse {
     pub is_announcement: bool,
     /// Ephemeral message expiration in seconds (0 = disabled).
     pub ephemeral_expiration: u32,
+    /// Disappearing mode trigger (0-20 range, from `trigger` attribute on `<ephemeral>`).
+    pub ephemeral_trigger: Option<u32>,
     /// Whether membership approval is required to join.
     pub membership_approval: bool,
     /// Who can add members to the group.
@@ -458,12 +460,13 @@ impl ProtocolNode for GroupInfoResponse {
         if self.is_announcement {
             children.push(NodeBuilder::new("announcement").build());
         }
-        if self.ephemeral_expiration > 0 {
-            children.push(
-                NodeBuilder::new("ephemeral")
-                    .attr("expiration", self.ephemeral_expiration.to_string())
-                    .build(),
-            );
+        if self.ephemeral_expiration > 0 || self.ephemeral_trigger.is_some() {
+            let mut eph = NodeBuilder::new("ephemeral")
+                .attr("expiration", self.ephemeral_expiration.to_string());
+            if let Some(trigger) = self.ephemeral_trigger {
+                eph = eph.attr("trigger", trigger.to_string());
+            }
+            children.push(eph.build());
         }
         if self.membership_approval {
             children.push(
@@ -604,11 +607,14 @@ impl ProtocolNode for GroupInfoResponse {
         let is_locked = node.get_optional_child_by_tag(&["locked"]).is_some();
         let is_announcement = node.get_optional_child_by_tag(&["announcement"]).is_some();
 
-        let ephemeral_expiration = node
-            .get_optional_child_by_tag(&["ephemeral"])
+        let ephemeral_node = node.get_optional_child_by_tag(&["ephemeral"]);
+        let ephemeral_expiration = ephemeral_node
             .and_then(|n| n.attrs().optional_string("expiration"))
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
+        let ephemeral_trigger = ephemeral_node
+            .and_then(|n| n.attrs().optional_string("trigger"))
+            .and_then(|s| s.parse::<u32>().ok());
 
         let membership_approval = node
             .get_optional_child_by_tag(&["membership_approval_mode", "group_join"])
@@ -672,6 +678,7 @@ impl ProtocolNode for GroupInfoResponse {
             is_locked,
             is_announcement,
             ephemeral_expiration,
+            ephemeral_trigger,
             membership_approval,
             member_add_mode,
             member_link_mode,
@@ -726,7 +733,10 @@ impl ProtocolNode for GroupParticipatingRequest {
         if node.tag != "participating" {
             return Err(anyhow!("expected <participating>, got <{}>", node.tag));
         }
-        Ok(Self::default())
+        Ok(Self {
+            include_participants: node.get_optional_child("participants").is_some(),
+            include_description: node.get_optional_child("description").is_some(),
+        })
     }
 }
 
