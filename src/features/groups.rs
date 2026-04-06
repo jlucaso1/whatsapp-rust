@@ -18,7 +18,7 @@ pub use wacore::iq::groups::{
     ParticipantChangeResponse,
 };
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GroupMetadata {
     pub id: Jid,
     pub subject: String,
@@ -36,6 +36,10 @@ pub struct GroupMetadata {
     pub description: Option<String>,
     /// Description ID (for conflict detection when updating).
     pub description_id: Option<String>,
+    /// JID of the participant who set the description.
+    pub description_owner: Option<Jid>,
+    /// Timestamp when the description was set.
+    pub description_time: Option<u64>,
     /// Whether the group is locked (only admins can edit group info).
     pub is_locked: bool,
     /// Whether announcement mode is enabled (only admins can send messages).
@@ -92,6 +96,8 @@ impl From<GroupInfoResponse> for GroupMetadata {
             subject_owner: group.subject_owner,
             description: group.description,
             description_id: group.description_id,
+            description_owner: group.description_owner,
+            description_time: group.description_time,
             is_locked: group.is_locked,
             is_announcement: group.is_announcement,
             ephemeral_expiration: group.ephemeral_expiration,
@@ -608,25 +614,7 @@ mod tests {
                 phone_number: None,
                 is_admin: true,
             }],
-            addressing_mode: AddressingMode::Pn,
-            creator: None,
-            creation_time: None,
-            subject_time: None,
-            subject_owner: None,
-            description: None,
-            description_id: None,
-            is_locked: false,
-            is_announcement: false,
-            ephemeral_expiration: 0,
-            membership_approval: false,
-            member_add_mode: None,
-            member_link_mode: None,
-            size: None,
-            is_parent_group: false,
-            parent_group_jid: None,
-            is_default_sub_group: false,
-            is_general_chat: false,
-            allow_non_admin_sub_group_creation: false,
+            ..Default::default()
         };
 
         assert_eq!(metadata.subject, "Test Group");

@@ -276,13 +276,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
                 None
             } else {
                 node.get_optional_child("body")
-                    .and_then(|body| match &body.content {
-                        Some(NodeContent::String(s)) => Some(s.clone()),
-                        Some(NodeContent::Bytes(b)) => {
-                            Some(String::from_utf8_lossy(b).into_owned())
-                        }
-                        _ => None,
-                    })
+                    .and_then(|body| body.content_as_string())
             };
             GroupNotificationAction::Description { id, description }
         }

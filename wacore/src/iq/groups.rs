@@ -410,6 +410,10 @@ pub struct GroupInfoResponse {
     pub description: Option<String>,
     /// Description ID (for conflict detection when updating).
     pub description_id: Option<String>,
+    /// JID of the participant who set the description.
+    pub description_owner: Option<Jid>,
+    /// Timestamp when the description was set.
+    pub description_time: Option<u64>,
     /// Whether the group is locked (only admins can edit group info).
     pub is_locked: bool,
     /// Whether announcement mode is enabled (only admins can send messages).
@@ -484,12 +488,23 @@ impl ProtocolNode for GroupInfoResponse {
                     .build(),
             );
         }
-        if let Some(ref desc) = self.description {
+        if self.description.is_some() || self.description_id.is_some() {
             let mut desc_builder = NodeBuilder::new("description");
             if let Some(ref desc_id) = self.description_id {
                 desc_builder = desc_builder.attr("id", desc_id.as_str());
             }
-            children.push(desc_builder.string_content(desc.as_str()).build());
+            if let Some(ref owner) = self.description_owner {
+                desc_builder = desc_builder.attr("participant", owner.clone());
+            }
+            if let Some(t) = self.description_time {
+                desc_builder = desc_builder.attr("t", t.to_string());
+            }
+            if let Some(ref desc) = self.description {
+                desc_builder = desc_builder.children([NodeBuilder::new("body")
+                    .string_content(desc.as_str())
+                    .build()]);
+            }
+            children.push(desc_builder.build());
         }
 
         // Community fields
@@ -614,15 +629,19 @@ impl ProtocolNode for GroupInfoResponse {
                 _ => None,
             });
 
-        // Parse description
+        // Description lives inside <description id="..." participant="..." t="..."><body>text</body></description>
         let description_node = node.get_optional_child_by_tag(&["description"]);
-        let description = description_node.and_then(|n| match &n.content {
-            Some(NodeContent::String(s)) => Some(s.clone()),
-            _ => None,
-        });
+        let description = description_node
+            .and_then(|n| n.get_optional_child("body"))
+            .and_then(|body| body.content_as_string());
         let description_id = description_node
             .and_then(|n| n.attrs().optional_string("id"))
             .map(|s| s.to_string());
+        let description_owner =
+            description_node.and_then(|n| n.attrs().optional_jid("participant"));
+        let description_time = description_node
+            .and_then(|n| n.attrs().optional_string("t"))
+            .and_then(|s| s.parse::<u64>().ok());
 
         // Parse community fields
         let is_parent_group = node.get_optional_child_by_tag(&["parent"]).is_some();
@@ -648,6 +667,8 @@ impl ProtocolNode for GroupInfoResponse {
             subject_owner,
             description,
             description_id,
+            description_owner,
+            description_time,
             is_locked,
             is_announcement,
             ephemeral_expiration,
@@ -2866,5 +2887,42 @@ mod tests {
         assert!(!response.is_parent_group);
         assert!(response.is_default_sub_group);
         assert_eq!(response.parent_group_jid, Some(parent_jid.parse().unwrap()));
+    }
+
+    #[test]
+    fn test_group_info_response_parses_description_from_body() {
+        let node = NodeBuilder::new("group")
+            .attr("id", "120363000000000001@g.us")
+            .attr("subject", "Test Group")
+            .children([NodeBuilder::new("description")
+                .attr("id", "desc123")
+                .attr("participant", "5511999999999@s.whatsapp.net")
+                .attr("t", "1700000000")
+                .children([NodeBuilder::new("body")
+                    .apply_content(Some(NodeContent::String("Hello world".into())))
+                    .build()])
+                .build()])
+            .build();
+
+        let response = GroupInfoResponse::try_from_node(&node).unwrap();
+        assert_eq!(response.description.as_deref(), Some("Hello world"));
+        assert_eq!(response.description_id.as_deref(), Some("desc123"));
+        assert_eq!(
+            response.description_owner,
+            Some("5511999999999@s.whatsapp.net".parse().unwrap())
+        );
+        assert_eq!(response.description_time, Some(1700000000));
+    }
+
+    #[test]
+    fn test_group_info_response_no_description() {
+        let node = NodeBuilder::new("group")
+            .attr("id", "120363000000000001@g.us")
+            .attr("subject", "Test Group")
+            .build();
+
+        let response = GroupInfoResponse::try_from_node(&node).unwrap();
+        assert!(response.description.is_none());
+        assert!(response.description_id.is_none());
     }
 }

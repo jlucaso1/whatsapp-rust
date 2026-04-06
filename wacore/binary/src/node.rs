@@ -437,6 +437,15 @@ impl Node {
         self.children()
             .and_then(|nodes| nodes.iter().find(|node| node.tag == tag))
     }
+
+    /// Extract text content, handling both String and Bytes (lossy UTF-8).
+    pub fn content_as_string(&self) -> Option<String> {
+        match &self.content {
+            Some(NodeContent::String(s)) => Some(s.clone()),
+            Some(NodeContent::Bytes(b)) => Some(String::from_utf8_lossy(b).into_owned()),
+            _ => None,
+        }
+    }
 }
 
 impl<'a> NodeRef<'a> {
