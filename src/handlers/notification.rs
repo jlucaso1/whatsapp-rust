@@ -336,6 +336,22 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
         return;
     }
 
+    // WA Web: isMePrimary(h) → handleSelfPrimaryIdentityChange (different flow).
+    // We must not clear our own device record.
+    let device_snapshot = client.persistence_manager.get_device_snapshot().await;
+    let is_me = device_snapshot
+        .pn
+        .as_ref()
+        .is_some_and(|pn| pn.user == from_jid.user)
+        || device_snapshot
+            .lid
+            .as_ref()
+            .is_some_and(|lid| lid.user == from_jid.user);
+    if is_me {
+        debug!("Ignoring self-primary identity change");
+        return;
+    }
+
     info!(
         "Identity change for user {}: clearing device record",
         from_jid.user
@@ -1967,6 +1983,35 @@ mod tests {
                 .await
                 .is_none(),
             "device registry cache should be invalidated after identity change"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_identity_change_ignores_self_primary() {
+        let client = create_test_client().await;
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
+
+        // Set our own JID so the self-check works
+        client
+            .persistence_manager
+            .modify_device(|d| {
+                d.pn = Some("5511999999999@s.whatsapp.net".parse().unwrap());
+            })
+            .await;
+
+        // Identity change FROM our own JID — should be ignored per WA Web's isMePrimary
+        let node = NodeBuilder::new("notification")
+            .attr("type", "encrypt")
+            .attr("from", "5511999999999@s.whatsapp.net")
+            .attr("id", "identity-change-self")
+            .children([NodeBuilder::new("identity").build()])
+            .build();
+        handle_notification_impl(&client, &node).await;
+
+        assert!(
+            collector.events().is_empty(),
+            "self identity change should be ignored"
         );
     }
 
