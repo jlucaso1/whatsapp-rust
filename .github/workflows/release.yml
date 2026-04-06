@@ -36,7 +36,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-01-30
+          toolchain: nightly-2026-04-05
 
       - name: Install protoc
         uses: taiki-e/install-action@v2
