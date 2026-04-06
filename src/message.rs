@@ -1025,17 +1025,16 @@ impl Client {
 
             match decrypt_result {
                 Ok(padded_plaintext) => {
-                    // WA Web: isFromKnownDevice() in preProcessMsg
-                    // Uses the actual device ID from the participant JID
-                    // (e.g., device 33 for sender:33@lid, device 0 for bare sender@lid).
+                    // Sync device list if sender is unknown, but still process
+                    // the message. Signal decryption success already proves the
+                    // sender holds the session key — discarding would only add
+                    // latency via an unnecessary retry round-trip.
                     if !self.is_from_known_device(&info.source.sender).await {
-                        warn!(
+                        debug!(
                             "[msg:{}] Unknown device {}, triggering device sync",
                             info.id, info.source.sender
                         );
                         self.handle_unknown_device_sync(info).await;
-                        self.spawn_retry_receipt(info, RetryReason::UnknownCompanionNoPrekey);
-                        continue;
                     }
 
                     if let Err(e) = self
