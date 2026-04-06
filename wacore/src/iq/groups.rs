@@ -410,12 +410,18 @@ pub struct GroupInfoResponse {
     pub description: Option<String>,
     /// Description ID (for conflict detection when updating).
     pub description_id: Option<String>,
+    /// JID of the participant who set the description.
+    pub description_owner: Option<Jid>,
+    /// Timestamp when the description was set.
+    pub description_time: Option<u64>,
     /// Whether the group is locked (only admins can edit group info).
     pub is_locked: bool,
     /// Whether announcement mode is enabled (only admins can send messages).
     pub is_announcement: bool,
     /// Ephemeral message expiration in seconds (0 = disabled).
     pub ephemeral_expiration: u32,
+    /// Disappearing mode trigger (0-20 range, from `trigger` attribute on `<ephemeral>`).
+    pub ephemeral_trigger: Option<u32>,
     /// Whether membership approval is required to join.
     pub membership_approval: bool,
     /// Who can add members to the group.
@@ -454,12 +460,13 @@ impl ProtocolNode for GroupInfoResponse {
         if self.is_announcement {
             children.push(NodeBuilder::new("announcement").build());
         }
-        if self.ephemeral_expiration > 0 {
-            children.push(
-                NodeBuilder::new("ephemeral")
-                    .attr("expiration", self.ephemeral_expiration.to_string())
-                    .build(),
-            );
+        if self.ephemeral_expiration > 0 || self.ephemeral_trigger.is_some() {
+            let mut eph = NodeBuilder::new("ephemeral")
+                .attr("expiration", self.ephemeral_expiration.to_string());
+            if let Some(trigger) = self.ephemeral_trigger {
+                eph = eph.attr("trigger", trigger.to_string());
+            }
+            children.push(eph.build());
         }
         if self.membership_approval {
             children.push(
@@ -484,12 +491,27 @@ impl ProtocolNode for GroupInfoResponse {
                     .build(),
             );
         }
-        if let Some(ref desc) = self.description {
+        if self.description.is_some()
+            || self.description_id.is_some()
+            || self.description_owner.is_some()
+            || self.description_time.is_some()
+        {
             let mut desc_builder = NodeBuilder::new("description");
             if let Some(ref desc_id) = self.description_id {
                 desc_builder = desc_builder.attr("id", desc_id.as_str());
             }
-            children.push(desc_builder.string_content(desc.as_str()).build());
+            if let Some(ref owner) = self.description_owner {
+                desc_builder = desc_builder.attr("participant", owner.clone());
+            }
+            if let Some(t) = self.description_time {
+                desc_builder = desc_builder.attr("t", t.to_string());
+            }
+            if let Some(ref desc) = self.description {
+                desc_builder = desc_builder.children([NodeBuilder::new("body")
+                    .string_content(desc.as_str())
+                    .build()]);
+            }
+            children.push(desc_builder.build());
         }
 
         // Community fields
@@ -589,11 +611,14 @@ impl ProtocolNode for GroupInfoResponse {
         let is_locked = node.get_optional_child_by_tag(&["locked"]).is_some();
         let is_announcement = node.get_optional_child_by_tag(&["announcement"]).is_some();
 
-        let ephemeral_expiration = node
-            .get_optional_child_by_tag(&["ephemeral"])
+        let ephemeral_node = node.get_optional_child_by_tag(&["ephemeral"]);
+        let ephemeral_expiration = ephemeral_node
             .and_then(|n| n.attrs().optional_string("expiration"))
             .and_then(|s| s.parse::<u32>().ok())
             .unwrap_or(0);
+        let ephemeral_trigger = ephemeral_node
+            .and_then(|n| n.attrs().optional_string("trigger"))
+            .and_then(|s| s.parse::<u32>().ok());
 
         let membership_approval = node
             .get_optional_child_by_tag(&["membership_approval_mode", "group_join"])
@@ -614,15 +639,19 @@ impl ProtocolNode for GroupInfoResponse {
                 _ => None,
             });
 
-        // Parse description
+        // Description lives inside <description id="..." participant="..." t="..."><body>text</body></description>
         let description_node = node.get_optional_child_by_tag(&["description"]);
-        let description = description_node.and_then(|n| match &n.content {
-            Some(NodeContent::String(s)) => Some(s.clone()),
-            _ => None,
-        });
+        let description = description_node
+            .and_then(|n| n.get_optional_child("body"))
+            .and_then(|body| body.content_as_string());
         let description_id = description_node
             .and_then(|n| n.attrs().optional_string("id"))
             .map(|s| s.to_string());
+        let description_owner =
+            description_node.and_then(|n| n.attrs().optional_jid("participant"));
+        let description_time = description_node
+            .and_then(|n| n.attrs().optional_string("t"))
+            .and_then(|s| s.parse::<u64>().ok());
 
         // Parse community fields
         let is_parent_group = node.get_optional_child_by_tag(&["parent"]).is_some();
@@ -648,9 +677,12 @@ impl ProtocolNode for GroupInfoResponse {
             subject_owner,
             description,
             description_id,
+            description_owner,
+            description_time,
             is_locked,
             is_announcement,
             ephemeral_expiration,
+            ephemeral_trigger,
             membership_approval,
             member_add_mode,
             member_link_mode,
@@ -705,7 +737,10 @@ impl ProtocolNode for GroupParticipatingRequest {
         if node.tag != "participating" {
             return Err(anyhow!("expected <participating>, got <{}>", node.tag));
         }
-        Ok(Self::default())
+        Ok(Self {
+            include_participants: node.get_optional_child("participants").is_some(),
+            include_description: node.get_optional_child("description").is_some(),
+        })
     }
 }
 
@@ -2866,5 +2901,44 @@ mod tests {
         assert!(!response.is_parent_group);
         assert!(response.is_default_sub_group);
         assert_eq!(response.parent_group_jid, Some(parent_jid.parse().unwrap()));
+    }
+
+    #[test]
+    fn test_group_info_response_parses_description_from_body() {
+        let node = NodeBuilder::new("group")
+            .attr("id", "120363000000000001@g.us")
+            .attr("subject", "Test Group")
+            .children([NodeBuilder::new("description")
+                .attr("id", "desc123")
+                .attr("participant", "5511999999999@s.whatsapp.net")
+                .attr("t", "1700000000")
+                .children([NodeBuilder::new("body")
+                    .apply_content(Some(NodeContent::String("Hello world".into())))
+                    .build()])
+                .build()])
+            .build();
+
+        let response = GroupInfoResponse::try_from_node(&node).unwrap();
+        assert_eq!(response.description.as_deref(), Some("Hello world"));
+        assert_eq!(response.description_id.as_deref(), Some("desc123"));
+        assert_eq!(
+            response.description_owner,
+            Some("5511999999999@s.whatsapp.net".parse().unwrap())
+        );
+        assert_eq!(response.description_time, Some(1700000000));
+    }
+
+    #[test]
+    fn test_group_info_response_no_description() {
+        let node = NodeBuilder::new("group")
+            .attr("id", "120363000000000001@g.us")
+            .attr("subject", "Test Group")
+            .build();
+
+        let response = GroupInfoResponse::try_from_node(&node).unwrap();
+        assert!(response.description.is_none());
+        assert!(response.description_id.is_none());
+        assert!(response.description_owner.is_none());
+        assert!(response.description_time.is_none());
     }
 }

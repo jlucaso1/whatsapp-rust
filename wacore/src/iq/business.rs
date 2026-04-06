@@ -87,10 +87,8 @@ pub struct BusinessHours {
 pub struct BusinessHoursConfig {
     pub day_of_week: DayOfWeek,
     pub mode: BusinessHourMode,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub open_time: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub close_time: Option<String>,
+    pub open_time: u32,
+    pub close_time: u32,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -181,8 +179,12 @@ impl IqSpec for BusinessProfileSpec {
                         Some(BusinessHoursConfig {
                             day_of_week: DayOfWeek::from(day.as_ref()),
                             mode: BusinessHourMode::from(mode_str.as_ref()),
-                            open_time: optional_attr(c, "open_time").map(|s| s.into_owned()),
-                            close_time: optional_attr(c, "close_time").map(|s| s.into_owned()),
+                            open_time: optional_attr(c, "open_time")
+                                .and_then(|s| s.parse::<u32>().ok())
+                                .unwrap_or(0),
+                            close_time: optional_attr(c, "close_time")
+                                .and_then(|s| s.parse::<u32>().ok())
+                                .unwrap_or(0),
                         })
                     })
                     .collect();
