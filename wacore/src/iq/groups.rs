@@ -491,7 +491,11 @@ impl ProtocolNode for GroupInfoResponse {
                     .build(),
             );
         }
-        if self.description.is_some() || self.description_id.is_some() {
+        if self.description.is_some()
+            || self.description_id.is_some()
+            || self.description_owner.is_some()
+            || self.description_time.is_some()
+        {
             let mut desc_builder = NodeBuilder::new("description");
             if let Some(ref desc_id) = self.description_id {
                 desc_builder = desc_builder.attr("id", desc_id.as_str());
@@ -2934,5 +2938,7 @@ mod tests {
         let response = GroupInfoResponse::try_from_node(&node).unwrap();
         assert!(response.description.is_none());
         assert!(response.description_id.is_none());
+        assert!(response.description_owner.is_none());
+        assert!(response.description_time.is_none());
     }
 }
