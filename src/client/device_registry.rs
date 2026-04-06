@@ -314,9 +314,8 @@ impl Client {
                 }
             }
         }
-        if let Err(e) = self.flush_signal_cache().await {
-            warn!("delete_sessions_for_devices: failed to flush: {e}");
-        }
+        self.flush_signal_cache_logged("delete_sessions_for_devices")
+            .await;
     }
 
     /// Clear device record on raw_id mismatch (identity change).
@@ -554,6 +553,32 @@ mod tests {
         create_test_client_with_failing_http("device_registry").await
     }
 
+    async fn setup_lid_pn(client: &Arc<Client>, lid: &str, pn: &str) {
+        use crate::lid_pn_cache::LidPnEntry;
+        let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
+        client.lid_pn_cache.add(entry).await;
+    }
+
+    async fn setup_device_record(client: &Arc<Client>, user: &str, device_ids: &[u32]) {
+        let record = wacore::store::traits::DeviceListRecord {
+            user: user.into(),
+            devices: device_ids
+                .iter()
+                .map(|&id| wacore::store::traits::DeviceInfo {
+                    device_id: id,
+                    key_index: None,
+                })
+                .collect(),
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+            raw_id: None,
+        };
+        client
+            .device_registry_cache
+            .insert(user.into(), record)
+            .await;
+    }
+
     #[tokio::test]
     async fn test_resolve_to_canonical_key_unknown_user() {
         let client = create_test_client().await;
@@ -563,15 +588,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_resolve_to_canonical_key_with_lid_mapping() {
-        use crate::lid_pn_cache::LidPnEntry;
-
         let client = create_test_client().await;
         let lid = "100000000000001";
         let pn = "15551234567";
 
-        // Add directly to cache (avoids persistence layer which needs DB tables)
-        let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
-        client.lid_pn_cache.add(entry).await;
+        setup_lid_pn(&client, lid, pn).await;
 
         // PN should resolve to LID
         let result = client.resolve_to_canonical_key(pn).await;
@@ -591,15 +612,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_lookup_keys_with_lid_mapping() {
-        use crate::lid_pn_cache::LidPnEntry;
-
         let client = create_test_client().await;
         let lid = "100000000000001";
         let pn = "15551234567";
 
-        // Add directly to cache (avoids persistence layer which needs DB tables)
-        let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
-        client.lid_pn_cache.add(entry).await;
+        setup_lid_pn(&client, lid, pn).await;
 
         // Looking up by PN should return [LID, PN]
         let keys = client.get_lookup_keys(pn).await;
@@ -612,8 +629,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_15_digit_lid_handling() {
-        use crate::lid_pn_cache::LidPnEntry;
-
         let client = create_test_client().await;
         // Real example: 15-digit LID
         let lid = "100000000000001";
@@ -621,9 +636,7 @@ mod tests {
 
         assert_eq!(lid.len(), 15, "LID should be 15 digits");
 
-        // Add directly to cache (avoids persistence layer which needs DB tables)
-        let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
-        client.lid_pn_cache.add(entry).await;
+        setup_lid_pn(&client, lid, pn).await;
 
         // 15-digit LID should be properly recognized via cache lookup
         let canonical = client.resolve_to_canonical_key(lid).await;
@@ -649,31 +662,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_has_device_with_cached_record() {
-        use crate::lid_pn_cache::LidPnEntry;
-
         let client = create_test_client().await;
         let lid = "100000000000001";
         let pn = "15551234567";
 
-        // Add directly to cache (avoids persistence layer which needs DB tables)
-        let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
-        client.lid_pn_cache.add(entry).await;
-
-        // Manually insert into cache to test lookup logic
-        let record = wacore::store::traits::DeviceListRecord {
-            user: lid.to_string(),
-            devices: vec![wacore::store::traits::DeviceInfo {
-                device_id: 1,
-                key_index: None,
-            }],
-            timestamp: 12345,
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert(lid.to_string(), record)
-            .await;
+        setup_lid_pn(&client, lid, pn).await;
+        setup_device_record(&client, lid, &[1]).await;
 
         // Device should be findable via both PN and LID (bidirectional lookup)
         assert!(client.has_device(pn, 1).await);
@@ -686,29 +680,12 @@ mod tests {
     /// all LID/PN aliases when called with either identifier.
     #[tokio::test]
     async fn test_invalidate_device_cache_uses_correct_jid_types() {
-        use crate::lid_pn_cache::LidPnEntry;
-
         let client = create_test_client().await;
         let lid = "100000000000001";
         let pn = "15551234567";
 
-        let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
-        client.lid_pn_cache.add(entry).await;
-
-        let record = wacore::store::traits::DeviceListRecord {
-            user: lid.to_string(),
-            devices: vec![wacore::store::traits::DeviceInfo {
-                device_id: 1,
-                key_index: None,
-            }],
-            timestamp: 12345,
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert(lid.to_string(), record)
-            .await;
+        setup_lid_pn(&client, lid, pn).await;
+        setup_device_record(&client, lid, &[1]).await;
 
         assert!(client.device_registry_cache.get(lid).await.is_some());
 
@@ -720,20 +697,7 @@ mod tests {
         );
 
         // Re-insert and invalidate via LID
-        let record2 = wacore::store::traits::DeviceListRecord {
-            user: lid.to_string(),
-            devices: vec![wacore::store::traits::DeviceInfo {
-                device_id: 2,
-                key_index: None,
-            }],
-            timestamp: 12346,
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert(lid.to_string(), record2)
-            .await;
+        setup_device_record(&client, lid, &[2]).await;
 
         client.invalidate_device_cache(lid).await;
         assert!(
@@ -748,20 +712,7 @@ mod tests {
         let client = create_test_client().await;
         let unknown_user = "100000000000999";
 
-        let record = wacore::store::traits::DeviceListRecord {
-            user: unknown_user.to_string(),
-            devices: vec![wacore::store::traits::DeviceInfo {
-                device_id: 1,
-                key_index: None,
-            }],
-            timestamp: 12345,
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert(unknown_user.to_string(), record)
-            .await;
+        setup_device_record(&client, unknown_user, &[1]).await;
 
         assert!(
             client
@@ -802,25 +753,10 @@ mod tests {
 
     #[tokio::test]
     async fn test_patch_device_add_to_existing_cache() {
-        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
-
         let client = create_test_client().await;
 
         // Pre-populate registry cache with device 0
-        let record = DeviceListRecord {
-            user: "15551234567".into(),
-            devices: vec![DeviceInfo {
-                device_id: 0,
-                key_index: None,
-            }],
-            timestamp: wacore::time::now_secs(),
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert("15551234567".into(), record)
-            .await;
+        setup_device_record(&client, "15551234567", &[0]).await;
 
         // Patch: add device 3
         let elem = make_device_element(3, Some(5));
@@ -839,24 +775,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_patch_device_add_deduplicates() {
-        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
-
         let client = create_test_client().await;
 
-        let record = DeviceListRecord {
-            user: "15551234567".into(),
-            devices: vec![DeviceInfo {
-                device_id: 3,
-                key_index: None,
-            }],
-            timestamp: wacore::time::now_secs(),
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert("15551234567".into(), record)
-            .await;
+        setup_device_record(&client, "15551234567", &[3]).await;
 
         // Patch: add device 3 again — should not duplicate
         let elem = make_device_element(3, None);
@@ -889,30 +810,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_patch_device_remove() {
-        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
-
         let client = create_test_client().await;
 
-        let record = DeviceListRecord {
-            user: "15551234567".into(),
-            devices: vec![
-                DeviceInfo {
-                    device_id: 0,
-                    key_index: None,
-                },
-                DeviceInfo {
-                    device_id: 3,
-                    key_index: None,
-                },
-            ],
-            timestamp: wacore::time::now_secs(),
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert("15551234567".into(), record)
-            .await;
+        setup_device_record(&client, "15551234567", &[0, 3]).await;
 
         client.patch_device_remove("15551234567", 3).await;
 
@@ -969,20 +869,7 @@ mod tests {
         let client = create_test_client().await;
 
         // Pre-populate registry cache
-        let record = wacore::store::traits::DeviceListRecord {
-            user: "15551234567".to_string(),
-            devices: vec![wacore::store::traits::DeviceInfo {
-                device_id: 0,
-                key_index: None,
-            }],
-            timestamp: 1000,
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert("15551234567".to_string(), record)
-            .await;
+        setup_device_record(&client, "15551234567", &[0]).await;
 
         // Patch: add device 3
         let elem = make_device_element(3, Some(2));
@@ -1000,7 +887,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_lid_migration_preserves_registry_cache() {
-        use crate::lid_pn_cache::LidPnEntry;
         use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 
         let client = create_test_client().await;
@@ -1031,9 +917,7 @@ mod tests {
             .await
             .unwrap();
 
-        // Add LID-PN mapping so resolution works
-        let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
-        client.lid_pn_cache.add(entry).await;
+        setup_lid_pn(&client, lid, pn).await;
 
         // Migrate
         client
@@ -1067,32 +951,12 @@ mod tests {
     /// storage key.
     #[tokio::test]
     async fn test_reconstruct_device_jids_uses_query_alias() {
-        use crate::lid_pn_cache::LidPnEntry;
-        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
-
         let client = create_test_client().await;
         let pn = "15550000088";
         let lid = "100000000000088";
 
-        // Store record under LID key
-        let record = DeviceListRecord {
-            user: lid.to_string(),
-            devices: vec![DeviceInfo {
-                device_id: 5,
-                key_index: None,
-            }],
-            timestamp: wacore::time::now_secs(),
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert(lid.to_string(), record)
-            .await;
-
-        // Add LID-PN mapping so bidirectional lookup works
-        let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
-        client.lid_pn_cache.add(entry).await;
+        setup_device_record(&client, lid, &[5]).await;
+        setup_lid_pn(&client, lid, pn).await;
 
         // Query by PN — should find the LID-stored record but return PN-typed JIDs
         let pn_jid = Jid::pn(pn);
@@ -1233,25 +1097,11 @@ mod tests {
     #[tokio::test]
     async fn test_patch_device_add_invalidates_sender_key_cache() {
         use crate::sender_key_device_cache::SenderKeyDeviceMap;
-        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 
         let client = create_test_client().await;
 
         // Pre-populate device registry with device 0 only
-        let record = DeviceListRecord {
-            user: "15551234567".into(),
-            devices: vec![DeviceInfo {
-                device_id: 0,
-                key_index: None,
-            }],
-            timestamp: wacore::time::now_secs(),
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert("15551234567".into(), record)
-            .await;
+        setup_device_record(&client, "15551234567", &[0]).await;
 
         // Warm the sender key device cache for a group
         let group = "120363000000000001@g.us";
@@ -1338,30 +1188,10 @@ mod tests {
     #[tokio::test]
     async fn test_patch_device_remove_invalidates_sender_key_cache() {
         use crate::sender_key_device_cache::SenderKeyDeviceMap;
-        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 
         let client = create_test_client().await;
 
-        let record = DeviceListRecord {
-            user: "15551234567".into(),
-            devices: vec![
-                DeviceInfo {
-                    device_id: 0,
-                    key_index: None,
-                },
-                DeviceInfo {
-                    device_id: 3,
-                    key_index: None,
-                },
-            ],
-            timestamp: wacore::time::now_secs(),
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert("15551234567".into(), record)
-            .await;
+        setup_device_record(&client, "15551234567", &[0, 3]).await;
 
         // Warm sender key device cache
         let group = "120363000000000001@g.us";

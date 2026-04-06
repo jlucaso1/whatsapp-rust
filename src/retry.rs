@@ -237,9 +237,8 @@ impl Client {
                             signal_address, stored_reg_id, received_reg_id
                         );
                         self.signal_cache.delete_session(&signal_address).await;
-                        if let Err(e) = self.flush_signal_cache().await {
-                            log::warn!("Failed to flush session deletion for reg ID mismatch: {e}");
-                        }
+                        self.flush_signal_cache_logged("reg ID mismatch session deletion")
+                            .await;
                     }
                 }
             }

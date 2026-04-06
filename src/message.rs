@@ -286,15 +286,15 @@ impl Client {
 
         let participants = node.get_optional_child_by_tag(&["participants"]);
         if let Some(participants_node) = participants {
-            let own_jid = self.get_pn().await;
+            let own_jid_str = self.get_pn().await.map(|j| j.to_string());
             let to_nodes = participants_node.get_children_by_tag("to");
             for to_node in to_nodes {
                 let to_jid = match to_node.attrs().optional_string("jid") {
-                    Some(jid) => jid.to_string(),
+                    Some(jid) => jid,
                     None => continue,
                 };
-                if let Some(ref our_jid) = own_jid
-                    && to_jid == our_jid.to_string()
+                if let Some(ref ours) = own_jid_str
+                    && *to_jid == **ours
                 {
                     let enc_children = to_node.get_children_by_tag("enc");
                     all_enc_nodes.extend(enc_children);
@@ -583,12 +583,8 @@ impl Client {
         }
 
         // Flush cached Signal state to DB (matches WA Web's flushBufferToDiskIfNotMemOnlyMode)
-        if let Err(e) = self.flush_signal_cache().await {
-            log::error!(
-                "Failed to flush signal cache after message {}: {e:?}",
-                info.id
-            );
-        }
+        self.flush_signal_cache_logged(&format!("message {}", info.id))
+            .await;
     }
 
     async fn process_session_enc_batch(

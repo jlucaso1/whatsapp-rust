@@ -289,18 +289,16 @@ impl Client {
         let to = Jid::status_broadcast();
         let request_id = self.generate_message_id().await;
 
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let mut device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let account_info = device_snapshot.account.take();
         let own_jid = device_snapshot
             .pn
-            .clone()
+            .take()
             .ok_or(crate::client::ClientError::NotLoggedIn)?;
-        // Status always uses PN addressing, so own_lid is only needed as a
-        // fallback parameter for prepare_group_stanza (unused in PN mode).
         let own_lid = device_snapshot
             .lid
-            .clone()
+            .take()
             .unwrap_or_else(|| own_jid.clone());
-        let account_info = device_snapshot.account.clone();
 
         // Status always uses PN addressing. Resolve any LID recipients to their
         // phone numbers so we don't end up with duplicate PN+LID entries for the
@@ -488,9 +486,7 @@ impl Client {
             self.invalidate_device_cache(user).await;
         }
 
-        if let Err(e) = self.flush_signal_cache().await {
-            log::error!("Failed to flush signal cache after send_status_message: {e:?}");
-        }
+        self.flush_signal_cache_logged("send_status_message").await;
 
         Ok(SendResult {
             message_id: request_id,
@@ -875,16 +871,16 @@ impl Client {
             // Preparation work (no lock needed)
             let mut group_info = self.groups().query_info(&to).await?;
 
-            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+            let mut device_snapshot = self.persistence_manager.get_device_snapshot().await;
+            let account_info = device_snapshot.account.take();
             let own_jid = device_snapshot
                 .pn
-                .clone()
+                .take()
                 .ok_or(crate::client::ClientError::NotLoggedIn)?;
             let own_lid = device_snapshot
                 .lid
-                .clone()
+                .take()
                 .ok_or_else(|| anyhow!("LID not set, cannot send to group"))?;
-            let account_info = device_snapshot.account.clone();
 
             // Store serialized message bytes for retry (lightweight)
             self.add_recent_message(to.clone(), request_id.clone(), message)
@@ -1141,9 +1137,7 @@ impl Client {
         }
 
         // Flush cached Signal state to DB after encryption
-        if let Err(e) = self.flush_signal_cache().await {
-            log::error!("Failed to flush signal cache after send_message_impl: {e:?}");
-        }
+        self.flush_signal_cache_logged("send_message_impl").await;
 
         // Issue new tc token after send if a bucket boundary was crossed.
         // Fire-and-forget so send_message returns without waiting for the IQ

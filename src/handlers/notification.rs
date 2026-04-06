@@ -387,9 +387,7 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
                 .await;
         }
 
-        if let Err(e) = client.flush_signal_cache().await {
-            warn!("Identity change: failed to flush signal cache: {e}");
-        }
+        client.flush_signal_cache_logged("identity change").await;
     }
 
     // Force fresh usync on next send
