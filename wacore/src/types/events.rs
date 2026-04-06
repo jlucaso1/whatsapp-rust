@@ -304,6 +304,17 @@ pub struct DeviceListUpdate {
     pub contact_hash: Option<String>,
 }
 
+/// Identity key changed for a user (e.g., user reinstalled WhatsApp).
+/// Emitted after device record cleanup so sessions and sender keys are cleared.
+#[derive(Debug, Clone, Serialize)]
+pub struct IdentityChange {
+    /// The user whose identity changed
+    pub user: Jid,
+    /// Optional LID for the user
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lid_user: Option<Jid>,
+}
+
 /// Type of business status update.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum BusinessUpdateType {
@@ -436,6 +447,9 @@ pub enum Event {
 
     /// Device list changed for a user (device added/removed/updated)
     DeviceListUpdate(DeviceListUpdate),
+
+    /// Identity key changed (user reinstalled WhatsApp)
+    IdentityChange(IdentityChange),
 
     /// Business account status changed (verified name, profile, conversion to personal)
     BusinessStatusUpdate(BusinessStatusUpdate),
