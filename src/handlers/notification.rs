@@ -46,8 +46,15 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
 
     match notification_type {
         "encrypt" => {
-            if node.attrs.get("from").is_some_and(|v| v == SERVER_JID) {
-                // Dispatch based on first child tag, matching WA Web's handleEncryptNotification.
+            // Identity change: <notification type="encrypt" from="user@s.whatsapp.net">
+            //   <identity/>
+            // </notification>
+            // WA Web: WAWebHandleIdentityChange — clears device record, deletes sessions,
+            // marks sender keys for rotation, re-establishes session.
+            if node.get_optional_child("identity").is_some() {
+                handle_identity_change(client, node).await;
+            } else if node.attrs.get("from").is_some_and(|v| v == SERVER_JID) {
+                // Server-originated encrypt notifications:
                 // "count" → handlePreKeyLow, "digest" → handleDigestKey
                 let first_child_tag = node
                     .children()
@@ -302,6 +309,71 @@ fn handle_digest_key(client: &Arc<Client>) {
             }
         }))
         .detach();
+}
+
+/// Handle identity change notification (user reinstalled WhatsApp).
+///
+/// Matches WA Web's `WAWebHandleIdentityChange`:
+/// ```xml
+/// <notification type="encrypt" from="user@s.whatsapp.net">
+///   <identity/>
+/// </notification>
+/// ```
+/// Clears device record (sessions + sender keys) for the user so that
+/// fresh sessions are established and SKDM is redistributed on next send.
+async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
+    let Some(from_jid) = node.attrs().optional_jid("from") else {
+        warn!("Identity change notification missing 'from' attribute");
+        return;
+    };
+
+    // WA Web ignores companion devices (device != 0) — only primary identity matters
+    if from_jid.device != 0 {
+        debug!(
+            "Ignoring identity change from companion device {}",
+            from_jid
+        );
+        return;
+    }
+
+    // WA Web: isMePrimary(h) → handleSelfPrimaryIdentityChange (different flow).
+    // We must not clear our own device record.
+    let device_snapshot = client.persistence_manager.get_device_snapshot().await;
+    let is_me = device_snapshot
+        .pn
+        .as_ref()
+        .is_some_and(|pn| pn.user == from_jid.user)
+        || device_snapshot
+            .lid
+            .as_ref()
+            .is_some_and(|lid| lid.user == from_jid.user);
+    if is_me {
+        debug!("Ignoring self-primary identity change");
+        return;
+    }
+
+    info!(
+        "Identity change for user {}: clearing device record",
+        from_jid.user
+    );
+
+    // Load existing record to pass to clear_device_record
+    if let Some(record) = client.load_device_record(&from_jid.user).await {
+        client
+            .clear_device_record(&from_jid.user, &from_jid.server, &record)
+            .await;
+    }
+
+    // Invalidate device cache so next send triggers fresh usync
+    client.invalidate_device_cache(&from_jid.user).await;
+
+    // Dispatch event so application layer can show security code change
+    client.core.event_bus.dispatch(&Event::IdentityChange(
+        crate::types::events::IdentityChange {
+            user: from_jid,
+            lid_user: node.attrs().optional_jid("lid"),
+        },
+    ));
 }
 
 /// Handle device list change notifications.
@@ -1861,6 +1933,106 @@ mod tests {
         assert!(
             collector.events().is_empty(),
             "hash-only update without jid should not dispatch events"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_identity_change_dispatches_event_and_invalidates_cache() {
+        let client = create_test_client().await;
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
+
+        // Pre-populate device registry so clear_device_record has something to clear
+        let record = wacore::store::traits::DeviceListRecord {
+            user: "5511999999999".into(),
+            devices: vec![wacore::store::traits::DeviceInfo {
+                device_id: 1,
+                key_index: None,
+            }],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+            raw_id: Some(42),
+        };
+        client
+            .device_registry_cache
+            .insert("5511999999999".into(), record)
+            .await;
+
+        // Simulate identity change notification: type="encrypt" with <identity/> child
+        let node = NodeBuilder::new("notification")
+            .attr("type", "encrypt")
+            .attr("from", "5511999999999@s.whatsapp.net")
+            .attr("id", "identity-change-1")
+            .children([NodeBuilder::new("identity").build()])
+            .build();
+        handle_notification_impl(&client, &node).await;
+
+        // Should have dispatched IdentityChange event
+        let events = collector.events();
+        assert!(
+            events.iter().any(|e| matches!(e, Event::IdentityChange(_))),
+            "should dispatch IdentityChange event, got: {:?}",
+            events
+        );
+
+        // Device registry cache should be invalidated
+        assert!(
+            client
+                .device_registry_cache
+                .get("5511999999999")
+                .await
+                .is_none(),
+            "device registry cache should be invalidated after identity change"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_identity_change_ignores_self_primary() {
+        let client = create_test_client().await;
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
+
+        // Set our own JID so the self-check works
+        client
+            .persistence_manager
+            .modify_device(|d| {
+                d.pn = Some("5511999999999@s.whatsapp.net".parse().unwrap());
+            })
+            .await;
+
+        // Identity change FROM our own JID — should be ignored per WA Web's isMePrimary
+        let node = NodeBuilder::new("notification")
+            .attr("type", "encrypt")
+            .attr("from", "5511999999999@s.whatsapp.net")
+            .attr("id", "identity-change-self")
+            .children([NodeBuilder::new("identity").build()])
+            .build();
+        handle_notification_impl(&client, &node).await;
+
+        assert!(
+            collector.events().is_empty(),
+            "self identity change should be ignored"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_identity_change_ignores_companion_device() {
+        let client = create_test_client().await;
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
+
+        // Companion device (device=5) — should be ignored per WA Web
+        let node = NodeBuilder::new("notification")
+            .attr("type", "encrypt")
+            .attr("from", "5511999999999:5@s.whatsapp.net")
+            .attr("id", "identity-change-2")
+            .children([NodeBuilder::new("identity").build()])
+            .build();
+        handle_notification_impl(&client, &node).await;
+
+        assert!(
+            collector.events().is_empty(),
+            "companion device identity change should be ignored"
         );
     }
 }

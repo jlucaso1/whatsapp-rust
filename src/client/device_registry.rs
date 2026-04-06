@@ -206,6 +206,8 @@ impl Client {
     /// 4. Replace the full device record
     ///
     /// If `signed_bytes` is absent, falls back to simple append (lenient).
+    /// When a genuinely new device is added, invalidates the sender key device
+    /// cache so SKDM will be sent on the next group message.
     pub(crate) async fn patch_device_add(
         &self,
         user: &str,
@@ -217,6 +219,8 @@ impl Client {
         let Some(mut record) = self.load_device_record(user).await else {
             return;
         };
+
+        let devices_before: Vec<u32> = record.devices.iter().map(|d| d.device_id).collect();
 
         let signed_bytes = key_index_info.and_then(|ki| ki.signed_bytes.as_deref());
 
@@ -261,6 +265,16 @@ impl Client {
             self.append_device_if_new(&mut record, device_id, device.key_index);
         }
 
+        // Detect new devices: any device_id present now that wasn't before.
+        // Invalidate sender key device cache so SKDM is sent on next group message.
+        let has_new_device = record
+            .devices
+            .iter()
+            .any(|d| !devices_before.contains(&d.device_id));
+        if has_new_device {
+            self.sender_key_device_cache.invalidate_all();
+        }
+
         if let Err(e) = self.update_device_list(record).await {
             warn!("patch_device_add: failed to persist: {e}");
         }
@@ -281,47 +295,54 @@ impl Client {
         }
     }
 
-    /// Clear device record on raw_id mismatch (identity change).
-    ///
-    /// Matches WA Web's `clearDeviceRecord()` in `IdentityUpdateDeviceTableApi`:
-    /// - Deletes Signal sessions for non-primary devices (stale identity)
-    /// - Invalidates sender key device cache so SKDM will be redistributed
-    /// - Flushes cache to persist session deletions
-    pub(crate) async fn clear_device_record(
-        &self,
-        user: &str,
-        server: &str,
-        record: &wacore::store::traits::DeviceListRecord,
-    ) {
-        let non_primary_count = record.devices.iter().filter(|d| d.device_id != 0).count();
-        info!(
-            "Clearing device record for user {user}: removing {non_primary_count} non-primary device(s) due to raw_id change",
-        );
-
-        // Delete Signal sessions under BOTH LID and PN addresses.
-        // The notification may arrive via one address but sessions can exist
-        // under either (encrypt path is LID-first, decrypt stores under sender).
+    /// Delete Signal sessions for specific device IDs under both LID and PN
+    /// addresses, then flush. Shared by `clear_device_record` and
+    /// `patch_device_remove`.
+    async fn delete_sessions_for_devices(&self, user: &str, device_ids: &[u16]) {
         let lookup = self.resolve_lookup_keys(user).await;
-        let servers: &[&str] = match &lookup {
-            UserLookupKeys::LidWithPn { .. } | UserLookupKeys::PnWithLid { .. } => &[
-                wacore_binary::jid::HIDDEN_USER_SERVER,
-                wacore_binary::jid::DEFAULT_USER_SERVER,
-            ],
-            UserLookupKeys::Unknown { .. } => std::slice::from_ref(&server),
-        };
-        for &srv in servers {
+        let servers = [
+            wacore_binary::jid::HIDDEN_USER_SERVER,
+            wacore_binary::jid::DEFAULT_USER_SERVER,
+        ];
+        for &srv in &servers {
             for key in lookup.all_keys() {
-                for device in record.devices.iter().filter(|d| d.device_id != 0) {
+                for &device_id in device_ids {
                     let mut jid = Jid::new(key, srv);
-                    jid.device = device.device_id as u16;
+                    jid.device = device_id;
                     let addr = wacore::types::jid::JidExt::to_protocol_address(&jid);
                     self.signal_cache.delete_session(&addr).await;
                 }
             }
         }
         if let Err(e) = self.flush_signal_cache().await {
-            warn!("clear_device_record: failed to flush session deletions: {e}");
+            warn!("delete_sessions_for_devices: failed to flush: {e}");
         }
+    }
+
+    /// Clear device record on raw_id mismatch (identity change).
+    ///
+    /// Matches WA Web's `clearDeviceRecord()` in `IdentityUpdateDeviceTableApi`:
+    /// - Deletes Signal sessions for non-primary devices (stale identity)
+    /// - Invalidates sender key device cache so SKDM will be redistributed
+    pub(crate) async fn clear_device_record(
+        &self,
+        user: &str,
+        _server: &str,
+        record: &wacore::store::traits::DeviceListRecord,
+    ) {
+        let non_primary_ids: Vec<u16> = record
+            .devices
+            .iter()
+            .filter(|d| d.device_id != 0)
+            .map(|d| d.device_id as u16)
+            .collect();
+        info!(
+            "Clearing device record for user {user}: removing {} non-primary device(s) due to raw_id change",
+            non_primary_ids.len()
+        );
+
+        self.delete_sessions_for_devices(user, &non_primary_ids)
+            .await;
 
         // Clear persisted SKDM tracking across ALL groups so stale has_key=true
         // rows don't survive restart. Identity changes are rare so the cost is acceptable.
@@ -333,19 +354,28 @@ impl Client {
         {
             warn!("clear_device_record: failed to clear persisted sender key devices: {e}");
         }
-        // Also invalidate in-memory cache
         self.sender_key_device_cache.invalidate_all();
     }
 
     /// Remove a device from the registry after a device remove notification.
+    ///
+    /// Matches WA Web's `bulkApplyDeviceUpdate` cleanup for removed devices
+    /// (`UpdateDeviceTableApi`): deletes Signal sessions for the device,
+    /// then invalidates the sender key device cache so SKDM will be
+    /// redistributed on the next group send.
     pub(crate) async fn patch_device_remove(&self, user: &str, device_id: u32) {
         if let Some(mut record) = self.load_device_record(user).await {
             let before = record.devices.len();
             record.devices.retain(|d| d.device_id != device_id);
-            if record.devices.len() != before
-                && let Err(e) = self.update_device_list(record).await
-            {
-                warn!("patch_device_remove: failed to persist: {e}");
+            if record.devices.len() != before {
+                if device_id != 0 {
+                    self.delete_sessions_for_devices(user, &[device_id as u16])
+                        .await;
+                }
+                self.sender_key_device_cache.invalidate_all();
+                if let Err(e) = self.update_device_list(record).await {
+                    warn!("patch_device_remove: failed to persist: {e}");
+                }
             }
         }
     }
@@ -1196,5 +1226,165 @@ mod tests {
             .expect("record should still exist");
         assert_eq!(updated.devices.len(), 1);
         assert_eq!(updated.devices[0].device_id, 0);
+    }
+
+    // ── Sender key device cache invalidation tests ──────────────────────
+
+    #[tokio::test]
+    async fn test_patch_device_add_invalidates_sender_key_cache() {
+        use crate::sender_key_device_cache::SenderKeyDeviceMap;
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+
+        let client = create_test_client().await;
+
+        // Pre-populate device registry with device 0 only
+        let record = DeviceListRecord {
+            user: "15551234567".into(),
+            devices: vec![DeviceInfo {
+                device_id: 0,
+                key_index: None,
+            }],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+            raw_id: None,
+        };
+        client
+            .device_registry_cache
+            .insert("15551234567".into(), record)
+            .await;
+
+        // Warm the sender key device cache for a group
+        let group = "120363000000000001@g.us";
+        let map =
+            SenderKeyDeviceMap::from_db_rows(&[("15551234567:0@s.whatsapp.net".into(), true)]);
+        client
+            .sender_key_device_cache
+            .get_or_init(group, async { std::sync::Arc::new(map) })
+            .await;
+
+        // Add device 3 — should invalidate sender key cache
+        let elem = make_device_element(3, Some(5));
+        client.patch_device_add("15551234567", &elem, None).await;
+
+        // Sender key cache should be cleared (get_or_init would need to re-fetch)
+        // We verify by checking that the cached map doesn't contain the old entry
+        // anymore through the cache's internal state. Since invalidate_all() was
+        // called, re-init will produce a fresh map.
+        let fresh_map = SenderKeyDeviceMap::from_db_rows(&[]);
+        let result = client
+            .sender_key_device_cache
+            .get_or_init(group, async { std::sync::Arc::new(fresh_map) })
+            .await;
+        assert!(
+            result.is_empty(),
+            "sender key cache should have been invalidated and re-initialized empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_patch_device_add_no_invalidation_when_device_exists() {
+        use crate::sender_key_device_cache::SenderKeyDeviceMap;
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+
+        let client = create_test_client().await;
+
+        // Pre-populate device registry with device 0 AND device 3
+        let record = DeviceListRecord {
+            user: "15551234567".into(),
+            devices: vec![
+                DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                },
+                DeviceInfo {
+                    device_id: 3,
+                    key_index: Some(5),
+                },
+            ],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+            raw_id: None,
+        };
+        client
+            .device_registry_cache
+            .insert("15551234567".into(), record)
+            .await;
+
+        // Warm the sender key device cache
+        let group = "120363000000000001@g.us";
+        let map = SenderKeyDeviceMap::from_db_rows(&[
+            ("15551234567:0@s.whatsapp.net".into(), true),
+            ("15551234567:3@s.whatsapp.net".into(), true),
+        ]);
+        client
+            .sender_key_device_cache
+            .get_or_init(group, async { std::sync::Arc::new(map) })
+            .await;
+
+        // Re-add device 3 (already exists) — should NOT invalidate cache
+        let elem = make_device_element(3, Some(5));
+        client.patch_device_add("15551234567", &elem, None).await;
+
+        // Cache should still have the old entry
+        let cached = client
+            .sender_key_device_cache
+            .get_or_init(group, async {
+                panic!("init should not be called — cache should still be warm")
+            })
+            .await;
+        assert!(!cached.is_empty(), "cache should still be warm");
+    }
+
+    #[tokio::test]
+    async fn test_patch_device_remove_invalidates_sender_key_cache() {
+        use crate::sender_key_device_cache::SenderKeyDeviceMap;
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+
+        let client = create_test_client().await;
+
+        let record = DeviceListRecord {
+            user: "15551234567".into(),
+            devices: vec![
+                DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                },
+                DeviceInfo {
+                    device_id: 3,
+                    key_index: None,
+                },
+            ],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+            raw_id: None,
+        };
+        client
+            .device_registry_cache
+            .insert("15551234567".into(), record)
+            .await;
+
+        // Warm sender key device cache
+        let group = "120363000000000001@g.us";
+        let map = SenderKeyDeviceMap::from_db_rows(&[
+            ("15551234567:0@s.whatsapp.net".into(), true),
+            ("15551234567:3@s.whatsapp.net".into(), true),
+        ]);
+        client
+            .sender_key_device_cache
+            .get_or_init(group, async { std::sync::Arc::new(map) })
+            .await;
+
+        // Remove device 3 — should invalidate sender key cache
+        client.patch_device_remove("15551234567", 3).await;
+
+        let fresh_map = SenderKeyDeviceMap::from_db_rows(&[]);
+        let result = client
+            .sender_key_device_cache
+            .get_or_init(group, async { std::sync::Arc::new(fresh_map) })
+            .await;
+        assert!(
+            result.is_empty(),
+            "sender key cache should have been invalidated after device removal"
+        );
     }
 }
