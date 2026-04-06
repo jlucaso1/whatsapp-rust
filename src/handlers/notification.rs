@@ -319,15 +319,16 @@ fn handle_digest_key(client: &Arc<Client>) {
 ///   <identity/>
 /// </notification>
 /// ```
-/// Clears device record (sessions + sender keys) for the user so that
-/// fresh sessions are established and SKDM is redistributed on next send.
+///
+/// WA Web defers this when offline. We process immediately because all cleanup
+/// is local-only, and `ensure_e2e_sessions` self-defers via `wait_for_offline_delivery_end`.
 async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
     let Some(from_jid) = node.attrs().optional_jid("from") else {
         warn!("Identity change notification missing 'from' attribute");
         return;
     };
 
-    // WA Web ignores companion devices (device != 0) — only primary identity matters
+    // Only primary device identity changes matter
     if from_jid.device != 0 {
         debug!(
             "Ignoring identity change from companion device {}",
@@ -336,8 +337,7 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
         return;
     }
 
-    // WA Web: isMePrimary(h) → handleSelfPrimaryIdentityChange (different flow).
-    // We must not clear our own device record.
+    // Self-identity changes use a different flow; clearing our own record would break sessions
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let is_me = device_snapshot
         .pn
@@ -357,23 +357,64 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
         from_jid.user
     );
 
-    // Load existing record to pass to clear_device_record
+    // Deletes non-primary sessions + all sender key device tracking
     if let Some(record) = client.load_device_record(&from_jid.user).await {
         client
             .clear_device_record(&from_jid.user, &from_jid.server, &record)
             .await;
     }
 
-    // Invalidate device cache so next send triggers fresh usync
+    // Delete primary device session + identity key so a fresh session can be established
+    {
+        use wacore::types::jid::JidExt;
+        let resolved = client.resolve_encryption_jid(&from_jid).await;
+        let addr = resolved.to_protocol_address();
+        client.signal_cache.delete_session(&addr).await;
+        client.signal_cache.delete_identity(&addr).await;
+        if let Err(e) = client.flush_signal_cache().await {
+            warn!("Identity change: failed to flush after primary session deletion: {e}");
+        }
+    }
+
+    // Force status sender key rotation for forward secrecy (clear_device_record
+    // only cleared device tracking, not the key itself)
+    {
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+        use wacore::types::jid::JidExt;
+        let status_group = "status@broadcast";
+        for own_jid in device_snapshot.pn.iter().chain(device_snapshot.lid.iter()) {
+            let sk_name = SenderKeyName::new(
+                status_group.to_string(),
+                own_jid.to_protocol_address().to_string(),
+            );
+            client
+                .signal_cache
+                .delete_sender_key(sk_name.cache_key())
+                .await;
+        }
+    }
+
+    // Force fresh usync on next send
     client.invalidate_device_cache(&from_jid.user).await;
 
-    // Dispatch event so application layer can show security code change
+    let session_jid = from_jid.clone();
     client.core.event_bus.dispatch(&Event::IdentityChange(
         crate::types::events::IdentityChange {
             user: from_jid,
             lid_user: node.attrs().optional_jid("lid"),
         },
     ));
+
+    // Re-establish session in background (self-defers when offline)
+    let client_clone = client.clone();
+    client
+        .runtime
+        .spawn(Box::pin(async move {
+            if let Err(e) = client_clone.ensure_e2e_sessions(&[session_jid]).await {
+                warn!("Identity change: failed to re-establish session: {e}");
+            }
+        }))
+        .detach();
 }
 
 /// Handle device list change notifications.
@@ -2021,7 +2062,6 @@ mod tests {
         let collector = Arc::new(TestEventCollector::default());
         client.register_handler(collector.clone());
 
-        // Companion device (device=5) — should be ignored per WA Web
         let node = NodeBuilder::new("notification")
             .attr("type", "encrypt")
             .attr("from", "5511999999999:5@s.whatsapp.net")
@@ -2033,6 +2073,116 @@ mod tests {
         assert!(
             collector.events().is_empty(),
             "companion device identity change should be ignored"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_identity_change_deletes_primary_session() {
+        use wacore::libsignal::protocol::SessionRecord;
+        use wacore::types::jid::JidExt;
+
+        let client = create_test_client().await;
+
+        let target_jid: Jid = "5511888888888@s.whatsapp.net".parse().unwrap();
+        let addr = target_jid.to_protocol_address();
+
+        // Pre-populate a session for the primary device
+        client
+            .signal_cache
+            .put_session(&addr, SessionRecord::new_fresh())
+            .await;
+        client.signal_cache.put_identity(&addr, &[0u8; 32]).await;
+
+        let node = NodeBuilder::new("notification")
+            .attr("type", "encrypt")
+            .attr("from", "5511888888888@s.whatsapp.net")
+            .attr("id", "identity-change-3")
+            .children([NodeBuilder::new("identity").build()])
+            .build();
+        handle_notification_impl(&client, &node).await;
+
+        let backend = client.persistence_manager.backend();
+        let has = client
+            .signal_cache
+            .has_session(&addr, &*backend)
+            .await
+            .unwrap();
+        assert!(
+            !has,
+            "primary session should be deleted after identity change"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_identity_change_rotates_status_sender_key() {
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+        use wacore::types::jid::JidExt;
+
+        let client = create_test_client().await;
+
+        // Set our own JID so sender key deletion knows which namespaces to check
+        let own_jid: Jid = "5511777777777@s.whatsapp.net".parse().unwrap();
+        client
+            .persistence_manager
+            .modify_device(|d| {
+                d.pn = Some(own_jid.clone());
+            })
+            .await;
+
+        // Pre-populate a sender key for status@broadcast
+        let sk_name = SenderKeyName::new(
+            "status@broadcast".to_string(),
+            own_jid.to_protocol_address().to_string(),
+        );
+        let sk_record = wacore::libsignal::protocol::SenderKeyRecord::new_empty();
+        client
+            .signal_cache
+            .put_sender_key(&sk_name, sk_record)
+            .await;
+
+        // Fire identity change for a different user
+        let node = NodeBuilder::new("notification")
+            .attr("type", "encrypt")
+            .attr("from", "5511888888888@s.whatsapp.net")
+            .attr("id", "identity-change-4")
+            .children([NodeBuilder::new("identity").build()])
+            .build();
+        handle_notification_impl(&client, &node).await;
+
+        let backend = client.persistence_manager.backend();
+        let sk = client
+            .signal_cache
+            .get_sender_key(&sk_name, &*backend)
+            .await
+            .unwrap();
+        assert!(
+            sk.is_none(),
+            "status@broadcast sender key should be deleted for forward secrecy"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_identity_change_with_offline_attribute() {
+        let client = create_test_client().await;
+        let collector = Arc::new(TestEventCollector::default());
+        client.register_handler(collector.clone());
+
+        // Notification with offline attribute should still be processed
+        let node = NodeBuilder::new("notification")
+            .attr("type", "encrypt")
+            .attr("from", "5511888888888@s.whatsapp.net")
+            .attr("id", "identity-change-5")
+            .attr("offline", "1")
+            .children([NodeBuilder::new("identity").build()])
+            .build();
+        handle_notification_impl(&client, &node).await;
+
+        assert!(
+            collector
+                .events()
+                .iter()
+                .any(|e| matches!(e, Event::IdentityChange(_))),
+            "offline identity change should still dispatch event"
         );
     }
 }
