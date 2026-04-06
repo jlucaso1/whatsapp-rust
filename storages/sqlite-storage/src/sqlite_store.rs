@@ -57,8 +57,9 @@ type SqlitePool = Pool<ConnectionManager<SqliteConnection>>;
 /// Field order must match the column order in `schema::device`.
 /// Using a named struct instead of a positional tuple so fields are
 /// accessed by name, reducing the risk of mix-ups when columns are added.
-#[derive(Queryable)]
-#[allow(dead_code)] // `id` is required by Queryable column mapping but not read directly
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = crate::schema::device)]
+#[allow(dead_code)]
 struct DeviceRow {
     id: i32,
     lid: String,
@@ -80,6 +81,7 @@ struct DeviceRow {
     props_hash: Option<String>,
     next_pre_key_id: i32,
     nct_salt: Option<Vec<u8>>,
+    server_has_prekeys: bool,
 }
 
 #[derive(Clone)]
@@ -320,6 +322,7 @@ impl SqliteStore {
         let edge_routing_info = device_data.edge_routing_info.clone();
         let props_hash = device_data.props_hash.clone();
         let next_pre_key_id = device_data.next_pre_key_id as i32;
+        let server_has_prekeys = device_data.server_has_prekeys;
         let nct_salt = device_data.nct_salt.clone();
         let new_lid = device_data
             .lid
@@ -358,6 +361,7 @@ impl SqliteStore {
                     device::edge_routing_info.eq(edge_routing_info.clone()),
                     device::props_hash.eq(props_hash.clone()),
                     device::next_pre_key_id.eq(next_pre_key_id),
+                    device::server_has_prekeys.eq(server_has_prekeys),
                     device::nct_salt.eq(nct_salt.clone()),
                 ))
                 .on_conflict(device::id)
@@ -381,6 +385,7 @@ impl SqliteStore {
                     device::edge_routing_info.eq(edge_routing_info),
                     device::props_hash.eq(props_hash),
                     device::next_pre_key_id.eq(next_pre_key_id),
+                    device::server_has_prekeys.eq(server_has_prekeys),
                     device::nct_salt.eq(nct_salt),
                 ))
                 .execute(&mut conn)
@@ -444,6 +449,7 @@ impl SqliteStore {
                     device::edge_routing_info.eq(None::<Vec<u8>>),
                     device::props_hash.eq(None::<String>),
                     device::next_pre_key_id.eq(new_device.next_pre_key_id as i32),
+                    device::server_has_prekeys.eq(new_device.server_has_prekeys),
                     device::nct_salt.eq(None::<Vec<u8>>),
                 ))
                 .execute(&mut conn)
@@ -563,6 +569,7 @@ impl SqliteStore {
                 edge_routing_info: row.edge_routing_info,
                 props_hash: row.props_hash,
                 next_pre_key_id: row.next_pre_key_id as u32,
+                server_has_prekeys: row.server_has_prekeys,
                 nct_salt: row.nct_salt,
                 nct_salt_sync_seen: false,
             }))
