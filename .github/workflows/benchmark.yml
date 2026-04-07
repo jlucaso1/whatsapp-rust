@@ -79,7 +79,18 @@ jobs:
           max-items-in-chart: 100
           summary-always: true
 
-      # PR: compare against baseline (no commenting — custom step handles it)
+      # Fetch baseline before the action modifies git state
+      - name: Fetch baseline data
+        id: baseline
+        if: github.event_name == 'pull_request'
+        run: |
+          gh api repos/${{ github.repository }}/contents/dev/bench/data.js?ref=gh-pages \
+            --jq '.content' | base64 -d > /tmp/baseline_data.js
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      # PR: compare against baseline
       - name: Compare against baseline (pull request)
         if: github.event_name == 'pull_request'
         uses: benchmark-action/github-action-benchmark@v1
@@ -95,21 +106,11 @@ jobs:
 
       # Custom collapsed PR comment showing regressions, improvements, and unchanged
       - name: Post benchmark comment
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.baseline.outcome == 'success'
         uses: actions/github-script@v7
         with:
           script: |
-            const fs = require('fs');
             const { execSync } = require('child_process');
-
-            // Fetch baseline data from gh-pages
-            try {
-              execSync('git fetch origin gh-pages:gh-pages', { stdio: 'pipe' });
-              execSync('git show gh-pages:dev/bench/data.js > /tmp/baseline_data.js', { stdio: 'pipe' });
-            } catch {
-              console.log('No baseline data on gh-pages yet, skipping comment');
-              return;
-            }
 
             const comment = execSync(
               'python3 .github/scripts/bench-comment.py bench_results.json /tmp/baseline_data.js',
