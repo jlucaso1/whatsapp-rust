@@ -243,7 +243,7 @@ where
     R: Rng + CryptoRng,
 {
     let sender_address = sender_jid.to_protocol_address();
-    let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+    let sender_key_name = SenderKeyName::from_jid(&group_jid, &sender_address);
     log::debug!(
         "Attempting to load sender key for group {} sender {}",
         sender_key_name.group_id(),
@@ -1273,7 +1273,7 @@ pub async fn create_sender_key_distribution_message_for_group(
     own_sending_jid: &Jid,
 ) -> Result<Vec<u8>> {
     let sender_address = own_sending_jid.to_protocol_address();
-    let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+    let sender_key_name = SenderKeyName::from_jid(&group_jid, &sender_address);
     let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     let skdm = crate::libsignal::protocol::create_sender_key_distribution_message(

@@ -1006,8 +1006,7 @@ impl Client {
             // participant — normalizing to bare ensures consistent lookup.
             let sender_for_sk = info.source.sender.to_non_ad();
             let sender_address = sender_for_sk.to_protocol_address();
-            let sender_key_name =
-                SenderKeyName::new(info.source.chat.to_string(), sender_address.to_string());
+            let sender_key_name = SenderKeyName::from_jid(&info.source.chat, &sender_address);
 
             log::debug!(
                 "Looking up sender key for group {} with sender address {} (from sender JID: {})",
@@ -1336,9 +1335,9 @@ impl Client {
         node: &Node,
     ) -> Result<MessageInfo, anyhow::Error> {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_jid = device_snapshot.pn.clone().unwrap_or_default();
-        let own_lid = device_snapshot.lid.clone();
-        wacore::messages::parse_message_info(node, &own_jid, own_lid.as_ref())
+        let default_jid = Jid::default();
+        let own_jid = device_snapshot.pn.as_ref().unwrap_or(&default_jid);
+        wacore::messages::parse_message_info(node, own_jid, device_snapshot.lid.as_ref())
     }
 
     pub(crate) async fn handle_app_state_sync_key_share(
@@ -1498,7 +1497,7 @@ impl Client {
         let sender_bare = sender_jid.to_non_ad();
         let sender_address = sender_bare.to_protocol_address();
 
-        let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+        let sender_key_name = SenderKeyName::from_jid(&group_jid, &sender_address);
 
         // Route through the signal cache adapter so the sender key is immediately visible
         // in the cache for subsequent group_decrypt calls within the same message batch.
@@ -1937,8 +1936,14 @@ mod tests {
 
         // Create SKDM using LID address (mimics handle_sender_key_distribution_message)
         let lid_protocol_address = own_lid.to_protocol_address();
-        let lid_sender_key_name =
-            SenderKeyName::new(group_jid.to_string(), lid_protocol_address.to_string());
+        let lid_sender_key_name = SenderKeyName::from_jid(&group_jid, &lid_protocol_address);
+
+        // Pin serialized form so from_jid stays compatible with persisted records
+        assert_eq!(lid_sender_key_name.group_id(), group_jid.to_string());
+        assert_eq!(
+            lid_sender_key_name.sender_id(),
+            lid_protocol_address.to_string()
+        );
 
         let device_arc = pm.get_device_arc().await;
         let skdm = {
@@ -1965,8 +1970,7 @@ mod tests {
 
         // Try to retrieve using PHONE NUMBER address (THE BUG)
         let phone_protocol_address = own_phone.to_protocol_address();
-        let phone_sender_key_name =
-            SenderKeyName::new(group_jid.to_string(), phone_protocol_address.to_string());
+        let phone_sender_key_name = SenderKeyName::from_jid(&group_jid, &phone_protocol_address);
 
         let phone_lookup_result = {
             let mut device_guard = device_arc.write().await;
@@ -2045,8 +2049,7 @@ mod tests {
         for (lid_str, _phone_str) in &participants {
             let lid_jid: Jid = lid_str.parse().expect("test JID should be valid");
             let lid_protocol_address = lid_jid.to_protocol_address();
-            let lid_sender_key_name =
-                SenderKeyName::new(group_jid.to_string(), lid_protocol_address.to_string());
+            let lid_sender_key_name = SenderKeyName::from_jid(&group_jid, &lid_protocol_address);
 
             let skdm = {
                 let mut device_guard = device_arc.write().await;
@@ -2077,10 +2080,9 @@ mod tests {
             let lid_protocol_address = lid_jid.to_protocol_address();
             let phone_protocol_address = phone_jid.to_protocol_address();
 
-            let lid_sender_key_name =
-                SenderKeyName::new(group_jid.to_string(), lid_protocol_address.to_string());
+            let lid_sender_key_name = SenderKeyName::from_jid(&group_jid, &lid_protocol_address);
             let phone_sender_key_name =
-                SenderKeyName::new(group_jid.to_string(), phone_protocol_address.to_string());
+                SenderKeyName::from_jid(&group_jid, &phone_protocol_address);
 
             // Should find with LID address
             let lid_lookup = {
@@ -2511,7 +2513,7 @@ mod tests {
         // Store sender key using display JID (LID)
         let display_protocol_address = display_jid.to_protocol_address();
         let display_sender_key_name =
-            SenderKeyName::new(group_jid.to_string(), display_protocol_address.to_string());
+            SenderKeyName::from_jid(&group_jid, &display_protocol_address);
 
         let device_arc = pm.get_device_arc().await;
         {
@@ -2539,10 +2541,8 @@ mod tests {
 
         // Verify it's NOT accessible via encryption JID (phone number)
         let encryption_protocol_address = encryption_jid.to_protocol_address();
-        let encryption_sender_key_name = SenderKeyName::new(
-            group_jid.to_string(),
-            encryption_protocol_address.to_string(),
-        );
+        let encryption_sender_key_name =
+            SenderKeyName::from_jid(&group_jid, &encryption_protocol_address);
 
         let lookup_with_encryption = {
             let mut device_guard = device_arc.write().await;
@@ -2605,8 +2605,7 @@ mod tests {
 
         // Step 1: Create and store a sender key (simulating first message processing)
         let sender_protocol_address = sender_jid.to_protocol_address();
-        let sender_key_name =
-            SenderKeyName::new(group_jid.to_string(), sender_protocol_address.to_string());
+        let sender_key_name = SenderKeyName::from_jid(&group_jid, &sender_protocol_address);
 
         let device_arc = pm.get_device_arc().await;
         {
