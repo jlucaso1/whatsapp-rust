@@ -7,7 +7,7 @@ use crate::{
     node::{NodeContent, NodeContentRef},
 };
 
-const DEFAULT_MARSHAL_CAPACITY: usize = 1024;
+const DEFAULT_MARSHAL_CAPACITY: usize = 32768;
 const AUTO_RESERVE_ATTRS_THRESHOLD: usize = 24;
 const AUTO_RESERVE_CHILDREN_THRESHOLD: usize = 64;
 const AUTO_RESERVE_SCALAR_THRESHOLD: usize = 8 * 1024;
