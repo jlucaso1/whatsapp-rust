@@ -359,7 +359,7 @@ pub fn parse_privacy_token_notification(
 /// `salt` — NCT salt from app state sync (raw bytes, not base64).
 /// `recipient_lid` — The recipient's bare account LID string (e.g. `"12345@lid"`).
 pub fn compute_cs_token(salt: &[u8], recipient_lid: &str) -> Vec<u8> {
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use sha2::Sha256;
 
     let mut mac = Hmac::<Sha256>::new_from_slice(salt).expect("HMAC-SHA256 accepts any key length");

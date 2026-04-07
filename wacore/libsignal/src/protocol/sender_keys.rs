@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 
 use prost::Message;
 
-use hmac::{Hmac, Mac};
+use hmac::{HmacReset, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::protocol::crypto::hmac_sha256;
@@ -133,7 +133,7 @@ impl SenderChainKey {
             )
         })?;
 
-        let mut hmac = Hmac::<Sha256>::new_from_slice(&self.chain_key)
+        let mut hmac = HmacReset::<Sha256>::new_from_slice(&self.chain_key)
             .expect("HMAC-SHA256 should accept any size key");
 
         hmac.update(&[Self::MESSAGE_KEY_SEED]);
