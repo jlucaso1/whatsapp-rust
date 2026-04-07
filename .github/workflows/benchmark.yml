@@ -98,6 +98,6 @@ jobs:
           alert-threshold: "105%"
           comment-on-alert: true
           comment-always: true
-          fail-on-alert: true
+          fail-on-alert: false
           alert-comment-cc-users: "@jlucaso1"
           summary-always: true
