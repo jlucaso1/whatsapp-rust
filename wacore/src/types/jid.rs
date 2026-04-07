@@ -7,8 +7,7 @@ fn mapped_server(s: &str) -> &str {
     if s == "s.whatsapp.net" { "c.us" } else { s }
 }
 
-/// Write the protocol address lock key (`{user}[:{device}]@{server}.0`)
-/// into `buf`, reusing its allocation. Zero heap allocations.
+/// Write the protocol address lock key into `buf`, reusing its allocation.
 pub fn write_protocol_address_to(jid: &Jid, buf: &mut String) {
     use std::fmt::Write;
     buf.clear();
@@ -24,12 +23,31 @@ pub fn write_protocol_address_to(jid: &Jid, buf: &mut String) {
 }
 
 /// Consistent ordering for deadlock-free multi-lock acquisition.
-/// Compares Jid fields directly — no String allocation needed.
 pub fn cmp_for_lock_order(a: &Jid, b: &Jid) -> std::cmp::Ordering {
     mapped_server(&a.server)
         .cmp(mapped_server(&b.server))
         .then_with(|| a.user.cmp(&b.user))
         .then_with(|| a.device.cmp(&b.device))
+}
+
+/// Sort and deduplicate by user identity (user + server).
+pub fn sort_dedup_by_user(jids: &mut Vec<Jid>) {
+    jids.sort_unstable_by(|a, b| a.user.cmp(&b.user).then_with(|| a.server.cmp(&b.server)));
+    jids.dedup_by(|a, b| a.user == b.user && a.server == b.server);
+}
+
+/// Sort and deduplicate by device identity (user + server + agent + device).
+pub fn sort_dedup_by_device(jids: &mut Vec<Jid>) {
+    jids.sort_unstable_by(|a, b| {
+        a.user
+            .cmp(&b.user)
+            .then_with(|| a.server.cmp(&b.server))
+            .then_with(|| a.agent.cmp(&b.agent))
+            .then_with(|| a.device.cmp(&b.device))
+    });
+    jids.dedup_by(|a, b| {
+        a.user == b.user && a.server == b.server && a.agent == b.agent && a.device == b.device
+    });
 }
 
 pub trait JidExt {
