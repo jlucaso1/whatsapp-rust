@@ -61,3 +61,7 @@ tokio = { workspace = true, features = ["macros", "rt"] }
 [[bench]]
 name = "reporting_token_benchmark"
 harness = false
+
+[[bench]]
+name = "lock_key_benchmark"
+harness = false

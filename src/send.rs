@@ -506,7 +506,8 @@ impl Client {
             self.invalidate_device_cache(user).await;
         }
 
-        self.flush_signal_cache_logged("send_status_message").await;
+        self.flush_signal_cache_logged("send_status_message", None)
+            .await;
 
         Ok(SendResult {
             message_id: request_id,
@@ -1076,11 +1077,13 @@ impl Client {
                 debug!(target: "Client/TcToken", "Scheduled tc token issuance after send for {}", to);
             }
 
-            let lock_keys = self.build_session_lock_keys(&all_dm_jids).await;
+            let lock_jids = self.build_session_lock_keys(&all_dm_jids).await;
 
-            let mut _session_mutexes = Vec::with_capacity(lock_keys.len());
-            for key in &lock_keys {
-                _session_mutexes.push(self.session_lock_for(key.as_str()).await);
+            let mut _session_mutexes = Vec::with_capacity(lock_jids.len());
+            let mut lock_buf = String::with_capacity(64);
+            for jid in &lock_jids {
+                wacore::types::jid::write_protocol_address_to(jid, &mut lock_buf);
+                _session_mutexes.push(self.session_lock_for(&lock_buf).await);
             }
             let mut _session_guards = Vec::with_capacity(_session_mutexes.len());
             for mutex in &_session_mutexes {
@@ -1136,7 +1139,8 @@ impl Client {
         }
 
         // Flush cached Signal state to DB after encryption
-        self.flush_signal_cache_logged("send_message_impl").await;
+        self.flush_signal_cache_logged("send_message_impl", None)
+            .await;
 
         // Issue new tc token after send if a bucket boundary was crossed.
         // Fire-and-forget so send_message returns without waiting for the IQ
@@ -1484,17 +1488,15 @@ impl Client {
     /// INVARIANT: Keys are sorted to prevent deadlocks when acquiring multiple
     /// session locks (e.g. DM sends that encrypt for recipient + own devices).
     /// Keys match the decrypt path format so send and receive serialize correctly.
-    pub(crate) async fn build_session_lock_keys(
-        &self,
-        device_jids: &[Jid],
-    ) -> Vec<wacore::libsignal::protocol::ProtocolAddress> {
-        let mut keys: Vec<wacore::libsignal::protocol::ProtocolAddress> =
-            Vec::with_capacity(device_jids.len());
+    /// Returns resolved encryption JIDs sorted in a consistent order for
+    /// deadlock-free lock acquisition. Sorts by Jid fields directly — no
+    /// intermediate ProtocolAddress/String allocations for sorting.
+    pub(crate) async fn build_session_lock_keys(&self, device_jids: &[Jid]) -> Vec<Jid> {
+        let mut keys: Vec<Jid> = Vec::with_capacity(device_jids.len());
         for jid in device_jids {
-            let enc_jid = self.resolve_encryption_jid(jid).await;
-            keys.push(enc_jid.to_protocol_address());
+            keys.push(self.resolve_encryption_jid(jid).await);
         }
-        keys.sort_unstable();
+        keys.sort_unstable_by(wacore::types::jid::cmp_for_lock_order);
         keys.dedup();
         keys
     }
@@ -2210,19 +2212,16 @@ mod tests {
             let send_lock_keys = client.build_session_lock_keys(&devices).await;
 
             assert_eq!(send_lock_keys.len(), 3);
-            assert_eq!(send_lock_keys[0].as_str(), "100000012345678:33@lid.0");
-            assert_eq!(send_lock_keys[1].as_str(), "100000012345678:5@lid.0");
-            assert_eq!(send_lock_keys[2].as_str(), "100000012345678@lid.0");
+            // Sorted by (server, user, device_numeric): 0, 5, 33
+            assert_eq!(send_lock_keys[0].device, 0);
+            assert_eq!(send_lock_keys[1].device, 5);
+            assert_eq!(send_lock_keys[2].device, 33);
 
-            // Send keys must match what the decrypt path would use
+            // Send keys must cover every device
             for device_jid in &devices {
-                let decrypt_key = device_jid.to_protocol_address();
                 assert!(
-                    send_lock_keys
-                        .iter()
-                        .any(|k| k.as_str() == decrypt_key.as_str()),
-                    "decrypt key {} not in send keys: {send_lock_keys:?}",
-                    decrypt_key.as_str()
+                    send_lock_keys.contains(device_jid),
+                    "device {device_jid} not in send keys: {send_lock_keys:?}"
                 );
             }
 
@@ -2334,31 +2333,21 @@ mod tests {
                 .to_non_ad();
 
             let all_dm_jids = vec![recipient_bare.clone(), own_device_5.clone()];
-            let lock_keys = client.build_session_lock_keys(&all_dm_jids).await;
+            let lock_jids = client.build_session_lock_keys(&all_dm_jids).await;
 
             // Recipient lock key must be BARE (device 0), matching decrypt path
             assert_eq!(
                 recipient_bare.to_protocol_address_string(),
                 "100000012345678@lid.0"
             );
-            assert!(
-                lock_keys
-                    .iter()
-                    .any(|k| k.as_str() == "100000012345678@lid.0")
-            );
+            assert!(lock_jids.contains(&recipient_bare));
 
             // Own device lock key must be device-specific
-            assert!(
-                lock_keys
-                    .iter()
-                    .any(|k| k.as_str() == "999999999999:5@c.us.0")
-            );
+            assert!(lock_jids.contains(&own_device_5));
 
             // Device-specific recipient key must NOT be present
             assert!(
-                !lock_keys
-                    .iter()
-                    .any(|k| k.as_str() == "100000012345678:33@lid.0"),
+                !lock_jids.contains(&recipient_device33),
                 "recipient must NOT use device-specific address"
             );
         }

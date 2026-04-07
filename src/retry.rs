@@ -233,7 +233,7 @@ impl Client {
                             signal_address, stored_reg_id, received_reg_id
                         );
                         self.signal_cache.delete_session(&signal_address).await;
-                        self.flush_signal_cache_logged("reg ID mismatch session deletion")
+                        self.flush_signal_cache_logged("reg ID mismatch session deletion", None)
                             .await;
                     }
                 }

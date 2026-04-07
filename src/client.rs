@@ -1356,9 +1356,13 @@ impl Client {
     }
 
     /// [`flush_signal_cache`](Self::flush_signal_cache) with error logging instead of propagation.
-    pub(crate) async fn flush_signal_cache_logged(&self, context: &str) {
+    pub(crate) async fn flush_signal_cache_logged(&self, context: &str, id: Option<&str>) {
         if let Err(e) = self.flush_signal_cache().await {
-            log::error!("Failed to flush signal cache ({context}): {e:?}");
+            if let Some(id) = id {
+                log::error!("Failed to flush signal cache ({context} {id}): {e:?}");
+            } else {
+                log::error!("Failed to flush signal cache ({context}): {e:?}");
+            }
         }
     }
 

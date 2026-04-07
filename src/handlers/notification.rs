@@ -384,7 +384,9 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
                 .await;
         }
 
-        client.flush_signal_cache_logged("identity change").await;
+        client
+            .flush_signal_cache_logged("identity change", None)
+            .await;
     }
 
     // Force fresh usync on next send
