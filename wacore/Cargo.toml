@@ -55,9 +55,14 @@ wacore-noise = { workspace = true }
 waproto = { workspace = true }
 
 [dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
 iai-callgrind = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [[bench]]
 name = "reporting_token_benchmark"
+harness = false
+
+[[bench]]
+name = "send_receive_benchmark"
 harness = false
