@@ -1022,7 +1022,8 @@ fn handle_status_notification(client: &Arc<Client>, node: &Node) {
 fn notification_timestamp(node: &Node) -> chrono::DateTime<chrono::Utc> {
     node.attrs()
         .optional_u64("t")
-        .map(|t| chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now))
+        .and_then(|t| i64::try_from(t).ok())
+        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
         .unwrap_or_else(chrono::Utc::now)
 }
 

@@ -993,8 +993,14 @@ mod tests {
             our_pn: &Jid,
             our_lid: &Jid,
         ) -> wacore_binary::node::Node {
+            // Mirror production routing: groups → chat JID, DMs → sender JID
+            let receipt_to = if info.source.is_group {
+                &info.source.chat
+            } else {
+                &info.source.sender
+            };
             let mut builder = NodeBuilder::new("receipt")
-                .attr("to", &info.source.sender)
+                .attr("to", receipt_to)
                 .attr("id", info.id.clone())
                 .attr("type", "retry");
 
