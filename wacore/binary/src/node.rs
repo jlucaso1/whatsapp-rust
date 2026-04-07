@@ -148,6 +148,13 @@ impl From<Jid> for NodeValue {
     }
 }
 
+impl From<&Jid> for NodeValue {
+    #[inline]
+    fn from(jid: &Jid) -> Self {
+        NodeValue::Jid(jid.clone())
+    }
+}
+
 /// A collection of node attributes stored as key-value pairs.
 /// Uses a Vec internally for better cache locality with small attribute counts (typically 3-6).
 /// Values can be either strings or JIDs, avoiding stringification overhead for JID attributes.

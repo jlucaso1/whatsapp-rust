@@ -255,7 +255,7 @@ impl IqSpec for IssuePrivacyTokensSpec {
             .iter()
             .map(|jid| {
                 NodeBuilder::new("token")
-                    .attr("jid", jid.clone())
+                    .attr("jid", jid)
                     .attr("t", self.timestamp.to_string())
                     .attr("type", "trusted_contact")
                     .build()

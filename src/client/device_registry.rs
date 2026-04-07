@@ -314,7 +314,7 @@ impl Client {
                 }
             }
         }
-        self.flush_signal_cache_logged("delete_sessions_for_devices")
+        self.flush_signal_cache_logged("delete_sessions_for_devices", None)
             .await;
     }
 

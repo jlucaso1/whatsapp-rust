@@ -180,6 +180,27 @@ fn button_name_to_flow_name(button_name: &str) -> &str {
     }
 }
 
+fn build_revoke_message(
+    remote_jid: &Jid,
+    from_me: bool,
+    message_id: String,
+    participant: Option<String>,
+) -> wa::Message {
+    wa::Message {
+        protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+            key: Some(wa::MessageKey {
+                remote_jid: Some(remote_jid.to_string()),
+                from_me: Some(from_me),
+                id: Some(message_id),
+                participant,
+            }),
+            r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
 impl Client {
     /// Send a message to a user, group, or newsletter.
     ///
@@ -485,7 +506,8 @@ impl Client {
             self.invalidate_device_cache(user).await;
         }
 
-        self.flush_signal_cache_logged("send_status_message").await;
+        self.flush_signal_cache_logged("send_status_message", None)
+            .await;
 
         Ok(SendResult {
             message_id: request_id,
@@ -708,19 +730,7 @@ impl Client {
             }
         };
 
-        let revoke_message = wa::Message {
-            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
-                key: Some(wa::MessageKey {
-                    remote_jid: Some(to.to_string()),
-                    from_me: Some(from_me),
-                    id: Some(message_id.clone()),
-                    participant,
-                }),
-                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
+        let revoke_message = build_revoke_message(&to, from_me, message_id, participant);
 
         // The revoke message stanza needs a NEW unique ID, not the message ID being revoked
         // The message_id being revoked is already in protocolMessage.key.id
@@ -840,9 +850,9 @@ impl Client {
             // Peer messages are only valid for individual users, not groups
             // Resolve encryption JID and acquire lock ONLY for encryption
             let encryption_jid = self.resolve_encryption_jid(&to).await;
-            let signal_addr_str = encryption_jid.to_protocol_address_string();
+            let signal_addr = encryption_jid.to_protocol_address();
 
-            let session_mutex = self.session_lock_for(&signal_addr_str).await;
+            let session_mutex = self.session_lock_for(signal_addr.as_str()).await;
             let _session_guard = session_mutex.lock().await;
 
             let mut store_adapter = self.signal_adapter().await;
@@ -1067,11 +1077,13 @@ impl Client {
                 debug!(target: "Client/TcToken", "Scheduled tc token issuance after send for {}", to);
             }
 
-            let lock_keys = self.build_session_lock_keys(&all_dm_jids).await;
+            let lock_jids = self.build_session_lock_keys(&all_dm_jids).await;
 
-            let mut _session_mutexes = Vec::with_capacity(lock_keys.len());
-            for key in &lock_keys {
-                _session_mutexes.push(self.session_lock_for(key).await);
+            let mut _session_mutexes = Vec::with_capacity(lock_jids.len());
+            let mut lock_buf = String::with_capacity(64);
+            for jid in &lock_jids {
+                wacore::types::jid::write_protocol_address_to(jid, &mut lock_buf);
+                _session_mutexes.push(self.session_lock_for(&lock_buf).await);
             }
             let mut _session_guards = Vec::with_capacity(_session_mutexes.len());
             for mutex in &_session_mutexes {
@@ -1127,7 +1139,8 @@ impl Client {
         }
 
         // Flush cached Signal state to DB after encryption
-        self.flush_signal_cache_logged("send_message_impl").await;
+        self.flush_signal_cache_logged("send_message_impl", None)
+            .await;
 
         // Issue new tc token after send if a bucket boundary was crossed.
         // Fire-and-forget so send_message returns without waiting for the IQ
@@ -1475,14 +1488,16 @@ impl Client {
     /// INVARIANT: Keys are sorted to prevent deadlocks when acquiring multiple
     /// session locks (e.g. DM sends that encrypt for recipient + own devices).
     /// Keys match the decrypt path format so send and receive serialize correctly.
-    pub(crate) async fn build_session_lock_keys(&self, device_jids: &[Jid]) -> Vec<String> {
-        let mut keys = Vec::with_capacity(device_jids.len());
+    /// Returns resolved encryption JIDs sorted in a consistent order for
+    /// deadlock-free lock acquisition. Sorts by Jid fields directly — no
+    /// intermediate ProtocolAddress/String allocations for sorting.
+    pub(crate) async fn build_session_lock_keys(&self, device_jids: &[Jid]) -> Vec<Jid> {
+        let mut keys: Vec<Jid> = Vec::with_capacity(device_jids.len());
         for jid in device_jids {
-            let enc_jid = self.resolve_encryption_jid(jid).await;
-            keys.push(enc_jid.to_protocol_address_string());
+            keys.push(self.resolve_encryption_jid(jid).await);
         }
-        keys.sort_unstable();
-        keys.dedup();
+        keys.sort_unstable_by(wacore::types::jid::cmp_for_lock_order);
+        keys.dedup_by(|a, b| wacore::types::jid::cmp_for_lock_order(a, b).is_eq());
         keys
     }
 
@@ -1617,19 +1632,7 @@ mod tests {
         );
         assert_eq!(edit_attr.to_string_val(), "7");
 
-        let revoke_message = wa::Message {
-            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
-                key: Some(wa::MessageKey {
-                    remote_jid: Some(to.to_string()),
-                    from_me: Some(from_me),
-                    id: Some(message_id.clone()),
-                    participant,
-                }),
-                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
+        let revoke_message = build_revoke_message(&to, from_me, message_id.clone(), participant);
 
         let proto_msg = revoke_message.protocol_message.unwrap();
         let key = proto_msg.key.unwrap();
@@ -1669,19 +1672,8 @@ mod tests {
         );
         assert_eq!(edit_attr.to_string_val(), "8");
 
-        let revoke_message = wa::Message {
-            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
-                key: Some(wa::MessageKey {
-                    remote_jid: Some(to.to_string()),
-                    from_me: Some(from_me),
-                    id: Some(message_id.clone()),
-                    participant: participant.clone(),
-                }),
-                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
-                ..Default::default()
-            })),
-            ..Default::default()
-        };
+        let revoke_message =
+            build_revoke_message(&to, from_me, message_id.clone(), participant.clone());
 
         let proto_msg = revoke_message.protocol_message.unwrap();
         let key = proto_msg.key.unwrap();
@@ -2220,16 +2212,16 @@ mod tests {
             let send_lock_keys = client.build_session_lock_keys(&devices).await;
 
             assert_eq!(send_lock_keys.len(), 3);
-            assert_eq!(send_lock_keys[0], "100000012345678:33@lid.0");
-            assert_eq!(send_lock_keys[1], "100000012345678:5@lid.0");
-            assert_eq!(send_lock_keys[2], "100000012345678@lid.0");
+            // Sorted by (server, user, device_numeric): 0, 5, 33
+            assert_eq!(send_lock_keys[0].device, 0);
+            assert_eq!(send_lock_keys[1].device, 5);
+            assert_eq!(send_lock_keys[2].device, 33);
 
-            // Send keys must match what the decrypt path would use
+            // Send keys must cover every device
             for device_jid in &devices {
-                let decrypt_key = device_jid.to_protocol_address().to_string();
                 assert!(
-                    send_lock_keys.contains(&decrypt_key),
-                    "decrypt key {decrypt_key} not in send keys: {send_lock_keys:?}"
+                    send_lock_keys.contains(device_jid),
+                    "device {device_jid} not in send keys: {send_lock_keys:?}"
                 );
             }
 
@@ -2341,21 +2333,21 @@ mod tests {
                 .to_non_ad();
 
             let all_dm_jids = vec![recipient_bare.clone(), own_device_5.clone()];
-            let lock_keys = client.build_session_lock_keys(&all_dm_jids).await;
+            let lock_jids = client.build_session_lock_keys(&all_dm_jids).await;
 
             // Recipient lock key must be BARE (device 0), matching decrypt path
             assert_eq!(
                 recipient_bare.to_protocol_address_string(),
                 "100000012345678@lid.0"
             );
-            assert!(lock_keys.contains(&"100000012345678@lid.0".to_string()));
+            assert!(lock_jids.contains(&recipient_bare));
 
             // Own device lock key must be device-specific
-            assert!(lock_keys.contains(&"999999999999:5@c.us.0".to_string()));
+            assert!(lock_jids.contains(&own_device_5));
 
             // Device-specific recipient key must NOT be present
             assert!(
-                !lock_keys.contains(&"100000012345678:33@lid.0".to_string()),
+                !lock_jids.contains(&recipient_device33),
                 "recipient must NOT use device-specific address"
             );
         }

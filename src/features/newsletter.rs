@@ -376,7 +376,7 @@ impl<'a> Newsletter<'a> {
         let request_id = self.client.generate_message_id().await;
 
         let stanza = NodeBuilder::new("message")
-            .attr("to", jid.clone())
+            .attr("to", jid)
             .attr("type", "reaction")
             .attr("id", &request_id)
             .attr("server_id", server_id.to_string())

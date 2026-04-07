@@ -179,12 +179,12 @@ impl RequestUtils {
             .attr("id", id)
             .attr("xmlns", query.namespace)
             .attr("type", query.query_type.as_str())
-            .attr("to", query.to.clone());
+            .attr("to", &query.to);
 
         if let Some(target) = &query.target
             && !target.is_empty()
         {
-            builder = builder.attr("target", target.clone());
+            builder = builder.attr("target", target);
         }
 
         if let Some(content) = &query.content {

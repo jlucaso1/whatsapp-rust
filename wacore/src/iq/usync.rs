@@ -106,16 +106,12 @@ fn build_user_nodes(users: &[IsOnWhatsAppUser]) -> Vec<Node> {
                 };
                 let mut children = vec![NodeBuilder::new("contact").string_content(phone).build()];
                 if let Some(lid) = &user.known_lid {
-                    children.push(
-                        NodeBuilder::new("lid")
-                            .attr("jid", Jid::lid(lid).to_string())
-                            .build(),
-                    );
+                    children.push(NodeBuilder::new("lid").attr("jid", Jid::lid(lid)).build());
                 }
                 NodeBuilder::new("user").children(children).build()
             } else {
                 NodeBuilder::new("user")
-                    .attr("jid", user.jid.to_non_ad().to_string())
+                    .attr("jid", user.jid.to_non_ad())
                     .build()
             }
         })
@@ -393,7 +389,7 @@ impl IqSpec for UserInfoSpec {
             .iter()
             .map(|jid| {
                 NodeBuilder::new("user")
-                    .attr("jid", jid.to_non_ad().to_string())
+                    .attr("jid", jid.to_non_ad())
                     .build()
             })
             .collect();
@@ -518,7 +514,7 @@ impl IqSpec for DeviceListSpec {
             .iter()
             .map(|jid| {
                 NodeBuilder::new("user")
-                    .attr("jid", jid.to_non_ad().to_string())
+                    .attr("jid", jid.to_non_ad())
                     .build()
             })
             .collect();
@@ -682,7 +678,7 @@ impl IqSpec for LidQuerySpec {
             .iter()
             .map(|jid| {
                 NodeBuilder::new("user")
-                    .attr("jid", jid.to_non_ad().to_string())
+                    .attr("jid", jid.to_non_ad())
                     .build()
             })
             .collect();

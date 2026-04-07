@@ -118,9 +118,7 @@ impl IqSpec for BusinessProfileSpec {
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("business_profile")
                     .attr("v", "244")
-                    .children([NodeBuilder::new("profile")
-                        .attr("jid", self.jid.clone())
-                        .build()])
+                    .children([NodeBuilder::new("profile").attr("jid", &self.jid).build()])
                     .build(),
             ])),
         )

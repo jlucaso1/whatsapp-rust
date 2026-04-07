@@ -62,7 +62,7 @@ impl<'a> Chatstate<'a> {
         };
 
         NodeBuilder::new("chatstate")
-            .attr("to", to.clone())
+            .attr("to", to)
             .children([child])
             .build()
     }

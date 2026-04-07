@@ -31,7 +31,7 @@ pub fn compute_key_bundle_digest(
 impl PreKeyUtils {
     pub fn build_fetch_prekeys_request(jids: &[Jid], reason: Option<&str>) -> Node {
         let user_nodes = jids.iter().map(|jid| {
-            let mut user_builder = NodeBuilder::new("user").attr("jid", jid.clone());
+            let mut user_builder = NodeBuilder::new("user").attr("jid", jid);
             if let Some(r) = reason {
                 user_builder = user_builder.attr("reason", r);
             }

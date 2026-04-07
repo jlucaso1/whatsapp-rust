@@ -31,7 +31,7 @@ pub fn build_get_user_devices_query(jids: &[Jid], sid: &str) -> Node {
         .iter()
         .map(|jid| {
             NodeBuilder::new("user")
-                .attr("jid", jid.to_non_ad().to_string())
+                .attr("jid", jid.to_non_ad())
                 .build()
         })
         .collect::<Vec<_>>();

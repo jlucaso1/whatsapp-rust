@@ -347,7 +347,7 @@ where
     // For phone number JIDs, check if we have an existing session under the corresponding LID.
     // This handles the case where a session was established via a message with sender_lid,
     // and now we're sending a reply using the phone number address.
-    let mut jid_to_encryption_jid: std::collections::HashMap<Jid, Jid> =
+    let mut jid_to_encryption_jid: std::collections::HashMap<&Jid, Jid> =
         std::collections::HashMap::with_capacity(devices.len());
     let mut jids_needing_prekeys = Vec::with_capacity(devices.len());
     let mut had_406 = false;
@@ -375,7 +375,7 @@ where
                     lid_jid,
                     device_jid
                 );
-                jid_to_encryption_jid.insert(device_jid.clone(), lid_jid);
+                jid_to_encryption_jid.insert(device_jid, lid_jid);
                 continue;
             }
         }
@@ -389,7 +389,7 @@ where
             .is_some()
         {
             // Session exists under direct address, use it
-            jid_to_encryption_jid.insert(device_jid.clone(), device_jid.clone());
+            jid_to_encryption_jid.insert(device_jid, device_jid.clone());
             continue;
         }
 
@@ -411,7 +411,7 @@ where
         } else {
             device_jid.clone()
         };
-        jid_to_encryption_jid.insert(device_jid.clone(), encryption_jid);
+        jid_to_encryption_jid.insert(device_jid, encryption_jid);
         // Use original device_jid for prekey fetch (HashMap key match)
         jids_needing_prekeys.push(device_jid.clone());
     }
@@ -714,7 +714,7 @@ pub async fn prepare_dm_stanza<
         device_sent_message: Some(Box::new(DeviceSentMessage {
             destination_jid: Some(to_jid.to_string()),
             message: Some(Box::new(message_for_encryption)),
-            phash: Some("".to_string()),
+            phash: Some(String::new()),
         })),
         ..Default::default()
     };
@@ -1305,11 +1305,7 @@ pub fn ensure_status_participants(
     let bare_to_nodes: Vec<Node> = group_info
         .participants
         .iter()
-        .map(|jid| {
-            NodeBuilder::new("to")
-                .attr("jid", jid.to_non_ad().to_string())
-                .build()
-        })
+        .map(|jid| NodeBuilder::new("to").attr("jid", jid.to_non_ad()).build())
         .collect();
 
     // Check if <participants> already exists in the stanza children
@@ -1332,11 +1328,7 @@ pub fn ensure_status_participants(
             .children()
             .unwrap_or_default()
             .iter()
-            .filter_map(|n| {
-                n.attrs
-                    .get("jid")
-                    .and_then(|v| v.to_string().parse::<Jid>().ok().map(|j| j.user.clone()))
-            })
+            .filter_map(|n| n.attrs.get("jid").and_then(|v| v.to_jid()).map(|j| j.user))
             .collect();
 
         let new_to_nodes: Vec<Node> = bare_to_nodes
@@ -1344,9 +1336,8 @@ pub fn ensure_status_participants(
             .filter(|n| {
                 n.attrs
                     .get("jid")
-                    .and_then(|v| v.to_string().parse::<Jid>().ok())
-                    .map(|j| !existing_users.contains(&j.user))
-                    .unwrap_or(false)
+                    .and_then(|v| v.to_jid())
+                    .is_some_and(|j| !existing_users.contains(&j.user))
             })
             .collect();
 

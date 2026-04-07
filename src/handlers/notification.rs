@@ -372,22 +372,27 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
 
         let resolved = client.resolve_encryption_jid(&from_jid).await;
         let addr = resolved.to_protocol_address();
+
+        // Hold session lock while deleting to prevent concurrent encrypt/decrypt
+        // from recreating the stale session (mirrors Signal::delete_sessions)
+        let lock = client.session_lock_for(addr.as_str()).await;
+        let _guard = lock.lock().await;
         client.signal_cache.delete_session(&addr).await;
         client.signal_cache.delete_identity(&addr).await;
+        drop(_guard);
 
         let status_group = "status@broadcast";
         for own_jid in device_snapshot.pn.iter().chain(device_snapshot.lid.iter()) {
-            let sk_name = SenderKeyName::new(
-                status_group.to_string(),
-                own_jid.to_protocol_address().to_string(),
-            );
+            let sk_name = SenderKeyName::from_jid(&status_group, &own_jid.to_protocol_address());
             client
                 .signal_cache
                 .delete_sender_key(sk_name.cache_key())
                 .await;
         }
 
-        client.flush_signal_cache_logged("identity change").await;
+        client
+            .flush_signal_cache_logged("identity change", None)
+            .await;
     }
 
     // Force fresh usync on next send
@@ -894,11 +899,7 @@ fn handle_picture_notification(client: &Arc<Client>, node: &Node) {
         }
     };
 
-    let timestamp = node
-        .attrs()
-        .optional_u64("t")
-        .map(|t| chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now))
-        .unwrap_or_else(chrono::Utc::now);
+    let timestamp = notification_timestamp(node);
 
     // Look for <set>, <delete>, or <request> child to determine the action.
     // WhatsApp Web has two formats:
@@ -988,11 +989,7 @@ fn handle_status_notification(client: &Arc<Client>, node: &Node) {
         }
     };
 
-    let timestamp = node
-        .attrs()
-        .optional_u64("t")
-        .map(|t| chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now))
-        .unwrap_or_else(chrono::Utc::now);
+    let timestamp = notification_timestamp(node);
 
     if let Some(set_node) = node.get_optional_child("set") {
         let status_text = match &set_node.content {
@@ -1025,7 +1022,8 @@ fn handle_status_notification(client: &Arc<Client>, node: &Node) {
 fn notification_timestamp(node: &Node) -> chrono::DateTime<chrono::Utc> {
     node.attrs()
         .optional_u64("t")
-        .map(|t| chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now))
+        .and_then(|t| i64::try_from(t).ok())
+        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
         .unwrap_or_else(chrono::Utc::now)
 }
 
@@ -2130,10 +2128,7 @@ mod tests {
             .await;
 
         // Pre-populate a sender key for status@broadcast
-        let sk_name = SenderKeyName::new(
-            "status@broadcast".to_string(),
-            own_jid.to_protocol_address().to_string(),
-        );
+        let sk_name = SenderKeyName::from_jid(&"status@broadcast", &own_jid.to_protocol_address());
         let sk_record = wacore::libsignal::protocol::SenderKeyRecord::new_empty();
         client
             .signal_cache

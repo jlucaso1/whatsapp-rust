@@ -501,7 +501,7 @@ impl ProtocolNode for GroupInfoResponse {
                 desc_builder = desc_builder.attr("id", desc_id.as_str());
             }
             if let Some(ref owner) = self.description_owner {
-                desc_builder = desc_builder.attr("participant", owner.clone());
+                desc_builder = desc_builder.attr("participant", owner);
             }
             if let Some(t) = self.description_time {
                 desc_builder = desc_builder.attr("t", t.to_string());
@@ -521,7 +521,7 @@ impl ProtocolNode for GroupInfoResponse {
         if let Some(ref parent_jid) = self.parent_group_jid {
             children.push(
                 NodeBuilder::new("linked_parent")
-                    .attr("jid", parent_jid.clone())
+                    .attr("jid", parent_jid)
                     .build(),
             );
         }
@@ -1035,7 +1035,7 @@ impl IqSpec for LeaveGroupIq {
 
     fn build_iq(&self) -> InfoQuery<'static> {
         let group_node = NodeBuilder::new("group")
-            .attr("id", self.group_jid.clone())
+            .attr("id", &self.group_jid)
             .build();
         let leave_node = NodeBuilder::new("leave").children([group_node]).build();
 
@@ -1083,7 +1083,7 @@ macro_rules! define_group_participant_iq {
                     .iter()
                     .map(|jid| {
                         NodeBuilder::new("participant")
-                            .attr("jid", jid.clone())
+                            .attr("jid", jid)
                             .build()
                     })
                     .collect();
@@ -1132,7 +1132,7 @@ macro_rules! define_group_participant_iq {
                     .iter()
                     .map(|jid| {
                         NodeBuilder::new("participant")
-                            .attr("jid", jid.clone())
+                            .attr("jid", jid)
                             .build()
                     })
                     .collect();
@@ -1581,7 +1581,7 @@ impl IqSpec for LinkSubgroupsIq {
         let group_nodes: Vec<Node> = self
             .subgroup_jids
             .iter()
-            .map(|jid| NodeBuilder::new("group").attr("jid", jid.clone()).build())
+            .map(|jid| NodeBuilder::new("group").attr("jid", jid).build())
             .collect();
 
         let link_node = NodeBuilder::new("link")
@@ -1652,7 +1652,7 @@ impl IqSpec for UnlinkSubgroupsIq {
             .subgroup_jids
             .iter()
             .map(|jid| {
-                let mut builder = NodeBuilder::new("group").attr("jid", jid.clone());
+                let mut builder = NodeBuilder::new("group").attr("jid", jid);
                 if self.remove_orphan_members {
                     builder = builder.attr("remove_orphaned_members", "true");
                 }
@@ -1758,7 +1758,7 @@ impl IqSpec for QueryLinkedGroupIq {
     fn build_iq(&self) -> InfoQuery<'static> {
         let query_node = NodeBuilder::new("query_linked")
             .attr("type", "sub_group")
-            .attr("jid", self.subgroup_jid.clone())
+            .attr("jid", &self.subgroup_jid)
             .build();
 
         InfoQuery::get_ref(
@@ -1803,7 +1803,7 @@ impl IqSpec for JoinLinkedGroupIq {
 
     fn build_iq(&self) -> InfoQuery<'static> {
         let node = NodeBuilder::new("join_linked_group")
-            .attr("jid", self.subgroup_jid.clone())
+            .attr("jid", &self.subgroup_jid)
             .build();
 
         InfoQuery::set_ref(
@@ -2146,11 +2146,7 @@ impl IqSpec for MembershipRequestActionIq {
         let participant_nodes: Vec<Node> = self
             .participants
             .iter()
-            .map(|jid| {
-                NodeBuilder::new("participant")
-                    .attr("jid", jid.clone())
-                    .build()
-            })
+            .map(|jid| NodeBuilder::new("participant").attr("jid", jid).build())
             .collect();
 
         InfoQuery::set_ref(

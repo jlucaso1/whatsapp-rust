@@ -309,9 +309,9 @@ impl IqSpec for SetPrivacySettingSpec {
                 .map(|entry| {
                     let mut user = NodeBuilder::new("user")
                         .attr("action", entry.action.as_str())
-                        .attr("jid", entry.jid.clone());
+                        .attr("jid", &entry.jid);
                     if let Some(ref pn) = entry.pn_jid {
-                        user = user.attr("pn_jid", pn.clone());
+                        user = user.attr("pn_jid", pn);
                     }
                     user.build()
                 })

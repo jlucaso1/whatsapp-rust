@@ -1,6 +1,37 @@
 use crate::libsignal::protocol::ProtocolAddress;
 use wacore_binary::jid::Jid;
 
+/// Map server names to WhatsApp Web's internal Signal address format.
+#[inline]
+fn mapped_server(s: &str) -> &str {
+    if s == "s.whatsapp.net" { "c.us" } else { s }
+}
+
+/// Write the protocol address lock key (`{user}[:{device}]@{server}.0`)
+/// into `buf`, reusing its allocation. Zero heap allocations.
+pub fn write_protocol_address_to(jid: &Jid, buf: &mut String) {
+    use std::fmt::Write;
+    buf.clear();
+    let server = mapped_server(&jid.server);
+    buf.push_str(&jid.user);
+    if jid.device != 0 {
+        buf.push(':');
+        let _ = write!(buf, "{}", jid.device);
+    }
+    buf.push('@');
+    buf.push_str(server);
+    buf.push_str(".0");
+}
+
+/// Consistent ordering for deadlock-free multi-lock acquisition.
+/// Compares Jid fields directly — no String allocation needed.
+pub fn cmp_for_lock_order(a: &Jid, b: &Jid) -> std::cmp::Ordering {
+    mapped_server(&a.server)
+        .cmp(mapped_server(&b.server))
+        .then_with(|| a.user.cmp(&b.user))
+        .then_with(|| a.device.cmp(&b.device))
+}
+
 pub trait JidExt {
     fn to_protocol_address(&self) -> ProtocolAddress;
 
@@ -20,15 +51,7 @@ pub trait JidExt {
 impl JidExt for Jid {
     fn to_signal_address_string(&self) -> String {
         use std::fmt::Write;
-
-        // Map server names to WhatsApp Web's internal format
-        // WhatsApp Web uses @c.us for phone numbers, @lid for LID
-        let server = match &*self.server {
-            "s.whatsapp.net" => "c.us",
-            other => other,
-        };
-
-        // Pre-size the output: user + ":" + device(max 5 digits) + "@" + server
+        let server = mapped_server(&self.server);
         let mut result = String::with_capacity(self.user.len() + 7 + server.len());
         result.push_str(&self.user);
         if self.device != 0 {

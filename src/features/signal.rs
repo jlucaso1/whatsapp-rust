@@ -38,9 +38,8 @@ impl<'a> Signal<'a> {
         // Resolve PN→LID to use the correct Signal session (matches send path)
         let encryption_jid = self.client.resolve_encryption_jid(jid).await;
         let signal_addr = encryption_jid.to_protocol_address();
-        let signal_addr_str = signal_addr.to_string();
 
-        let lock = self.client.session_lock_for(&signal_addr_str).await;
+        let lock = self.client.session_lock_for(signal_addr.as_str()).await;
         let _guard = lock.lock().await;
         let mut adapter = self.client.signal_adapter().await;
 
@@ -93,9 +92,8 @@ impl<'a> Signal<'a> {
 
         let encryption_jid = self.client.resolve_encryption_jid(jid).await;
         let signal_addr = encryption_jid.to_protocol_address();
-        let signal_addr_str = signal_addr.to_string();
 
-        let lock = self.client.session_lock_for(&signal_addr_str).await;
+        let lock = self.client.session_lock_for(signal_addr.as_str()).await;
         let _guard = lock.lock().await;
         let mut adapter = self.client.signal_adapter().await;
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
@@ -135,7 +133,7 @@ impl<'a> Signal<'a> {
     ) -> Result<(Option<Vec<u8>>, Vec<u8>)> {
         let own_jid = self.client.get_own_jid_for_group(group_jid).await?;
         let sender_addr = own_jid.to_protocol_address();
-        let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_addr.to_string());
+        let sender_key_name = SenderKeyName::from_jid(group_jid, &sender_addr);
 
         // Only create SKDM when no sender key exists (matches WA Web behavior)
         let device_store = self.client.persistence_manager.get_device_arc().await;
@@ -238,9 +236,8 @@ impl<'a> Signal<'a> {
         for jid in jids {
             let resolved = self.client.resolve_encryption_jid(jid).await;
             let addr = resolved.to_protocol_address();
-            let addr_str = addr.to_string();
 
-            let lock = self.client.session_lock_for(&addr_str).await;
+            let lock = self.client.session_lock_for(addr.as_str()).await;
             let _guard = lock.lock().await;
 
             // WA Web removes session + identity together (deleteRemoteSession)
@@ -267,10 +264,12 @@ impl<'a> Signal<'a> {
         self.client.ensure_e2e_sessions(&device_jids).await?;
 
         // Acquire per-device session locks before encrypting (matches DM send path)
-        let lock_keys = self.client.build_session_lock_keys(&device_jids).await;
-        let mut session_mutexes = Vec::with_capacity(lock_keys.len());
-        for key in &lock_keys {
-            session_mutexes.push(self.client.session_lock_for(key).await);
+        let lock_jids = self.client.build_session_lock_keys(&device_jids).await;
+        let mut session_mutexes = Vec::with_capacity(lock_jids.len());
+        let mut lock_buf = String::with_capacity(64);
+        for jid in &lock_jids {
+            wacore::types::jid::write_protocol_address_to(jid, &mut lock_buf);
+            session_mutexes.push(self.client.session_lock_for(&lock_buf).await);
         }
         let mut _session_guards = Vec::with_capacity(session_mutexes.len());
         for mutex in &session_mutexes {

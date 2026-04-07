@@ -36,7 +36,7 @@ impl StanzaHandler for PresenceHandler {
         let last_seen = node
             .attrs
             .get("last")
-            .and_then(|v| v.to_string().parse::<i64>().ok())
+            .and_then(|v| v.as_str().parse::<i64>().ok())
             .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
 
         debug!(
