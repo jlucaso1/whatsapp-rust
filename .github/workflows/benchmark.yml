@@ -48,7 +48,7 @@ jobs:
           cache-targets: "false"
 
       - name: Run benchmarks
-        run: cargo bench --workspace | tee bench_output.txt
+        run: cargo bench -p wacore -p wacore-binary -p wacore-libsignal | tee bench_output.txt
 
       - name: Parse results
         run: |
