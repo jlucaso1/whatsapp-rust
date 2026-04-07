@@ -136,20 +136,17 @@ impl Client {
     /// message are rare and a double-send is benign (recipients deduplicate
     /// by message ID).
     async fn increment_retry_count(&self, cache_key: &str) -> Option<u8> {
-        let current = self.message_retry_counts.get(&cache_key.to_string()).await;
+        let cache_key = cache_key.to_owned();
+        let current = self.message_retry_counts.get(&cache_key).await;
         match current {
             Some(count) if count >= MAX_DECRYPT_RETRIES => None,
             Some(count) => {
                 let new_count = count + 1;
-                self.message_retry_counts
-                    .insert(cache_key.to_string(), new_count)
-                    .await;
+                self.message_retry_counts.insert(cache_key, new_count).await;
                 Some(new_count)
             }
             None => {
-                self.message_retry_counts
-                    .insert(cache_key.to_string(), 1_u8)
-                    .await;
+                self.message_retry_counts.insert(cache_key, 1_u8).await;
                 Some(1)
             }
         }
@@ -286,16 +283,14 @@ impl Client {
 
         let participants = node.get_optional_child_by_tag(&["participants"]);
         if let Some(participants_node) = participants {
-            let own_jid_str = self.get_pn().await.map(|j| j.to_string());
+            let own_jid = self.get_pn().await;
             let to_nodes = participants_node.get_children_by_tag("to");
             for to_node in to_nodes {
-                let to_jid = match to_node.attrs().optional_string("jid") {
+                let to_jid = match to_node.attrs().optional_jid("jid") {
                     Some(jid) => jid,
                     None => continue,
                 };
-                if let Some(ref ours) = own_jid_str
-                    && *to_jid == **ours
-                {
+                if own_jid.as_ref().is_some_and(|ours| *ours == to_jid) {
                     let enc_children = to_node.get_children_by_tag("enc");
                     all_enc_nodes.extend(enc_children);
                 }

@@ -140,7 +140,7 @@ impl Client {
         });
 
         let original_msg = match self
-            .take_recent_message(receipt.source.chat.clone(), message_id.clone())
+            .take_recent_message(&receipt.source.chat, &message_id)
             .await
         {
             Some(msg) => msg,
@@ -156,12 +156,8 @@ impl Client {
         // take_recent_message consumed it; without this a second participant's
         // retry would silently fail with "not found in cache".
         if is_group_or_status {
-            self.add_recent_message(
-                receipt.source.chat.clone(),
-                message_id.clone(),
-                &original_msg,
-            )
-            .await;
+            self.add_recent_message(&receipt.source.chat, &message_id, &original_msg)
+                .await;
         }
 
         // Reuse the participant string extracted earlier (same source: node's
@@ -923,14 +919,10 @@ mod tests {
         };
 
         // Insert via the new async API
-        client
-            .add_recent_message(chat.clone(), msg_id.clone(), &msg)
-            .await;
+        client.add_recent_message(&chat, &msg_id, &msg).await;
 
         // First take should return and remove it from cache
-        let taken = client
-            .take_recent_message(chat.clone(), msg_id.clone())
-            .await;
+        let taken = client.take_recent_message(&chat, &msg_id).await;
         assert!(taken.is_some());
         assert_eq!(
             taken
@@ -941,7 +933,7 @@ mod tests {
         );
 
         // Second take should return None
-        let taken_again = client.take_recent_message(chat, msg_id).await;
+        let taken_again = client.take_recent_message(&chat, &msg_id).await;
         assert!(taken_again.is_none());
     }
 
@@ -1820,26 +1812,18 @@ mod tests {
         };
 
         // Add message to cache
-        client
-            .add_recent_message(chat.clone(), msg_id.clone(), &msg)
-            .await;
+        client.add_recent_message(&chat, &msg_id, &msg).await;
 
         // First device takes the message
-        let taken = client
-            .take_recent_message(chat.clone(), msg_id.clone())
-            .await;
+        let taken = client.take_recent_message(&chat, &msg_id).await;
         assert!(taken.is_some(), "First take should succeed");
 
         // Re-add for subsequent retries (simulating the status broadcast fix)
         let taken_msg = taken.unwrap();
-        client
-            .add_recent_message(chat.clone(), msg_id.clone(), &taken_msg)
-            .await;
+        client.add_recent_message(&chat, &msg_id, &taken_msg).await;
 
         // Second device should also be able to take the message
-        let taken2 = client
-            .take_recent_message(chat.clone(), msg_id.clone())
-            .await;
+        let taken2 = client.take_recent_message(&chat, &msg_id).await;
         assert!(
             taken2.is_some(),
             "Second take should succeed after re-add (status broadcast multi-device retry)"

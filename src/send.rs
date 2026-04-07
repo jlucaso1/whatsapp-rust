@@ -349,8 +349,7 @@ impl Client {
             group_info.participants.push(own_base);
         }
 
-        self.add_recent_message(to.clone(), request_id.clone(), &message)
-            .await;
+        self.add_recent_message(&to, &request_id, &message).await;
 
         let device_store_arc = self.persistence_manager.get_device_arc().await;
         let to_str = to.to_string();
@@ -593,14 +592,8 @@ impl Client {
             return;
         }
 
-        // Write to DB first, then invalidate cache. Next read reloads from
-        // DB with the authoritative state. This avoids the clone+modify race
-        // where concurrent writers can overwrite each other's mutations.
-        let strs: Vec<String> = devices.iter().map(|j| j.to_string()).collect();
-        let entries: Vec<(&str, bool)> = strs.iter().map(|s| (s.as_str(), true)).collect();
         if let Err(e) = self
-            .persistence_manager
-            .set_sender_key_status(group_jid, &entries)
+            .set_sender_key_status_for_devices(group_jid, devices, true, false)
             .await
         {
             log::warn!(
@@ -883,8 +876,7 @@ impl Client {
                 .ok_or_else(|| anyhow!("LID not set, cannot send to group"))?;
 
             // Store serialized message bytes for retry (lightweight)
-            self.add_recent_message(to.clone(), request_id.clone(), message)
-                .await;
+            self.add_recent_message(&to, &request_id, message).await;
 
             let device_store_arc = self.persistence_manager.get_device_arc().await;
             let to_str = to.to_string();
@@ -1006,8 +998,7 @@ impl Client {
             // Per-device locking to match decrypt path (message.rs:684),
             // preventing ratchet desync on concurrent send/receive.
 
-            self.add_recent_message(to.clone(), request_id.clone(), message)
-                .await;
+            self.add_recent_message(&to, &request_id, message).await;
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             let own_jid = device_snapshot
@@ -1294,7 +1285,7 @@ impl Client {
     }
 
     /// Returns true if at least one token was persisted.
-    async fn store_issued_tc_tokens(
+    pub(crate) async fn store_issued_tc_tokens(
         &self,
         tokens: &[wacore::iq::tctoken::ReceivedTcToken],
     ) -> bool {
