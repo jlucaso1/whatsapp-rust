@@ -613,14 +613,9 @@ fn bench_dm_recv(mut d: DmRecvData) {
     ));
 }
 
-// Steady-state group send (skmsg only, no SKDM distribution)
-#[library_benchmark]
-#[bench::group_10(setup = setup_group_send_10)]
-#[bench::group_50(setup = setup_group_send_50)]
-#[bench::group_256(setup = setup_group_send_256)]
-fn bench_group_send(mut d: GrpSendData) {
+fn run_group_send(d: &mut GrpSendData) {
     let own_jid = d.alice.jid.clone();
-    let mut group_info = GroupInfo::new(d.participants, AddressingMode::Pn);
+    let mut group_info = GroupInfo::new(std::mem::take(&mut d.participants), AddressingMode::Pn);
     let mut stores = SignalStores {
         sender_key_store: &mut d.alice.sender_keys,
         session_store: &mut d.alice.sessions,
@@ -636,9 +631,9 @@ fn bench_group_send(mut d: GrpSendData) {
         &own_jid,
         &own_jid,
         None,
-        d.group_jid,
+        d.group_jid.clone(),
         &d.msg,
-        "b-grp-001".into(),
+        "b-grp".into(),
         d.force_skdm,
         None,
         None,
@@ -649,40 +644,22 @@ fn bench_group_send(mut d: GrpSendData) {
     black_box(marshal(&result.node).unwrap());
 }
 
+// Steady-state group send (skmsg only, no SKDM distribution)
+#[library_benchmark]
+#[bench::group_10(setup = setup_group_send_10)]
+#[bench::group_50(setup = setup_group_send_50)]
+#[bench::group_256(setup = setup_group_send_256)]
+fn bench_group_send(mut d: GrpSendData) {
+    run_group_send(&mut d);
+}
+
 // First-message group send: forces SKDM distribution with N pairwise encryptions
 #[library_benchmark]
 #[bench::skdm_10(setup = setup_group_skdm_10)]
 #[bench::skdm_50(setup = setup_group_skdm_50)]
 #[bench::skdm_256(setup = setup_group_skdm_256)]
 fn bench_group_send_skdm(mut d: GrpSendData) {
-    let own_jid = d.alice.jid.clone();
-    let mut group_info = GroupInfo::new(d.participants, AddressingMode::Pn);
-    let mut stores = SignalStores {
-        sender_key_store: &mut d.alice.sender_keys,
-        session_store: &mut d.alice.sessions,
-        identity_store: &mut d.alice.identity,
-        prekey_store: &mut d.alice.prekeys,
-        signed_prekey_store: &d.alice.signed_prekeys,
-    };
-
-    let result = futures::executor::block_on(prepare_group_stanza(
-        &mut stores,
-        &d.resolver,
-        &mut group_info,
-        &own_jid,
-        &own_jid,
-        None,
-        d.group_jid,
-        &d.msg,
-        "b-grp-skdm".into(),
-        d.force_skdm,
-        None,
-        None,
-        &[],
-    ))
-    .unwrap();
-
-    black_box(marshal(&result.node).unwrap());
+    run_group_send(&mut d);
 }
 
 #[library_benchmark]
