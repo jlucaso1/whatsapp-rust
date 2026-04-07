@@ -134,6 +134,11 @@ impl SignalMessage {
     }
 
     #[inline]
+    pub fn into_serialized(self) -> Box<[u8]> {
+        self.serialized
+    }
+
+    #[inline]
     pub fn body(&self) -> &[u8] {
         &self.ciphertext
     }
@@ -320,6 +325,11 @@ impl PreKeySignalMessage {
     pub fn serialized(&self) -> &[u8] {
         &self.serialized
     }
+
+    #[inline]
+    pub fn into_serialized(self) -> Box<[u8]> {
+        self.serialized
+    }
 }
 
 impl AsRef<[u8]> for PreKeySignalMessage {
@@ -504,6 +514,11 @@ impl SenderKeyMessage {
     pub fn serialized(&self) -> &[u8] {
         &self.serialized
     }
+
+    #[inline]
+    pub fn into_serialized(self) -> Box<[u8]> {
+        self.serialized
+    }
 }
 
 impl AsRef<[u8]> for SenderKeyMessage {
@@ -627,6 +642,11 @@ impl SenderKeyDistributionMessage {
     #[inline]
     pub fn serialized(&self) -> &[u8] {
         &self.serialized
+    }
+
+    #[inline]
+    pub fn into_serialized(self) -> Box<[u8]> {
+        self.serialized
     }
 }
 

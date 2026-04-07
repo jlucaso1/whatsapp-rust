@@ -54,15 +54,14 @@ impl<'a> Signal<'a> {
         drop(_guard);
         self.client.flush_signal_cache().await?;
 
-        match encrypted {
-            CiphertextMessage::PreKeySignalMessage(msg) => {
-                Ok((EncType::PreKeyMessage, msg.serialized().to_vec()))
-            }
-            CiphertextMessage::SignalMessage(msg) => {
-                Ok((EncType::Message, msg.serialized().to_vec()))
-            }
-            _ => Err(anyhow!("unexpected ciphertext variant")),
-        }
+        let (_, is_prekey, bytes) = wacore::send::extract_ciphertext(encrypted)
+            .ok_or_else(|| anyhow!("unexpected ciphertext variant"))?;
+        let enc_type = if is_prekey {
+            EncType::PreKeyMessage
+        } else {
+            EncType::Message
+        };
+        Ok((enc_type, bytes.into_vec()))
     }
 
     /// Decrypt a Signal protocol message from a sender.
@@ -173,7 +172,7 @@ impl<'a> Signal<'a> {
 
         self.client.flush_signal_cache().await?;
 
-        Ok((skdm_bytes, ciphertext.serialized().to_vec()))
+        Ok((skdm_bytes, ciphertext.into_serialized().into_vec()))
     }
 
     /// Decrypt a group (sender-key) message.

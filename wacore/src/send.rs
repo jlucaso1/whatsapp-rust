@@ -33,6 +33,19 @@ pub(crate) mod stanza {
     pub const ENC_TYPE_SKMSG: &str = "skmsg";
 }
 
+/// Extract (enc_type, is_prekey, serialized) from a CiphertextMessage.
+pub fn extract_ciphertext(msg: CiphertextMessage) -> Option<(&'static str, bool, Box<[u8]>)> {
+    match msg {
+        CiphertextMessage::SignalMessage(m) => {
+            Some((stanza::ENC_TYPE_MSG, false, m.into_serialized()))
+        }
+        CiphertextMessage::PreKeySignalMessage(m) => {
+            Some((stanza::ENC_TYPE_PKMSG, true, m.into_serialized()))
+        }
+        _ => None,
+    }
+}
+
 /// Unwrap wrapper message types to reach the inner message.
 /// Matches WA Web's getUnwrappedProtobufMessage (EProtoUtils.js:19-35).
 fn unwrap_message(msg: &wa::Message) -> &wa::Message {
@@ -603,16 +616,12 @@ where
         .await
         {
             Ok(encrypted_payload) => {
-                let (enc_type, serialized_bytes) = match encrypted_payload {
-                    CiphertextMessage::PreKeySignalMessage(msg) => {
-                        includes_prekey_message = true;
-                        (stanza::ENC_TYPE_PKMSG, msg.serialized().to_vec())
-                    }
-                    CiphertextMessage::SignalMessage(msg) => {
-                        (stanza::ENC_TYPE_MSG, msg.serialized().to_vec())
-                    }
-                    _ => continue,
+                let Some((enc_type, is_prekey, serialized_bytes)) =
+                    extract_ciphertext(encrypted_payload)
+                else {
+                    continue;
                 };
+                includes_prekey_message |= is_prekey;
 
                 let mut enc_builder = NodeBuilder::new("enc")
                     .attr("v", stanza::ENC_VERSION)
@@ -708,7 +717,7 @@ pub async fn prepare_dm_stanza<
         message.clone()
     };
 
-    let recipient_plaintext = MessageUtils::pad_message_v2(message_for_encryption.encode_to_vec());
+    let recipient_plaintext = MessageUtils::encode_and_pad(&message_for_encryption);
 
     let dsm = wa::Message {
         device_sent_message: Some(Box::new(DeviceSentMessage {
@@ -816,19 +825,14 @@ where
     S: crate::libsignal::protocol::SessionStore,
     I: crate::libsignal::protocol::IdentityKeyStore,
 {
-    let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+    let plaintext = MessageUtils::encode_and_pad(message);
     let signal_address = encryption_jid.to_protocol_address();
 
     let encrypted_message =
         message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
 
-    let (enc_type, serialized_bytes) = match encrypted_message {
-        CiphertextMessage::SignalMessage(msg) => (stanza::ENC_TYPE_MSG, msg.serialized().to_vec()),
-        CiphertextMessage::PreKeySignalMessage(msg) => {
-            (stanza::ENC_TYPE_PKMSG, msg.serialized().to_vec())
-        }
-        _ => return Err(anyhow!("Unexpected peer encryption message type")),
-    };
+    let (enc_type, _, serialized_bytes) = extract_ciphertext(encrypted_message)
+        .ok_or_else(|| anyhow!("Unexpected peer encryption message type"))?;
 
     let enc_node = NodeBuilder::new("enc")
         .attrs([("v", "2"), ("type", enc_type)])
@@ -866,25 +870,14 @@ where
     S: crate::libsignal::protocol::SessionStore,
     I: crate::libsignal::protocol::IdentityKeyStore,
 {
-    let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+    let plaintext = MessageUtils::encode_and_pad(message);
     let signal_address = encryption_jid.to_protocol_address();
 
     let encrypted =
         message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
 
-    let (enc_type, is_prekey, serialized) = match encrypted {
-        CiphertextMessage::SignalMessage(msg) => {
-            (stanza::ENC_TYPE_MSG, false, msg.serialized().to_vec())
-        }
-        CiphertextMessage::PreKeySignalMessage(msg) => {
-            (stanza::ENC_TYPE_PKMSG, true, msg.serialized().to_vec())
-        }
-        _ => {
-            return Err(anyhow!(
-                "Unexpected encryption message type for group retry"
-            ));
-        }
-    };
+    let (enc_type, is_prekey, serialized) = extract_ciphertext(encrypted)
+        .ok_or_else(|| anyhow!("Unexpected encryption message type for group retry"))?;
 
     // count="N" distinguishes retries from normal sends (MsgCreateDeviceStanza.js:150-153)
     let mut enc_builder = NodeBuilder::new("enc")
@@ -1175,7 +1168,7 @@ pub async fn prepare_group_stanza<
         }
     }
 
-    let plaintext = MessageUtils::pad_message_v2(message_for_encryption.encode_to_vec());
+    let plaintext = MessageUtils::encode_and_pad(&message_for_encryption);
     let skmsg = encrypt_group_message(
         stores.sender_key_store,
         &to_jid,
@@ -1185,7 +1178,7 @@ pub async fn prepare_group_stanza<
     )
     .await?;
 
-    let skmsg_ciphertext = skmsg.serialized().to_vec();
+    let skmsg_ciphertext = skmsg.into_serialized();
 
     let mediatype = media_type_from_message(message);
     let hide_decrypt_fail = (edit.as_ref().is_some_and(|e| {
@@ -1279,7 +1272,7 @@ pub async fn create_sender_key_distribution_message_for_group(
     )
     .await?;
 
-    Ok(skdm.serialized().to_vec())
+    Ok(skdm.into_serialized().into_vec())
 }
 
 /// Ensure the status stanza has a `<participants>` node listing all recipient
