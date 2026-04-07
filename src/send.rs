@@ -730,7 +730,7 @@ impl Client {
             }
         };
 
-        let revoke_message = build_revoke_message(&to, from_me, message_id.clone(), participant);
+        let revoke_message = build_revoke_message(&to, from_me, message_id, participant);
 
         // The revoke message stanza needs a NEW unique ID, not the message ID being revoked
         // The message_id being revoked is already in protocolMessage.key.id
@@ -1497,7 +1497,7 @@ impl Client {
             keys.push(self.resolve_encryption_jid(jid).await);
         }
         keys.sort_unstable_by(wacore::types::jid::cmp_for_lock_order);
-        keys.dedup();
+        keys.dedup_by(|a, b| wacore::types::jid::cmp_for_lock_order(a, b).is_eq());
         keys
     }
 

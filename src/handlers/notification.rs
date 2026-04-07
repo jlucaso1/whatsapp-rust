@@ -372,8 +372,14 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
 
         let resolved = client.resolve_encryption_jid(&from_jid).await;
         let addr = resolved.to_protocol_address();
+
+        // Hold session lock while deleting to prevent concurrent encrypt/decrypt
+        // from recreating the stale session (mirrors Signal::delete_sessions)
+        let lock = client.session_lock_for(addr.as_str()).await;
+        let _guard = lock.lock().await;
         client.signal_cache.delete_session(&addr).await;
         client.signal_cache.delete_identity(&addr).await;
+        drop(_guard);
 
         let status_group = "status@broadcast";
         for own_jid in device_snapshot.pn.iter().chain(device_snapshot.lid.iter()) {

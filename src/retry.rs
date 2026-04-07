@@ -232,7 +232,10 @@ impl Client {
                              Deleting session since no key bundle provided.",
                             signal_address, stored_reg_id, received_reg_id
                         );
+                        let lock = self.session_lock_for(signal_address.as_str()).await;
+                        let _guard = lock.lock().await;
                         self.signal_cache.delete_session(&signal_address).await;
+                        drop(_guard);
                         self.flush_signal_cache_logged("reg ID mismatch session deletion", None)
                             .await;
                     }
