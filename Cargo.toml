@@ -28,7 +28,7 @@ members = [
 default-members = [
     ".",
     "http_clients/ureq-client",
-    "storages/sqlite-storage",
+    "storages/redb-storage",
     "transports/tokio-transport",
     "wacore",
     "wacore/appstate",

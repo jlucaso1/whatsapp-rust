@@ -18,16 +18,19 @@ use crate::transport::mock::MockTransportFactory;
 // Alternative: SqliteStore (in-memory) - uncomment the sqlite section below
 
 // --- RedbStore Configuration (current) ---
+#[cfg(feature = "redb-storage")]
 use whatsapp_rust_redb_storage::RedbStore;
 
 /// Creates an in-memory test backend.
 /// This is the single point of change to swap between storage backends.
+#[cfg(feature = "redb-storage")]
 pub fn create_test_backend() -> Arc<dyn Backend> {
     Arc::new(RedbStore::in_memory().expect("test backend should initialize"))
 }
 
 /// Creates an in-memory test backend for a specific device ID.
 /// Used for multi-device testing scenarios.
+#[cfg(feature = "redb-storage")]
 pub fn create_test_backend_for_device(device_id: i32) -> Arc<dyn Backend> {
     Arc::new(RedbStore::in_memory_for_device(device_id).expect("test backend should initialize"))
 }

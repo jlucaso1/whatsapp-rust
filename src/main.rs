@@ -7,7 +7,7 @@ use waproto::whatsapp as wa;
 use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::bot::{Bot, MessageContext};
 use whatsapp_rust::pair_code::PairCodeOptions;
-use whatsapp_rust_redb_storage::RedbStore;
+use whatsapp_rust::store::RedbStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 

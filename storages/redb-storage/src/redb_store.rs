@@ -94,14 +94,13 @@ impl SignalStore for RedbStore {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
         let db = self.db.clone();
         let key_str = self.keys().key1(address);
-        let key_data = key.to_vec();
 
         tokio::task::spawn_blocking(move || -> Result<()> {
             let write_txn = db.begin_write().map_err(db_err)?;
             {
                 let mut table = write_txn.open_table(IDENTITIES).map_err(db_err)?;
                 table
-                    .insert(key_str.as_str(), key_data.as_slice())
+                    .insert(key_str.as_str(), key.as_slice())
                     .map_err(db_err)?;
             }
             write_txn.commit().map_err(db_err)?;
@@ -199,6 +198,42 @@ impl SignalStore for RedbStore {
             {
                 let mut table = write_txn.open_table(SESSIONS).map_err(db_err)?;
                 table.remove(key_str.as_str()).map_err(db_err)?;
+            }
+            write_txn.commit().map_err(db_err)?;
+            Ok(())
+        })
+        .await
+        .map_err(db_err)??;
+
+        Ok(())
+    }
+
+    async fn store_prekeys_batch(&self, keys: &[(u32, Vec<u8>)], uploaded: bool) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let db = self.db.clone();
+        let keys_builder = self.keys();
+        let keys: Vec<(u64, Vec<u8>)> = keys
+            .iter()
+            .map(|(id, record)| (keys_builder.pack_id(*id), record.clone()))
+            .collect();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let write_txn = db.begin_write().map_err(db_err)?;
+            {
+                let mut prekey_table = write_txn.open_table(PREKEYS).map_err(db_err)?;
+                let mut uploaded_table = write_txn.open_table(PREKEYS_UPLOADED).map_err(db_err)?;
+
+                for (packed_key, record) in &keys {
+                    prekey_table
+                        .insert(*packed_key, record.as_slice())
+                        .map_err(db_err)?;
+                    uploaded_table
+                        .insert(*packed_key, uploaded)
+                        .map_err(db_err)?;
+                }
             }
             write_txn.commit().map_err(db_err)?;
             Ok(())
@@ -809,19 +844,30 @@ impl ProtocolStore for RedbStore {
 
     async fn put_lid_mapping(&self, entry: &LidPnMappingEntry) -> Result<()> {
         let db = self.db.clone();
-        let lid_key = self.keys().key1(&entry.lid);
-        let pn_key = self.keys().key1(&entry.phone_number);
+        let keys = self.keys();
+        let lid_key = keys.key1(&entry.lid);
+        let pn_key = keys.key1(&entry.phone_number);
         let data = encode(entry)?;
 
         tokio::task::spawn_blocking(move || -> Result<()> {
             let write_txn = db.begin_write().map_err(db_err)?;
             {
                 let mut mapping_table = write_txn.open_table(LID_PN_MAPPING).map_err(db_err)?;
+                let mut index_table = write_txn.open_table(PN_LID_INDEX).map_err(db_err)?;
+
+                // Remove stale PN->LID index if the phone number changed
+                if let Ok(Some(old_guard)) = mapping_table.get(lid_key.as_str()) {
+                    let old_entry: LidPnMappingEntry = decode(old_guard.value())?;
+                    drop(old_guard);
+                    let old_pn_key = keys.key1(&old_entry.phone_number);
+                    if old_pn_key != pn_key {
+                        index_table.remove(old_pn_key.as_str()).map_err(db_err)?;
+                    }
+                }
+
                 mapping_table
                     .insert(lid_key.as_str(), data.as_slice())
                     .map_err(db_err)?;
-
-                let mut index_table = write_txn.open_table(PN_LID_INDEX).map_err(db_err)?;
                 index_table
                     .insert(pn_key.as_str(), lid_key.as_str())
                     .map_err(db_err)?;
@@ -1379,7 +1425,18 @@ impl DeviceStore for RedbStore {
 
                 let current = match counter_table.get("next_id") {
                     Ok(Some(guard)) => guard.value(),
-                    Ok(None) => 1,
+                    Ok(None) => {
+                        // Counter missing — derive from existing DEVICE_DATA keys
+                        let device_table = write_txn.open_table(DEVICE_DATA).map_err(db_err)?;
+                        let max_key = device_table
+                            .range::<i32>(..)
+                            .map_err(db_err)?
+                            .last()
+                            .and_then(|entry| entry.ok())
+                            .map(|(k, _)| k.value())
+                            .unwrap_or(0);
+                        max_key + 1
+                    }
                     Err(e) => return Err(db_err(e)),
                 };
 
@@ -1629,5 +1686,88 @@ mod tests {
 
         assert!(!store.exists().await.unwrap());
         assert!(store.load().await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn test_cross_device_isolation() {
+        // Two stores sharing the same DB but with different device_ids
+        // must not see each other's data.
+        let db = Arc::new(
+            Builder::new()
+                .create_with_backend(InMemoryBackend::new())
+                .expect("shared db"),
+        );
+
+        let store_a = RedbStore {
+            db: db.clone(),
+            device_id: 1,
+        };
+        let store_b = RedbStore { db, device_id: 2 };
+
+        // Prekeys
+        store_a.store_prekey(10, b"prekey-a", false).await.unwrap();
+        store_b.store_prekey(10, b"prekey-b", false).await.unwrap();
+        assert_eq!(store_a.load_prekey(10).await.unwrap().unwrap(), b"prekey-a");
+        assert_eq!(store_b.load_prekey(10).await.unwrap().unwrap(), b"prekey-b");
+        assert_eq!(store_a.get_max_prekey_id().await.unwrap(), 10);
+
+        // Sessions
+        let addr = "123@s.whatsapp.net";
+        store_a.put_session(addr, b"session-a").await.unwrap();
+        assert!(store_b.get_session(addr).await.unwrap().is_none());
+
+        // Identities
+        store_a.put_identity(addr, [1u8; 32]).await.unwrap();
+        assert!(store_b.load_identity(addr).await.unwrap().is_none());
+
+        // Sender keys
+        store_a
+            .put_sender_key("group::member", b"sk-a")
+            .await
+            .unwrap();
+        assert!(
+            store_b
+                .get_sender_key("group::member")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // Signed prekeys
+        store_a.store_signed_prekey(5, b"spk-a").await.unwrap();
+        assert!(store_b.load_signed_prekey(5).await.unwrap().is_none());
+        assert!(store_b.load_all_signed_prekeys().await.unwrap().is_empty());
+
+        // Prekeys batch
+        store_a
+            .store_prekeys_batch(
+                &[(20, b"batch-a-20".to_vec()), (21, b"batch-a-21".to_vec())],
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(store_b.load_prekey(20).await.unwrap().is_none());
+        assert!(store_b.load_prekey(21).await.unwrap().is_none());
+        assert_eq!(store_a.get_max_prekey_id().await.unwrap(), 21);
+        assert_eq!(store_b.get_max_prekey_id().await.unwrap(), 10);
+    }
+
+    #[tokio::test]
+    async fn test_store_prekeys_batch() {
+        let store = create_test_store();
+
+        let keys = vec![(1, vec![10, 11]), (2, vec![20, 21]), (3, vec![30, 31])];
+
+        store.store_prekeys_batch(&keys, true).await.unwrap();
+
+        // All three should be loadable
+        for (id, data) in &keys {
+            assert_eq!(store.load_prekey(*id).await.unwrap().unwrap(), *data);
+        }
+
+        assert_eq!(store.get_max_prekey_id().await.unwrap(), 3);
+
+        // Empty batch is a no-op
+        store.store_prekeys_batch(&[], false).await.unwrap();
     }
 }
