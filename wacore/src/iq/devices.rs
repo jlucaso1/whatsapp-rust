@@ -27,7 +27,7 @@ impl IqSpec for RemoveCompanionDeviceSpec {
 
     fn build_iq(&self) -> InfoQuery<'static> {
         let child = NodeBuilder::new("remove-companion-device")
-            .attr("jid", self.jid.clone())
+            .attr("jid", &self.jid)
             .attr("reason", "user_initiated")
             .build();
 

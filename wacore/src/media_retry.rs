@@ -149,16 +149,16 @@ pub fn build_media_retry_receipt(
         .build();
 
     let mut rmr_builder = NodeBuilder::new("rmr")
-        .attr("jid", chat_jid.to_string())
+        .attr("jid", chat_jid)
         .attr("from_me", is_from_me.to_string());
 
     if let Some(p) = participant {
-        rmr_builder = rmr_builder.attr("participant", p.to_string());
+        rmr_builder = rmr_builder.attr("participant", p);
     }
 
     NodeBuilder::new("receipt")
         .attr("type", "server-error")
-        .attr("to", own_jid.to_string())
+        .attr("to", own_jid)
         .attr("id", msg_id)
         .children([encrypt_node, rmr_builder.build()])
         .build()

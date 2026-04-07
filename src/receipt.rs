@@ -130,7 +130,7 @@ impl Client {
 
         let mut builder = NodeBuilder::new("receipt")
             .attr("id", &info.id)
-            .attr("to", info.source.chat.clone());
+            .attr("to", &info.source.chat);
 
         // WA Web: peer device messages (category="peer") use type="peer_msg".
         // Normal delivery receipts omit the type attribute (DROP_ATTR).
@@ -140,7 +140,7 @@ impl Client {
 
         // For group messages, the 'participant' attribute is required to identify the sender.
         if info.source.is_group {
-            builder = builder.attr("participant", info.source.sender.clone());
+            builder = builder.attr("participant", &info.source.sender);
         }
 
         let receipt_node = builder.build();
@@ -172,13 +172,13 @@ impl Client {
         let timestamp = (wacore::time::now_secs() as u64).to_string();
 
         let mut builder = NodeBuilder::new("receipt")
-            .attr("to", chat.clone())
+            .attr("to", chat)
             .attr("type", "read")
             .attr("id", &message_ids[0])
             .attr("t", &timestamp);
 
         if let Some(sender) = sender {
-            builder = builder.attr("participant", sender.clone());
+            builder = builder.attr("participant", sender);
         }
 
         // Additional message IDs go into <list><item id="..."/></list>

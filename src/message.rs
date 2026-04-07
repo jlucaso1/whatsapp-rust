@@ -578,8 +578,7 @@ impl Client {
         }
 
         // Flush cached Signal state to DB (matches WA Web's flushBufferToDiskIfNotMemOnlyMode)
-        self.flush_signal_cache_logged(&format!("message {}", info.id))
-            .await;
+        self.flush_signal_cache_logged("message dispatch").await;
     }
 
     async fn process_session_enc_batch(

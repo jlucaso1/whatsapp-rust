@@ -377,10 +377,7 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
 
         let status_group = "status@broadcast";
         for own_jid in device_snapshot.pn.iter().chain(device_snapshot.lid.iter()) {
-            let sk_name = SenderKeyName::new(
-                status_group.to_string(),
-                own_jid.to_protocol_address().to_string(),
-            );
+            let sk_name = SenderKeyName::from_jid(&status_group, &own_jid.to_protocol_address());
             client
                 .signal_cache
                 .delete_sender_key(sk_name.cache_key())
@@ -894,11 +891,7 @@ fn handle_picture_notification(client: &Arc<Client>, node: &Node) {
         }
     };
 
-    let timestamp = node
-        .attrs()
-        .optional_u64("t")
-        .map(|t| chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now))
-        .unwrap_or_else(chrono::Utc::now);
+    let timestamp = notification_timestamp(node);
 
     // Look for <set>, <delete>, or <request> child to determine the action.
     // WhatsApp Web has two formats:
@@ -988,11 +981,7 @@ fn handle_status_notification(client: &Arc<Client>, node: &Node) {
         }
     };
 
-    let timestamp = node
-        .attrs()
-        .optional_u64("t")
-        .map(|t| chrono::DateTime::from_timestamp(t as i64, 0).unwrap_or_else(chrono::Utc::now))
-        .unwrap_or_else(chrono::Utc::now);
+    let timestamp = notification_timestamp(node);
 
     if let Some(set_node) = node.get_optional_child("set") {
         let status_text = match &set_node.content {
@@ -2130,10 +2119,7 @@ mod tests {
             .await;
 
         // Pre-populate a sender key for status@broadcast
-        let sk_name = SenderKeyName::new(
-            "status@broadcast".to_string(),
-            own_jid.to_protocol_address().to_string(),
-        );
+        let sk_name = SenderKeyName::from_jid(&"status@broadcast", &own_jid.to_protocol_address());
         let sk_record = wacore::libsignal::protocol::SenderKeyRecord::new_empty();
         client
             .signal_cache

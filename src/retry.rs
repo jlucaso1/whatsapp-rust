@@ -308,10 +308,8 @@ impl Client {
 
                     for own_jid in jids_to_delete {
                         use wacore::libsignal::store::sender_key_name::SenderKeyName;
-                        let sk_name = SenderKeyName::new(
-                            group_jid.clone(),
-                            own_jid.to_protocol_address().to_string(),
-                        );
+                        let sk_name =
+                            SenderKeyName::from_jid(&group_jid, &own_jid.to_protocol_address());
                         self.signal_cache
                             .delete_sender_key(sk_name.cache_key())
                             .await;
@@ -780,12 +778,12 @@ impl Client {
         // to identify which group member should resend. For DMs, omit it since the
         // "to" address already identifies the sender.
         let mut builder = NodeBuilder::new("receipt")
-            .attr("to", receipt_to.clone())
+            .attr("to", receipt_to)
             .attr("id", info.id.clone())
             .attr("type", "retry");
 
         if info.source.is_group {
-            builder = builder.attr("participant", info.source.sender.clone());
+            builder = builder.attr("participant", &info.source.sender);
         }
 
         // Handle peer vs device sync messages (matches WhatsApp Web's sendRetryReceipt):
@@ -809,7 +807,7 @@ impl Client {
                     // Include recipient so the sender can look up the original message.
                     // Without this, the retry fails silently (getTargetChat returns null).
                     let recipient = info.source.recipient.as_ref().unwrap_or(&info.source.chat);
-                    builder = builder.attr("recipient", recipient.clone());
+                    builder = builder.attr("recipient", recipient);
                 }
             }
         }
@@ -851,7 +849,7 @@ impl Client {
 
         // WA Web: <enc_rekey call-creator="JID" call-id="..." count="N"/>
         let enc_rekey_node = NodeBuilder::new("enc_rekey")
-            .attr("call-creator", call_creator.clone())
+            .attr("call-creator", call_creator)
             .attr("call-id", call_id)
             .attr("count", retry_count.to_string())
             .build();
@@ -861,7 +859,7 @@ impl Client {
             .build();
 
         let receipt_node = NodeBuilder::new("receipt")
-            .attr("to", peer_jid.clone())
+            .attr("to", peer_jid)
             .attr("id", stanza_id)
             .attr("type", "enc_rekey_retry")
             .children([enc_rekey_node, registration_node])
@@ -993,12 +991,12 @@ mod tests {
             our_lid: &Jid,
         ) -> wacore_binary::node::Node {
             let mut builder = NodeBuilder::new("receipt")
-                .attr("to", info.source.sender.clone())
+                .attr("to", &info.source.sender)
                 .attr("id", info.id.clone())
                 .attr("type", "retry");
 
             if info.source.is_group {
-                builder = builder.attr("participant", info.source.sender.clone());
+                builder = builder.attr("participant", &info.source.sender);
             }
 
             if !info.source.is_group {
@@ -1010,7 +1008,7 @@ mod tests {
                         builder = builder.attr("category", MessageCategory::Peer.as_str());
                     } else {
                         let recipient = info.source.recipient.as_ref().unwrap_or(&info.source.chat);
-                        builder = builder.attr("recipient", recipient.clone());
+                        builder = builder.attr("recipient", recipient);
                     }
                 }
             }

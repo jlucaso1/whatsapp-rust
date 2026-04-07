@@ -92,9 +92,27 @@ struct NodeWaiter {
     tx: futures::channel::oneshot::Sender<Arc<Node>>,
 }
 
-struct SentNodeWaiter {
-    filter: NodeFilter,
-    tx: futures::channel::oneshot::Sender<Arc<Node>>,
+fn resolve_waiters(
+    waiters_mutex: &std::sync::Mutex<Vec<NodeWaiter>>,
+    counter: &AtomicUsize,
+    node: &Arc<Node>,
+) {
+    let mut waiters = waiters_mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut i = 0;
+    while i < waiters.len() {
+        if waiters[i].tx.is_canceled() {
+            waiters.swap_remove(i);
+            counter.fetch_sub(1, Ordering::Release);
+        } else if waiters[i].filter.matches(node) {
+            let w = waiters.swap_remove(i);
+            counter.fetch_sub(1, Ordering::Release);
+            let _ = w.tx.send(Arc::clone(node));
+        } else {
+            i += 1;
+        }
+    }
 }
 
 use async_lock::Mutex;
@@ -295,7 +313,7 @@ pub struct Client {
     node_waiters: std::sync::Mutex<Vec<NodeWaiter>>,
     node_waiter_count: AtomicUsize,
     /// Waiters for raw outgoing nodes before encryption.
-    sent_node_waiters: std::sync::Mutex<Vec<SentNodeWaiter>>,
+    sent_node_waiters: std::sync::Mutex<Vec<NodeWaiter>>,
     sent_node_waiter_count: AtomicUsize,
 
     pub(crate) unique_id: String,
@@ -1849,11 +1867,11 @@ impl Client {
         let id = self.generate_request_id();
 
         let stanza = wacore_binary::builder::NodeBuilder::new("call")
-            .attr("to", call_from.clone())
+            .attr("to", call_from)
             .attr("id", id)
             .children([wacore_binary::builder::NodeBuilder::new("reject")
                 .attr("call-id", call_id)
-                .attr("call-creator", call_from.clone())
+                .attr("call-creator", call_from)
                 .attr("count", "0")
                 .build()])
             .build();
@@ -3216,52 +3234,18 @@ impl Client {
             .sent_node_waiters
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        waiters.push(SentNodeWaiter { filter, tx });
+        waiters.push(NodeWaiter { filter, tx });
         rx
     }
 
     /// Check pending node waiters against an incoming node.
     /// Only called when `node_waiter_count > 0`.
     fn resolve_node_waiters(&self, node: &Arc<Node>) {
-        let mut waiters = self
-            .node_waiters
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut i = 0;
-        while i < waiters.len() {
-            if waiters[i].tx.is_canceled() {
-                // Receiver dropped — clean up
-                waiters.swap_remove(i);
-                self.node_waiter_count.fetch_sub(1, Ordering::Release);
-            } else if waiters[i].filter.matches(node) {
-                // Match found — remove and send
-                let w = waiters.swap_remove(i);
-                self.node_waiter_count.fetch_sub(1, Ordering::Release);
-                let _ = w.tx.send(Arc::clone(node));
-            } else {
-                i += 1;
-            }
-        }
+        resolve_waiters(&self.node_waiters, &self.node_waiter_count, node);
     }
 
     fn resolve_sent_node_waiters(&self, node: &Arc<Node>) {
-        let mut waiters = self
-            .sent_node_waiters
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut i = 0;
-        while i < waiters.len() {
-            if waiters[i].tx.is_canceled() {
-                waiters.swap_remove(i);
-                self.sent_node_waiter_count.fetch_sub(1, Ordering::Release);
-            } else if waiters[i].filter.matches(node) {
-                let w = waiters.swap_remove(i);
-                self.sent_node_waiter_count.fetch_sub(1, Ordering::Release);
-                let _ = w.tx.send(Arc::clone(node));
-            } else {
-                i += 1;
-            }
-        }
+        resolve_waiters(&self.sent_node_waiters, &self.sent_node_waiter_count, node);
     }
 
     fn clear_sent_node_waiters(&self) {
