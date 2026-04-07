@@ -1038,8 +1038,7 @@ pub async fn prepare_group_stanza<
             jids_to_resolve.push(own_jid_to_check);
         }
 
-        let mut seen_users = HashSet::new();
-        jids_to_resolve.retain(|jid| seen_users.insert((jid.user.clone(), jid.server.clone())));
+        crate::types::jid::sort_dedup_by_user(&mut jids_to_resolve);
 
         log::debug!(
             "Resolving devices for {} participants",
@@ -1067,10 +1066,7 @@ pub async fn prepare_group_stanza<
         // both convert to 100000037037034:33@lid).
         // Key on (user, server, agent, device) — excludes `integrator` which is not
         // part of the wire JID identity used in <to jid> and phash.
-        let mut seen = HashSet::new();
-        resolved_list.retain(|jid| {
-            seen.insert((jid.user.clone(), jid.server.clone(), jid.agent, jid.device))
-        });
+        crate::types::jid::sort_dedup_by_device(&mut resolved_list);
 
         // Filter devices for SKDM distribution:
         // - Exclude the exact sending device (own_sending_jid) - we already have our own sender key
@@ -1211,7 +1207,7 @@ pub async fn prepare_group_stanza<
 
     let stanza_type = stanza_type_from_message(message);
     let mut stanza_builder = NodeBuilder::new("message")
-        .attr("to", to_jid.clone())
+        .attr("to", to_jid)
         .attr("id", request_id)
         .attr("type", stanza_type);
 

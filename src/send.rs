@@ -1078,13 +1078,7 @@ impl Client {
             }
 
             let lock_jids = self.build_session_lock_keys(&all_dm_jids).await;
-
-            let mut _session_mutexes = Vec::with_capacity(lock_jids.len());
-            let mut lock_buf = String::with_capacity(64);
-            for jid in &lock_jids {
-                wacore::types::jid::write_protocol_address_to(jid, &mut lock_buf);
-                _session_mutexes.push(self.session_lock_for(&lock_buf).await);
-            }
+            let _session_mutexes = self.session_mutexes_for(&lock_jids).await;
             let mut _session_guards = Vec::with_capacity(_session_mutexes.len());
             for mutex in &_session_mutexes {
                 _session_guards.push(mutex.lock().await);
@@ -1487,10 +1481,7 @@ impl Client {
     /// Build sorted, deduplicated per-device session lock keys.
     /// INVARIANT: Keys are sorted to prevent deadlocks when acquiring multiple
     /// session locks (e.g. DM sends that encrypt for recipient + own devices).
-    /// Keys match the decrypt path format so send and receive serialize correctly.
-    /// Returns resolved encryption JIDs sorted in a consistent order for
-    /// deadlock-free lock acquisition. Sorts by Jid fields directly — no
-    /// intermediate ProtocolAddress/String allocations for sorting.
+    /// Resolve encryption JIDs and sort for deadlock-free lock acquisition.
     pub(crate) async fn build_session_lock_keys(&self, device_jids: &[Jid]) -> Vec<Jid> {
         let mut keys: Vec<Jid> = Vec::with_capacity(device_jids.len());
         for jid in device_jids {
@@ -1499,6 +1490,20 @@ impl Client {
         keys.sort_unstable_by(wacore::types::jid::cmp_for_lock_order);
         keys.dedup_by(|a, b| wacore::types::jid::cmp_for_lock_order(a, b).is_eq());
         keys
+    }
+
+    /// Fetch per-device session mutexes in deadlock-free order.
+    pub(crate) async fn session_mutexes_for(
+        &self,
+        jids: &[Jid],
+    ) -> Vec<std::sync::Arc<async_lock::Mutex<()>>> {
+        let mut mutexes = Vec::with_capacity(jids.len());
+        let mut buf = String::with_capacity(64);
+        for jid in jids {
+            wacore::types::jid::write_protocol_address_to(jid, &mut buf);
+            mutexes.push(self.session_lock_for(&buf).await);
+        }
+        mutexes
     }
 
     /// Build tctoken timing config from AB props, falling back to defaults.
