@@ -76,14 +76,10 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           benchmark-data-dir-path: dev/bench
-          alert-threshold: "105%"
-          comment-on-alert: true
-          fail-on-alert: false
-          alert-comment-cc-users: "@jlucaso1"
           max-items-in-chart: 100
           summary-always: true
 
-      # PR: compare against main baseline, post comment, but don't store
+      # PR: compare against baseline (no commenting — custom step handles it)
       - name: Compare against baseline (pull request)
         if: github.event_name == 'pull_request'
         uses: benchmark-action/github-action-benchmark@v1
@@ -95,9 +91,58 @@ jobs:
           auto-push: false
           save-data-file: false
           benchmark-data-dir-path: dev/bench
-          alert-threshold: "105%"
-          comment-on-alert: true
-          comment-always: true
-          fail-on-alert: false
-          alert-comment-cc-users: "@jlucaso1"
           summary-always: true
+
+      # Custom collapsed PR comment showing regressions, improvements, and unchanged
+      - name: Post benchmark comment
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const { execSync } = require('child_process');
+
+            // Fetch baseline data from gh-pages
+            try {
+              execSync('git fetch origin gh-pages:gh-pages', { stdio: 'pipe' });
+              execSync('git show gh-pages:dev/bench/data.js > /tmp/baseline_data.js', { stdio: 'pipe' });
+            } catch {
+              console.log('No baseline data on gh-pages yet, skipping comment');
+              return;
+            }
+
+            const comment = execSync(
+              'python3 .github/scripts/bench-comment.py bench_results.json /tmp/baseline_data.js',
+              { encoding: 'utf-8' }
+            ).trim();
+
+            if (!comment) {
+              console.log('No comment generated');
+              return;
+            }
+
+            // Find and update existing comment or create new one
+            const marker = '<!-- benchmark-comment -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: comment,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment,
+              });
+            }
