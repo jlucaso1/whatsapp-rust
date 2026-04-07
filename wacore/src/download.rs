@@ -384,7 +384,7 @@ impl DownloadUtils {
 
         let (iv, cipher_key, mac_key) = Self::get_media_keys(media_key, app_info)?;
 
-        let mut hmac = <Hmac<Sha256> as hmac::Mac>::new_from_slice(&mac_key)
+        let mut hmac = <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(&mac_key)
             .map_err(|_| anyhow!("Failed to init HMAC"))?;
         hmac.update(&iv);
 

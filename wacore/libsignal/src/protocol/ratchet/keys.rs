@@ -7,7 +7,7 @@ use std::fmt;
 
 use arrayref::array_ref;
 
-use hmac::{Hmac, Mac};
+use hmac::{HmacReset, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::protocol::{PrivateKey, PublicKey, Result, crypto, stores::session_structure};
@@ -211,7 +211,7 @@ impl ChainKey {
     /// Compute both message keys and next chain key in one call, reusing HMAC key setup.
     #[inline]
     pub fn step_with_message_keys(&self) -> crate::protocol::Result<(MessageKeyGenerator, Self)> {
-        let mut hmac = Hmac::<Sha256>::new_from_slice(&self.key)
+        let mut hmac = HmacReset::<Sha256>::new_from_slice(&self.key)
             .expect("HMAC-SHA256 should accept any size key");
 
         hmac.update(&Self::MESSAGE_KEY_SEED);
