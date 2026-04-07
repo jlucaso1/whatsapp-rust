@@ -31,6 +31,11 @@ impl SenderKeyName {
         &self.cache_key
     }
 
+    /// Construct from a group JID and a protocol address, converting to owned strings.
+    pub fn from_jid(group_jid: &impl std::fmt::Display, sender: &ProtocolAddress) -> Self {
+        Self::new(group_jid.to_string(), sender.to_string())
+    }
+
     pub fn to_protocol_address(&self) -> ProtocolAddress {
         ProtocolAddress::new(format!("{}\n{}", self.group_id, self.sender_id), 0.into())
     }
