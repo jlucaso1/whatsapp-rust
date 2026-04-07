@@ -1968,7 +1968,7 @@ mod tests {
         let phone_sender_key_name = SenderKeyName::from_jid(&group_jid, &phone_protocol_address);
 
         let phone_lookup_result = {
-            let mut device_guard = device_arc.write().await;
+            let device_guard = device_arc.read().await;
             device_guard.load_sender_key(&phone_sender_key_name).await
         };
 
@@ -1981,7 +1981,7 @@ mod tests {
 
         // Try to retrieve using LID address (THE FIX)
         let lid_lookup_result = {
-            let mut device_guard = device_arc.write().await;
+            let device_guard = device_arc.read().await;
             device_guard.load_sender_key(&lid_sender_key_name).await
         };
 
@@ -2081,7 +2081,7 @@ mod tests {
 
             // Should find with LID address
             let lid_lookup = {
-                let mut device_guard = device_arc.write().await;
+                let device_guard = device_arc.read().await;
                 device_guard.load_sender_key(&lid_sender_key_name).await
             };
             assert!(
@@ -2092,7 +2092,7 @@ mod tests {
 
             // Should NOT find with phone number address (the bug)
             let phone_lookup = {
-                let mut device_guard = device_arc.write().await;
+                let device_guard = device_arc.read().await;
                 device_guard.load_sender_key(&phone_sender_key_name).await
             };
             assert!(
@@ -2524,7 +2524,7 @@ mod tests {
 
         // Verify it's stored under display JID
         let lookup_with_display = {
-            let mut device_guard = device_arc.write().await;
+            let device_guard = device_arc.read().await;
             device_guard.load_sender_key(&display_sender_key_name).await
         };
         assert!(
@@ -2540,7 +2540,7 @@ mod tests {
             SenderKeyName::from_jid(&group_jid, &encryption_protocol_address);
 
         let lookup_with_encryption = {
-            let mut device_guard = device_arc.write().await;
+            let device_guard = device_arc.read().await;
             device_guard
                 .load_sender_key(&encryption_sender_key_name)
                 .await

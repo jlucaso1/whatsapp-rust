@@ -483,7 +483,7 @@ impl SenderKeyStore for Device {
     }
 
     async fn load_sender_key(
-        &mut self,
+        &self,
         sender_key_name: &SenderKeyName,
     ) -> SignalResult<Option<SenderKeyRecord>> {
         match self

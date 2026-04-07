@@ -154,7 +154,7 @@ pub trait SenderKeyStore: ThreadSafe {
 
     /// Look up the entry corresponding to `(sender, distribution_id)`.
     async fn load_sender_key(
-        &mut self,
+        &self,
         sender_key_name: &SenderKeyName,
     ) -> Result<Option<SenderKeyRecord>>;
 }

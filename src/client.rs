@@ -3414,11 +3414,10 @@ impl Client {
             self.resolve_sent_node_waiters(&Arc::new(node.clone()));
         }
 
-        let mut plaintext_buf = Vec::with_capacity(1024);
-        if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
+        let plaintext_buf = wacore_binary::marshal::marshal_auto(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");
-            return Err(SocketError::Crypto("Marshal error".to_string()).into());
-        }
+            SocketError::Crypto("Marshal error".to_string())
+        })?;
 
         self.send_raw_bytes(plaintext_buf).await
     }
