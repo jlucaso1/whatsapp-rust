@@ -448,6 +448,7 @@ struct GrpSendData {
     alice: User,
     group_jid: Jid,
     participants: Vec<Jid>,
+    force_skdm: bool,
     resolver: MockResolver,
     msg: wa::Message,
 }
@@ -478,6 +479,7 @@ fn setup_group_send(n: usize) -> GrpSendData {
         alice,
         group_jid,
         participants,
+        force_skdm: false,
         resolver: MockResolver(devices),
         msg: text_msg(),
     }
@@ -491,6 +493,23 @@ fn setup_group_send_50() -> GrpSendData {
 }
 fn setup_group_send_256() -> GrpSendData {
     setup_group_send(256)
+}
+
+// First-message path: force_skdm=true exercises N pairwise encryptions
+fn setup_group_skdm_10() -> GrpSendData {
+    let mut d = setup_group_send(10);
+    d.force_skdm = true;
+    d
+}
+fn setup_group_skdm_50() -> GrpSendData {
+    let mut d = setup_group_send(50);
+    d.force_skdm = true;
+    d
+}
+fn setup_group_skdm_256() -> GrpSendData {
+    let mut d = setup_group_send(256);
+    d.force_skdm = true;
+    d
 }
 
 struct GrpRecvData {
@@ -594,6 +613,7 @@ fn bench_dm_recv(mut d: DmRecvData) {
     ));
 }
 
+// Steady-state group send (skmsg only, no SKDM distribution)
 #[library_benchmark]
 #[bench::group_10(setup = setup_group_send_10)]
 #[bench::group_50(setup = setup_group_send_50)]
@@ -619,7 +639,43 @@ fn bench_group_send(mut d: GrpSendData) {
         d.group_jid,
         &d.msg,
         "b-grp-001".into(),
-        false,
+        d.force_skdm,
+        None,
+        None,
+        &[],
+    ))
+    .unwrap();
+
+    black_box(marshal(&result.node).unwrap());
+}
+
+// First-message group send: forces SKDM distribution with N pairwise encryptions
+#[library_benchmark]
+#[bench::skdm_10(setup = setup_group_skdm_10)]
+#[bench::skdm_50(setup = setup_group_skdm_50)]
+#[bench::skdm_256(setup = setup_group_skdm_256)]
+fn bench_group_send_skdm(mut d: GrpSendData) {
+    let own_jid = d.alice.jid.clone();
+    let mut group_info = GroupInfo::new(d.participants, AddressingMode::Pn);
+    let mut stores = SignalStores {
+        sender_key_store: &mut d.alice.sender_keys,
+        session_store: &mut d.alice.sessions,
+        identity_store: &mut d.alice.identity,
+        prekey_store: &mut d.alice.prekeys,
+        signed_prekey_store: &d.alice.signed_prekeys,
+    };
+
+    let result = futures::executor::block_on(prepare_group_stanza(
+        &mut stores,
+        &d.resolver,
+        &mut group_info,
+        &own_jid,
+        &own_jid,
+        None,
+        d.group_jid,
+        &d.msg,
+        "b-grp-skdm".into(),
+        d.force_skdm,
         None,
         None,
         &[],
@@ -643,10 +699,11 @@ fn bench_group_recv(mut d: GrpRecvData) {
 library_benchmark_group!(name = dm_send; benchmarks = bench_dm_send);
 library_benchmark_group!(name = dm_recv; benchmarks = bench_dm_recv);
 library_benchmark_group!(name = group_send; benchmarks = bench_group_send);
+library_benchmark_group!(name = group_send_skdm; benchmarks = bench_group_send_skdm);
 library_benchmark_group!(name = group_recv; benchmarks = bench_group_recv);
 
 main!(
     config = LibraryBenchmarkConfig::default()
         .tool(Callgrind::default().flamegraph(FlamegraphConfig::default()));
-    library_benchmark_groups = dm_send, dm_recv, group_send, group_recv
+    library_benchmark_groups = dm_send, dm_recv, group_send, group_send_skdm, group_recv
 );
