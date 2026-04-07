@@ -211,7 +211,7 @@ impl SenderKeyStore for InMemorySenderKeyStore {
     }
 
     async fn load_sender_key(
-        &mut self,
+        &self,
         sender_key_name: &SenderKeyName,
     ) -> wacore_libsignal::protocol::error::Result<Option<SenderKeyRecord>> {
         Ok(self.sender_keys.get(sender_key_name).cloned())

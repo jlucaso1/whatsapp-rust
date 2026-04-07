@@ -41,6 +41,14 @@ pub fn marshal_to_vec(node: &Node, output: &mut Vec<u8>) -> Result<()> {
     Ok(())
 }
 
+/// Like `marshal_to_vec` but reserves capacity for large nodes first.
+pub fn marshal_auto_to_vec(node: &Node, output: &mut Vec<u8>) -> Result<()> {
+    if should_auto_reserve_node(node) {
+        output.reserve(estimate_capacity_node(node));
+    }
+    marshal_to_vec(node, output)
+}
+
 pub fn marshal(node: &Node) -> Result<Vec<u8>> {
     let mut payload = Vec::with_capacity(DEFAULT_MARSHAL_CAPACITY);
     marshal_to_vec(node, &mut payload)?;

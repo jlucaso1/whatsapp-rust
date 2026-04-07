@@ -252,7 +252,7 @@ impl wacore::libsignal::protocol::SenderKeyStore for SenderKeyAdapter {
     }
 
     async fn load_sender_key(
-        &mut self,
+        &self,
         sender_key_name: &SenderKeyName,
     ) -> wacore::libsignal::protocol::error::Result<
         Option<wacore::libsignal::protocol::SenderKeyRecord>,

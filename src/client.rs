@@ -3415,7 +3415,7 @@ impl Client {
         }
 
         let mut plaintext_buf = Vec::with_capacity(1024);
-        if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
+        if let Err(e) = wacore_binary::marshal::marshal_auto_to_vec(&node, &mut plaintext_buf) {
             error!("Failed to marshal node: {e:?}");
             return Err(SocketError::Crypto("Marshal error".to_string()).into());
         }

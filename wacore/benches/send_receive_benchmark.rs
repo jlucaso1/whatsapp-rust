@@ -136,7 +136,7 @@ impl SenderKeyStore for MemSenderKeyStore {
         self.0.insert(n.clone(), r);
         Ok(())
     }
-    async fn load_sender_key(&mut self, n: &SenderKeyName) -> SigResult<Option<SenderKeyRecord>> {
+    async fn load_sender_key(&self, n: &SenderKeyName) -> SigResult<Option<SenderKeyRecord>> {
         Ok(self.0.get(n).cloned())
     }
 }
