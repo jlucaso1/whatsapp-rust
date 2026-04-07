@@ -1,17 +1,22 @@
 use super::error::{StoreError, db_err};
 use crate::store::Device;
 use crate::store::traits::Backend;
+use async_lock::RwLock;
+use event_listener::Event;
+use futures::FutureExt;
 use log::{debug, error};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use tokio::sync::{Notify, RwLock};
-use tokio::time::{Duration, sleep};
+use std::time::Duration;
+use wacore::runtime::Runtime;
 
 pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
     backend: Arc<dyn Backend>,
     dirty: Arc<AtomicBool>,
-    save_notify: Arc<Notify>,
+    save_notify: Arc<Event>,
+    /// Set to true when the background saver halts due to repeated flush failures.
+    saver_halted: Arc<AtomicBool>,
 }
 
 impl PersistenceManager {
@@ -49,7 +54,8 @@ impl PersistenceManager {
             device: Arc::new(RwLock::new(device)),
             backend,
             dirty: Arc::new(AtomicBool::new(false)),
-            save_notify: Arc::new(Notify::new()),
+            save_notify: Arc::new(Event::new()),
+            saver_halted: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -65,6 +71,11 @@ impl PersistenceManager {
         self.backend.clone()
     }
 
+    /// Returns true if the background saver halted due to repeated flush failures.
+    pub fn is_saver_halted(&self) -> bool {
+        self.saver_halted.load(Ordering::Acquire)
+    }
+
     pub async fn modify_device<F, R>(&self, modifier: F) -> R
     where
         F: FnOnce(&mut Device) -> R,
@@ -73,9 +84,14 @@ impl PersistenceManager {
         let result = modifier(&mut device_guard);
 
         self.dirty.store(true, Ordering::Relaxed);
-        self.save_notify.notify_one();
+        self.save_notify.notify(1);
 
         result
+    }
+
+    /// Flush any dirty device state to the backend immediately.
+    pub async fn flush(&self) -> Result<(), StoreError> {
+        self.save_to_disk().await
     }
 
     async fn save_to_disk(&self) -> Result<(), StoreError> {
@@ -85,30 +101,84 @@ impl PersistenceManager {
             let serializable_device = device_guard.to_serializable();
             drop(device_guard);
 
-            self.backend
-                .save(&serializable_device)
-                .await
-                .map_err(db_err)?;
+            if let Err(e) = self.backend.save(&serializable_device).await {
+                // Restore dirty flag so the next tick retries the save
+                self.dirty.store(true, Ordering::Release);
+                return Err(db_err(e));
+            }
             debug!("Device state saved successfully.");
         }
         Ok(())
     }
 
-    pub fn run_background_saver(self: Arc<Self>, interval: Duration) {
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    _ = self.save_notify.notified() => {
-                        debug!("Save notification received.");
-                    }
-                    _ = sleep(interval) => {}
-                }
+    /// Triggers a snapshot of the underlying storage backend.
+    /// Useful for debugging critical errors like crypto state corruption.
+    pub async fn create_snapshot(
+        &self,
+        name: &str,
+        extra_content: Option<&[u8]>,
+    ) -> Result<(), StoreError> {
+        #[cfg(feature = "debug-snapshots")]
+        {
+            // Ensure pending changes are saved first
+            self.save_to_disk().await?;
+            self.backend
+                .snapshot_db(name, extra_content)
+                .await
+                .map_err(db_err)
+        }
+        #[cfg(not(feature = "debug-snapshots"))]
+        {
+            let _ = name;
+            let _ = extra_content;
+            log::warn!("Snapshot requested but 'debug-snapshots' feature is disabled");
+            Ok(())
+        }
+    }
 
-                if let Err(e) = self.save_to_disk().await {
-                    error!("Error saving device state in background: {e}");
+    pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
+        const MAX_CONSECUTIVE_FAILURES: u32 = 10;
+
+        let rt = runtime.clone();
+        let weak = Arc::downgrade(&self);
+        drop(self);
+        runtime
+            .spawn(Box::pin(async move {
+                let mut consecutive_failures: u32 = 0;
+                loop {
+                    let Some(this) = weak.upgrade() else {
+                        debug!("PersistenceManager dropped, exiting background saver.");
+                        return;
+                    };
+                    let listener = this.save_notify.listen();
+                    drop(this);
+
+                    futures::select! {
+                        _ = listener.fuse() => {}
+                        _ = rt.sleep(interval).fuse() => {}
+                    }
+
+                    let Some(this) = weak.upgrade() else {
+                        debug!("PersistenceManager dropped, exiting background saver.");
+                        return;
+                    };
+                    if let Err(e) = this.save_to_disk().await {
+                        consecutive_failures += 1;
+                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                            this.saver_halted.store(true, Ordering::Release);
+                            error!(
+                                "Background saver: {consecutive_failures} consecutive flush failures, \
+                                 halting to prevent silent data loss. Last error: {e}"
+                            );
+                            return;
+                        }
+                        error!("Background saver flush failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {e}");
+                    } else {
+                        consecutive_failures = 0;
+                    }
                 }
-            }
-        });
+            }))
+            .detach();
         debug!("Background saver task started with interval {interval:?}");
     }
 }
@@ -124,32 +194,31 @@ impl PersistenceManager {
     }
 }
 
-// SKDM recipient tracking methods
 impl PersistenceManager {
-    /// Get the list of device JIDs that have already received SKDM for a group
-    pub async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<String>, StoreError> {
-        self.backend
-            .get_skdm_recipients(group_jid)
-            .await
-            .map_err(db_err)
-    }
-
-    /// Mark devices as having received SKDM for a group
-    pub async fn add_skdm_recipients(
+    pub async fn get_sender_key_devices(
         &self,
         group_jid: &str,
-        device_jids: &[String],
-    ) -> Result<(), StoreError> {
+    ) -> Result<Vec<(String, bool)>, StoreError> {
         self.backend
-            .add_skdm_recipients(group_jid, device_jids)
+            .get_sender_key_devices(group_jid)
             .await
             .map_err(db_err)
     }
 
-    /// Clear all SKDM recipients for a group (used when sender key is rotated)
-    pub async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<(), StoreError> {
+    pub async fn set_sender_key_status(
+        &self,
+        group_jid: &str,
+        entries: &[(&str, bool)],
+    ) -> Result<(), StoreError> {
         self.backend
-            .clear_skdm_recipients(group_jid)
+            .set_sender_key_status(group_jid, entries)
+            .await
+            .map_err(db_err)
+    }
+
+    pub async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<(), StoreError> {
+        self.backend
+            .clear_sender_key_devices(group_jid)
             .await
             .map_err(db_err)
     }

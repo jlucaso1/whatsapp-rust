@@ -19,13 +19,15 @@
 //! - Ephemeral encryption: AES-256-CTR
 //! - Bundle encryption: AES-256-GCM after HKDF key derivation
 
+use crate::StringEnum;
 use crate::libsignal::protocol::{KeyPair, PublicKey};
 use aes::cipher::{KeyIvInit, StreamCipher};
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit};
 use ctr::Ctr128BE;
 use hkdf::Hkdf;
-use rand::Rng;
+use hmac::{Hmac, Mac};
+use rand::RngExt;
 use sha2::Sha256;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::SERVER_JID;
@@ -48,43 +50,61 @@ const PAIR_CODE_IV_SIZE: usize = 16;
 /// Excludes 0, I, O, U to prevent visual confusion.
 const CROCKFORD_ALPHABET: &[u8; 32] = b"123456789ABCDEFGHJKLMNPQRSTVWXYZ";
 
+/// RFC 2898 PBKDF2 using HMAC-SHA256. Replaces the `pbkdf2` crate dependency
+/// which hasn't released a digest 0.11-compatible stable version yet.
+fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], rounds: u32, output: &mut [u8]) {
+    use hmac::KeyInit as _;
+    for (i, chunk) in output.chunks_mut(32).enumerate() {
+        let mut u = {
+            let mut mac =
+                Hmac::<Sha256>::new_from_slice(password).expect("HMAC accepts any key length");
+            mac.update(salt);
+            mac.update(&((i as u32) + 1).to_be_bytes());
+            let result: [u8; 32] = mac.finalize().into_bytes().into();
+            result
+        };
+        chunk.copy_from_slice(&u[..chunk.len()]);
+        for _ in 1..rounds {
+            let mut mac =
+                Hmac::<Sha256>::new_from_slice(password).expect("HMAC accepts any key length");
+            mac.update(&u);
+            u = mac.finalize().into_bytes().into();
+            for (a, b) in chunk.iter_mut().zip(u.iter()) {
+                *a ^= b;
+            }
+        }
+    }
+}
+
 /// Validity duration for pair codes (approximately).
 const PAIR_CODE_VALIDITY_SECS: u64 = 180;
 
 /// Platform identifiers for companion devices.
 /// These match the DeviceProps.PlatformType protobuf enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 #[repr(u8)]
 pub enum PlatformId {
+    #[str = "0"]
     Unknown = 0,
-    #[default]
+    #[string_default]
+    #[str = "1"]
     Chrome = 1,
+    #[str = "2"]
     Firefox = 2,
+    #[str = "3"]
     InternetExplorer = 3,
+    #[str = "4"]
     Opera = 4,
+    #[str = "5"]
     Safari = 5,
+    #[str = "6"]
     Edge = 6,
+    #[str = "7"]
     Electron = 7,
+    #[str = "8"]
     Uwp = 8,
+    #[str = "9"]
     OtherWebClient = 9,
-}
-
-impl PlatformId {
-    /// Returns the platform ID as a string (for XML content).
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            Self::Unknown => "0",
-            Self::Chrome => "1",
-            Self::Firefox => "2",
-            Self::InternetExplorer => "3",
-            Self::Opera => "4",
-            Self::Safari => "5",
-            Self::Edge => "6",
-            Self::Electron => "7",
-            Self::Uwp => "8",
-            Self::OtherWebClient => "9",
-        }
-    }
 }
 
 /// Options for pair code authentication.
@@ -129,7 +149,7 @@ pub enum PairCodeState {
         /// The 8-character pair code (needed to decrypt primary's ephemeral key).
         pair_code: String,
         /// Ephemeral keypair generated for this session.
-        ephemeral_keypair: KeyPair,
+        ephemeral_keypair: Box<KeyPair>,
     },
     /// Pairing completed (success or failure).
     Completed,
@@ -160,7 +180,7 @@ impl PairCodeUtils {
     /// which excludes 0, I, O, and U to prevent visual confusion.
     pub fn generate_code() -> String {
         let mut bytes = [0u8; 5];
-        rand::rng().fill(&mut bytes);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut bytes);
         Self::encode_crockford(&bytes)
     }
 
@@ -200,7 +220,7 @@ impl PairCodeUtils {
     /// Consider wrapping in `spawn_blocking` for async contexts.
     pub fn derive_key(code: &str, salt: &[u8; PAIR_CODE_SALT_SIZE]) -> [u8; 32] {
         let mut key = [0u8; 32];
-        pbkdf2::pbkdf2_hmac::<Sha256>(code.as_bytes(), salt, PAIR_CODE_PBKDF2_ITERATIONS, &mut key);
+        pbkdf2_hmac_sha256(code.as_bytes(), salt, PAIR_CODE_PBKDF2_ITERATIONS, &mut key);
         key
     }
 
@@ -211,8 +231,8 @@ impl PairCodeUtils {
         // Generate random salt and IV
         let mut salt = [0u8; PAIR_CODE_SALT_SIZE];
         let mut iv = [0u8; PAIR_CODE_IV_SIZE];
-        rand::rng().fill(&mut salt);
-        rand::rng().fill(&mut iv);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut salt);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut iv);
 
         // Derive key from code and encrypt with AES-256-CTR
         let key = Self::derive_key(code, &salt);
@@ -410,7 +430,7 @@ impl PairCodeUtils {
 
         // Generate random bytes for ADV secret derivation
         let mut random_bytes = [0u8; 32];
-        rand::rng().fill(&mut random_bytes);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut random_bytes);
 
         // Derive ADV secret using HKDF
         // Combined secret = ephemeral_shared + identity_shared + random_bytes
@@ -433,7 +453,7 @@ impl PairCodeUtils {
 
         // Generate salt for HKDF
         let mut key_bundle_salt = [0u8; 32];
-        rand::rng().fill(&mut key_bundle_salt);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut key_bundle_salt);
 
         // Derive bundle encryption key using HKDF
         // HKDF(IKM=ephemeral_shared, salt=random_salt, info="link_code_pairing_key_bundle_encryption_key")
@@ -447,7 +467,7 @@ impl PairCodeUtils {
 
         // Generate random IV for AES-GCM (12 bytes)
         let mut iv = [0u8; 12];
-        rand::rng().fill(&mut iv);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut iv);
 
         // AES-GCM encrypt the bundle
         let cipher = Aes256Gcm::new_from_slice(&enc_key)
@@ -604,11 +624,13 @@ mod tests {
     }
 
     #[test]
-    fn test_platform_id_values() {
-        // Platform IDs match DeviceProps.PlatformType protobuf enum
+    fn test_platform_id_string_enum() {
+        // StringEnum derive works correctly
+        assert_eq!(PlatformId::Chrome.as_str(), "1");
+        assert_eq!(PlatformId::Firefox.to_string(), "2");
+        assert_eq!(PlatformId::default(), PlatformId::Chrome);
+        // repr(u8) values match DeviceProps.PlatformType protobuf enum
         assert_eq!(PlatformId::Chrome as u8, 1);
-        assert_eq!(PlatformId::Firefox as u8, 2);
-        assert_eq!(PlatformId::Edge as u8, 6);
     }
 
     #[test]
@@ -684,26 +706,6 @@ mod tests {
 
         // Different salts should produce different keys
         assert_ne!(key1, key2);
-    }
-
-    #[test]
-    fn test_platform_id_as_str() {
-        assert_eq!(PlatformId::Unknown.as_str(), "0");
-        assert_eq!(PlatformId::Chrome.as_str(), "1");
-        assert_eq!(PlatformId::Firefox.as_str(), "2");
-        assert_eq!(PlatformId::InternetExplorer.as_str(), "3");
-        assert_eq!(PlatformId::Opera.as_str(), "4");
-        assert_eq!(PlatformId::Safari.as_str(), "5");
-        assert_eq!(PlatformId::Edge.as_str(), "6");
-        assert_eq!(PlatformId::Electron.as_str(), "7");
-        assert_eq!(PlatformId::Uwp.as_str(), "8");
-        assert_eq!(PlatformId::OtherWebClient.as_str(), "9");
-    }
-
-    #[test]
-    fn test_platform_id_default() {
-        let default = PlatformId::default();
-        assert_eq!(default, PlatformId::Chrome);
     }
 
     #[test]

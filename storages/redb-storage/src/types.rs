@@ -18,4 +18,12 @@ pub struct SerializableDevice {
     pub app_version_tertiary: u32,
     pub app_version_last_fetched_ms: i64,
     pub edge_routing_info: Option<Vec<u8>>,
+    #[serde(default)]
+    pub props_hash: Option<String>,
+    #[serde(default)]
+    pub next_pre_key_id: u32,
+    #[serde(default)]
+    pub server_has_prekeys: bool,
+    #[serde(default)]
+    pub nct_salt: Option<Vec<u8>>,
 }

@@ -24,18 +24,28 @@ impl Default for HashState {
     }
 }
 
+/// Result of updating the hash state with mutations.
+#[derive(Debug, Clone, Default)]
+pub struct HashUpdateResult {
+    /// Whether a REMOVE mutation was missing its previous value.
+    /// This happens when the server has an entry we don't have locally.
+    /// WhatsApp Web tracks this as `hasMissingRemove` and uses it to
+    /// determine if MAC validation failures should be fatal.
+    pub has_missing_remove: bool,
+}
+
 impl HashState {
     pub fn update_hash<F>(
         &mut self,
         mutations: &[wa::SyncdMutation],
         mut get_prev_set_value_mac: F,
-    ) -> (Vec<anyhow::Error>, anyhow::Result<()>)
+    ) -> (HashUpdateResult, anyhow::Result<()>)
     where
         F: FnMut(&[u8], usize) -> anyhow::Result<Option<Vec<u8>>>,
     {
-        let mut added: Vec<Vec<u8>> = Vec::new();
-        let mut removed: Vec<Vec<u8>> = Vec::new();
-        let mut warnings: Vec<anyhow::Error> = Vec::new();
+        let mut added: Vec<Vec<u8>> = Vec::with_capacity(mutations.len());
+        let mut removed: Vec<Vec<u8>> = Vec::with_capacity(mutations.len());
+        let mut result = HashUpdateResult::default();
 
         for (i, mutation) in mutations.iter().enumerate() {
             let op = mutation.operation.unwrap_or_default();
@@ -57,18 +67,20 @@ impl HashState {
                     Ok(Some(prev)) => removed.push(prev),
                     Ok(None) => {
                         if op == wa::syncd_mutation::SyncdOperation::Remove as i32 {
-                            warnings.push(anyhow::anyhow!(
-                                AppStateError::MissingPreviousSetValueOperation
-                            ));
+                            result.has_missing_remove = true;
+                            log::trace!(
+                                target: "AppState",
+                                "REMOVE mutation missing previous value (hasMissingRemove=true)"
+                            );
                         }
                     }
-                    Err(e) => return (warnings, Err(anyhow::anyhow!(e))),
+                    Err(e) => return (result, Err(anyhow::anyhow!(e))),
                 }
             }
         }
 
         WAPATCH_INTEGRITY.subtract_then_add_in_place(&mut self.hash, &removed, &added);
-        (warnings, Ok(()))
+        (result, Ok(()))
     }
 
     /// Update hash state from snapshot records directly (avoids cloning into SyncdMutation).
@@ -76,7 +88,8 @@ impl HashState {
     /// This is an optimized version for snapshots where all operations are SET
     /// and there are no previous values to look up.
     pub fn update_hash_from_records(&mut self, records: &[wa::SyncdRecord]) {
-        let added: Vec<Vec<u8>> = records
+        // Collect slices directly — no Vec<u8> allocation per MAC.
+        let added: Vec<&[u8]> = records
             .iter()
             .filter_map(|record| {
                 record
@@ -84,11 +97,11 @@ impl HashState {
                     .as_ref()
                     .and_then(|v| v.blob.as_ref())
                     .filter(|blob| blob.len() >= 32)
-                    .map(|blob| blob[blob.len() - 32..].to_vec())
+                    .map(|blob| &blob[blob.len() - 32..])
             })
             .collect();
 
-        WAPATCH_INTEGRITY.subtract_then_add_in_place(&mut self.hash, &[], &added);
+        WAPATCH_INTEGRITY.subtract_then_add_in_place(&mut self.hash, &[] as &[&[u8]], &added);
     }
 
     pub fn generate_snapshot_mac(&self, name: &str, key: &[u8]) -> Vec<u8> {
@@ -103,9 +116,12 @@ impl HashState {
 }
 
 pub fn generate_patch_mac(patch: &wa::SyncdPatch, name: &str, key: &[u8], version: u64) -> Vec<u8> {
-    let mut parts: Vec<Vec<u8>> = Vec::new();
+    let mut mac =
+        CryptographicMac::new("HmacSha256", key).expect("HmacSha256 is a valid algorithm");
+
+    // Feed directly to HMAC without collecting into Vec<Vec<u8>>
     if let Some(sm) = &patch.snapshot_mac {
-        parts.push(sm.clone());
+        mac.update(sm);
     }
     for m in &patch.mutations {
         if let Some(record) = &m.record
@@ -113,16 +129,12 @@ pub fn generate_patch_mac(patch: &wa::SyncdPatch, name: &str, key: &[u8], versio
             && let Some(blob) = &val.blob
             && blob.len() >= 32
         {
-            parts.push(blob[blob.len() - 32..].to_vec());
+            mac.update(&blob[blob.len() - 32..]);
         }
     }
-    parts.push(u64_to_be(version).to_vec());
-    parts.push(name.as_bytes().to_vec());
-    let mut mac =
-        CryptographicMac::new("HmacSha256", key).expect("HmacSha256 is a valid algorithm");
-    for p in parts.iter() {
-        mac.update(p);
-    }
+    mac.update(&u64_to_be(version));
+    mac.update(name.as_bytes());
+
     mac.finalize()
 }
 
@@ -131,19 +143,21 @@ pub fn generate_content_mac(
     data: &[u8],
     key_id: &[u8],
     key: &[u8],
-) -> Vec<u8> {
+) -> [u8; 32] {
     let op_byte = [operation as u8 + 1];
     let key_data_length = u64_to_be((key_id.len() + 1) as u64);
-    let mac_full = {
-        let mut mac =
-            CryptographicMac::new("HmacSha512", key).expect("HmacSha512 is a valid algorithm");
-        mac.update(&op_byte);
-        mac.update(key_id);
-        mac.update(data);
-        mac.update(&key_data_length);
-        mac.finalize()
-    };
-    mac_full[..32].to_vec()
+    let mut mac =
+        CryptographicMac::new("HmacSha512", key).expect("HmacSha512 is a valid algorithm");
+    mac.update(&op_byte);
+    mac.update(key_id);
+    mac.update(data);
+    mac.update(&key_data_length);
+    let mut out = [0u8; 64];
+    mac.finalize_into(&mut out)
+        .expect("64 bytes is enough for HmacSha512");
+    let mut result = [0u8; 32];
+    result.copy_from_slice(&out[..32]);
+    result
 }
 
 fn u64_to_be(val: u64) -> [u8; 8] {
@@ -224,13 +238,14 @@ mod tests {
         ];
 
         let get_prev_mac_closure = |_: &[u8], _: usize| Ok(None);
-        let (warnings, result) = state.update_hash(&initial_mutations, get_prev_mac_closure);
+        let (hash_result, result) = state.update_hash(&initial_mutations, get_prev_mac_closure);
         assert!(result.is_ok());
-        assert!(warnings.is_empty());
+        assert!(!hash_result.has_missing_remove);
 
+        const EMPTY: &[Vec<u8>] = &[];
         let expected_hash_after_add = WAPATCH_INTEGRITY.subtract_then_add(
             &[0; 128],
-            &[],
+            EMPTY,
             &[VALUE_MAC_1.to_vec(), VALUE_MAC_2.to_vec()],
         );
         assert_eq!(state.hash.as_slice(), expected_hash_after_add.as_slice());
@@ -253,10 +268,10 @@ mod tests {
 
         let get_prev_mac_closure_phase2 =
             |index_mac: &[u8], _: usize| Ok(prev_macs.get(index_mac).cloned());
-        let (warnings, result) =
+        let (hash_result, result) =
             state.update_hash(&update_and_remove_mutations, get_prev_mac_closure_phase2);
         assert!(result.is_ok());
-        assert!(warnings.is_empty());
+        assert!(!hash_result.has_missing_remove);
 
         let expected_final_hash = WAPATCH_INTEGRITY.subtract_then_add(
             &expected_hash_after_add,
@@ -268,6 +283,67 @@ mod tests {
             state.hash.as_slice(),
             expected_final_hash.as_slice(),
             "The final hash state after overwrite and remove is incorrect."
+        );
+    }
+
+    /// Known-answer test for generate_patch_mac to guard byte ordering and input
+    /// concatenation.  The expected MAC was computed by feeding:
+    ///   snapshot_mac ‖ mutation1_tail(32) ‖ mutation2_tail(32)
+    ///   ‖ u64_to_be(42) ‖ b"regular_high"
+    /// into HMAC-SHA256 with key = [0xAA; 32].
+    #[test]
+    fn test_generate_patch_mac_known_answer() {
+        let key = [0xAAu8; 32];
+        let name = "regular_high";
+        let version: u64 = 42;
+
+        // Build a patch with snapshot_mac and two mutations with >=32 byte blobs.
+        let snapshot_mac = vec![0x11u8; 32];
+        let mut blob1 = vec![0u8; 16]; // 16 prefix bytes
+        blob1.extend_from_slice(&[0x22u8; 32]); // 32-byte tail taken by generate_patch_mac
+        let mut blob2 = vec![0u8; 16];
+        blob2.extend_from_slice(&[0x33u8; 32]);
+
+        let patch = wa::SyncdPatch {
+            version: Some(wa::SyncdVersion {
+                version: Some(version),
+            }),
+            snapshot_mac: Some(snapshot_mac.clone()),
+            mutations: vec![
+                wa::SyncdMutation {
+                    operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                    record: Some(wa::SyncdRecord {
+                        index: None,
+                        value: Some(wa::SyncdValue { blob: Some(blob1) }),
+                        key_id: None,
+                    }),
+                },
+                wa::SyncdMutation {
+                    operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                    record: Some(wa::SyncdRecord {
+                        index: None,
+                        value: Some(wa::SyncdValue { blob: Some(blob2) }),
+                        key_id: None,
+                    }),
+                },
+            ],
+            ..Default::default()
+        };
+
+        // Compute expected MAC manually using the same HMAC-SHA256 inputs.
+        let mut expected_mac =
+            CryptographicMac::new("HmacSha256", &key).expect("HmacSha256 is a valid algorithm");
+        expected_mac.update(&snapshot_mac); // snapshot_mac
+        expected_mac.update(&[0x22u8; 32]); // mutation 1 tail
+        expected_mac.update(&[0x33u8; 32]); // mutation 2 tail
+        expected_mac.update(&42u64.to_be_bytes()); // version
+        expected_mac.update(b"regular_high"); // name
+        let expected = expected_mac.finalize();
+
+        let actual = generate_patch_mac(&patch, name, &key, version);
+        assert_eq!(
+            actual, expected,
+            "generate_patch_mac output must match manual HMAC-SHA256 computation"
         );
     }
 }

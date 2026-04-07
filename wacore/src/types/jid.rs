@@ -9,58 +9,51 @@ pub trait JidExt {
     /// - Device part `:device` only included when `device != 0`
     /// - Examples: `123456789@lid`, `123456789:33@lid`, `5511999887766@c.us`
     fn to_signal_address_string(&self) -> String;
+
+    /// Returns the full protocol address string including the device_id suffix.
+    /// Format: `{signal_address_string}.0`
+    /// This is equivalent to `to_protocol_address().to_string()` but avoids
+    /// the intermediate ProtocolAddress allocation — one String instead of two.
+    fn to_protocol_address_string(&self) -> String;
 }
 
 impl JidExt for Jid {
     fn to_signal_address_string(&self) -> String {
-        // WhatsApp Web's SignalAddress.toString() format:
-        // - Device part `:device` only included when device != 0
-        // - Full format: {user}[:device]@{server}
-        //
-        // From WAWebSignalAddress module:
-        // ```javascript
-        // toString=function(){
-        //   var t=this.wid.device!=null&&this.wid.device!==0?":"+this.wid.device:"";
-        //   // ...
-        //   return [i.user,t,"@lid"].join("")
-        // }
-        // ```
-        let device_part = if self.device != 0 {
-            format!(":{}", self.device)
-        } else {
-            String::new()
-        };
+        use std::fmt::Write;
 
         // Map server names to WhatsApp Web's internal format
         // WhatsApp Web uses @c.us for phone numbers, @lid for LID
-        let server = match self.server.as_str() {
+        let server = match &*self.server {
             "s.whatsapp.net" => "c.us",
             other => other,
         };
 
-        format!("{}{device_part}@{server}", self.user)
+        // Pre-size the output: user + ":" + device(max 5 digits) + "@" + server
+        let mut result = String::with_capacity(self.user.len() + 7 + server.len());
+        result.push_str(&self.user);
+        if self.device != 0 {
+            result.push(':');
+            let _ = write!(result, "{}", self.device);
+        }
+        result.push('@');
+        result.push_str(server);
+        result
     }
 
+    /// Build a `ProtocolAddress` for Signal session store lookups.
+    /// The device_id is always 0 — WhatsApp encodes the device in the name.
     fn to_protocol_address(&self) -> ProtocolAddress {
-        // WhatsApp Web's createSignalLikeAddress format:
-        // ```javascript
-        // function g(e){
-        //   var t=0,  // <-- always 0 for the device_id portion
-        //   n=new(o("WAWebSignalAddress")).SignalAddress(e),
-        //   r=n.toString();
-        //   return r+"."+t  // Signal address + ".0"
-        // }
-        // ```
-        //
-        // The full session key format is: {SignalAddress.toString()}.0
-        // Examples:
-        // - 123456789@lid.0 (LID user, device 0)
-        // - 123456789:33@lid.0 (LID user with device 33)
-        // - 5511999887766@c.us.0 (Phone number, device 0)
-        //
-        // The device is encoded in the name, and device_id is always 0.
         let name = self.to_signal_address_string();
         ProtocolAddress::new(name, 0.into())
+    }
+
+    fn to_protocol_address_string(&self) -> String {
+        // Reuse to_signal_address_string() and append the fixed ".0" suffix.
+        // Reserves 2 extra bytes so the append doesn't reallocate.
+        let mut result = self.to_signal_address_string();
+        result.reserve(2);
+        result.push_str(".0");
+        result
     }
 }
 
@@ -132,5 +125,26 @@ mod tests {
         assert_eq!(addr.name(), "5511999887766@c.us");
         assert_eq!(u32::from(addr.device_id()), 0);
         assert_eq!(addr.to_string(), "5511999887766@c.us.0");
+    }
+
+    #[test]
+    fn test_protocol_address_string_matches_to_string() {
+        // to_protocol_address_string() must produce the same output as
+        // to_protocol_address().to_string() for all JID types.
+        let jids = [
+            "123456789@lid",
+            "123456789:33@lid",
+            "100000000000001.1:75@lid",
+            "5511999887766@s.whatsapp.net",
+            "5511999887766:33@s.whatsapp.net",
+        ];
+        for jid_str in &jids {
+            let jid = Jid::from_str(jid_str).expect("test JID should be valid");
+            assert_eq!(
+                jid.to_protocol_address_string(),
+                jid.to_protocol_address().to_string(),
+                "mismatch for JID: {jid_str}"
+            );
+        }
     }
 }

@@ -1,55 +1,20 @@
+//! Contact information feature.
+//!
+//! Profile picture types are defined in `wacore::iq::contacts`.
+//! Usync types are defined in `wacore::iq::usync`.
+
 use crate::client::Client;
-use crate::jid_utils::server_jid;
-use crate::request::InfoQuery;
-use anyhow::{Result, anyhow};
+use crate::request::IqError;
+use anyhow::Result;
 use log::debug;
 use std::collections::HashMap;
-use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::{Node, NodeContent};
+use wacore::iq::contacts::{ProfilePictureSpec, ProfilePictureType};
+use wacore::iq::usync::{IsOnWhatsAppQueryType, IsOnWhatsAppSpec, IsOnWhatsAppUser, UserInfoSpec};
+use wacore_binary::jid::{Jid, JidExt};
 
-#[derive(Debug, Clone)]
-pub struct IsOnWhatsAppResult {
-    pub jid: Jid,
-    pub is_registered: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct ContactInfo {
-    pub jid: Jid,
-
-    pub lid: Option<Jid>,
-
-    pub is_registered: bool,
-
-    pub is_business: bool,
-
-    pub status: Option<String>,
-
-    pub picture_id: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ProfilePicture {
-    pub id: String,
-
-    pub url: String,
-
-    pub direct_path: Option<String>,
-}
-
-#[derive(Debug, Clone)]
-pub struct UserInfo {
-    pub jid: Jid,
-
-    pub lid: Option<Jid>,
-
-    pub status: Option<String>,
-
-    pub picture_id: Option<String>,
-
-    pub is_business: bool,
-}
+// Re-export types from wacore
+pub use wacore::iq::contacts::ProfilePicture;
+pub use wacore::iq::usync::{IsOnWhatsAppResult, UserInfo};
 
 pub struct Contacts<'a> {
     client: &'a Client,
@@ -60,112 +25,92 @@ impl<'a> Contacts<'a> {
         Self { client }
     }
 
-    pub async fn is_on_whatsapp(&self, phones: &[&str]) -> Result<Vec<IsOnWhatsAppResult>> {
-        if phones.is_empty() {
-            return Ok(Vec::new());
+    async fn persist_lid_mappings<'b, I>(&self, entries: I)
+    where
+        I: IntoIterator<Item = (&'b Jid, Option<&'b Jid>)>,
+    {
+        for (jid, lid) in entries {
+            let Some(lid) = lid else {
+                continue;
+            };
+            if !jid.is_pn() || !lid.is_lid() {
+                continue;
+            }
+            if let Err(err) = self
+                .client
+                .add_lid_pn_mapping(
+                    &lid.user,
+                    &jid.user,
+                    crate::lid_pn_cache::LearningSource::Usync,
+                )
+                .await
+            {
+                log::warn!(
+                    "Failed to persist usync LID mapping {} -> {}: {err}",
+                    jid,
+                    lid
+                );
+            }
         }
-
-        let request_id = self.client.generate_request_id();
-        debug!("is_on_whatsapp: checking {} numbers", phones.len());
-
-        let query_node = NodeBuilder::new("query")
-            .children(vec![NodeBuilder::new("contact").build()])
-            .build();
-
-        let user_nodes: Vec<Node> = phones
-            .iter()
-            .map(|phone| {
-                let phone_content = if phone.starts_with('+') {
-                    phone.to_string()
-                } else {
-                    format!("+{}", phone)
-                };
-                NodeBuilder::new("user")
-                    .children(vec![
-                        NodeBuilder::new("contact")
-                            .string_content(phone_content)
-                            .build(),
-                    ])
-                    .build()
-            })
-            .collect();
-
-        let list_node = NodeBuilder::new("list").children(user_nodes).build();
-
-        let usync_node = NodeBuilder::new("usync")
-            .attr("sid", request_id.as_str())
-            .attr("mode", "query")
-            .attr("last", "true")
-            .attr("index", "0")
-            .attr("context", "interactive")
-            .children(vec![query_node, list_node])
-            .build();
-
-        let iq = InfoQuery::get(
-            "usync",
-            server_jid(),
-            Some(NodeContent::Nodes(vec![usync_node])),
-        );
-
-        let response_node = self.client.send_iq(iq).await?;
-        Self::parse_is_on_whatsapp_response(&response_node)
     }
 
-    pub async fn get_info(&self, phones: &[&str]) -> Result<Vec<ContactInfo>> {
-        if phones.is_empty() {
+    /// Check if JIDs are registered on WhatsApp.
+    ///
+    /// Accepts both PN JIDs (`Jid::pn("1234567890")`) and LID JIDs (`Jid::lid("100000001")`).
+    /// PN and LID queries use different protocols (matching WA Web ExistsJob), so mixed
+    /// inputs are split into separate requests.
+    pub async fn is_on_whatsapp(&self, jids: &[Jid]) -> Result<Vec<IsOnWhatsAppResult>> {
+        if jids.is_empty() {
             return Ok(Vec::new());
         }
 
-        let request_id = self.client.generate_request_id();
-        debug!("get_info: fetching info for {} numbers", phones.len());
+        debug!("is_on_whatsapp: checking {} JIDs", jids.len());
 
-        let query_node = NodeBuilder::new("query")
-            .children(vec![
-                NodeBuilder::new("contact").build(),
-                NodeBuilder::new("lid").build(),
-                NodeBuilder::new("status").build(),
-                NodeBuilder::new("picture").build(),
-                NodeBuilder::new("business").build(),
-            ])
-            .build();
+        let mut pn_users = Vec::new();
+        let mut lid_users = Vec::new();
+        for jid in jids {
+            if jid.is_pn() {
+                let known_lid = self.client.lid_pn_cache.get_current_lid(&jid.user).await;
+                pn_users.push(IsOnWhatsAppUser {
+                    jid: jid.to_non_ad(),
+                    known_lid,
+                });
+            } else if jid.is_lid() {
+                lid_users.push(IsOnWhatsAppUser {
+                    jid: jid.to_non_ad(),
+                    known_lid: None,
+                });
+            } else {
+                log::warn!("is_on_whatsapp: skipping unsupported JID type: {jid}");
+            }
+        }
 
-        let user_nodes: Vec<Node> = phones
-            .iter()
-            .map(|phone| {
-                let phone_content = if phone.starts_with('+') {
-                    phone.to_string()
-                } else {
-                    format!("+{}", phone)
-                };
-                NodeBuilder::new("user")
-                    .children(vec![
-                        NodeBuilder::new("contact")
-                            .string_content(phone_content)
-                            .build(),
-                    ])
-                    .build()
-            })
-            .collect();
+        let mut results = Vec::new();
 
-        let list_node = NodeBuilder::new("list").children(user_nodes).build();
+        if !pn_users.is_empty() {
+            let sid = self.client.generate_request_id();
+            let spec = IsOnWhatsAppSpec::new(pn_users, sid, IsOnWhatsAppQueryType::Pn);
+            results.extend(self.client.execute(spec).await?);
+        }
 
-        let usync_node = NodeBuilder::new("usync")
-            .attr("sid", request_id.as_str())
-            .attr("mode", "query")
-            .attr("last", "true")
-            .attr("index", "0")
-            .attr("context", "interactive")
-            .children(vec![query_node, list_node])
-            .build();
+        if !lid_users.is_empty() {
+            let sid = self.client.generate_request_id();
+            let spec = IsOnWhatsAppSpec::new(lid_users, sid, IsOnWhatsAppQueryType::Lid);
+            results.extend(self.client.execute(spec).await?);
+        }
 
-        let iq = InfoQuery::get(
-            "usync",
-            server_jid(),
-            Some(NodeContent::Nodes(vec![usync_node])),
-        );
+        self.persist_lid_mappings(results.iter().map(|r| (&r.jid, r.lid.as_ref())))
+            .await;
+        self.persist_lid_mappings(results.iter().filter_map(|r| {
+            if r.jid.is_lid() {
+                r.pn_jid.as_ref().map(|pn| (pn, Some(&r.jid)))
+            } else {
+                None
+            }
+        }))
+        .await;
 
-        let response_node = self.client.send_iq(iq).await?;
-        Self::parse_contact_info_response(&response_node)
+        Ok(results)
     }
 
     pub async fn get_profile_picture(
@@ -179,21 +124,48 @@ impl<'a> Contacts<'a> {
             jid
         );
 
-        let picture_type = if preview { "preview" } else { "image" };
-        let picture_node = NodeBuilder::new("picture")
-            .attr("type", picture_type)
-            .attr("query", "url")
-            .build();
+        let picture_type = if preview {
+            ProfilePictureType::Preview
+        } else {
+            ProfilePictureType::Full
+        };
+        let mut spec = ProfilePictureSpec::new(jid, picture_type);
 
-        let iq = InfoQuery::get(
-            "w:profile:picture",
-            server_jid(),
-            Some(NodeContent::Nodes(vec![picture_node])),
-        )
-        .with_target(jid.clone());
+        // Skip own JID: server never responds when tctoken is sent for self
+        let is_own_jid = {
+            let snap = self.client.persistence_manager.get_device_snapshot().await;
+            snap.pn.as_ref().is_some_and(|pn| pn.is_same_user_as(jid))
+                || snap
+                    .lid
+                    .as_ref()
+                    .is_some_and(|lid| lid.is_same_user_as(jid))
+        };
+        if !jid.is_group()
+            && !jid.is_newsletter()
+            && !jid.is_bot()
+            && !jid.is_broadcast_list()
+            && !jid.is_status_broadcast()
+            && !is_own_jid
+            && self
+                .client
+                .ab_props
+                .is_enabled_or(
+                    wacore::iq::props::config_codes::PROFILE_PIC_PRIVACY_TOKEN,
+                    true,
+                )
+                .await
+            && let Some(token) = self.client.lookup_tc_token_for_jid(jid).await
+        {
+            spec = spec.with_tc_token(token);
+        }
 
-        let response_node = self.client.send_iq(iq).await?;
-        Self::parse_profile_picture_response(&response_node)
+        match self.client.execute(spec).await {
+            Ok(pic) => Ok(pic),
+            // 404/401 = no profile picture (or not authorized to see it).
+            // WhatsApp server returns type="error" IQ for these cases.
+            Err(IqError::ServerError { code, .. }) if code == 404 || code == 401 => Ok(None),
+            Err(e) => Err(e.into()),
+        }
     }
 
     pub async fn get_user_info(&self, jids: &[Jid]) -> Result<HashMap<Jid, UserInfo>> {
@@ -201,252 +173,15 @@ impl<'a> Contacts<'a> {
             return Ok(HashMap::new());
         }
 
-        let request_id = self.client.generate_request_id();
         debug!("get_user_info: fetching info for {} JIDs", jids.len());
 
-        let query_node = NodeBuilder::new("query")
-            .children(vec![
-                NodeBuilder::new("business")
-                    .children(vec![NodeBuilder::new("verified_name").build()])
-                    .build(),
-                NodeBuilder::new("status").build(),
-                NodeBuilder::new("picture").build(),
-                NodeBuilder::new("devices").attr("version", "2").build(),
-                NodeBuilder::new("lid").build(),
-            ])
-            .build();
+        let request_id = self.client.generate_request_id();
+        let spec = UserInfoSpec::new(jids.to_vec(), request_id);
 
-        let user_nodes: Vec<Node> = jids
-            .iter()
-            .map(|jid| {
-                NodeBuilder::new("user")
-                    .attr("jid", jid.to_non_ad().to_string())
-                    .build()
-            })
-            .collect();
-
-        let list_node = NodeBuilder::new("list").children(user_nodes).build();
-
-        let usync_node = NodeBuilder::new("usync")
-            .attr("sid", request_id.as_str())
-            .attr("mode", "full")
-            .attr("last", "true")
-            .attr("index", "0")
-            .attr("context", "background")
-            .children(vec![query_node, list_node])
-            .build();
-
-        let iq = InfoQuery::get(
-            "usync",
-            server_jid(),
-            Some(NodeContent::Nodes(vec![usync_node])),
-        );
-
-        let response_node = self.client.send_iq(iq).await?;
-        Self::parse_user_info_response(&response_node)
-    }
-
-    fn parse_is_on_whatsapp_response(node: &Node) -> Result<Vec<IsOnWhatsAppResult>> {
-        let usync = node
-            .get_optional_child("usync")
-            .ok_or_else(|| anyhow!("Response missing <usync> node"))?;
-
-        let list = usync
-            .get_optional_child("list")
-            .ok_or_else(|| anyhow!("Response missing <list> node"))?;
-
-        let mut results = Vec::new();
-
-        for user_node in list.get_children_by_tag("user") {
-            let jid_str = user_node.attrs().optional_string("jid");
-
-            if let Some(jid_str) = jid_str
-                && let Ok(jid) = jid_str.parse::<Jid>()
-            {
-                let contact_node = user_node.get_optional_child("contact");
-                let is_registered = contact_node
-                    .map(|c| c.attrs().optional_string("type") == Some("in"))
-                    .unwrap_or(false);
-
-                results.push(IsOnWhatsAppResult { jid, is_registered });
-            }
-        }
-
-        Ok(results)
-    }
-
-    fn parse_contact_info_response(node: &Node) -> Result<Vec<ContactInfo>> {
-        let usync = node
-            .get_optional_child("usync")
-            .ok_or_else(|| anyhow!("Response missing <usync> node"))?;
-
-        let list = usync
-            .get_optional_child("list")
-            .ok_or_else(|| anyhow!("Response missing <list> node"))?;
-
-        let mut results = Vec::new();
-
-        for user_node in list.get_children_by_tag("user") {
-            let jid_str = user_node.attrs().optional_string("jid");
-
-            if let Some(jid_str) = jid_str
-                && let Ok(jid) = jid_str.parse::<Jid>()
-            {
-                let contact_node = user_node.get_optional_child("contact");
-                let is_registered = contact_node
-                    .map(|c| c.attrs().optional_string("type") == Some("in"))
-                    .unwrap_or(false);
-
-                let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
-                    lid_node
-                        .attrs()
-                        .optional_string("val")
-                        .and_then(|val| val.parse::<Jid>().ok())
-                });
-
-                let status = user_node
-                    .get_optional_child("status")
-                    .and_then(|status_node| {
-                        if status_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        match &status_node.content {
-                            Some(NodeContent::String(s)) if !s.is_empty() => Some(s.clone()),
-                            _ => None,
-                        }
-                    });
-
-                let picture_id = user_node
-                    .get_optional_child("picture")
-                    .and_then(|pic_node| {
-                        if pic_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        pic_node.attrs().optional_u64("id")
-                    });
-
-                let is_business = user_node.get_optional_child("business").is_some();
-
-                results.push(ContactInfo {
-                    jid,
-                    lid,
-                    is_registered,
-                    is_business,
-                    status,
-                    picture_id,
-                });
-            }
-        }
-
-        Ok(results)
-    }
-
-    fn parse_profile_picture_response(node: &Node) -> Result<Option<ProfilePicture>> {
-        let picture_node = match node.get_optional_child("picture") {
-            Some(p) => p,
-            None => return Ok(None),
-        };
-
-        if let Some(error_node) = picture_node.get_optional_child("error") {
-            let code = error_node.attrs().optional_string("code").unwrap_or("0");
-            if code == "404" || code == "401" {
-                return Ok(None);
-            }
-            let text = error_node
-                .attrs()
-                .optional_string("text")
-                .unwrap_or("unknown error");
-            return Err(anyhow!("Profile picture error {}: {}", code, text));
-        }
-
-        let id = picture_node
-            .attrs()
-            .optional_string("id")
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-
-        let url = picture_node
-            .attrs()
-            .optional_string("url")
-            .map(|s| s.to_string())
-            .ok_or_else(|| anyhow!("Picture response missing 'url' attribute"))?;
-
-        let direct_path = picture_node
-            .attrs()
-            .optional_string("direct_path")
-            .map(|s| s.to_string());
-
-        Ok(Some(ProfilePicture {
-            id,
-            url,
-            direct_path,
-        }))
-    }
-
-    fn parse_user_info_response(node: &Node) -> Result<HashMap<Jid, UserInfo>> {
-        let usync = node
-            .get_optional_child("usync")
-            .ok_or_else(|| anyhow!("Response missing <usync> node"))?;
-
-        let list = usync
-            .get_optional_child("list")
-            .ok_or_else(|| anyhow!("Response missing <list> node"))?;
-
-        let mut results = HashMap::new();
-
-        for user_node in list.get_children_by_tag("user") {
-            let jid_str = user_node.attrs().optional_string("jid");
-
-            if let Some(jid_str) = jid_str
-                && let Ok(jid) = jid_str.parse::<Jid>()
-            {
-                let lid = user_node.get_optional_child("lid").and_then(|lid_node| {
-                    lid_node
-                        .attrs()
-                        .optional_string("val")
-                        .and_then(|val| val.parse::<Jid>().ok())
-                });
-
-                let status = user_node
-                    .get_optional_child("status")
-                    .and_then(|status_node| {
-                        if status_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        match &status_node.content {
-                            Some(NodeContent::String(s)) if !s.is_empty() => Some(s.clone()),
-                            _ => None,
-                        }
-                    });
-
-                let picture_id = user_node
-                    .get_optional_child("picture")
-                    .and_then(|pic_node| {
-                        if pic_node.get_optional_child("error").is_some() {
-                            return None;
-                        }
-                        pic_node
-                            .attrs()
-                            .optional_string("id")
-                            .map(|s| s.to_string())
-                    });
-
-                let is_business = user_node.get_optional_child("business").is_some();
-
-                results.insert(
-                    jid.clone(),
-                    UserInfo {
-                        jid,
-                        lid,
-                        status,
-                        picture_id,
-                        is_business,
-                    },
-                );
-            }
-        }
-
-        Ok(results)
+        let info = self.client.execute(spec).await?;
+        self.persist_lid_mappings(info.values().map(|entry| (&entry.jid, entry.lid.as_ref())))
+            .await;
+        Ok(info)
     }
 }
 
@@ -461,51 +196,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_contact_info_struct() {
-        let jid: Jid = "1234567890@s.whatsapp.net"
-            .parse()
-            .expect("test JID should be valid");
-        let lid: Jid = "12345678@lid".parse().expect("test JID should be valid");
-
-        let info = ContactInfo {
-            jid: jid.clone(),
-            lid: Some(lid.clone()),
-            is_registered: true,
-            is_business: false,
-            status: Some("Hey there!".to_string()),
-            picture_id: Some(123456789),
-        };
-
-        assert!(info.is_registered);
-        assert!(!info.is_business);
-        assert_eq!(info.status, Some("Hey there!".to_string()));
-        assert_eq!(info.picture_id, Some(123456789));
-        assert!(info.lid.is_some());
-    }
-
-    #[test]
     fn test_profile_picture_struct() {
         let pic = ProfilePicture {
             id: "123456789".to_string(),
             url: "https://example.com/pic.jpg".to_string(),
             direct_path: Some("/v/pic.jpg".to_string()),
+            hash: None,
         };
 
         assert_eq!(pic.id, "123456789");
         assert_eq!(pic.url, "https://example.com/pic.jpg");
         assert!(pic.direct_path.is_some());
-    }
-
-    #[test]
-    fn test_is_on_whatsapp_result_struct() {
-        let jid: Jid = "1234567890@s.whatsapp.net"
-            .parse()
-            .expect("test JID should be valid");
-        let result = IsOnWhatsAppResult {
-            jid,
-            is_registered: true,
-        };
-
-        assert!(result.is_registered);
     }
 }

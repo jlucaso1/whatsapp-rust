@@ -14,53 +14,82 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   PROTOC_VERSION: "3.25.3"
+  BENCHER_PROJECT: whatsapp-rust
+  BENCHER_TESTBED: ubuntu-latest
+  BENCHER_ADAPTER: rust_iai_callgrind
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   benchmark:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2025-12-19
+          toolchain: nightly-2026-04-05
 
-      - name: Install protoc
+      - name: Install tools (protoc, valgrind, iai-callgrind-runner)
         uses: taiki-e/install-action@v2
         with:
-          tool: protoc@${{ env.PROTOC_VERSION }}
+          tool: protoc@${{ env.PROTOC_VERSION }},valgrind,iai-callgrind-runner@0.16.1
 
-      - name: Install Valgrind
-        run: sudo apt-get update && sudo apt-get install -y valgrind
-
-      - name: Install cargo-binstall
-        uses: cargo-bins/cargo-binstall@v1.16.4
-
-      - name: Install iai-callgrind-runner
-        run: cargo binstall --no-confirm iai-callgrind-runner@0.16.1
-
-      - name: Cache Rust dependencies
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Cache Rust registry
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ${{ runner.os }}-cargo-bench
+          cache-targets: "false"
 
-      - uses: bencherdev/bencher@v0.5.9
+      - uses: bencherdev/bencher@v0.5.10
 
-      - name: Run Iai-Callgrind benchmarks
+      - name: Run benchmarks
         env:
-          BRANCH_NAME: ${{ github.head_ref || github.ref_name }}
           BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          bencher run \
-            --project whatsapp-rust \
-            --token "$BENCHER_API_TOKEN" \
-            --branch "$BRANCH_NAME" \
-            --testbed ubuntu-latest \
-            --adapter rust_iai_callgrind \
-            --github-actions "$GITHUB_TOKEN" \
-            --threshold-measure instructions \
-            --threshold-test percentage \
-            --threshold-upper-boundary 0.05 \
-            --thresholds-reset \
-            "cargo bench --workspace"
+          # Common bencher args (shared across all scenarios)
+          BENCHER_ARGS=(
+            --project "$BENCHER_PROJECT"
+            --testbed "$BENCHER_TESTBED"
+            --adapter "$BENCHER_ADAPTER"
+            --github-actions "$GITHUB_TOKEN"
+          )
+
+          if [ "$GITHUB_EVENT_NAME" == "push" ]; then
+            # Push to main: establish baseline (no GitHub check posting)
+            bencher run \
+              --project "$BENCHER_PROJECT" \
+              --testbed "$BENCHER_TESTBED" \
+              --adapter "$BENCHER_ADAPTER" \
+              --token "$BENCHER_API_TOKEN" \
+              --branch main \
+              --threshold-measure instructions \
+              --threshold-test percentage \
+              --threshold-upper-boundary 0.05 \
+              --thresholds-reset \
+              "cargo bench --workspace"
+
+          elif [ -n "$BENCHER_API_TOKEN" ]; then
+            # Pull request with token available: full tracking
+            bencher run \
+              "${BENCHER_ARGS[@]}" \
+              --token "$BENCHER_API_TOKEN" \
+              --branch "${{ github.head_ref }}" \
+              --start-point "${{ github.base_ref }}" \
+              --start-point-clone-thresholds \
+              --start-point-reset \
+              --threshold-measure instructions \
+              --threshold-test percentage \
+              --threshold-upper-boundary 0.05 \
+              --thresholds-reset \
+              --ci-only-thresholds \
+              "cargo bench --workspace"
+
+          else
+            # Pull request without token (fork PRs): run benchmarks locally
+            echo "::warning title=Bencher::BENCHER_API_TOKEN not available. Running benchmarks without analytics."
+            cargo bench --workspace
+          fi

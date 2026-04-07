@@ -1,19 +1,16 @@
 use crate::socket::error::{EncryptSendError, Result, SocketError};
 use crate::transport::Transport;
+use async_channel;
+use futures::channel::oneshot;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
-use tokio::sync::{mpsc, oneshot};
-use tokio::task::JoinHandle;
-use wacore::aes_gcm::{
-    Aes256Gcm,
-    aead::{Aead, AeadInPlace},
-};
-use wacore::handshake::utils::generate_iv;
+use wacore::handshake::NoiseCipher;
+use wacore::runtime::{AbortHandle, Runtime};
 
 const INLINE_ENCRYPT_THRESHOLD: usize = 16 * 1024;
 
-/// Result type for send operations, returning both buffers for reuse.
-type SendResult = std::result::Result<(Vec<u8>, Vec<u8>), EncryptSendError>;
+/// Result type for send operations.
+type SendResult = std::result::Result<(), EncryptSendError>;
 
 /// A job sent to the dedicated sender task.
 struct SendJob {
@@ -23,41 +20,51 @@ struct SendJob {
 }
 
 pub struct NoiseSocket {
-    read_key: Arc<Aes256Gcm>,
+    #[allow(dead_code)] // Kept for potential future spawns
+    runtime: Arc<dyn Runtime>,
+    read_key: Arc<NoiseCipher>,
     read_counter: Arc<AtomicU32>,
     /// Channel to send jobs to the dedicated sender task.
     /// Using a channel instead of a mutex avoids blocking callers while
     /// the current send is in progress - they can enqueue their work and
     /// await the result without holding a lock.
-    send_job_tx: mpsc::Sender<SendJob>,
+    send_job_tx: async_channel::Sender<SendJob>,
     /// Handle to the sender task. Aborted on drop to prevent resource leaks
     /// if the task is stuck on a slow/hanging network operation.
-    sender_task_handle: JoinHandle<()>,
+    _sender_task_handle: AbortHandle,
 }
 
 impl NoiseSocket {
-    pub fn new(transport: Arc<dyn Transport>, write_key: Aes256Gcm, read_key: Aes256Gcm) -> Self {
+    pub fn new(
+        runtime: Arc<dyn Runtime>,
+        transport: Arc<dyn Transport>,
+        write_key: NoiseCipher,
+        read_key: NoiseCipher,
+    ) -> Self {
         let write_key = Arc::new(write_key);
         let read_key = Arc::new(read_key);
 
         // Create channel for send jobs. Buffer size of 32 allows multiple
         // callers to enqueue work without blocking on channel capacity.
-        let (send_job_tx, send_job_rx) = mpsc::channel::<SendJob>(32);
+        let (send_job_tx, send_job_rx) = async_channel::bounded::<SendJob>(32);
 
         // Spawn the dedicated sender task
         let transport_clone = transport.clone();
         let write_key_clone = write_key.clone();
-        let sender_task_handle = tokio::spawn(Self::sender_task(
+        let rt_clone = runtime.clone();
+        let sender_task_handle = runtime.spawn(Box::pin(Self::sender_task(
+            rt_clone,
             transport_clone,
             write_key_clone,
             send_job_rx,
-        ));
+        )));
 
         Self {
+            runtime,
             read_key,
             read_counter: Arc::new(AtomicU32::new(0)),
             send_job_tx,
-            sender_task_handle,
+            _sender_task_handle: sender_task_handle,
         }
     }
 
@@ -65,14 +72,16 @@ impl NoiseSocket {
     /// This ensures frames are sent in counter order without requiring a mutex.
     /// The task owns the write counter and processes jobs one at a time.
     async fn sender_task(
+        runtime: Arc<dyn Runtime>,
         transport: Arc<dyn Transport>,
-        write_key: Arc<Aes256Gcm>,
-        mut send_job_rx: mpsc::Receiver<SendJob>,
+        write_key: Arc<NoiseCipher>,
+        send_job_rx: async_channel::Receiver<SendJob>,
     ) {
         let mut write_counter: u32 = 0;
 
-        while let Some(job) = send_job_rx.recv().await {
+        while let Ok(job) = send_job_rx.recv().await {
             let result = Self::process_send_job(
+                &runtime,
                 &transport,
                 &write_key,
                 &mut write_counter,
@@ -90,45 +99,27 @@ impl NoiseSocket {
 
     /// Process a single send job: encrypt and send the message.
     async fn process_send_job(
+        runtime: &Arc<dyn Runtime>,
         transport: &Arc<dyn Transport>,
-        write_key: &Arc<Aes256Gcm>,
+        write_key: &Arc<NoiseCipher>,
         write_counter: &mut u32,
         mut plaintext_buf: Vec<u8>,
         mut out_buf: Vec<u8>,
     ) -> SendResult {
         let counter = *write_counter;
-        *write_counter = write_counter.wrapping_add(1);
 
-        // For small messages, encrypt in-place in out_buf to avoid allocation
+        // For small messages, encrypt plaintext_buf in-place then frame into out_buf.
+        // This avoids the previous triple-copy pattern (plaintext→out→plaintext→out).
         if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
-            // Copy plaintext to out_buf and encrypt in-place
-            out_buf.clear();
-            out_buf.extend_from_slice(&plaintext_buf);
-            plaintext_buf.clear();
-
-            let iv = generate_iv(counter);
-            if let Err(e) = write_key.encrypt_in_place(iv.as_ref().into(), b"", &mut out_buf) {
-                return Err(EncryptSendError::crypto(
-                    anyhow::anyhow!(e.to_string()),
-                    plaintext_buf,
-                    out_buf,
-                ));
+            if let Err(e) = write_key.encrypt_in_place_with_counter(counter, &mut plaintext_buf) {
+                return Err(EncryptSendError::crypto(anyhow::anyhow!(e.to_string())));
             }
 
-            // Frame the ciphertext - we need a temporary copy since encode_frame_into
-            // clears the output buffer
-            let ciphertext_len = out_buf.len();
-            plaintext_buf.extend_from_slice(&out_buf);
+            // Frame the ciphertext from plaintext_buf into out_buf (single copy)
             out_buf.clear();
-            if let Err(e) = wacore::framing::encode_frame_into(
-                &plaintext_buf[..ciphertext_len],
-                None,
-                &mut out_buf,
-            ) {
-                plaintext_buf.clear();
-                return Err(EncryptSendError::framing(e, plaintext_buf, out_buf));
+            if let Err(e) = wacore::framing::encode_frame_into(&plaintext_buf, None, &mut out_buf) {
+                return Err(EncryptSendError::framing(e));
             }
-            plaintext_buf.clear();
         } else {
             // Offload larger messages to a blocking thread
             let write_key = write_key.clone();
@@ -136,40 +127,37 @@ impl NoiseSocket {
             let plaintext_arc = Arc::new(plaintext_buf);
             let plaintext_arc_for_task = plaintext_arc.clone();
 
-            let spawn_result = tokio::task::spawn_blocking(move || {
-                let iv = generate_iv(counter);
-                write_key.encrypt(iv.as_ref().into(), &plaintext_arc_for_task[..])
+            let encrypt_result = wacore::runtime::blocking(&**runtime, move || {
+                write_key.encrypt_with_counter(counter, &plaintext_arc_for_task[..])
             })
             .await;
 
+            // Recover ownership so the buffer is dropped at end of scope
             plaintext_buf = Arc::try_unwrap(plaintext_arc).unwrap_or_else(|arc| (*arc).clone());
+            drop(plaintext_buf);
 
-            let ciphertext = match spawn_result {
-                Ok(Ok(c)) => c,
-                Ok(Err(e)) => {
-                    return Err(EncryptSendError::crypto(
-                        anyhow::anyhow!(e.to_string()),
-                        plaintext_buf,
-                        out_buf,
-                    ));
-                }
-                Err(join_err) => {
-                    return Err(EncryptSendError::join(join_err, plaintext_buf, out_buf));
+            let ciphertext = match encrypt_result {
+                Ok(c) => c,
+                Err(e) => {
+                    return Err(EncryptSendError::crypto(anyhow::anyhow!(e.to_string())));
                 }
             };
 
-            plaintext_buf.clear();
             out_buf.clear();
             if let Err(e) = wacore::framing::encode_frame_into(&ciphertext, None, &mut out_buf) {
-                return Err(EncryptSendError::framing(e, plaintext_buf, out_buf));
+                return Err(EncryptSendError::framing(e));
             }
         }
 
         if let Err(e) = transport.send(out_buf).await {
-            return Err(EncryptSendError::transport(e, plaintext_buf, Vec::new()));
+            return Err(EncryptSendError::transport(e));
         }
 
-        Ok((plaintext_buf, Vec::new()))
+        // Only advance the counter after the encrypted frame was successfully sent.
+        // If transport.send() fails, we can retry with the same counter value.
+        *write_counter = write_counter.wrapping_add(1);
+
+        Ok(())
     }
 
     pub async fn encrypt_and_send(&self, plaintext_buf: Vec<u8>, out_buf: Vec<u8>) -> SendResult {
@@ -182,13 +170,8 @@ impl NoiseSocket {
         };
 
         // Send job to the sender task. If channel is closed, sender task has stopped.
-        if let Err(send_err) = self.send_job_tx.send(job).await {
-            // Recover the buffers from the failed send job so caller can reuse them
-            let job = send_err.0;
-            return Err(EncryptSendError::channel_closed(
-                job.plaintext_buf,
-                job.out_buf,
-            ));
+        if let Err(_send_err) = self.send_job_tx.send(job).await {
+            return Err(EncryptSendError::channel_closed());
         }
 
         // Wait for the sender task to process our job and return the result
@@ -196,87 +179,64 @@ impl NoiseSocket {
             Ok(result) => result,
             Err(_) => {
                 // Sender task dropped without sending a response
-                Err(EncryptSendError::channel_closed(Vec::new(), Vec::new()))
+                Err(EncryptSendError::channel_closed())
             }
         }
     }
 
     pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
         let counter = self.read_counter.fetch_add(1, Ordering::SeqCst);
-        let iv = generate_iv(counter);
         self.read_key
-            .decrypt(iv.as_ref().into(), ciphertext)
+            .decrypt_with_counter(counter, ciphertext)
             .map_err(|e| SocketError::Crypto(e.to_string()))
     }
 }
 
-impl Drop for NoiseSocket {
-    fn drop(&mut self) {
-        // Abort the sender task to prevent resource leaks if it's stuck
-        // on a slow/hanging network operation. This ensures cleanup even
-        // if transport.send() never returns.
-        self.sender_task_handle.abort();
-    }
-}
+// AbortHandle aborts the sender task on drop automatically, so no manual
+// Drop impl is needed — the `sender_task_handle` field's own Drop does the work.
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wacore::aes_gcm::{Aes256Gcm, KeyInit};
 
     #[tokio::test]
-    async fn test_encrypt_and_send_returns_both_buffers() {
-        // Create a mock transport
+    async fn test_encrypt_and_send_succeeds() {
         let transport = Arc::new(crate::transport::mock::MockTransport);
 
-        // Create dummy keys for testing
         let key = [0u8; 32];
-        let write_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
-        let read_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
+        let write_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
+        let read_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
 
-        let socket = NoiseSocket::new(transport, write_key, read_key);
+        let socket = NoiseSocket::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            transport,
+            write_key,
+            read_key,
+        );
 
         let plaintext_buf = Vec::with_capacity(1024);
         let encrypted_buf = Vec::with_capacity(1024);
-        let plaintext_capacity = plaintext_buf.capacity();
 
         let result = socket.encrypt_and_send(plaintext_buf, encrypted_buf).await;
         assert!(result.is_ok(), "encrypt_and_send should succeed");
-
-        let (returned_plaintext, returned_encrypted) = result.unwrap();
-
-        assert_eq!(
-            returned_plaintext.capacity(),
-            plaintext_capacity,
-            "Plaintext buffer should maintain its capacity"
-        );
-        assert!(
-            returned_encrypted.is_empty(),
-            "Encrypted buffer is moved to transport (zero-copy)"
-        );
-        assert!(
-            returned_plaintext.is_empty(),
-            "Returned plaintext buffer should be cleared"
-        );
     }
 
     #[tokio::test]
     async fn test_concurrent_sends_maintain_order() {
+        use async_lock::Mutex;
         use async_trait::async_trait;
         use std::sync::Arc;
-        use tokio::sync::Mutex;
 
         // Create a mock transport that records the order of sends by decrypting
         // the first byte (which contains the task index)
         struct RecordingTransport {
             recorded_order: Arc<Mutex<Vec<u8>>>,
-            read_key: Aes256Gcm,
+            read_key: NoiseCipher,
             counter: std::sync::atomic::AtomicU32,
         }
 
-        #[async_trait]
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl crate::transport::Transport for RecordingTransport {
             async fn send(&self, data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
                 // Decrypt the data to extract the index (first byte of plaintext)
@@ -286,9 +246,8 @@ mod tests {
                     let counter = self
                         .counter
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                    let iv = super::generate_iv(counter);
 
-                    if let Ok(plaintext) = self.read_key.decrypt(iv.as_ref().into(), ciphertext)
+                    if let Ok(plaintext) = self.read_key.decrypt_with_counter(counter, ciphertext)
                         && !plaintext.is_empty()
                     {
                         let index = plaintext[0];
@@ -304,19 +263,21 @@ mod tests {
 
         let recorded_order = Arc::new(Mutex::new(Vec::new()));
         let key = [0u8; 32];
-        let write_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
-        let read_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
+        let write_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
+        let read_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
 
         let transport = Arc::new(RecordingTransport {
             recorded_order: recorded_order.clone(),
-            read_key: Aes256Gcm::new_from_slice(&key)
-                .expect("32-byte key should be valid for AES-256-GCM"),
+            read_key: NoiseCipher::new(&key).expect("32-byte key should be valid"),
             counter: std::sync::atomic::AtomicU32::new(0),
         });
 
-        let socket = Arc::new(NoiseSocket::new(transport, write_key, read_key));
+        let socket = Arc::new(NoiseSocket::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            transport,
+            write_key,
+            read_key,
+        ));
 
         // Spawn multiple concurrent sends with their indices
         let mut handles = Vec::new();
@@ -356,7 +317,8 @@ mod tests {
             last_size: Arc<AtomicUsize>,
         }
 
-        #[async_trait]
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl crate::transport::Transport for SizeRecordingTransport {
             async fn send(&self, data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
                 self.last_size.store(data.len(), Ordering::SeqCst);
@@ -371,12 +333,15 @@ mod tests {
         });
 
         let key = [0u8; 32];
-        let write_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
-        let read_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
+        let write_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
+        let read_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
 
-        let socket = NoiseSocket::new(transport, write_key, read_key);
+        let socket = NoiseSocket::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            transport,
+            write_key,
+            read_key,
+        );
 
         // Test various payload sizes: tiny, small, medium, large, very large
         let test_sizes = [0, 1, 50, 100, 500, 1000, 1024, 2000, 5000, 16384, 20000];
@@ -427,7 +392,8 @@ mod tests {
 
         struct NoOpTransport;
 
-        #[async_trait]
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl crate::transport::Transport for NoOpTransport {
             async fn send(&self, _data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
                 Ok(())
@@ -437,12 +403,15 @@ mod tests {
 
         let transport = Arc::new(NoOpTransport);
         let key = [0u8; 32];
-        let write_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
-        let read_key =
-            Aes256Gcm::new_from_slice(&key).expect("32-byte key should be valid for AES-256-GCM");
+        let write_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
+        let read_key = NoiseCipher::new(&key).expect("32-byte key should be valid");
 
-        let socket = NoiseSocket::new(transport, write_key, read_key);
+        let socket = NoiseSocket::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            transport,
+            write_key,
+            read_key,
+        );
 
         // Test empty payload
         let result = socket

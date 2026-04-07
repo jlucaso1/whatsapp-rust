@@ -417,6 +417,29 @@ impl SignalStore for RedbStore {
 
         Ok(())
     }
+
+    async fn get_max_prekey_id(&self) -> Result<u32> {
+        let db = self.db.clone();
+        let range = self.keys().pack_id_range();
+
+        tokio::task::spawn_blocking(move || -> Result<u32> {
+            let read_txn = db.begin_read().map_err(db_err)?;
+            let table = open_table_or_default!(read_txn, PREKEYS, 0u32);
+
+            let mut max_id: u32 = 0;
+            let iter = table.range(range).map_err(db_err)?;
+            for entry in iter {
+                let (key_guard, _) = entry.map_err(db_err)?;
+                let id = (key_guard.value() & 0xFFFFFFFF) as u32;
+                if id > max_id {
+                    max_id = id;
+                }
+            }
+            Ok(max_id)
+        })
+        .await
+        .map_err(db_err)?
+    }
 }
 
 #[async_trait]
@@ -445,6 +468,8 @@ impl AppSyncStore for RedbStore {
     async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> Result<()> {
         let db = self.db.clone();
         let full_key = self.keys().app_state_key(key_id);
+        let key_id_bytes = key_id.to_vec();
+        let latest_key_str = self.keys().key1("latest");
         let data = encode(&key)?;
 
         tokio::task::spawn_blocking(move || -> Result<()> {
@@ -453,6 +478,11 @@ impl AppSyncStore for RedbStore {
                 let mut table = write_txn.open_table(APP_STATE_KEYS).map_err(db_err)?;
                 table
                     .insert(full_key.as_slice(), data.as_slice())
+                    .map_err(db_err)?;
+
+                let mut key_id_table = write_txn.open_table(APP_STATE_KEY_IDS).map_err(db_err)?;
+                key_id_table
+                    .insert(latest_key_str.as_str(), key_id_bytes.as_slice())
                     .map_err(db_err)?;
             }
             write_txn.commit().map_err(db_err)?;
@@ -589,22 +619,40 @@ impl AppSyncStore for RedbStore {
 
         Ok(())
     }
+
+    async fn get_latest_sync_key_id(&self) -> Result<Option<Vec<u8>>> {
+        let db = self.db.clone();
+        let key_str = self.keys().key1("latest");
+
+        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+            let read_txn = db.begin_read().map_err(db_err)?;
+            let table = open_table_or_default!(read_txn, APP_STATE_KEY_IDS, None);
+
+            match table.get(key_str.as_str()) {
+                Ok(Some(guard)) => Ok(Some(guard.value().to_vec())),
+                Ok(None) => Ok(None),
+                Err(e) => Err(db_err(e)),
+            }
+        })
+        .await
+        .map_err(db_err)?
+    }
 }
 
 #[async_trait]
 impl ProtocolStore for RedbStore {
-    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<String>> {
+    async fn get_sender_key_devices(&self, group_jid: &str) -> Result<Vec<(String, bool)>> {
         let db = self.db.clone();
         let key_str = self.keys().key1(group_jid);
 
-        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<(String, bool)>> {
             let read_txn = db.begin_read().map_err(db_err)?;
-            let table = open_table_or_default!(read_txn, SKDM_RECIPIENTS, Vec::new());
+            let table = open_table_or_default!(read_txn, SENDER_KEY_DEVICES, Vec::new());
 
             match table.get(key_str.as_str()) {
                 Ok(Some(guard)) => {
-                    let recipients: Vec<String> = decode(guard.value())?;
-                    Ok(recipients)
+                    let entries: Vec<(String, bool)> = decode(guard.value())?;
+                    Ok(entries)
                 }
                 Ok(None) => Ok(Vec::new()),
                 Err(e) => Err(db_err(e)),
@@ -614,33 +662,36 @@ impl ProtocolStore for RedbStore {
         .map_err(db_err)?
     }
 
-    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[String]) -> Result<()> {
-        if device_jids.is_empty() {
+    async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()> {
+        if entries.is_empty() {
             return Ok(());
         }
 
         let db = self.db.clone();
         let key_str = self.keys().key1(group_jid);
-        let new_jids = device_jids.to_vec();
+        let new_entries: Vec<(String, bool)> =
+            entries.iter().map(|(s, b)| (s.to_string(), *b)).collect();
 
         tokio::task::spawn_blocking(move || -> Result<()> {
             let write_txn = db.begin_write().map_err(db_err)?;
             {
-                let mut table = write_txn.open_table(SKDM_RECIPIENTS).map_err(db_err)?;
+                let mut table = write_txn.open_table(SENDER_KEY_DEVICES).map_err(db_err)?;
 
-                let mut recipients: Vec<String> = match table.get(key_str.as_str()) {
+                let mut current: Vec<(String, bool)> = match table.get(key_str.as_str()) {
                     Ok(Some(guard)) => decode(guard.value())?,
                     Ok(None) => Vec::new(),
                     Err(e) => return Err(db_err(e)),
                 };
 
-                for jid in new_jids {
-                    if !recipients.contains(&jid) {
-                        recipients.push(jid);
+                for (jid, has_key) in &new_entries {
+                    if let Some(existing) = current.iter_mut().find(|(j, _)| j == jid) {
+                        existing.1 = *has_key;
+                    } else {
+                        current.push((jid.clone(), *has_key));
                     }
                 }
 
-                let data = encode(&recipients)?;
+                let data = encode(&current)?;
                 table
                     .insert(key_str.as_str(), data.as_slice())
                     .map_err(db_err)?;
@@ -654,15 +705,47 @@ impl ProtocolStore for RedbStore {
         Ok(())
     }
 
-    async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()> {
+    async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()> {
         let db = self.db.clone();
         let key_str = self.keys().key1(group_jid);
 
         tokio::task::spawn_blocking(move || -> Result<()> {
             let write_txn = db.begin_write().map_err(db_err)?;
             {
-                let mut table = write_txn.open_table(SKDM_RECIPIENTS).map_err(db_err)?;
+                let mut table = write_txn.open_table(SENDER_KEY_DEVICES).map_err(db_err)?;
                 table.remove(key_str.as_str()).map_err(db_err)?;
+            }
+            write_txn.commit().map_err(db_err)?;
+            Ok(())
+        })
+        .await
+        .map_err(db_err)??;
+
+        Ok(())
+    }
+
+    async fn clear_all_sender_key_devices(&self) -> Result<()> {
+        let db = self.db.clone();
+        let prefix = self.keys().prefix();
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let write_txn = db.begin_write().map_err(db_err)?;
+            {
+                let mut table = write_txn.open_table(SENDER_KEY_DEVICES).map_err(db_err)?;
+                let keys_to_remove: Vec<String> = {
+                    let range = table.range::<&str>(..).map_err(db_err)?;
+                    let mut keys = Vec::new();
+                    for entry in range {
+                        let (key_guard, _) = entry.map_err(db_err)?;
+                        if key_guard.value().starts_with(&prefix) {
+                            keys.push(key_guard.value().to_string());
+                        }
+                    }
+                    keys
+                };
+                for key in &keys_to_remove {
+                    table.remove(key.as_str()).map_err(db_err)?;
+                }
             }
             write_txn.commit().map_err(db_err)?;
             Ok(())
@@ -886,27 +969,55 @@ impl ProtocolStore for RedbStore {
         .map_err(db_err)?
     }
 
-    async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()> {
+    async fn delete_devices(&self, user: &str) -> Result<()> {
         let db = self.db.clone();
-        let key_str = self.keys().key1(group_jid);
-        let participant = participant.to_string();
+        let key_str = self.keys().key1(user);
 
         tokio::task::spawn_blocking(move || -> Result<()> {
             let write_txn = db.begin_write().map_err(db_err)?;
             {
-                let mut table = write_txn.open_table(SENDER_KEY_STATUS).map_err(db_err)?;
+                let mut table = write_txn.open_table(DEVICE_REGISTRY).map_err(db_err)?;
+                table.remove(key_str.as_str()).map_err(db_err)?;
+            }
+            write_txn.commit().map_err(db_err)?;
+            Ok(())
+        })
+        .await
+        .map_err(db_err)??;
 
-                let mut participants: Vec<String> = match table.get(key_str.as_str()) {
-                    Ok(Some(guard)) => decode(guard.value())?,
-                    Ok(None) => Vec::new(),
-                    Err(e) => return Err(db_err(e)),
-                };
+        Ok(())
+    }
 
-                if !participants.contains(&participant) {
-                    participants.push(participant);
+    async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>> {
+        let db = self.db.clone();
+        let key_str = self.keys().key1(jid);
+
+        tokio::task::spawn_blocking(move || -> Result<Option<TcTokenEntry>> {
+            let read_txn = db.begin_read().map_err(db_err)?;
+            let table = open_table_or_default!(read_txn, TC_TOKENS, None);
+
+            match table.get(key_str.as_str()) {
+                Ok(Some(guard)) => {
+                    let entry: TcTokenEntry = decode(guard.value())?;
+                    Ok(Some(entry))
                 }
+                Ok(None) => Ok(None),
+                Err(e) => Err(db_err(e)),
+            }
+        })
+        .await
+        .map_err(db_err)?
+    }
 
-                let data = encode(&participants)?;
+    async fn put_tc_token(&self, jid: &str, entry: &TcTokenEntry) -> Result<()> {
+        let db = self.db.clone();
+        let key_str = self.keys().key1(jid);
+        let data = encode(entry)?;
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let write_txn = db.begin_write().map_err(db_err)?;
+            {
+                let mut table = write_txn.open_table(TC_TOKENS).map_err(db_err)?;
                 table
                     .insert(key_str.as_str(), data.as_slice())
                     .map_err(db_err)?;
@@ -920,33 +1031,196 @@ impl ProtocolStore for RedbStore {
         Ok(())
     }
 
-    async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>> {
+    async fn delete_tc_token(&self, jid: &str) -> Result<()> {
         let db = self.db.clone();
-        let key_str = self.keys().key1(group_jid);
+        let key_str = self.keys().key1(jid);
 
-        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+        tokio::task::spawn_blocking(move || -> Result<()> {
             let write_txn = db.begin_write().map_err(db_err)?;
-
-            let participants: Vec<String>;
             {
-                let mut table = write_txn.open_table(SENDER_KEY_STATUS).map_err(db_err)?;
-
-                participants = match table.get(key_str.as_str()) {
-                    Ok(Some(guard)) => decode(guard.value())?,
-                    Ok(None) => Vec::new(),
-                    Err(e) => return Err(db_err(e)),
-                };
-
+                let mut table = write_txn.open_table(TC_TOKENS).map_err(db_err)?;
                 table.remove(key_str.as_str()).map_err(db_err)?;
             }
-
             write_txn.commit().map_err(db_err)?;
+            Ok(())
+        })
+        .await
+        .map_err(db_err)??;
 
-            Ok(participants)
+        Ok(())
+    }
+
+    async fn get_all_tc_token_jids(&self) -> Result<Vec<String>> {
+        let db = self.db.clone();
+        let prefix = self.keys().prefix();
+
+        tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
+            let read_txn = db.begin_read().map_err(db_err)?;
+            let table = open_table_or_default!(read_txn, TC_TOKENS, Vec::new());
+
+            let mut jids = Vec::new();
+            let range = table.range::<&str>(..).map_err(db_err)?;
+            for entry in range {
+                let (key_guard, _) = entry.map_err(db_err)?;
+                let key = key_guard.value();
+                if let Some(jid_part) = key.strip_prefix(&prefix) {
+                    jids.push(jid_part.to_string());
+                }
+            }
+            Ok(jids)
         })
         .await
         .map_err(db_err)?
     }
+
+    async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32> {
+        let db = self.db.clone();
+        let prefix = self.keys().prefix();
+
+        tokio::task::spawn_blocking(move || -> Result<u32> {
+            let write_txn = db.begin_write().map_err(db_err)?;
+            let mut deleted = 0u32;
+            {
+                let mut table = write_txn.open_table(TC_TOKENS).map_err(db_err)?;
+
+                let keys_to_remove: Vec<String> = {
+                    let range = table.range::<&str>(..).map_err(db_err)?;
+                    let mut keys = Vec::new();
+                    for entry in range {
+                        let (key_guard, value_guard) = entry.map_err(db_err)?;
+                        let key = key_guard.value();
+                        if key.starts_with(&prefix) {
+                            let token_entry: TcTokenEntry = decode(value_guard.value())?;
+                            if token_entry.token_timestamp < cutoff_timestamp {
+                                keys.push(key.to_string());
+                            }
+                        }
+                    }
+                    keys
+                };
+
+                for key in &keys_to_remove {
+                    table.remove(key.as_str()).map_err(db_err)?;
+                    deleted += 1;
+                }
+            }
+            write_txn.commit().map_err(db_err)?;
+            Ok(deleted)
+        })
+        .await
+        .map_err(db_err)?
+    }
+
+    async fn store_sent_message(
+        &self,
+        chat_jid: &str,
+        message_id: &str,
+        payload: &[u8],
+    ) -> Result<()> {
+        let db = self.db.clone();
+        let key_str = self.keys().key2(chat_jid, message_id);
+        let entry = SentMessageEntry {
+            payload: payload.to_vec(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs() as i64,
+        };
+        let data = encode(&entry)?;
+
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let write_txn = db.begin_write().map_err(db_err)?;
+            {
+                let mut table = write_txn.open_table(SENT_MESSAGES).map_err(db_err)?;
+                table
+                    .insert(key_str.as_str(), data.as_slice())
+                    .map_err(db_err)?;
+            }
+            write_txn.commit().map_err(db_err)?;
+            Ok(())
+        })
+        .await
+        .map_err(db_err)??;
+
+        Ok(())
+    }
+
+    async fn take_sent_message(&self, chat_jid: &str, message_id: &str) -> Result<Option<Vec<u8>>> {
+        let db = self.db.clone();
+        let key_str = self.keys().key2(chat_jid, message_id);
+
+        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+            let write_txn = db.begin_write().map_err(db_err)?;
+
+            let result;
+            {
+                let mut table = write_txn.open_table(SENT_MESSAGES).map_err(db_err)?;
+
+                result = match table.get(key_str.as_str()) {
+                    Ok(Some(guard)) => {
+                        let entry: SentMessageEntry = decode(guard.value())?;
+                        Some(entry.payload)
+                    }
+                    Ok(None) => None,
+                    Err(e) => return Err(db_err(e)),
+                };
+
+                if result.is_some() {
+                    table.remove(key_str.as_str()).map_err(db_err)?;
+                }
+            }
+
+            write_txn.commit().map_err(db_err)?;
+            Ok(result)
+        })
+        .await
+        .map_err(db_err)?
+    }
+
+    async fn delete_expired_sent_messages(&self, cutoff_timestamp: i64) -> Result<u32> {
+        let db = self.db.clone();
+        let prefix = self.keys().prefix();
+
+        tokio::task::spawn_blocking(move || -> Result<u32> {
+            let write_txn = db.begin_write().map_err(db_err)?;
+            let mut deleted = 0u32;
+            {
+                let mut table = write_txn.open_table(SENT_MESSAGES).map_err(db_err)?;
+
+                let keys_to_remove: Vec<String> = {
+                    let range = table.range::<&str>(..).map_err(db_err)?;
+                    let mut keys = Vec::new();
+                    for entry in range {
+                        let (key_guard, value_guard) = entry.map_err(db_err)?;
+                        let key = key_guard.value();
+                        if key.starts_with(&prefix) {
+                            let msg_entry: SentMessageEntry = decode(value_guard.value())?;
+                            if msg_entry.created_at < cutoff_timestamp {
+                                keys.push(key.to_string());
+                            }
+                        }
+                    }
+                    keys
+                };
+
+                for key in &keys_to_remove {
+                    table.remove(key.as_str()).map_err(db_err)?;
+                    deleted += 1;
+                }
+            }
+            write_txn.commit().map_err(db_err)?;
+            Ok(deleted)
+        })
+        .await
+        .map_err(db_err)?
+    }
+}
+
+/// Wrapper for sent message storage with timestamp for expiration.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct SentMessageEntry {
+    payload: Vec<u8>,
+    created_at: i64,
 }
 
 #[async_trait]
@@ -972,6 +1246,10 @@ impl DeviceStore for RedbStore {
             app_version_tertiary: device.app_version_tertiary,
             app_version_last_fetched_ms: device.app_version_last_fetched_ms,
             edge_routing_info: device.edge_routing_info.clone(),
+            props_hash: device.props_hash.clone(),
+            next_pre_key_id: device.next_pre_key_id,
+            server_has_prekeys: device.server_has_prekeys,
+            nct_salt: device.nct_salt.clone(),
         };
 
         let data = encode(&serializable)?;
@@ -1055,6 +1333,11 @@ impl DeviceStore for RedbStore {
                     DEVICE_PROPS.clone()
                 },
                 edge_routing_info: serializable.edge_routing_info,
+                props_hash: serializable.props_hash,
+                next_pre_key_id: serializable.next_pre_key_id,
+                server_has_prekeys: serializable.server_has_prekeys,
+                nct_salt: serializable.nct_salt,
+                nct_salt_sync_seen: false,
             }))
         })
         .await
@@ -1125,6 +1408,10 @@ impl DeviceStore for RedbStore {
                     app_version_tertiary: new_device.app_version_tertiary,
                     app_version_last_fetched_ms: new_device.app_version_last_fetched_ms,
                     edge_routing_info: None,
+                    props_hash: None,
+                    next_pre_key_id: new_device.next_pre_key_id,
+                    server_has_prekeys: new_device.server_has_prekeys,
+                    nct_salt: None,
                 };
 
                 let data = encode(&serializable)?;
@@ -1219,40 +1506,45 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_skdm_recipients() {
+    async fn test_sender_key_devices() {
         let store = create_test_store();
 
         let group = "group@g.us";
-        let recipients = vec!["user1@s.whatsapp.net".to_string()];
 
-        store.add_skdm_recipients(group, &recipients).await.unwrap();
+        // Initially empty
+        let devices = store.get_sender_key_devices(group).await.unwrap();
+        assert!(devices.is_empty());
 
-        let loaded = store.get_skdm_recipients(group).await.unwrap();
-        assert_eq!(loaded, recipients);
-
-        store.clear_skdm_recipients(group).await.unwrap();
-        let loaded = store.get_skdm_recipients(group).await.unwrap();
-        assert!(loaded.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_sender_key_status() {
-        let store = create_test_store();
-
-        let group = "group@g.us";
-        let participant = "user@s.whatsapp.net";
-
+        // Set status for devices
         store
-            .mark_forget_sender_key(group, participant)
+            .set_sender_key_status(
+                group,
+                &[
+                    ("user1@s.whatsapp.net", true),
+                    ("user2@s.whatsapp.net", false),
+                ],
+            )
             .await
             .unwrap();
 
-        let marks = store.consume_forget_marks(group).await.unwrap();
-        assert_eq!(marks.len(), 1);
-        assert!(marks.contains(&participant.to_string()));
+        let devices = store.get_sender_key_devices(group).await.unwrap();
+        assert_eq!(devices.len(), 2);
+        assert!(devices.contains(&("user1@s.whatsapp.net".to_string(), true)));
+        assert!(devices.contains(&("user2@s.whatsapp.net".to_string(), false)));
 
-        let marks = store.consume_forget_marks(group).await.unwrap();
-        assert!(marks.is_empty());
+        // Update existing entry
+        store
+            .set_sender_key_status(group, &[("user2@s.whatsapp.net", true)])
+            .await
+            .unwrap();
+        let devices = store.get_sender_key_devices(group).await.unwrap();
+        assert_eq!(devices.len(), 2);
+        assert!(devices.contains(&("user2@s.whatsapp.net".to_string(), true)));
+
+        // Clear
+        store.clear_sender_key_devices(group).await.unwrap();
+        let devices = store.get_sender_key_devices(group).await.unwrap();
+        assert!(devices.is_empty());
     }
 
     #[tokio::test]
@@ -1297,7 +1589,7 @@ mod tests {
 
         assert!(
             store
-                .get_skdm_recipients("group@g.us")
+                .get_sender_key_devices("group@g.us")
                 .await
                 .unwrap()
                 .is_empty()
@@ -1326,11 +1618,14 @@ mod tests {
         );
         assert!(
             store
-                .consume_forget_marks("group@g.us")
+                .get_tc_token("test@s.whatsapp.net")
                 .await
                 .unwrap()
-                .is_empty()
+                .is_none()
         );
+        assert!(store.get_all_tc_token_jids().await.unwrap().is_empty());
+        assert!(store.get_latest_sync_key_id().await.unwrap().is_none());
+        assert_eq!(store.get_max_prekey_id().await.unwrap(), 0);
 
         assert!(!store.exists().await.unwrap());
         assert!(store.load().await.unwrap().is_none());

@@ -39,8 +39,8 @@ fn test_attr_parser_ref_zero_copy_access() {
     let node_ref = unmarshal_ref(&marshaled_with_flag[1..]).expect("unmarshal_ref failed");
 
     let mut parser = node_ref.attr_parser();
-    assert_eq!(parser.string("xmlns"), "test");
-    assert_eq!(parser.optional_string("type"), Some("result"));
+    assert_eq!(parser.optional_string("xmlns").as_deref(), Some("test"));
+    assert_eq!(parser.optional_string("type").as_deref(), Some("result"));
     assert!(parser.ok());
     parser
         .finish()

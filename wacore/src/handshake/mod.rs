@@ -1,8 +1,6 @@
-pub mod edge_routing;
-pub mod noise;
-pub mod state;
-pub mod utils;
-
-pub use edge_routing::{EdgeRoutingError, MAX_EDGE_ROUTING_LEN, build_edge_routing_preintro};
-pub use noise::NoiseHandshake;
-pub use state::{HandshakeState, Result};
+// Re-export everything from wacore-noise
+pub use wacore_noise::{
+    EdgeRoutingError, HandshakeError, HandshakeResult as Result, HandshakeState, HandshakeUtils,
+    MAX_EDGE_ROUTING_LEN, NoiseCipher, NoiseHandshake, WA_CERT_PUB_KEY,
+    build_edge_routing_preintro, build_handshake_header, generate_iv,
+};

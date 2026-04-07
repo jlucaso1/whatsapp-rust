@@ -1,31 +1,56 @@
-use crate::client::Client;
-use crate::jid_utils::server_jid;
-use crate::request::{InfoQuery, IqError};
-use serde::Deserialize;
-use std::time::{Duration, Instant};
-use wacore_binary::builder::NodeBuilder;
+//! Media connection management.
+//!
+//! Protocol types are defined in `wacore::iq::mediaconn`.
 
-#[derive(Debug, Clone, Deserialize)]
-pub struct MediaConnHost {
-    pub hostname: String,
+use crate::client::Client;
+use crate::request::IqError;
+use std::time::Duration;
+use wacore::iq::mediaconn::MediaConnSpec;
+use wacore::time::Instant;
+
+/// Re-export protocol types from wacore.
+pub use wacore::iq::mediaconn::{HostType, MediaConnHost};
+
+/// Number of retry attempts after a media auth error (401/403).
+/// On auth failure, the media connection is invalidated and refreshed before retrying.
+pub(crate) const MEDIA_AUTH_REFRESH_RETRY_ATTEMPTS: usize = 1;
+
+/// Returns `true` if the HTTP status code indicates a media auth error
+/// that should trigger a media connection refresh and retry.
+pub(crate) fn is_media_auth_error(status_code: u16) -> bool {
+    matches!(status_code, 401 | 403)
 }
 
+/// Media connection with runtime-specific fields.
 #[derive(Debug, Clone)]
 pub struct MediaConn {
+    /// Authentication token for media operations.
     pub auth: String,
+    /// Time-to-live in seconds for route info.
     pub ttl: u64,
+    /// Time-to-live in seconds for auth token (may differ from route TTL).
+    pub auth_ttl: Option<u64>,
+    /// Available media hosts (sorted: primary first, fallback second).
     pub hosts: Vec<MediaConnHost>,
+    /// When this connection info was fetched (runtime-specific).
     pub fetched_at: Instant,
 }
 
 impl MediaConn {
+    /// Check if this connection info has expired.
+    /// Uses the earlier of route TTL and auth TTL (auth may expire before routes).
     pub fn is_expired(&self) -> bool {
-        self.fetched_at.elapsed() > Duration::from_secs(self.ttl)
+        let effective_ttl = self.auth_ttl.map_or(self.ttl, |at| self.ttl.min(at));
+        self.fetched_at.elapsed() > Duration::from_secs(effective_ttl)
     }
 }
 
 impl Client {
-    pub(crate) async fn refresh_media_conn(&self, force: bool) -> Result<MediaConn, IqError> {
+    pub(crate) async fn invalidate_media_conn(&self) {
+        *self.media_conn.write().await = None;
+    }
+
+    pub async fn refresh_media_conn(&self, force: bool) -> Result<MediaConn, IqError> {
         {
             let guard = self.media_conn.read().await;
             if !force
@@ -36,38 +61,13 @@ impl Client {
             }
         }
 
-        let resp = self
-            .send_iq(InfoQuery::set(
-                "w:m",
-                server_jid(),
-                Some(wacore_binary::node::NodeContent::Nodes(vec![
-                    NodeBuilder::new("media_conn").build(),
-                ])),
-            ))
-            .await?;
-
-        let media_conn_node =
-            resp.get_optional_child("media_conn")
-                .ok_or_else(|| IqError::ServerError {
-                    code: 500,
-                    text: "Missing media_conn node in response".to_string(),
-                })?;
-
-        let mut attrs = media_conn_node.attrs();
-        let auth = attrs.string("auth");
-        let ttl = attrs.optional_u64("ttl").unwrap_or(0);
-
-        let mut hosts = Vec::new();
-        for host_node in media_conn_node.get_children_by_tag("host") {
-            hosts.push(MediaConnHost {
-                hostname: host_node.attrs().string("hostname"),
-            });
-        }
+        let response = self.execute(MediaConnSpec::new()).await?;
 
         let new_conn = MediaConn {
-            auth,
-            ttl,
-            hosts,
+            auth: response.auth,
+            ttl: response.ttl,
+            auth_ttl: response.auth_ttl,
+            hosts: response.hosts,
             fetched_at: Instant::now(),
         };
 

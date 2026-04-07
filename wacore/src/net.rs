@@ -4,6 +4,9 @@ use bytes::Bytes;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// Default WhatsApp Web websocket endpoint.
+pub const WHATSAPP_WEB_WS_URL: &str = "wss://web.whatsapp.com/ws/chat";
+
 /// An event produced by the transport layer.
 #[derive(Debug, Clone)]
 pub enum TransportEvent {
@@ -17,7 +20,8 @@ pub enum TransportEvent {
 
 /// Represents an active network connection.
 /// The transport is a dumb pipe for bytes with no knowledge of WhatsApp framing.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait Transport: Send + Sync {
     /// Sends raw data to the server.
     async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error>;
@@ -27,7 +31,8 @@ pub trait Transport: Send + Sync {
 }
 
 /// A factory responsible for creating new transport instances.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait TransportFactory: Send + Sync {
     /// Creates a new transport and returns it, along with a stream of events.
     async fn create_transport(
@@ -87,9 +92,30 @@ impl HttpResponse {
     }
 }
 
+/// An HTTP response with a streaming body reader instead of a buffered `Vec<u8>`.
+/// Used for large downloads where buffering the entire response would be wasteful.
+pub struct StreamingHttpResponse {
+    pub status_code: u16,
+    pub body: Box<dyn std::io::Read + Send>,
+}
+
 /// Trait for executing HTTP requests in a runtime-agnostic way
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait HttpClient: Send + Sync {
     /// Executes a given HTTP request and returns the response.
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse>;
+
+    /// Whether this client supports synchronous streaming downloads.
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
+    /// Synchronous streaming variant — returns a reader over the response body.
+    /// Must be called from a blocking context.
+    fn execute_streaming(&self, _request: HttpRequest) -> Result<StreamingHttpResponse> {
+        Err(anyhow::anyhow!(
+            "Streaming not supported by this HTTP client"
+        ))
+    }
 }

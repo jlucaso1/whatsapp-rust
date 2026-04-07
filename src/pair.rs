@@ -1,10 +1,9 @@
 use crate::client::Client;
 use crate::lid_pn_cache::LearningSource;
 use crate::types::events::{Event, PairError, PairSuccess};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use prost::Message;
-use rand::TryRngCore;
-use rand_core::OsRng;
+
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use wacore::libsignal::protocol::KeyPair;
@@ -16,8 +15,8 @@ pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
 pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
     let device_state = DeviceState {
-        identity_key: store.identity_key,
-        noise_key: store.noise_key,
+        identity_key: store.identity_key.clone(),
+        noise_key: store.noise_key.clone(),
         adv_secret_key: store.adv_secret_key,
     };
     PairUtils::make_qr_data(&device_state, ref_str)
@@ -25,19 +24,18 @@ pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
 
 pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
     // Server JID is "s.whatsapp.net" (no @ prefix for server-only JIDs)
-    if node
+    if !node
         .attrs
         .get("from")
-        .map(|s| s.as_str())
-        .unwrap_or_default()
-        != SERVER_JID
+        .map(|from| from == SERVER_JID)
+        .unwrap_or(false)
     {
         return false;
     }
 
     if let Some(children) = node.children() {
         for child in children {
-            let handled = match child.tag.as_str() {
+            let handled = match child.tag.as_ref() {
                 "pair-device" => {
                     if let Some(ack_node) = PairUtils::build_ack_node(node)
                         && let Err(e) = client.send_node(ack_node).await
@@ -49,8 +47,8 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
 
                     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
                     let device_state = DeviceState {
-                        identity_key: device_snapshot.identity_key,
-                        noise_key: device_snapshot.noise_key,
+                        identity_key: device_snapshot.identity_key.clone(),
+                        noise_key: device_snapshot.noise_key.clone(),
                         adv_secret_key: device_snapshot.adv_secret_key,
                     };
 
@@ -62,41 +60,61 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                         }
                     }
 
-                    let (stop_tx, stop_rx) = tokio::sync::watch::channel(());
+                    let (stop_tx, stop_rx) = async_channel::bounded::<()>(1);
                     let codes_clone = codes.clone();
                     let client_clone = client.clone();
 
-                    tokio::spawn(async move {
-                        // The rotation logic is now inside the library
-                        let mut is_first = true;
-                        let mut stop_rx_clone = stop_rx.clone();
+                    client
+                        .runtime
+                        .spawn(Box::pin(async move {
+                            let mut is_first = true;
 
-                        for code in codes_clone {
-                            let timeout = if is_first {
-                                is_first = false;
-                                std::time::Duration::from_secs(60)
-                            } else {
-                                std::time::Duration::from_secs(20)
-                            };
-
-                            // Dispatch the new, simple event for each code
-                            client_clone
-                                .core
-                                .event_bus
-                                .dispatch(&Event::PairingQrCode { code, timeout });
-
-                            // Wait for the timeout OR a stop signal
-                            tokio::select! {
-                                _ = tokio::time::sleep(timeout) => {}
-                                _ = stop_rx_clone.changed() => {
-                                    info!("Pairing complete. Stopping QR code rotation.");
+                            for code in codes_clone {
+                                // Guard: pairing may complete before this task gets polled
+                                // (single-threaded runtimes, fast auto-pair, mock servers)
+                                if client_clone.is_logged_in() {
+                                    info!("Already logged in, stopping QR rotation.");
                                     return;
                                 }
+
+                                let timeout = if is_first {
+                                    is_first = false;
+                                    std::time::Duration::from_secs(60)
+                                } else {
+                                    std::time::Duration::from_secs(20)
+                                };
+
+                                client_clone
+                                    .core
+                                    .event_bus
+                                    .dispatch(&Event::PairingQrCode { code, timeout });
+
+                                let sleep = client_clone.runtime.sleep(timeout);
+                                let stop = stop_rx.recv();
+                                futures::pin_mut!(sleep);
+                                futures::pin_mut!(stop);
+                                match futures::future::select(sleep, stop).await {
+                                    futures::future::Either::Left(_) => {
+                                        if client_clone.is_logged_in() {
+                                            info!(
+                                                "Logged in during QR timeout, stopping rotation."
+                                            );
+                                            return;
+                                        }
+                                    }
+                                    futures::future::Either::Right(_) => {
+                                        info!("Pairing complete. Stopping QR code rotation.");
+                                        return;
+                                    }
+                                }
                             }
-                        }
-                        info!("All QR codes for this session have expired.");
-                        client_clone.disconnect().await;
-                    });
+
+                            if !client_clone.is_logged_in() {
+                                info!("All QR codes for this session have expired.");
+                                client_clone.disconnect().await;
+                            }
+                        }))
+                        .detach();
 
                     *client.pairing_cancellation_tx.lock().await = Some(stop_tx);
 
@@ -120,13 +138,17 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
 }
 
 async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_node: &Node) {
-    // Cancel QR code rotation if active
     if let Some(tx) = client.pairing_cancellation_tx.lock().await.take() {
-        let _ = tx.send(());
+        let _ = tx.try_send(());
+        debug!("Sent QR rotation stop signal");
+    } else {
+        debug!("QR rotation channel not yet stored — is_logged_in guard will stop the task");
     }
 
     // Clear pair code state if active
     *client.pair_code_state.lock().await = wacore::pair_code::PairCodeState::Completed;
+
+    client.update_server_time_offset(request_node);
 
     let req_id = match request_node.attrs.get("id") {
         Some(id) => id.to_string(),
@@ -153,12 +175,24 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
     let business_name = success_node
         .get_optional_child_by_tag(&["biz"])
-        .map(|n| n.attrs().optional_string("name").unwrap_or("").to_string())
+        .map(|n| {
+            n.attrs()
+                .optional_string("name")
+                .as_deref()
+                .unwrap_or("")
+                .to_string()
+        })
         .unwrap_or_default();
 
     let platform = success_node
         .get_optional_child_by_tag(&["platform"])
-        .map(|n| n.attrs().optional_string("name").unwrap_or("").to_string())
+        .map(|n| {
+            n.attrs()
+                .optional_string("name")
+                .as_deref()
+                .unwrap_or("")
+                .to_string()
+        })
         .unwrap_or_default();
 
     // For jid and lid, parse them together to handle errors correctly
@@ -180,8 +214,8 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {
-        identity_key: device_snapshot.identity_key,
-        noise_key: device_snapshot.noise_key,
+        identity_key: device_snapshot.identity_key.clone(),
+        noise_key: device_snapshot.noise_key.clone(),
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 
@@ -272,6 +306,14 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                 return;
             }
 
+            let client_for_unified = client.clone();
+            client
+                .runtime
+                .spawn(Box::pin(async move {
+                    client_for_unified.send_unified_session().await;
+                }))
+                .detach();
+
             // --- START: FIX ---
             // Set the flag to trigger a full sync on the next successful connection.
             client
@@ -321,12 +363,12 @@ pub async fn pair_with_qr_code(client: &Arc<Client>, qr_code: &str) -> Result<()
 
     let (pairing_ref, dut_noise_pub, dut_identity_pub) = PairUtils::parse_qr_code(qr_code)?;
 
-    let master_ephemeral = KeyPair::generate(&mut OsRng::unwrap_err(OsRng));
+    let master_ephemeral = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {
-        identity_key: device_snapshot.identity_key,
-        noise_key: device_snapshot.noise_key,
+        identity_key: device_snapshot.identity_key.clone(),
+        noise_key: device_snapshot.noise_key.clone(),
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 

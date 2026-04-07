@@ -3,8 +3,10 @@ use crate::client::Client;
 use async_trait::async_trait;
 use log::warn;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use wacore_binary::node::Node;
+
+/// WA Web: `WAWebMessageQueue` uses `promiseTimeout(r(), 2e4)` per queued handler.
+const MAX_MESSAGE_DELAY_MS: u64 = 20_000;
 
 /// Handler for `<message>` stanzas.
 ///
@@ -20,24 +22,24 @@ use wacore_binary::node::Node;
 #[derive(Default)]
 pub struct MessageHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for MessageHandler {
     fn tag(&self) -> &'static str {
         "message"
     }
 
     async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        // Extract the chat ID (from attribute) to serialize processing for this chat.
+        // Extract the chat ID to serialize processing for this chat.
         // This prevents race conditions where a later message is processed before
         // the PreKey message that establishes the session.
-        let chat_id = node.attrs().string("from");
-
-        if chat_id.is_empty() {
-            return false;
-        }
-
-        // Node is already Arc-wrapped - no cloning needed!
-        // This is the key optimization: we pass the same Arc through the system.
+        let chat_id = match node.attrs().optional_jid("from") {
+            Some(jid) => jid.to_string(),
+            None => {
+                warn!("Message stanza missing required 'from' attribute");
+                return false;
+            }
+        };
 
         // CRITICAL: Acquire the enqueue lock BEFORE getting/creating the queue.
         // This ensures that messages are enqueued in the exact order they arrive,
@@ -49,7 +51,7 @@ impl StanzaHandler for MessageHandler {
         // ordering since we hold the lock for the entire enqueue operation.
         let enqueue_mutex = client
             .message_enqueue_locks
-            .get_with_by_ref(&chat_id, async { Arc::new(tokio::sync::Mutex::new(())) })
+            .get_with_by_ref(&chat_id, async { Arc::new(async_lock::Mutex::new(())) })
             .await;
 
         // Acquire the lock - this serializes all enqueue operations for this chat
@@ -59,32 +61,43 @@ impl StanzaHandler for MessageHandler {
         let tx = client
             .message_queues
             .get_with_by_ref(&chat_id, async {
-                // Create a channel with backpressure
-                // Increased capacity to handle high message rates without blocking
-                let (tx, mut rx) = mpsc::channel::<Arc<Node>>(10000);
+                // Unbounded so the read loop never blocks on a full channel.
+                // WA Web uses unbounded promise chains for the same reason.
+                let (tx, rx) = async_channel::unbounded::<Arc<Node>>();
 
                 let client_for_worker = client.clone();
 
-                // Clone these for cleanup when the worker exits
-                let chat_id_for_cleanup = chat_id.clone();
-                let queues_for_cleanup = client.message_queues.clone();
-
-                // Spawn a worker task that processes messages sequentially for this chat
-                tokio::spawn(async move {
-                    while let Some(msg_node) = rx.recv().await {
-                        let client = client_for_worker.clone();
-                        Box::pin(client.handle_encrypted_message(msg_node)).await;
-                    }
-                    // Clean up when channel closes to prevent memory leaks
-                    queues_for_cleanup.invalidate(&chat_id_for_cleanup).await;
-                });
+                // Spawn a worker task that processes messages sequentially for this chat.
+                // The worker exits when all tx senders are dropped (cache TTI expiry drops
+                // the cached tx, and any cloned tx's are short-lived). No explicit
+                // invalidate() here — that would race with new queue entries under the
+                // same key (see bug audit #27).
+                client
+                    .runtime
+                    .spawn(Box::pin(async move {
+                        while let Ok(msg_node) = rx.recv().await {
+                            let start = wacore::time::now_millis() as u64;
+                            let client = client_for_worker.clone();
+                            Box::pin(client.handle_incoming_message(msg_node)).await;
+                            let elapsed = (wacore::time::now_millis() as u64).saturating_sub(start);
+                            if elapsed > MAX_MESSAGE_DELAY_MS {
+                                warn!(
+                                    target: "MessageQueue",
+                                    "Message processing took {:.1}s (MAX_MESSAGE_DELAY is {}s)",
+                                    elapsed as f64 / 1000.0,
+                                    MAX_MESSAGE_DELAY_MS / 1000
+                                );
+                            }
+                        }
+                    }))
+                    .detach();
 
                 tx
             })
             .await;
 
-        // Send the message to the queue - just clones the Arc, not the Node!
-        if let Err(e) = tx.send(node).await {
+        // Synchronous enqueue — try_send on unbounded never fails due to capacity.
+        if let Err(e) = tx.try_send(node) {
             warn!("Failed to enqueue message for processing: {e}");
         }
 

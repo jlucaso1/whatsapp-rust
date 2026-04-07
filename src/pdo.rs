@@ -14,14 +14,14 @@
 //! 3. The phone responds with PeerDataOperationRequestResponseMessage containing the decoded message
 //! 4. We emit the message as if we had decrypted it ourselves
 
+use crate::cache::Cache;
 use crate::client::Client;
 use crate::types::message::MessageInfo;
 use log::{debug, info, warn};
-use moka::future::Cache;
 use prost::Message;
 use std::sync::Arc;
 use std::time::Duration;
-use wacore::types::message::{EditAttribute, MessageSource, MsgMetaInfo};
+use wacore::types::message::{EditAttribute, MessageCategory, MessageSource, MsgMetaInfo};
 use wacore_binary::jid::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
@@ -30,7 +30,7 @@ use waproto::whatsapp as wa;
 #[derive(Clone, Debug)]
 pub struct PendingPdoRequest {
     pub message_info: MessageInfo,
-    pub requested_at: std::time::Instant,
+    pub requested_at: wacore::time::Instant,
 }
 
 /// Creates a new PDO request cache.
@@ -67,42 +67,45 @@ impl Client {
         let own_pn = device_snapshot
             .pn
             .clone()
-            .ok_or_else(|| anyhow::anyhow!("Not logged in - no phone number available for PDO"))?;
+            .ok_or_else(|| anyhow::Error::from(crate::client::ClientError::NotLoggedIn))?;
 
         // Create JID for device 0 (primary phone)
         let primary_phone_jid = own_pn.with_device(0);
 
-        // Atomically check-and-insert to avoid race conditions where two concurrent
-        // calls could both pass a contains_key check before either inserts.
-        let cache_key = format!("{}:{}", info.source.chat, info.id);
-        let pending = PendingPdoRequest {
-            message_info: info.clone(),
-            requested_at: std::time::Instant::now(),
+        // Resolve JIDs to LID for the MessageKey and cache key, matching WhatsApp Web's behavior.
+        // This ensures the cache key matches the JID that the phone will respond with (usually LID).
+        let remote_jid = self.resolve_encryption_jid(&info.source.chat).await;
+        let participant = if info.source.is_group {
+            Some(self.resolve_encryption_jid(&info.source.sender).await)
+        } else {
+            None
         };
-        let entry = self
-            .pdo_pending_requests
-            .entry(cache_key.clone())
-            .or_insert(pending)
-            .await;
 
-        if !entry.is_fresh() {
+        // Check-and-insert to avoid duplicate PDO requests for the same message.
+        let cache_key = format!("{}:{}", remote_jid, info.id);
+
+        if self.pdo_pending_requests.get(&cache_key).await.is_some() {
             debug!(
-                "PDO request already pending for message {} from {}",
-                info.id, info.source.sender
+                "PDO request already pending for message {} from {} (resolved: {})",
+                info.id, info.source.sender, remote_jid
             );
             return Ok(());
         }
 
+        let pending = PendingPdoRequest {
+            message_info: info.clone(),
+            requested_at: wacore::time::Instant::now(),
+        };
+        self.pdo_pending_requests
+            .insert(cache_key.clone(), pending)
+            .await;
+
         // Build the message key for the placeholder resend request
         let message_key = wa::MessageKey {
-            remote_jid: Some(info.source.chat.to_string()),
+            remote_jid: Some(remote_jid.to_string()),
             from_me: Some(info.source.is_from_me),
             id: Some(info.id.clone()),
-            participant: if info.source.is_group {
-                Some(info.source.sender.to_string())
-            } else {
-                None
-            },
+            participant: participant.map(|p| p.to_string()),
         };
 
         // Build the PDO request message
@@ -138,7 +141,7 @@ impl Client {
         );
 
         // Ensure E2E session exists before sending (matches WhatsApp Web behavior)
-        self.ensure_e2e_sessions(vec![primary_phone_jid.clone()])
+        self.ensure_e2e_sessions(std::slice::from_ref(&primary_phone_jid))
             .await?;
 
         // Send the message to our primary phone (device 0)
@@ -157,6 +160,62 @@ impl Client {
                 Err(e)
             }
         }
+    }
+
+    /// Request on-demand message history from the primary phone via PDO.
+    pub async fn fetch_message_history(
+        self: &Arc<Self>,
+        chat_jid: &Jid,
+        oldest_msg_id: &str,
+        oldest_msg_from_me: bool,
+        oldest_msg_timestamp_ms: i64,
+        count: i32,
+    ) -> Result<String, anyhow::Error> {
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let own_pn = device_snapshot
+            .pn
+            .clone()
+            .ok_or_else(|| anyhow::Error::from(crate::client::ClientError::NotLoggedIn))?;
+        let primary_phone_jid = own_pn.with_device(0);
+
+        let pdo_request = wa::message::PeerDataOperationRequestMessage {
+            peer_data_operation_request_type: Some(
+                wa::message::PeerDataOperationRequestType::HistorySyncOnDemand as i32,
+            ),
+            history_sync_on_demand_request: Some(
+                wa::message::peer_data_operation_request_message::HistorySyncOnDemandRequest {
+                    chat_jid: Some(chat_jid.to_string()),
+                    oldest_msg_id: Some(oldest_msg_id.to_string()),
+                    oldest_msg_from_me: Some(oldest_msg_from_me),
+                    oldest_msg_timestamp_ms: Some(oldest_msg_timestamp_ms),
+                    on_demand_msg_count: Some(count),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+
+        let protocol_message = wa::message::ProtocolMessage {
+            r#type: Some(
+                wa::message::protocol_message::Type::PeerDataOperationRequestMessage as i32,
+            ),
+            peer_data_operation_request_message: Some(pdo_request),
+            ..Default::default()
+        };
+
+        let msg = wa::Message {
+            protocol_message: Some(Box::new(protocol_message)),
+            ..Default::default()
+        };
+
+        info!(
+            "Sending PDO history sync on-demand request for chat {} (count={}) to primary phone {}",
+            chat_jid, count, primary_phone_jid
+        );
+
+        self.ensure_e2e_sessions(std::slice::from_ref(&primary_phone_jid))
+            .await?;
+        self.send_peer_message(primary_phone_jid, &msg).await
     }
 
     /// Sends a peer message (message to our own devices).
@@ -247,7 +306,7 @@ impl Client {
         );
 
         // Build MessageInfo from the WebMessageInfo or use the pending request's info
-        let message_info = if let Some(pending) = pending {
+        let mut message_info = if let Some(pending) = pending {
             pending.message_info
         } else {
             // Reconstruct MessageInfo from WebMessageInfo if we don't have it cached
@@ -269,7 +328,12 @@ impl Client {
             return;
         };
 
-        // Dispatch the message as a normal message event
+        if message_info.ephemeral_expiration.is_none() {
+            use wacore::proto_helpers::MessageExt;
+            message_info.ephemeral_expiration =
+                message.get_base_message().get_ephemeral_expiration();
+        }
+
         info!(
             "Dispatching PDO-recovered message {} from {} via phone",
             message_info.id, message_info.source.sender
@@ -341,7 +405,7 @@ impl Client {
             },
             timestamp,
             push_name: web_msg.push_name.clone().unwrap_or_default(),
-            category: String::new(),
+            category: MessageCategory::default(),
             multicast: false,
             media_type: String::new(),
             edit: EditAttribute::default(),
@@ -349,6 +413,8 @@ impl Client {
             meta_info: MsgMetaInfo::default(),
             verified_name: None,
             device_sent_meta: None,
+            ephemeral_expiration: None,
+            is_offline: false,
         })
     }
 
@@ -373,23 +439,25 @@ impl Client {
         let client_clone = Arc::clone(self);
         let info_clone = info.clone();
 
-        tokio::spawn(async move {
-            if !immediate {
-                // Add a small delay to allow the retry receipt to be processed first
-                // This avoids overwhelming the phone with simultaneous requests
-                tokio::time::sleep(Duration::from_millis(500)).await;
-            }
+        self.runtime
+            .spawn(Box::pin(async move {
+                if !immediate {
+                    // Add a small delay to allow the retry receipt to be processed first
+                    // This avoids overwhelming the phone with simultaneous requests
+                    client_clone.runtime.sleep(Duration::from_millis(500)).await;
+                }
 
-            if let Err(e) = client_clone
-                .send_pdo_placeholder_resend_request(&info_clone)
-                .await
-            {
-                warn!(
-                    "Failed to send PDO request for message {} from {}: {:?}",
-                    info_clone.id, info_clone.source.sender, e
-                );
-            }
-        });
+                if let Err(e) = client_clone
+                    .send_pdo_placeholder_resend_request(&info_clone)
+                    .await
+                {
+                    warn!(
+                        "Failed to send PDO request for message {} from {}: {:?}",
+                        info_clone.id, info_clone.source.sender, e
+                    );
+                }
+            }))
+            .detach();
     }
 
     /// Spawns a PDO request for a message that failed to decrypt.

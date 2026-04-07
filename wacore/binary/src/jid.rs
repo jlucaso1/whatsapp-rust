@@ -33,23 +33,11 @@ pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
 
     for (i, &b) in bytes.iter().enumerate() {
         match b {
-            b'@' => {
-                if at_pos.is_none() {
-                    at_pos = Some(i);
-                }
-            }
-            b':' => {
-                // Only track colon in user part (before @)
-                if at_pos.is_none() {
-                    colon_pos = Some(i);
-                }
-            }
-            b'.' => {
-                // Only track dots in user part (before @ and before :)
-                if at_pos.is_none() && colon_pos.is_none() {
-                    last_dot_pos = Some(i);
-                }
-            }
+            b'@' if at_pos.is_none() => at_pos = Some(i),
+            // Only track colon in user part (before @)
+            b':' if at_pos.is_none() => colon_pos = Some(i),
+            // Only track dots in user part (before @ and before :)
+            b'.' if at_pos.is_none() && colon_pos.is_none() => last_dot_pos = Some(i),
             _ => {}
         }
     }
@@ -258,6 +246,10 @@ pub trait JidExt {
             || self.server() == BOT_SERVER
     }
 
+    fn is_newsletter(&self) -> bool {
+        self.server() == NEWSLETTER_SERVER
+    }
+
     /// Returns true if this is a hosted/Cloud API device.
     /// Hosted devices have device ID 99 or use @hosted/@hosted.lid server.
     /// These devices should be excluded from group message fanout.
@@ -278,7 +270,7 @@ pub trait JidExt {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Jid {
     pub user: String,
-    pub server: String,
+    pub server: Cow<'static, str>,
     pub agent: u8,
     pub device: u16,
     pub integrator: u16,
@@ -309,10 +301,10 @@ impl JidExt for Jid {
 }
 
 impl Jid {
-    pub fn new(user: &str, server: &str) -> Self {
+    pub fn new(user: impl Into<String>, server: &str) -> Self {
         Self {
-            user: user.to_string(),
-            server: server.to_string(),
+            user: user.into(),
+            server: cow_server_from_str(server),
             ..Default::default()
         }
     }
@@ -321,7 +313,7 @@ impl Jid {
     pub fn pn(user: impl Into<String>) -> Self {
         Self {
             user: user.into(),
-            server: DEFAULT_USER_SERVER.to_string(),
+            server: Cow::Borrowed(DEFAULT_USER_SERVER),
             ..Default::default()
         }
     }
@@ -330,16 +322,36 @@ impl Jid {
     pub fn lid(user: impl Into<String>) -> Self {
         Self {
             user: user.into(),
-            server: HIDDEN_USER_SERVER.to_string(),
+            server: Cow::Borrowed(HIDDEN_USER_SERVER),
             ..Default::default()
         }
     }
 
-    /// Create a group JID (g.us)
+    /// Creates the `status@broadcast` JID used for status/story updates.
+    pub fn status_broadcast() -> Self {
+        Self {
+            user: STATUS_BROADCAST_USER.to_string(),
+            server: Cow::Borrowed(BROADCAST_SERVER),
+            agent: 0,
+            device: 0,
+            integrator: 0,
+        }
+    }
+
+    /// Create a group JID (g.us).
     pub fn group(id: impl Into<String>) -> Self {
         Self {
             user: id.into(),
-            server: GROUP_SERVER.to_string(),
+            server: Cow::Borrowed(GROUP_SERVER),
+            ..Default::default()
+        }
+    }
+
+    /// Create a newsletter (channel) JID (newsletter server).
+    pub fn newsletter(id: impl Into<String>) -> Self {
+        Self {
+            user: id.into(),
+            server: Cow::Borrowed(NEWSLETTER_SERVER),
             ..Default::default()
         }
     }
@@ -348,7 +360,7 @@ impl Jid {
     pub fn pn_device(user: impl Into<String>, device: u16) -> Self {
         Self {
             user: user.into(),
-            server: DEFAULT_USER_SERVER.to_string(),
+            server: Cow::Borrowed(DEFAULT_USER_SERVER),
             device,
             ..Default::default()
         }
@@ -358,7 +370,7 @@ impl Jid {
     pub fn lid_device(user: impl Into<String>, device: u16) -> Self {
         Self {
             user: user.into(),
-            server: HIDDEN_USER_SERVER.to_string(),
+            server: Cow::Borrowed(HIDDEN_USER_SERVER),
             device,
             ..Default::default()
         }
@@ -398,7 +410,7 @@ impl Jid {
     }
 
     pub fn actual_agent(&self) -> u8 {
-        match self.server.as_str() {
+        match &*self.server {
             DEFAULT_USER_SERVER => 0,
             // For LID (HIDDEN_USER_SERVER), use the parsed agent value.
             // LID user identifiers can contain dots (e.g., "100000000000001.1"),
@@ -425,9 +437,22 @@ impl Jid {
         self.is_same_user_as(user) || lid.is_some_and(|l| self.is_same_user_as(l))
     }
 
+    /// Normalize the JID for use in pre-key bundle storage and lookup.
+    ///
+    /// WhatsApp servers may return JIDs with varied agent fields, or we might derive them
+    /// with agent fields in some contexts. However, pre-key bundles are stored and looked up
+    /// using a normalized key where the agent is 0 for standard servers (s.whatsapp.net, lid).
+    pub fn normalize_for_prekey_bundle(&self) -> Self {
+        let mut jid = self.clone();
+        if jid.server == DEFAULT_USER_SERVER || jid.server == HIDDEN_USER_SERVER {
+            jid.agent = 0;
+        }
+        jid
+    }
+
     pub fn to_ad_string(&self) -> String {
         if self.user.is_empty() {
-            self.server.clone()
+            self.server.to_string()
         } else {
             format!(
                 "{}.{}:{}@{}",
@@ -435,6 +460,30 @@ impl Jid {
             )
         }
     }
+
+    /// Compare device identity (user, server, device) without allocation.
+    #[inline]
+    pub fn device_eq(&self, other: &Jid) -> bool {
+        self.user == other.user && self.server == other.server && self.device == other.device
+    }
+
+    /// Get a borrowing key for O(1) HashSet lookups by device identity.
+    #[inline]
+    pub fn device_key(&self) -> DeviceKey<'_> {
+        DeviceKey {
+            user: &self.user,
+            server: &self.server,
+            device: self.device,
+        }
+    }
+}
+
+/// Borrowing key for device identity (user, server, device). Use with HashSet for O(1) lookups.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct DeviceKey<'a> {
+    pub user: &'a str,
+    pub server: &'a str,
+    pub device: u16,
 }
 
 impl<'a> JidExt for JidRef<'a> {
@@ -466,11 +515,30 @@ impl<'a> JidRef<'a> {
     pub fn to_owned(&self) -> Jid {
         Jid {
             user: self.user.to_string(),
-            server: self.server.to_string(),
+            server: cow_server_from_str(&self.server),
             agent: self.agent,
             device: self.device,
             integrator: self.integrator,
         }
+    }
+}
+
+/// Convert a server string to `Cow<'static, str>`, borrowing for known constants.
+#[inline]
+pub fn cow_server_from_str(server: &str) -> Cow<'static, str> {
+    match server {
+        DEFAULT_USER_SERVER => Cow::Borrowed(DEFAULT_USER_SERVER),
+        HIDDEN_USER_SERVER => Cow::Borrowed(HIDDEN_USER_SERVER),
+        GROUP_SERVER => Cow::Borrowed(GROUP_SERVER),
+        BROADCAST_SERVER => Cow::Borrowed(BROADCAST_SERVER),
+        LEGACY_USER_SERVER => Cow::Borrowed(LEGACY_USER_SERVER),
+        NEWSLETTER_SERVER => Cow::Borrowed(NEWSLETTER_SERVER),
+        HOSTED_SERVER => Cow::Borrowed(HOSTED_SERVER),
+        HOSTED_LID_SERVER => Cow::Borrowed(HOSTED_LID_SERVER),
+        MESSENGER_SERVER => Cow::Borrowed(MESSENGER_SERVER),
+        INTEROP_SERVER => Cow::Borrowed(INTEROP_SERVER),
+        BOT_SERVER => Cow::Borrowed(BOT_SERVER),
+        other => Cow::Owned(other.to_string()),
     }
 }
 
@@ -481,7 +549,7 @@ impl FromStr for Jid {
         if let Some(parts) = parse_jid_fast(s) {
             return Ok(Jid {
                 user: parts.user.to_string(),
-                server: parts.server.to_string(),
+                server: cow_server_from_str(parts.server),
                 agent: parts.agent,
                 device: parts.device,
                 integrator: parts.integrator,
@@ -527,7 +595,7 @@ impl FromStr for Jid {
             };
             return Ok(Jid {
                 user: user.to_string(),
-                server: server.to_string(),
+                server: cow_server_from_str(server),
                 device,
                 agent: 0,
                 integrator: 0,
@@ -572,7 +640,7 @@ impl FromStr for Jid {
 
         Ok(Jid {
             user: user.to_string(),
-            server: server.to_string(),
+            server: cow_server_from_str(server),
             agent,
             device,
             integrator: 0,
@@ -780,7 +848,7 @@ mod tests {
         // The Display trait MUST NOT show the agent number.
         let jid1 = Jid {
             user: "1234567890".to_string(),
-            server: "s.whatsapp.net".to_string(),
+            server: Cow::Borrowed("s.whatsapp.net"),
             device: 15,
             agent: 2, // This agent would be decoded from binary but should be ignored in display
             integrator: 0,
@@ -793,7 +861,7 @@ mod tests {
         // The Display trait MUST NOT show the agent number.
         let jid2 = Jid {
             user: "12345.6789".to_string(),
-            server: "lid".to_string(),
+            server: Cow::Borrowed("lid"),
             device: 25,
             agent: 1, // This agent would be decoded from binary but should be ignored in display
             integrator: 0,
@@ -806,7 +874,7 @@ mod tests {
         // The Display trait MUST NOT show the agent number.
         let jid3 = Jid {
             user: "1234567890".to_string(),
-            server: "hosted".to_string(),
+            server: Cow::Borrowed("hosted"),
             device: 15,
             agent: 2,
             integrator: 0,
@@ -818,7 +886,7 @@ mod tests {
         // Verification Case: A generic JID where the agent SHOULD be displayed.
         let jid4 = Jid {
             user: "user".to_string(),
-            server: "custom.net".to_string(),
+            server: Cow::Owned("custom.net".to_string()),
             device: 10,
             agent: 5,
             integrator: 0,
@@ -1094,6 +1162,52 @@ mod tests {
         assert_eq!(jid.device, 33);
         assert!(jid.is_lid());
         assert!(jid.is_ad());
+    }
+
+    #[test]
+    fn test_status_broadcast_jid() {
+        let jid = Jid::status_broadcast();
+        assert_eq!(jid.user, STATUS_BROADCAST_USER);
+        assert_eq!(jid.server, BROADCAST_SERVER);
+        assert_eq!(jid.device, 0);
+        assert!(jid.is_status_broadcast());
+        assert!(!jid.is_group());
+        assert!(!jid.is_broadcast_list());
+        assert_eq!(jid.to_string(), "status@broadcast");
+
+        // Parsing round-trip
+        let parsed: Jid = "status@broadcast".parse().expect("should parse");
+        assert!(parsed.is_status_broadcast());
+        assert_eq!(parsed.user, "status");
+        assert_eq!(parsed.server, "broadcast");
+
+        // Regular broadcast list should NOT be status broadcast
+        let broadcast_list = Jid::new("12345", BROADCAST_SERVER);
+        assert!(broadcast_list.is_broadcast_list());
+        assert!(!broadcast_list.is_status_broadcast());
+    }
+
+    #[test]
+    fn test_jid_to_non_ad_preserves_user_server() {
+        // Verify to_non_ad strips device but keeps user/server
+        let device_jid = Jid::pn_device("1234567890", 33);
+        let non_ad = device_jid.to_non_ad();
+        assert_eq!(non_ad.user, "1234567890");
+        assert_eq!(non_ad.server, DEFAULT_USER_SERVER);
+        assert_eq!(non_ad.device, 0);
+        assert!(!non_ad.is_ad());
+
+        // LID variant
+        let lid_device = Jid::lid_device("100000012345678", 25);
+        let lid_non_ad = lid_device.to_non_ad();
+        assert_eq!(lid_non_ad.user, "100000012345678");
+        assert_eq!(lid_non_ad.server, HIDDEN_USER_SERVER);
+        assert_eq!(lid_non_ad.device, 0);
+
+        // status@broadcast stays the same
+        let status = Jid::status_broadcast();
+        let status_non_ad = status.to_non_ad();
+        assert_eq!(status_non_ad.to_string(), "status@broadcast");
     }
 
     #[test]

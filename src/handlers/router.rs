@@ -52,7 +52,7 @@ impl StanzaRouter {
         node: Arc<Node>,
         cancelled: &mut bool,
     ) -> bool {
-        if let Some(handler) = self.handlers.get(node.tag.as_str()) {
+        if let Some(handler) = self.handlers.get(node.tag.as_ref()) {
             handler.handle(client, node, cancelled).await
         } else {
             false
@@ -75,9 +75,8 @@ impl Default for StanzaRouter {
 mod tests {
     use super::*;
     use crate::test_utils::MockHttpClient;
-    use indexmap::IndexMap;
     use std::sync::Arc;
-    use wacore_binary::node::{Node, NodeContent};
+    use wacore_binary::node::{Attrs, Node, NodeContent};
 
     #[derive(Debug)]
     struct MockHandler {
@@ -145,7 +144,7 @@ mod tests {
         router.register(handler);
 
         // Create owned Node wrapped in Arc
-        let mut attrs = IndexMap::new();
+        let mut attrs = Attrs::new();
         attrs.insert("id".to_string(), "test-id".to_string());
         let node = Arc::new(Node::new(
             "test",
@@ -162,8 +161,14 @@ mod tests {
             .expect("persistence manager should initialize");
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
-        let (client, _rx) =
-            crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
+        let (client, _rx) = crate::client::Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            Arc::new(pm),
+            transport,
+            http_client,
+            None,
+        )
+        .await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, node, &mut cancelled).await;
@@ -177,7 +182,7 @@ mod tests {
         let router = StanzaRouter::new();
 
         // Create owned Node wrapped in Arc
-        let mut attrs = IndexMap::new();
+        let mut attrs = Attrs::new();
         attrs.insert("id".to_string(), "test-id".to_string());
         let node = Arc::new(Node::new(
             "unknown",
@@ -194,8 +199,14 @@ mod tests {
             .expect("persistence manager should initialize");
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
-        let (client, _rx) =
-            crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
+        let (client, _rx) = crate::client::Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            Arc::new(pm),
+            transport,
+            http_client,
+            None,
+        )
+        .await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, node, &mut cancelled).await;

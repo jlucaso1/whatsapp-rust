@@ -1,13 +1,15 @@
 use crate::socket::NoiseSocket;
 use crate::transport::{Transport, TransportEvent};
 use log::{debug, info, warn};
+use prost::Message;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
-use tokio::time::{Duration, timeout};
 use wacore::handshake::{
-    EdgeRoutingError, HandshakeState, MAX_EDGE_ROUTING_LEN, build_edge_routing_preintro,
-    utils::HandshakeError as CoreHandshakeError,
+    HandshakeError as CoreHandshakeError, HandshakeState, build_handshake_header,
 };
+use wacore::runtime::{Runtime, timeout as rt_timeout};
+use wacore_binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER};
 
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -19,59 +21,52 @@ pub enum HandshakeError {
     Core(#[from] CoreHandshakeError),
     #[error("Timed out waiting for handshake response")]
     Timeout,
+    #[error("Disconnected during handshake")]
+    Disconnected,
     #[error("Unexpected event during handshake: {0}")]
     UnexpectedEvent(String),
-    #[error("Edge routing error: {0}")]
-    EdgeRouting(#[from] EdgeRoutingError),
+}
+
+impl HandshakeError {
+    /// Transient errors that are expected during reconnect and will resolve on retry.
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Transport(_) | Self::Timeout | Self::Disconnected
+        )
+    }
 }
 
 type Result<T> = std::result::Result<T, HandshakeError>;
 
 pub async fn do_handshake(
+    runtime: Arc<dyn Runtime>,
     device: &crate::store::Device,
     transport: Arc<dyn Transport>,
     transport_events: &mut async_channel::Receiver<TransportEvent>,
 ) -> Result<Arc<NoiseSocket>> {
-    let mut handshake_state = HandshakeState::new(&device.core)?;
+    // Prepare the client payload (convert Device-specific data to bytes)
+    let client_payload = device.core.get_client_payload().encode_to_vec();
+
+    let mut handshake_state = HandshakeState::new(
+        device.core.noise_key.clone(),
+        client_payload,
+        NOISE_START_PATTERN,
+        &WA_CONN_HEADER,
+    )?;
     let mut frame_decoder = wacore::framing::FrameDecoder::new();
 
     debug!("--> Sending ClientHello");
     let client_hello_bytes = handshake_state.build_client_hello()?;
 
     // Build the connection header, optionally with edge routing pre-intro
-    let header: Vec<u8> = if let Some(ref routing_info) = device.core.edge_routing_info {
-        if routing_info.len() > MAX_EDGE_ROUTING_LEN {
-            warn!(
-                target: "Client",
-                "Edge routing info ({} bytes) exceeds the {}-byte limit; falling back to WA_CONN_HEADER",
-                routing_info.len(),
-                MAX_EDGE_ROUTING_LEN
-            );
-            wacore_binary::consts::WA_CONN_HEADER.to_vec()
-        } else {
-            match build_edge_routing_preintro(routing_info) {
-                Ok(mut header) => {
-                    debug!(
-                        target: "Client",
-                        "Sending edge routing pre-intro ({} bytes) for optimized reconnection",
-                        routing_info.len()
-                    );
-                    header.extend_from_slice(&wacore_binary::consts::WA_CONN_HEADER);
-                    header
-                }
-                Err(EdgeRoutingError::RoutingInfoTooLarge) => {
-                    warn!(
-                        target: "Client",
-                        "Routing info unexpectedly exceeds {} bytes; skipping pre-intro",
-                        MAX_EDGE_ROUTING_LEN
-                    );
-                    wacore_binary::consts::WA_CONN_HEADER.to_vec()
-                }
-            }
-        }
-    } else {
-        wacore_binary::consts::WA_CONN_HEADER.to_vec()
-    };
+    let (header, used_edge_routing) =
+        build_handshake_header(device.core.edge_routing_info.as_deref());
+    if used_edge_routing {
+        debug!("Sending edge routing pre-intro for optimized reconnection");
+    } else if device.core.edge_routing_info.is_some() {
+        warn!("Edge routing info provided but not used (possibly too large)");
+    }
 
     // First message includes the WA connection header (with optional edge routing)
     let framed = wacore::framing::encode_frame(&client_hello_bytes, Some(&header))
@@ -80,7 +75,13 @@ pub async fn do_handshake(
 
     // Wait for server response frame
     let resp_frame = loop {
-        match timeout(NOISE_HANDSHAKE_RESPONSE_TIMEOUT, transport_events.recv()).await {
+        match rt_timeout(
+            &*runtime,
+            NOISE_HANDSHAKE_RESPONSE_TIMEOUT,
+            transport_events.recv(),
+        )
+        .await
+        {
             Ok(Ok(TransportEvent::DataReceived(data))) => {
                 // Feed data into decoder
                 frame_decoder.feed(&data);
@@ -97,9 +98,7 @@ pub async fn do_handshake(
                 continue;
             }
             Ok(Ok(TransportEvent::Disconnected)) => {
-                return Err(HandshakeError::UnexpectedEvent(
-                    "Disconnected during handshake".to_string(),
-                ));
+                return Err(HandshakeError::Disconnected);
             }
             Ok(Err(_)) => return Err(HandshakeError::Timeout), // Channel closed
             Err(_) => return Err(HandshakeError::Timeout),
@@ -117,7 +116,9 @@ pub async fn do_handshake(
     transport.send(framed).await?;
 
     let (write_key, read_key) = handshake_state.finish()?;
-    info!(target: "Client", "Handshake complete, switching to encrypted communication");
+    info!("Handshake complete, switching to encrypted communication");
 
-    Ok(Arc::new(NoiseSocket::new(transport, write_key, read_key)))
+    Ok(Arc::new(NoiseSocket::new(
+        runtime, transport, write_key, read_key,
+    )))
 }

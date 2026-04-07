@@ -10,7 +10,8 @@ use wacore_binary::node::Node;
 #[derive(Default)]
 pub struct SuccessHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for SuccessHandler {
     fn tag(&self) -> &'static str {
         "success"
@@ -28,7 +29,8 @@ impl StanzaHandler for SuccessHandler {
 #[derive(Default)]
 pub struct FailureHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for FailureHandler {
     fn tag(&self) -> &'static str {
         "failure"
@@ -46,7 +48,8 @@ impl StanzaHandler for FailureHandler {
 #[derive(Default)]
 pub struct StreamErrorHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for StreamErrorHandler {
     fn tag(&self) -> &'static str {
         "stream:error"
@@ -64,7 +67,8 @@ impl StanzaHandler for StreamErrorHandler {
 #[derive(Default)]
 pub struct AckHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for AckHandler {
     fn tag(&self) -> &'static str {
         "ack"

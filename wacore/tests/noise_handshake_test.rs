@@ -3,9 +3,9 @@ use aes_gcm::aead::{Aead, KeyInit, Payload};
 use hkdf::Hkdf;
 use sha2::Sha256;
 use wacore::handshake::NoiseHandshake;
-use wacore::handshake::utils::generate_iv;
 use wacore::libsignal::crypto::CryptographicHash;
 use wacore::libsignal::protocol::{PrivateKey, PublicKey};
+use wacore::noise::generate_iv;
 use wacore_binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER};
 
 fn hex_to_bytes<const N: usize>(hex_str: &str) -> [u8; N] {
@@ -174,7 +174,7 @@ fn test_full_handshake_flow_with_go_data() {
     assert_eq!(*nh.hash(), hash_after_prologue, "Mismatch after prologue");
 
     println!("Step 2: Auth Client Ephemeral");
-    let _ = nh.authenticate(&client_eph_pub);
+    nh.authenticate(&client_eph_pub);
     assert_eq!(
         *nh.hash(),
         hash_after_auth_client_eph,
@@ -182,7 +182,7 @@ fn test_full_handshake_flow_with_go_data() {
     );
 
     println!("Step 3: Auth Server Ephemeral");
-    let _ = nh.authenticate(&server_eph_pub);
+    nh.authenticate(&server_eph_pub);
     assert_eq!(
         *nh.hash(),
         hash_after_auth_server_eph,

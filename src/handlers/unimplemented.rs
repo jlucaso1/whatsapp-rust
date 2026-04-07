@@ -28,13 +28,10 @@ impl UnimplementedHandler {
     pub fn for_presence() -> Self {
         Self::new(vec!["presence"])
     }
-
-    pub fn for_chatstate() -> Self {
-        Self::new(vec!["chatstate"])
-    }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for UnimplementedHandler {
     fn tag(&self) -> &'static str {
         // For multi-tag handlers, we'll register multiple instances

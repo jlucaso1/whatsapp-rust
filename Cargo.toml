@@ -1,7 +1,7 @@
 
 [package]
 name = "whatsapp-rust"
-version = "0.2.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["João Lucas <jlucaso@hotmail.com>"]
 license = "MIT"
@@ -15,73 +15,134 @@ members = [
     "http_clients/ureq-client",
     "storages/redb-storage",
     "storages/sqlite-storage",
+    "tests/e2e",
     "transports/tokio-transport",
     "wacore",
     "wacore/appstate",
     "wacore/binary",
+    "wacore/derive",
     "wacore/libsignal",
+    "wacore/noise",
+    "waproto",
+]
+default-members = [
+    ".",
+    "http_clients/ureq-client",
+    "storages/sqlite-storage",
+    "transports/tokio-transport",
+    "wacore",
+    "wacore/appstate",
+    "wacore/binary",
+    "wacore/derive",
+    "wacore/libsignal",
+    "wacore/noise",
     "waproto",
 ]
 
 [workspace.dependencies]
-flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }
-rand = "0.9"
-rand_core = "0.9"
-thiserror = "2.0.17"
-tokio = { version = "1.48.0", default-features = false }
-wacore-appstate = { path = "./wacore/appstate", version = "0.2.0" }
-wacore-binary = { path = "./wacore/binary", version = "0.2.0" }
-waproto = { path = "./waproto", version = "0.2.0" }
-
-[features]
-danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
-default = ["redb-storage", "tokio-transport", "ureq-client", "tokio-native"]
-ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
-tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
-signal = ["tokio/signal"]
-sqlite-storage = ["whatsapp-rust-sqlite-storage"]
-redb-storage = ["whatsapp-rust-redb-storage"]
-tokio-native = ["tokio/rt-multi-thread"]
-
-[dependencies]
-
+# Shared dependencies
+aes = "0.8.3"
+aes-gcm = { version = "0.10.2", default-features = false, features = ["aes", "alloc", "std"] }
 anyhow = { version = "1.0", default-features = false }
-async-channel = "2.5.0"
+async-channel = { version = "2.5.0", default-features = false, features = ["std"] }
+async-lock = { version = "3", default-features = false }
 async-trait = "0.1.89"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
-bytes = { version = "1.5", default-features = false }
+bytemuck = { version = "1.22", default-features = false }
+bytes = { version = "1.5", default-features = false, features = ["serde"] }
+chrono = { version = "0.4", default-features = false }
+ctr = { version = "0.9", default-features = false }
+event-listener = { version = "5", default-features = false }
+flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }
+futures = { version = "0.3", default-features = false, features = ["alloc", "async-await"] }
+getrandom = { version = "0.4", default-features = false }
+hex = { version = "0.4", default-features = false, features = ["alloc"] }
+hkdf = { version = "0.13.0", default-features = false }
+hmac = { version = "0.13.0", default-features = false }
+iai-callgrind = "0.16"
+log = "0.4"
+portable-atomic = { version = "1", default-features = false, features = ["fallback"] }
+prost = { version = "0.14.3", default-features = false, features = ["std"] }
+prost-build = { version = "0.14.3", default-features = false }
+rand = "0.10"
+serde = { version = "1.0", features = ["derive"] }
+serde-big-array = "0.5"
+serde_json = { version = "1.0", default-features = false }
+sha1 = { version = "0.11.0", default-features = false }
+sha2 = { version = "0.11.0", default-features = false }
+thiserror = "2.0.17"
+tokio = { version = "1.48.0", default-features = false }
+uuid = { version = "1", default-features = false }
 
-# Time handling
-chrono = { version = "0.4", default-features = false, features = [
-    "clock",
-    "serde",
-] }
-dashmap = "6.1.0"
+# Internal workspace crates
+wacore = { path = "./wacore", default-features = false, version = "0.5.0" }
+wacore-appstate = { path = "./wacore/appstate", default-features = false, version = "0.5.0" }
+wacore-binary = { path = "./wacore/binary", default-features = false, version = "0.5.0" }
+wacore-derive = { path = "./wacore/derive", version = "0.5.0" }
+wacore-libsignal = { path = "./wacore/libsignal", version = "0.5.0" }
+wacore-noise = { path = "./wacore/noise", version = "0.5.0" }
+waproto = { path = "./waproto", version = "0.5.0" }
+
+[features]
+debug-diagnostics = ["wacore/debug-diagnostics"]
+debug-snapshots = ["wacore/debug-snapshots"]
+danger-skip-tls-verify = ["whatsapp-rust-tokio-transport?/danger-skip-tls-verify"]
+default = [
+    "moka-cache",
+    "simd",
+    "redb-storage",
+    "tokio-transport",
+    "tokio-runtime",
+    "ureq-client",
+    "tokio-native",
+    "signal",
+]
+moka-cache = ["dep:moka"]
+simd = ["wacore/simd"]
+ureq-client = ["dep:whatsapp-rust-ureq-http-client"]
+tokio-transport = ["dep:whatsapp-rust-tokio-transport"]
+tokio-runtime = ["dep:tokio"]
+signal = ["tokio-runtime", "tokio/signal"]
+sqlite-storage = ["whatsapp-rust-sqlite-storage"]
+redb-storage = ["whatsapp-rust-redb-storage"]
+tokio-native = ["tokio-runtime", "tokio/rt-multi-thread"]
+
+[dependencies]
+anyhow = { workspace = true }
+async-channel = { workspace = true }
+async-lock = { workspace = true }
+async-trait = { workspace = true }
+base64 = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true, features = ["clock", "serde"] }
 env_logger = { version = "0.11", default-features = false }
-hex = { version = "0.4", features = ["alloc"], default-features = false }
-indexmap = { version = "2.12.1", features = ["serde"] }
-log = "0.4.27"
-moka = { version = "0.12.12", features = ["future"] }
-prost = { version = "0.14.1", default-features = false }
-
-# Cryptography
+event-listener = { workspace = true }
+futures = { workspace = true, features = ["std"] }
+hex = { workspace = true }
+log = { workspace = true }
+moka = { version = "0.12.12", features = ["future"], optional = true }
+portable-atomic = { workspace = true }
+prost = { workspace = true }
 rand = { workspace = true }
-rand_core = { workspace = true }
 scopeguard = "1.2"
-serde = { version = "1.0.188", features = ["derive"] }
-serde_json = "1.0"
+serde = { workspace = true }
+serde_json = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
-wacore = { path = "./wacore", version = "0.2.0" }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"], optional = true }
+wacore = { workspace = true }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
-whatsapp-rust-redb-storage = { path = "./storages/redb-storage", version = "0.2.0", optional = true }
-whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.2.0", optional = true }
-whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.2.0", optional = true }
-whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.2.0", optional = true }
+whatsapp-rust-redb-storage = { path = "./storages/redb-storage", version = "0.5.0", optional = true }
+whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.5.0", optional = true }
+whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.5.0", optional = true }
+whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.5.0", optional = true }
 
 [dev-dependencies]
-uuid = { version = "1.0", features = ["v4"] }
+uuid = { workspace = true, features = ["v4"] }
+
+[[example]]
+name = "benchmark"
+required-features = ["danger-skip-tls-verify"]
 
 [profile.release]
 opt-level = "z"

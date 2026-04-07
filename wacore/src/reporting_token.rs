@@ -19,7 +19,7 @@
 
 use anyhow::{Result, anyhow};
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use prost::Message;
 use sha2::Sha256;
 use wacore_binary::builder::NodeBuilder;
@@ -258,8 +258,8 @@ const USE_CASE_REPORT_TOKEN: &str = "Report Token";
 
 /// Generate a random message secret (32 bytes)
 pub fn generate_message_secret() -> [u8; MESSAGE_SECRET_SIZE] {
-    use rand::Rng;
-    let mut rng = rand::rng();
+    use rand::RngExt;
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
     rng.random()
 }
 
@@ -268,7 +268,8 @@ pub fn generate_message_secret() -> [u8; MESSAGE_SECRET_SIZE] {
 /// The info is constructed as: stanza_id || sender_jid || remote_jid || "Report Token"
 /// This matches WhatsApp Web's Binary.build(stanzaId, senderJid, remoteJid, REPORT_TOKEN)
 fn build_hkdf_info(stanza_id: &str, sender_jid: &str, remote_jid: &str) -> Vec<u8> {
-    let mut info = Vec::new();
+    let cap = stanza_id.len() + sender_jid.len() + remote_jid.len() + USE_CASE_REPORT_TOKEN.len();
+    let mut info = Vec::with_capacity(cap);
     info.extend_from_slice(stanza_id.as_bytes());
     info.extend_from_slice(sender_jid.as_bytes());
     info.extend_from_slice(remote_jid.as_bytes());
@@ -872,11 +873,9 @@ mod tests {
         let node = build_reporting_node(&result);
         assert_eq!(node.tag, "reporting");
 
-        let children: Vec<_> = node.get_children_by_tag("reporting_token");
-        assert_eq!(children.len(), 1);
+        let token_node = node.get_children_by_tag("reporting_token").next().unwrap();
 
-        let token_node = children[0];
-        assert_eq!(token_node.attrs().string("v"), "2");
+        assert!(token_node.attrs.get("v").is_some_and(|v| v == "2"));
 
         // CRITICAL: Verify the token content is BINARY BYTES, not a hex string.
         // WhatsApp expects raw bytes in the reporting_token node content.

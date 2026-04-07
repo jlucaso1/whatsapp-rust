@@ -13,7 +13,6 @@ use crate::protocol::state::{
 use crate::protocol::{IdentityKey, IdentityKeyPair, ProtocolAddress};
 use crate::store::sender_key_name::SenderKeyName;
 
-// TODO: consider moving this enum into utils.rs?
 /// Each Signal message can be considered to have exactly two participants, a sender and receiver.
 ///
 /// [IdentityKeyStore::is_trusted_identity] uses this to ensure the identity provided is configured
@@ -138,7 +137,7 @@ pub trait SessionStore: ThreadSafe {
     async fn store_session(
         &mut self,
         address: &ProtocolAddress,
-        record: &SessionRecord,
+        record: SessionRecord,
     ) -> Result<()>;
 }
 
@@ -150,8 +149,7 @@ pub trait SenderKeyStore: ThreadSafe {
     async fn store_sender_key(
         &mut self,
         sender_key_name: &SenderKeyName,
-        // TODO: pass this by value!
-        record: &SenderKeyRecord,
+        record: SenderKeyRecord,
     ) -> Result<()>;
 
     /// Look up the entry corresponding to `(sender, distribution_id)`.

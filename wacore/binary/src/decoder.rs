@@ -3,6 +3,7 @@ use crate::jid::JidRef;
 use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec, ValueRef};
 use crate::token;
 use std::borrow::Cow;
+#[cfg(feature = "simd")]
 use std::simd::{Simd, prelude::*, u8x16};
 
 pub(crate) struct Decoder<'a> {
@@ -23,6 +24,7 @@ impl<'a> Decoder<'a> {
         self.data.len() - self.position
     }
 
+    #[inline(always)]
     fn check_eos(&self, len: usize) -> Result<()> {
         if self.bytes_left() >= len {
             Ok(())
@@ -31,50 +33,61 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    #[inline(always)]
     fn read_u8(&mut self) -> Result<u8> {
         self.check_eos(1)?;
-        let value = self.data[self.position];
+        let position = self.position;
         self.position += 1;
-        Ok(value)
+        Ok(self.data[position])
     }
 
+    #[inline(always)]
     fn read_u16_be(&mut self) -> Result<u16> {
         self.check_eos(2)?;
-        let value = u16::from_be_bytes([self.data[self.position], self.data[self.position + 1]]);
+        let position = self.position;
         self.position += 2;
-        Ok(value)
+        Ok(u16::from_be_bytes([
+            self.data[position],
+            self.data[position + 1],
+        ]))
     }
 
+    #[inline(always)]
     fn read_u20_be(&mut self) -> Result<u32> {
         self.check_eos(3)?;
-        let bytes = [
-            self.data[self.position],
-            self.data[self.position + 1],
-            self.data[self.position + 2],
-        ];
+        let position = self.position;
         self.position += 3;
+        let bytes = [
+            self.data[position],
+            self.data[position + 1],
+            self.data[position + 2],
+        ];
         Ok(((bytes[0] as u32 & 0x0F) << 16) | ((bytes[1] as u32) << 8) | (bytes[2] as u32))
     }
 
+    #[inline(always)]
     fn read_u32_be(&mut self) -> Result<u32> {
         self.check_eos(4)?;
-        let value = u32::from_be_bytes([
-            self.data[self.position],
-            self.data[self.position + 1],
-            self.data[self.position + 2],
-            self.data[self.position + 3],
-        ]);
+        let position = self.position;
         self.position += 4;
-        Ok(value)
+        Ok(u32::from_be_bytes([
+            self.data[position],
+            self.data[position + 1],
+            self.data[position + 2],
+            self.data[position + 3],
+        ]))
     }
 
+    #[inline(always)]
     fn read_bytes(&mut self, len: usize) -> Result<&'a [u8]> {
         self.check_eos(len)?;
-        let slice = &self.data[self.position..self.position + len];
-        self.position += len;
-        Ok(slice)
+        let start = self.position;
+        let end = start + len;
+        self.position = end;
+        Ok(&self.data[start..end])
     }
 
+    #[inline(always)]
     fn read_string(&mut self, len: usize) -> Result<Cow<'a, str>> {
         let bytes = self.read_bytes(len)?;
         match std::str::from_utf8(bytes) {
@@ -83,11 +96,12 @@ impl<'a> Decoder<'a> {
         }
     }
 
+    #[inline(always)]
     fn read_list_size(&mut self, tag: u8) -> Result<usize> {
         match tag {
             token::LIST_EMPTY => Ok(0),
-            248 => self.read_u8().map(|v| v as usize),
-            249 => self.read_u16_be().map(|v| v as usize),
+            token::LIST_8 => self.read_u8().map(|v| v as usize),
+            token::LIST_16 => self.read_u16_be().map(|v| v as usize),
             _ => Err(BinaryError::InvalidToken(tag)),
         }
     }
@@ -112,10 +126,22 @@ impl<'a> Decoder<'a> {
             .read_value_as_string()?
             .ok_or(BinaryError::InvalidNode)?;
 
+        // Domain type mapping — must mirror encoder's server_to_domain_type().
+        // WA Web: 0=WHATSAPP, 1=LID, even+bit7=HOSTED, 129=HOSTED_LID, else throw.
         let server = match agent {
             0 => Cow::Borrowed(crate::jid::DEFAULT_USER_SERVER),
             1 => Cow::Borrowed(crate::jid::HIDDEN_USER_SERVER),
-            _ => Cow::Borrowed(crate::jid::HOSTED_SERVER),
+            128 => Cow::Borrowed(crate::jid::HOSTED_SERVER),
+            129 => Cow::Borrowed(crate::jid::HOSTED_LID_SERVER),
+            n if (n & 128) != 0 && (n & 1) == 0 => {
+                // WA Web treats any even number with bit 7 set as HOSTED
+                Cow::Borrowed(crate::jid::HOSTED_SERVER)
+            }
+            _ => {
+                return Err(BinaryError::AttrParse(format!(
+                    "AD_JID invalid domain type: {agent}"
+                )));
+            }
         };
 
         Ok(JidRef {
@@ -166,6 +192,11 @@ impl<'a> Decoder<'a> {
 
     fn read_value_as_string(&mut self) -> Result<Option<Cow<'a, str>>> {
         let tag = self.read_u8()?;
+        self.read_value_as_string_from_tag(tag)
+    }
+
+    #[inline(always)]
+    fn read_value_as_string_from_tag(&mut self, tag: u8) -> Result<Option<Cow<'a, str>>> {
         match tag {
             token::LIST_EMPTY => Ok(None),
             token::BINARY_8 => {
@@ -252,75 +283,125 @@ impl<'a> Decoder<'a> {
         let packed_data = self.read_bytes(len)?;
         let mut unpacked_bytes = Vec::with_capacity(raw_len);
 
-        const NIBBLE_LOOKUP: [u8; 16] = *b"0123456789-.\x00\x00\x00\x00";
-        const HEX_LOOKUP: [u8; 16] = *b"0123456789ABCDEF";
-        let lookup_table = Simd::from_array(if tag == token::NIBBLE_8 {
-            NIBBLE_LOOKUP
-        } else {
-            HEX_LOOKUP
-        });
-        let low_mask = Simd::splat(0x0F);
-
-        let (chunks, remainder) = packed_data.as_chunks::<16>();
-        for chunk in chunks {
-            let data = u8x16::from_array(*chunk);
-
-            let high_nibbles = (data >> 4) & low_mask;
-            let low_nibbles = data & low_mask;
-
-            if tag == token::NIBBLE_8 {
-                let le11 = Simd::splat(11);
-                let f15 = Simd::splat(15);
-                let hi_valid = high_nibbles.simd_le(le11) | high_nibbles.simd_eq(f15);
-                let lo_valid = low_nibbles.simd_le(le11) | low_nibbles.simd_eq(f15);
-                if !(hi_valid & lo_valid).all() {
-                    for byte in *chunk {
-                        let high = (byte & 0xF0) >> 4;
-                        let low = byte & 0x0F;
-                        Self::unpack_byte(tag, high)?;
-                        Self::unpack_byte(tag, low)?;
-                    }
-                    unreachable!("SIMD validation should match scalar validation");
-                }
-            }
-
-            let high_chars = lookup_table.swizzle_dyn(high_nibbles);
-            let low_chars = lookup_table.swizzle_dyn(low_nibbles);
-
-            let (lo, hi) = Simd::interleave(high_chars, low_chars);
-            unpacked_bytes.extend_from_slice(lo.as_array());
-            unpacked_bytes.extend_from_slice(hi.as_array());
-        }
-
-        for &byte in remainder {
-            let high = (byte & 0xF0) >> 4;
-            let low = byte & 0x0F;
-            unpacked_bytes.push(Self::unpack_byte(tag, high)? as u8);
-            unpacked_bytes.push(Self::unpack_byte(tag, low)? as u8);
+        match tag {
+            token::HEX_8 => Self::decode_packed_hex(packed_data, &mut unpacked_bytes),
+            token::NIBBLE_8 => Self::decode_packed_nibble(packed_data, &mut unpacked_bytes)?,
+            _ => return Err(BinaryError::InvalidToken(tag)),
         }
 
         if is_half_byte {
             unpacked_bytes.pop();
         }
 
-        String::from_utf8(unpacked_bytes).map_err(|e| BinaryError::InvalidUtf8(e.utf8_error()))
+        // Lookup tables produce only ASCII bytes ('0'..'9', 'A'..'F', '-', '.', '\0'),
+        // so from_utf8 will never fail. Use the safe version to avoid unsafe.
+        Ok(String::from_utf8(unpacked_bytes).expect("packed decode produced non-ASCII"))
     }
 
-    fn unpack_byte(tag: u8, value: u8) -> Result<char> {
-        match tag {
-            token::NIBBLE_8 => match value {
-                0..=9 => Ok((b'0' + value) as char),
-                10 => Ok('-'),
-                11 => Ok('.'),
-                15 => Ok('\x00'),
-                _ => Err(BinaryError::InvalidToken(value)),
-            },
-            token::HEX_8 => match value {
-                0..=9 => Ok((b'0' + value) as char),
-                10..=15 => Ok((b'A' + value - 10) as char),
-                _ => Err(BinaryError::InvalidToken(value)),
-            },
-            _ => Err(BinaryError::InvalidToken(tag)),
+    #[inline]
+    fn decode_packed_hex(packed_data: &[u8], unpacked_bytes: &mut Vec<u8>) {
+        #[cfg(feature = "simd")]
+        let packed_data = {
+            const HEX_LOOKUP: [u8; 16] = *b"0123456789ABCDEF";
+            let lookup_table = Simd::from_array(HEX_LOOKUP);
+            let low_mask = Simd::splat(0x0F);
+
+            let (chunks, remainder) = packed_data.as_chunks::<16>();
+            unpacked_bytes.reserve(chunks.len() * 32);
+            for chunk in chunks {
+                let data = u8x16::from_array(*chunk);
+                let high_nibbles = (data >> 4) & low_mask;
+                let low_nibbles = data & low_mask;
+                let high_chars = lookup_table.swizzle_dyn(high_nibbles);
+                let low_chars = lookup_table.swizzle_dyn(low_nibbles);
+                let (lo, hi) = Simd::interleave(high_chars, low_chars);
+                unpacked_bytes.extend_from_slice(lo.as_array());
+                unpacked_bytes.extend_from_slice(hi.as_array());
+            }
+            remainder
+        };
+
+        for &byte in packed_data {
+            let high = (byte & 0xF0) >> 4;
+            let low = byte & 0x0F;
+            unpacked_bytes.push(Self::unpack_hex(high));
+            unpacked_bytes.push(Self::unpack_hex(low));
+        }
+    }
+
+    #[inline]
+    fn decode_packed_nibble(packed_data: &[u8], unpacked_bytes: &mut Vec<u8>) -> Result<()> {
+        #[cfg(feature = "simd")]
+        let packed_data = {
+            const NIBBLE_LOOKUP: [u8; 16] = *b"0123456789-.\x00\x00\x00\x00";
+            let lookup_table = Simd::from_array(NIBBLE_LOOKUP);
+            let low_mask = Simd::splat(0x0F);
+            let le11 = Simd::splat(11);
+            let f15 = Simd::splat(15);
+
+            let (chunks, remainder) = packed_data.as_chunks::<16>();
+            unpacked_bytes.reserve(chunks.len() * 32);
+            for chunk in chunks {
+                let data = u8x16::from_array(*chunk);
+
+                let high_nibbles = (data >> 4) & low_mask;
+                let low_nibbles = data & low_mask;
+
+                let hi_valid = high_nibbles.simd_le(le11) | high_nibbles.simd_eq(f15);
+                let lo_valid = low_nibbles.simd_le(le11) | low_nibbles.simd_eq(f15);
+                if !(hi_valid & lo_valid).all() {
+                    // Validate first, then decode scalar as a conservative fallback.
+                    for byte in *chunk {
+                        let high = (byte & 0xF0) >> 4;
+                        let low = byte & 0x0F;
+                        Self::unpack_nibble(high)?;
+                        Self::unpack_nibble(low)?;
+                    }
+                    for byte in *chunk {
+                        let high = (byte & 0xF0) >> 4;
+                        let low = byte & 0x0F;
+                        unpacked_bytes.push(Self::unpack_nibble(high)?);
+                        unpacked_bytes.push(Self::unpack_nibble(low)?);
+                    }
+                    continue;
+                }
+
+                let high_chars = lookup_table.swizzle_dyn(high_nibbles);
+                let low_chars = lookup_table.swizzle_dyn(low_nibbles);
+                let (lo, hi) = Simd::interleave(high_chars, low_chars);
+                unpacked_bytes.extend_from_slice(lo.as_array());
+                unpacked_bytes.extend_from_slice(hi.as_array());
+            }
+            remainder
+        };
+
+        for &byte in packed_data {
+            let high = (byte & 0xF0) >> 4;
+            let low = byte & 0x0F;
+            unpacked_bytes.push(Self::unpack_nibble(high)?);
+            unpacked_bytes.push(Self::unpack_nibble(low)?);
+        }
+
+        Ok(())
+    }
+
+    #[inline(always)]
+    fn unpack_nibble(value: u8) -> Result<u8> {
+        match value {
+            0..=9 => Ok(b'0' + value),
+            10 => Ok(b'-'),
+            11 => Ok(b'.'),
+            15 => Ok(0),
+            _ => Err(BinaryError::InvalidToken(value)),
+        }
+    }
+
+    #[inline(always)]
+    fn unpack_hex(value: u8) -> u8 {
+        match value {
+            0..=9 => b'0' + value,
+            10..=15 => b'A' + value - 10,
+            _ => unreachable!("hex nibble validated by 4-bit mask"),
         }
     }
 
@@ -341,6 +422,11 @@ impl<'a> Decoder<'a> {
 
     fn read_content(&mut self) -> Result<Option<NodeContentRef<'a>>> {
         let tag = self.read_u8()?;
+        self.read_content_from_tag(tag)
+    }
+
+    #[inline(always)]
+    fn read_content_from_tag(&mut self, tag: u8) -> Result<Option<NodeContentRef<'a>>> {
         match tag {
             token::LIST_EMPTY => Ok(None),
 
@@ -370,8 +456,7 @@ impl<'a> Decoder<'a> {
             }
 
             _ => {
-                self.position -= 1;
-                let string_content = self.read_value_as_string()?;
+                let string_content = self.read_value_as_string_from_tag(tag)?;
 
                 match string_content {
                     Some(s) => Ok(Some(NodeContentRef::String(s))),
@@ -413,7 +498,7 @@ impl<'a> Decoder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::node::Node;
+    use crate::node::{Attrs, Node};
 
     type TestResult = crate::error::Result<()>;
 
@@ -421,7 +506,7 @@ mod tests {
     fn test_decode_node() -> TestResult {
         let node = Node::new(
             "message",
-            indexmap::IndexMap::new(),
+            Attrs::new(),
             Some(crate::node::NodeContent::String("receipt".to_string())),
         );
 
@@ -451,7 +536,7 @@ mod tests {
         let test_str = "-.0123456789";
         let node = Node::new(
             "test",
-            indexmap::IndexMap::new(),
+            Attrs::new(),
             Some(crate::node::NodeContent::String(test_str.to_string())),
         );
 
@@ -717,13 +802,13 @@ mod tests {
     #[test]
     fn test_nested_nodes() -> TestResult {
         // Create a 50-level deep node structure
-        let mut current = Node::new("leaf", indexmap::IndexMap::new(), None);
+        let mut current = Node::new("leaf", Attrs::new(), None);
 
         for i in 0..50 {
             let tag = format!("level{}", i);
             current = Node::new(
-                &tag,
-                indexmap::IndexMap::new(),
+                tag,
+                Attrs::new(),
                 Some(crate::node::NodeContent::Nodes(vec![current])),
             );
         }

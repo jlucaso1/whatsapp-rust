@@ -50,7 +50,7 @@ impl KeyBuilder {
 #[inline]
 pub fn serialize_keypair(key_pair: &KeyPair) -> Vec<u8> {
     let mut bytes = Vec::with_capacity(64);
-    bytes.extend_from_slice(&key_pair.private_key.serialize());
+    bytes.extend_from_slice(key_pair.private_key.serialize().as_ref());
     bytes.extend_from_slice(key_pair.public_key.public_key_bytes());
     bytes
 }
@@ -74,13 +74,10 @@ pub fn deserialize_keypair(bytes: &[u8]) -> Result<KeyPair> {
 
 #[inline]
 pub fn encode<T: serde::Serialize>(value: &T) -> Result<Vec<u8>> {
-    bincode::serde::encode_to_vec(value, bincode::config::standard())
-        .map_err(|e| StoreError::Serialization(e.to_string()))
+    rmp_serde::to_vec_named(value).map_err(|e| StoreError::Serialization(e.to_string()))
 }
 
 #[inline]
 pub fn decode<T: for<'de> serde::Deserialize<'de>>(bytes: &[u8]) -> Result<T> {
-    let (value, _) = bincode::serde::decode_from_slice(bytes, bincode::config::standard())
-        .map_err(|e| StoreError::Serialization(e.to_string()))?;
-    Ok(value)
+    rmp_serde::from_slice(bytes).map_err(|e| StoreError::Serialization(e.to_string()))
 }

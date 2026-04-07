@@ -1,26 +1,28 @@
 use crate::client::Client;
-use log::{debug, info, warn};
+use log::{debug, warn};
+use thiserror::Error;
+use wacore::StringEnum;
+use wacore::iq::tctoken::build_tc_token_node;
 use wacore_binary::builder::NodeBuilder;
+use wacore_binary::jid::Jid;
+use wacore_binary::node::Node;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Error)]
+pub enum PresenceError {
+    #[error("cannot send presence without a push name set")]
+    PushNameEmpty,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+/// Presence status for online/offline state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[non_exhaustive]
 pub enum PresenceStatus {
+    #[str = "available"]
     Available,
+    #[str = "unavailable"]
     Unavailable,
-}
-
-impl PresenceStatus {
-    fn as_str(&self) -> &'static str {
-        match self {
-            PresenceStatus::Available => "available",
-            PresenceStatus::Unavailable => "unavailable",
-        }
-    }
-}
-
-impl std::fmt::Display for PresenceStatus {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.as_str())
-    }
 }
 
 impl From<crate::types::presence::Presence> for PresenceStatus {
@@ -32,6 +34,7 @@ impl From<crate::types::presence::Presence> for PresenceStatus {
     }
 }
 
+/// Feature handle for presence operations.
 pub struct Presence<'a> {
     client: &'a Client,
 }
@@ -41,7 +44,28 @@ impl<'a> Presence<'a> {
         Self { client }
     }
 
-    pub async fn set(&self, status: PresenceStatus) -> Result<(), anyhow::Error> {
+    async fn build_subscription_node(&self, jid: &Jid) -> Node {
+        let mut builder = NodeBuilder::new("presence")
+            .attr("type", "subscribe")
+            .attr("to", jid.clone());
+
+        // Include tctoken if available (no t attribute, matching WhatsApp Web)
+        if let Some(token) = self.client.lookup_tc_token_for_jid(jid).await {
+            builder = builder.children([build_tc_token_node(&token)]);
+        }
+
+        builder.build()
+    }
+
+    fn build_unsubscription_node(&self, jid: &Jid) -> Node {
+        NodeBuilder::new("presence")
+            .attr("type", "unsubscribe")
+            .attr("to", jid.clone())
+            .build()
+    }
+
+    /// Set the presence status.
+    pub async fn set(&self, status: PresenceStatus) -> Result<(), PresenceError> {
         let device_snapshot = self
             .client
             .persistence_manager()
@@ -55,9 +79,11 @@ impl<'a> Presence<'a> {
 
         if device_snapshot.push_name.is_empty() {
             warn!("Cannot send presence: push_name is empty!");
-            return Err(anyhow::anyhow!(
-                "Cannot send presence without a push name set"
-            ));
+            return Err(PresenceError::PushNameEmpty);
+        }
+
+        if status == PresenceStatus::Available {
+            self.client.send_unified_session().await;
         }
 
         let presence_type = status.as_str();
@@ -67,25 +93,146 @@ impl<'a> Presence<'a> {
             .attr("name", &device_snapshot.push_name)
             .build();
 
-        info!(
+        debug!(
             "Sending presence stanza: <presence type=\"{}\" name=\"{}\"/>",
             presence_type,
-            node.attrs.get("name").map_or("", |s| s.as_str())
+            node.attrs
+                .get("name")
+                .map(|s| s.as_str())
+                .as_deref()
+                .unwrap_or("")
         );
 
-        self.client.send_node(node).await.map_err(|e| e.into())
+        self.client
+            .send_node(node)
+            .await
+            .map_err(|e| PresenceError::Other(anyhow::Error::from(e)))
     }
 
-    pub async fn set_available(&self) -> Result<(), anyhow::Error> {
+    /// Set presence to available (online).
+    pub async fn set_available(&self) -> Result<(), PresenceError> {
         self.set(PresenceStatus::Available).await
     }
 
-    pub async fn set_unavailable(&self) -> Result<(), anyhow::Error> {
+    /// Set presence to unavailable (offline).
+    pub async fn set_unavailable(&self) -> Result<(), PresenceError> {
         self.set(PresenceStatus::Unavailable).await
+    }
+
+    /// Subscribe to a contact's presence updates.
+    ///
+    /// Sends a `<presence type="subscribe">` stanza to the target JID.
+    /// If a valid tctoken exists for the contact, it is included as a child node.
+    ///
+    /// ## Wire Format
+    /// ```xml
+    /// <presence type="subscribe" to="user@s.whatsapp.net">
+    ///   <tctoken><!-- raw token bytes --></tctoken>
+    /// </presence>
+    /// ```
+    pub async fn subscribe(&self, jid: &Jid) -> Result<(), anyhow::Error> {
+        debug!("presence subscribe: subscribing to {}", jid);
+        let node = self.build_subscription_node(jid).await;
+        self.client
+            .send_node(node)
+            .await
+            .map_err(anyhow::Error::from)?;
+        self.client.track_presence_subscription(jid.clone()).await;
+        Ok(())
+    }
+
+    /// Re-subscribe presence if the JID has an active subscription.
+    /// Does not modify the tracking set.
+    pub(crate) async fn re_subscribe_when_active(&self, jid: &Jid) -> Result<(), anyhow::Error> {
+        if !self
+            .client
+            .presence_subscriptions
+            .lock()
+            .await
+            .contains(jid)
+        {
+            return Ok(());
+        }
+
+        let node = self.build_subscription_node(jid).await;
+        self.client
+            .send_node(node)
+            .await
+            .map_err(anyhow::Error::from)?;
+        Ok(())
+    }
+
+    /// Unsubscribe from a contact's presence updates.
+    ///
+    /// Sends a `<presence type="unsubscribe">` stanza to the target JID.
+    ///
+    /// ## Wire Format
+    /// ```xml
+    /// <presence type="unsubscribe" to="user@s.whatsapp.net"/>
+    /// ```
+    pub async fn unsubscribe(&self, jid: &Jid) -> Result<(), anyhow::Error> {
+        debug!("presence unsubscribe: unsubscribing from {}", jid);
+        let node = self.build_unsubscription_node(jid);
+        self.client
+            .send_node(node)
+            .await
+            .map_err(anyhow::Error::from)?;
+        self.client.untrack_presence_subscription(jid).await;
+        Ok(())
     }
 }
 
 impl Client {
+    pub(crate) async fn track_presence_subscription(&self, jid: Jid) {
+        self.presence_subscriptions.lock().await.insert(jid);
+    }
+
+    pub(crate) async fn untrack_presence_subscription(&self, jid: &Jid) {
+        self.presence_subscriptions.lock().await.remove(jid);
+    }
+
+    pub(crate) async fn tracked_presence_subscriptions(&self) -> Vec<Jid> {
+        self.presence_subscriptions
+            .lock()
+            .await
+            .iter()
+            .cloned()
+            .collect()
+    }
+
+    pub(crate) async fn resubscribe_presence_subscriptions(&self, expected_generation: u64) {
+        let subscribed_jids = self.tracked_presence_subscriptions().await;
+        if subscribed_jids.is_empty() {
+            return;
+        }
+
+        debug!(
+            "Re-subscribing to {} tracked presence subscriptions",
+            subscribed_jids.len()
+        );
+
+        for jid in subscribed_jids {
+            if self
+                .connection_generation
+                .load(std::sync::atomic::Ordering::SeqCst)
+                != expected_generation
+            {
+                debug!("Stopping presence re-subscribe: connection generation changed");
+                return;
+            }
+
+            if !self.is_connected() {
+                debug!("Stopping presence re-subscribe: connection closed");
+                return;
+            }
+
+            if let Err(err) = self.presence().re_subscribe_when_active(&jid).await {
+                warn!("Failed to re-subscribe to presence for {jid}: {err:?}");
+            }
+        }
+    }
+
+    /// Access presence operations.
     #[allow(clippy::wrong_self_convention)]
     pub fn presence(&self) -> Presence<'_> {
         Presence::new(self)
@@ -95,16 +242,226 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TokioRuntime;
+    use crate::bot::Bot;
+    use crate::http::{HttpClient, HttpRequest, HttpResponse};
+    use crate::store::commands::DeviceCommand;
+    use crate::test_utils::create_test_backend;
+    use anyhow::Result;
+    use std::str::FromStr;
+    use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
-    #[test]
-    fn test_presence_status_display() {
-        assert_eq!(PresenceStatus::Available.to_string(), "available");
-        assert_eq!(PresenceStatus::Unavailable.to_string(), "unavailable");
+    // Mock HTTP client for testing
+    #[derive(Debug, Clone)]
+    struct MockHttpClient;
+
+    #[async_trait::async_trait]
+    impl HttpClient for MockHttpClient {
+        async fn execute(&self, _request: HttpRequest) -> Result<HttpResponse> {
+            Ok(HttpResponse {
+                status_code: 200,
+                body: br#"self.__swData=JSON.parse(/*BTDS*/"{\"dynamic_data\":{\"SiteData\":{\"server_revision\":1026131876,\"client_revision\":1026131876}}}");"#.to_vec(),
+            })
+        }
     }
 
-    #[test]
-    fn test_presence_status_as_str() {
-        assert_eq!(PresenceStatus::Available.as_str(), "available");
-        assert_eq!(PresenceStatus::Unavailable.as_str(), "unavailable");
+    /// Verifies WhatsApp Web behavior: presence deferred until pushname available.
+    #[tokio::test]
+    async fn test_presence_rejected_when_pushname_empty() {
+        let backend = create_test_backend();
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+
+        let snapshot = client.persistence_manager().get_device_snapshot().await;
+        assert!(
+            snapshot.push_name.is_empty(),
+            "Pushname should be empty on fresh device"
+        );
+
+        let result = client.presence().set(PresenceStatus::Available).await;
+
+        assert!(
+            result.is_err(),
+            "Presence should fail when pushname is empty"
+        );
+        assert!(
+            matches!(result.unwrap_err(), PresenceError::PushNameEmpty),
+            "Error should be PushNameEmpty"
+        );
+    }
+
+    /// Simulates pushname arriving from app state sync (setting_pushName mutation).
+    #[tokio::test]
+    async fn test_presence_succeeds_after_pushname_set() {
+        let backend = create_test_backend();
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+
+        client
+            .persistence_manager()
+            .process_command(DeviceCommand::SetPushName("Test User".to_string()))
+            .await;
+
+        let snapshot = client.persistence_manager().get_device_snapshot().await;
+        assert_eq!(snapshot.push_name, "Test User");
+
+        // Validation passes; error should be connection-related, not pushname
+        let result = client.presence().set(PresenceStatus::Available).await;
+
+        if let Err(e) = result {
+            assert!(
+                !matches!(e, PresenceError::PushNameEmpty),
+                "Should not fail due to pushname, got: {}",
+                e
+            );
+            assert!(
+                matches!(e, PresenceError::Other(_)),
+                "Expected connection error (Other), got: {}",
+                e
+            );
+        }
+    }
+
+    /// Matches WAWebPushNameSync.js: fresh pairing -> app state sync -> presence.
+    #[tokio::test]
+    async fn test_pushname_presence_flow_matches_whatsapp_web() {
+        let backend = create_test_backend();
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+
+        // Fresh device has empty pushname
+        let snapshot = client.persistence_manager().get_device_snapshot().await;
+        assert!(snapshot.push_name.is_empty());
+
+        // Presence deferred when pushname empty
+        let result = client.presence().set(PresenceStatus::Available).await;
+        assert!(matches!(result, Err(PresenceError::PushNameEmpty)));
+
+        // Pushname arrives via app state sync
+        client
+            .persistence_manager()
+            .process_command(DeviceCommand::SetPushName("WhatsApp User".to_string()))
+            .await;
+
+        // Now presence validation passes
+        let result = client.presence().set(PresenceStatus::Available).await;
+
+        if let Err(e) = result {
+            assert!(
+                !matches!(e, PresenceError::PushNameEmpty),
+                "Error should be connection-related: {}",
+                e
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_presence_subscription_tracking_is_deduplicated() {
+        let backend = create_test_backend();
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+        let jid = Jid::from_str("1234567890@s.whatsapp.net").expect("valid jid");
+
+        client.track_presence_subscription(jid.clone()).await;
+        client.track_presence_subscription(jid.clone()).await;
+
+        let tracked = client.tracked_presence_subscriptions().await;
+        assert_eq!(tracked, vec![jid]);
+    }
+
+    #[tokio::test]
+    async fn test_presence_unsubscription_removes_tracked_jid() {
+        let backend = create_test_backend();
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+        let jid = Jid::from_str("1234567890@s.whatsapp.net").expect("valid jid");
+
+        client.track_presence_subscription(jid.clone()).await;
+        client.untrack_presence_subscription(&jid).await;
+
+        assert!(
+            client.tracked_presence_subscriptions().await.is_empty(),
+            "unsubscribe tracking should remove the jid"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_unsubscribe_builds_expected_presence_stanza() {
+        let jid = Jid::from_str("1234567890@s.whatsapp.net").expect("valid jid");
+        let backend = create_test_backend();
+        let transport = TokioWebSocketTransportFactory::new();
+
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(transport)
+            .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let client = bot.client();
+        let node = client.presence().build_unsubscription_node(&jid);
+
+        assert_eq!(node.tag, "presence");
+        assert!(node.attrs.get("type").is_some_and(|v| v == "unsubscribe"));
+        assert_eq!(
+            node.attrs.get("to").map(ToString::to_string),
+            Some(jid.to_string())
+        );
+        assert!(
+            node.content.is_none(),
+            "unsubscribe stanza should not have children"
+        );
     }
 }

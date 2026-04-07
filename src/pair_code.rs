@@ -49,7 +49,7 @@ use crate::client::Client;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
 use crate::types::events::Event;
 use log::{error, info, warn};
-use rand::TryRngCore;
+
 use std::sync::Arc;
 use wacore::libsignal::protocol::KeyPair;
 use wacore::pair_code::{PairCodeError, PairCodeState, PairCodeUtils};
@@ -135,7 +135,7 @@ impl Client {
         );
 
         // Generate ephemeral keypair for this pairing session
-        let ephemeral_keypair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let ephemeral_keypair = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
 
         // Get device state for noise key
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -155,11 +155,10 @@ impl Client {
             .try_into()
             .expect("ephemeral key is 32 bytes");
 
-        let wrapped_ephemeral = tokio::task::spawn_blocking(move || {
+        let wrapped_ephemeral = wacore::runtime::blocking(&*self.runtime, move || {
             PairCodeUtils::encrypt_ephemeral_pub(&ephemeral_pub, &code_clone)
         })
-        .await
-        .map_err(|e| PairCodeError::CryptoError(format!("spawn_blocking failed: {e}")))?;
+        .await;
 
         // Build the stage 1 IQ node
         let req_id = self.generate_request_id();
@@ -209,7 +208,7 @@ impl Client {
             pairing_ref,
             phone_jid: phone_number,
             pair_code: code.clone(),
-            ephemeral_keypair,
+            ephemeral_keypair: Box::new(ephemeral_keypair),
         };
 
         // Dispatch event for user to display the code
@@ -300,23 +299,16 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Decrypt primary's ephemeral public key (expensive PBKDF2 operation)
     // Run in spawn_blocking to avoid stalling the async runtime
     let pair_code_clone = pair_code.clone();
-    let primary_ephemeral_pub = match tokio::task::spawn_blocking(move || {
+    let primary_ephemeral_pub = match wacore::runtime::blocking(&*client.runtime, move || {
         PairCodeUtils::decrypt_primary_ephemeral_pub(&primary_wrapped_ephemeral, &pair_code_clone)
     })
     .await
     {
-        Ok(Ok(pub_key)) => pub_key,
-        Ok(Err(e)) => {
-            error!(
-                target: "Client/PairCode",
-                "Failed to decrypt primary ephemeral pub: {e}"
-            );
-            return false;
-        }
+        Ok(pub_key) => pub_key,
         Err(e) => {
             error!(
                 target: "Client/PairCode",
-                "spawn_blocking failed: {e}"
+                "Failed to decrypt primary ephemeral pub: {e}"
             );
             return false;
         }
@@ -325,11 +317,8 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Get device keys
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
 
-    // Prepare encrypted key bundle
-    // TODO: Store `new_adv_secret` via DeviceCommand::SetAdvSecretKey to enable HMAC
-    // verification in pair-success. Currently the HMAC check in do_pair_crypto is
-    // commented out, so pairing works without it. See wacore/src/pair.rs:147-153.
-    let (wrapped_bundle, _new_adv_secret) = match PairCodeUtils::prepare_key_bundle(
+    // Prepare encrypted key bundle (includes rotated adv_secret_key)
+    let (wrapped_bundle, new_adv_secret) = match PairCodeUtils::prepare_key_bundle(
         &ephemeral_keypair,
         &primary_ephemeral_pub,
         &primary_identity_pub,
@@ -341,6 +330,14 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
             return false;
         }
     };
+
+    // Persist rotated adv_secret_key so HMAC verification works in pair-success.
+    client
+        .persistence_manager
+        .process_command(crate::store::commands::DeviceCommand::SetAdvSecretKey(
+            new_adv_secret,
+        ))
+        .await;
 
     // Build and send stage 2 IQ
     let req_id = client.generate_request_id();

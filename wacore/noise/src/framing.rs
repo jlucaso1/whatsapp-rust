@@ -92,6 +92,16 @@ impl FrameDecoder {
             None
         }
     }
+
+    /// Returns the number of bytes currently buffered waiting for more data.
+    pub fn buffered_len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// Clears the internal buffer.
+    pub fn clear(&mut self) {
+        self.buffer.clear();
+    }
 }
 
 impl Default for FrameDecoder {

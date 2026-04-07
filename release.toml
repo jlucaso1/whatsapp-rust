@@ -1,0 +1,15 @@
+# cargo-release configuration
+# https://github.com/crate-ci/cargo-release/blob/master/docs/reference.md
+
+# Only allow releasing from main
+allow-branch = ["main"]
+
+# We handle tagging and pushing in GitHub Actions, not cargo-release
+tag = false
+push = false
+
+# Publish to crates.io
+publish = true
+
+# Verify before publishing (cargo package)
+verify = true

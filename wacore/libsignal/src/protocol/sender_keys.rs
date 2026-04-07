@@ -5,8 +5,10 @@
 
 use std::collections::VecDeque;
 
-use itertools::Itertools;
 use prost::Message;
+
+use hmac::{HmacReset, KeyInit, Mac};
+use sha2::Sha256;
 
 use crate::protocol::crypto::hmac_sha256;
 use crate::protocol::stores::{
@@ -49,8 +51,9 @@ impl SenderMessageKey {
     }
 
     pub(crate) fn from_protobuf(smk: sender_key_state_structure::SenderMessageKey) -> Self {
-        let seed_vec = smk.seed.unwrap_or_default();
-        let seed: [u8; 32] = seed_vec
+        let seed_bytes = smk.seed.unwrap_or_default();
+        let seed: [u8; 32] = seed_bytes
+            .as_ref()
             .try_into()
             .expect("SenderMessageKey seed must be exactly 32 bytes");
         Self::new(smk.iteration.unwrap_or_default(), seed)
@@ -69,14 +72,15 @@ impl SenderMessageKey {
     }
 
     pub(crate) fn as_protobuf(&self) -> sender_key_state_structure::SenderMessageKey {
+        use prost::bytes::Bytes;
         sender_key_state_structure::SenderMessageKey {
             iteration: Some(self.iteration),
-            seed: Some(self.seed.to_vec()),
+            seed: Some(Bytes::copy_from_slice(&self.seed)),
         }
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct SenderChainKey {
     iteration: u32,
     chain_key: [u8; 32],
@@ -97,7 +101,7 @@ impl SenderChainKey {
         self.iteration
     }
 
-    pub fn seed(&self) -> &[u8] {
+    pub fn seed(&self) -> &[u8; 32] {
         &self.chain_key
     }
 
@@ -119,6 +123,34 @@ impl SenderChainKey {
         SenderMessageKey::new(self.iteration, self.get_derivative(Self::MESSAGE_KEY_SEED))
     }
 
+    /// Compute both sender message key and next chain key in one call, reusing HMAC key setup.
+    #[inline]
+    pub fn step_with_message_key(&self) -> Result<(SenderMessageKey, Self), SignalProtocolError> {
+        let new_iteration = self.iteration.checked_add(1).ok_or_else(|| {
+            SignalProtocolError::InvalidState(
+                "sender_chain_key_step",
+                "Sender chain is too long".into(),
+            )
+        })?;
+
+        let mut hmac = HmacReset::<Sha256>::new_from_slice(&self.chain_key)
+            .expect("HMAC-SHA256 should accept any size key");
+
+        hmac.update(&[Self::MESSAGE_KEY_SEED]);
+        let message_key_seed: [u8; 32] = hmac.finalize_reset().into_bytes().into();
+
+        hmac.update(&[Self::CHAIN_KEY_SEED]);
+        let next_chain_key: [u8; 32] = hmac.finalize().into_bytes().into();
+
+        let message_key = SenderMessageKey::new(self.iteration, message_key_seed);
+        let next_chain = Self {
+            iteration: new_iteration,
+            chain_key: next_chain_key,
+        };
+
+        Ok((message_key, next_chain))
+    }
+
     #[inline]
     fn get_derivative(&self, label: u8) -> [u8; 32] {
         let label = [label];
@@ -126,9 +158,10 @@ impl SenderChainKey {
     }
 
     pub(crate) fn as_protobuf(&self) -> sender_key_state_structure::SenderChainKey {
+        use prost::bytes::Bytes;
         sender_key_state_structure::SenderChainKey {
             iteration: Some(self.iteration),
-            seed: Some(self.chain_key.to_vec()),
+            seed: Some(Bytes::copy_from_slice(&self.chain_key)),
         }
     }
 }
@@ -147,13 +180,15 @@ impl SenderKeyState {
         signature_key: PublicKey,
         signature_private_key: Option<PrivateKey>,
     ) -> SenderKeyState {
+        use prost::bytes::Bytes;
         let chain_key_arr: [u8; 32] = chain_key.try_into().expect("chain_key must be 32 bytes");
         let state = SenderKeyStateStructure {
             sender_key_id: Some(chain_id),
             sender_chain_key: Some(SenderChainKey::new(iteration, chain_key_arr).as_protobuf()),
             sender_signing_key: Some(sender_key_state_structure::SenderSigningKey {
-                public: Some(signature_key.serialize().to_vec()),
-                private: signature_private_key.map(|k| k.serialize().to_vec()),
+                public: Some(Bytes::copy_from_slice(&signature_key.serialize())),
+                private: signature_private_key
+                    .map(|k| Bytes::copy_from_slice(k.serialize().as_ref())),
             }),
             sender_message_keys: vec![],
         };
@@ -225,8 +260,12 @@ impl SenderKeyState {
         self.state
             .sender_message_keys
             .push(sender_message_key.as_protobuf());
-        while self.state.sender_message_keys.len() > consts::MAX_MESSAGE_KEYS {
-            self.state.sender_message_keys.remove(0);
+        // AMORTIZED EVICTION: Only prune when exceeding MAX + threshold.
+        // This reduces O(n) drain() calls from every insert to once every PRUNE_THRESHOLD inserts.
+        let len = self.state.sender_message_keys.len();
+        if len > consts::MAX_MESSAGE_KEYS + consts::MESSAGE_KEY_PRUNE_THRESHOLD {
+            let excess = len - consts::MAX_MESSAGE_KEYS;
+            self.state.sender_message_keys.drain(..excess);
         }
     }
 
@@ -344,7 +383,7 @@ impl SenderKeyRecord {
     ///
     /// Skips any bad protobufs.
     fn remove_state(&mut self, chain_id: u32, signature_key: PublicKey) -> Option<SenderKeyState> {
-        let (index, _state) = self.states.iter().find_position(|state| {
+        let (index, _state) = self.states.iter().enumerate().find(|(_, state)| {
             state.chain_id() == chain_id && state.signing_key_public().ok() == Some(signature_key)
         })?;
 
@@ -472,7 +511,7 @@ mod tests {
     /// Test SenderKeyState basic operations
     #[test]
     fn test_sender_key_state_basic() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -489,7 +528,7 @@ mod tests {
     /// Test SenderKeyState with private signing key
     #[test]
     fn test_sender_key_state_with_private_key() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -509,7 +548,7 @@ mod tests {
     /// Test SenderKeyState chain key operations
     #[test]
     fn test_sender_key_state_chain_key_update() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -529,7 +568,7 @@ mod tests {
             .next()
             .expect("sender chain key iteration should succeed");
 
-        state.set_sender_chain_key(next_sck.clone());
+        state.set_sender_chain_key(next_sck);
 
         let updated_sck = state
             .sender_chain_key()
@@ -540,7 +579,7 @@ mod tests {
     /// Test SenderKeyState message key storage
     #[test]
     fn test_sender_key_state_message_key_storage() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -569,7 +608,7 @@ mod tests {
     /// Test SenderKeyState message key limit
     #[test]
     fn test_sender_key_state_message_key_limit() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -582,15 +621,22 @@ mod tests {
             Some(keypair.private_key),
         );
 
-        // Add more than MAX_MESSAGE_KEYS
-        for i in 0..(consts::MAX_MESSAGE_KEYS + 100) {
+        // Amortized eviction uses MESSAGE_KEY_PRUNE_THRESHOLD.
+        // Eviction triggers when len > MAX_MESSAGE_KEYS + MESSAGE_KEY_PRUNE_THRESHOLD.
+        // Add MAX_MESSAGE_KEYS + 100 keys to ensure eviction happens.
+        let total_keys = consts::MAX_MESSAGE_KEYS + 100;
+        for i in 0..total_keys {
             let smk = SenderMessageKey::new(i as u32, [0xBB; 32]);
             state.add_sender_message_key(&smk);
         }
 
-        // Old keys should have been evicted
-        // The first keys should be gone
-        for i in 0..100 {
+        // After adding 2100 keys:
+        // - At 2051: prune to 2000 (removes first 51 keys: 0-50)
+        // - Continue adding keys 2051-2099 (49 more)
+        // - Final len = 2049, no second prune since 2049 <= 2050
+        // So keys 0-50 (51 keys) should be evicted.
+        let evicted_count = consts::MESSAGE_KEY_PRUNE_THRESHOLD + 1; // 51
+        for i in 0..evicted_count {
             let not_found = state.remove_sender_message_key(i as u32);
             assert!(
                 not_found.is_none(),
@@ -610,7 +656,7 @@ mod tests {
     /// Test SenderKeyRecord add and retrieve state
     #[test]
     fn test_sender_key_record_add_state() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -633,7 +679,7 @@ mod tests {
     /// Test SenderKeyRecord state limit
     #[test]
     fn test_sender_key_record_state_limit() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let chain_key = [0x42u8; 32];
 
         let mut record = SenderKeyRecord::new_empty();
@@ -659,7 +705,7 @@ mod tests {
     /// Test SenderKeyRecord chain ID lookup
     #[test]
     fn test_sender_key_record_chain_id_lookup() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair1 = KeyPair::generate(&mut rng);
         let keypair2 = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
@@ -700,7 +746,7 @@ mod tests {
     /// Test SenderKeyRecord serialization roundtrip
     #[test]
     fn test_sender_key_record_serialization() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -723,5 +769,68 @@ mod tests {
             .expect("sender key state should exist");
         assert_eq!(state.chain_id(), 12345);
         assert!(state.sender_chain_key().is_some());
+    }
+
+    /// Test that step_with_message_key produces the same results as
+    /// calling sender_message_key() and next() separately
+    #[test]
+    fn test_step_with_message_key_equivalence() {
+        let chain = [0x99u8; 32];
+        let sck = SenderChainKey::new(5, chain);
+
+        // Get results using separate calls
+        let msg_key_separate = sck.sender_message_key();
+        let next_chain_separate = sck.next().expect("next should succeed");
+
+        // Get results using optimized combined call
+        let (msg_key_combined, next_chain_combined) = sck
+            .step_with_message_key()
+            .expect("step_with_message_key should succeed");
+
+        // Verify message keys are identical
+        assert_eq!(msg_key_separate.iteration(), msg_key_combined.iteration());
+        assert_eq!(msg_key_separate.iv(), msg_key_combined.iv());
+        assert_eq!(msg_key_separate.cipher_key(), msg_key_combined.cipher_key());
+
+        // Verify next chain key is identical
+        assert_eq!(next_chain_separate.seed(), next_chain_combined.seed());
+        assert_eq!(
+            next_chain_separate.iteration(),
+            next_chain_combined.iteration()
+        );
+    }
+
+    /// Test step_with_message_key over multiple iterations
+    #[test]
+    fn test_step_with_message_key_chain() {
+        let initial_chain = [0xBBu8; 32];
+        let mut chain_separate = SenderChainKey::new(0, initial_chain);
+        let mut chain_combined = SenderChainKey::new(0, initial_chain);
+
+        // Step both chains 10 times and verify they stay in sync
+        for i in 0..10 {
+            let msg_key_sep = chain_separate.sender_message_key();
+            chain_separate = chain_separate.next().expect("next should succeed");
+
+            let (msg_key_comb, next_chain) = chain_combined
+                .step_with_message_key()
+                .expect("step_with_message_key should succeed");
+            chain_combined = next_chain;
+
+            // Verify message keys match
+            assert_eq!(
+                msg_key_sep.cipher_key(),
+                msg_key_comb.cipher_key(),
+                "cipher_key mismatch at iteration {i}"
+            );
+
+            // Verify chain keys match
+            assert_eq!(
+                chain_separate.seed(),
+                chain_combined.seed(),
+                "chain key mismatch at iteration {i}"
+            );
+            assert_eq!(chain_separate.iteration(), chain_combined.iteration());
+        }
     }
 }

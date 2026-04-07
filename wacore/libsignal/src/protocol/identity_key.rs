@@ -22,8 +22,19 @@ const ALTERNATE_IDENTITY_SIGNATURE_PREFIX_2: &[u8] = b"Signal_PNI_Signature";
 ///
 /// Wrapper for [`PublicKey`].
 #[derive(
-    Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy, derive_more::From, derive_more::Into,
+    Debug,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    derive_more::From,
+    derive_more::Into,
+    serde::Serialize,
+    serde::Deserialize,
 )]
+#[serde(transparent)]
 pub struct IdentityKey {
     public_key: PublicKey,
 }
@@ -40,9 +51,9 @@ impl IdentityKey {
         &self.public_key
     }
 
-    /// Return an owned byte slice which can be deserialized with [`Self::decode`].
+    /// Serialize the identity key to a fixed-size array (1 type byte + 32 key bytes).
     #[inline]
-    pub fn serialize(&self) -> Box<[u8]> {
+    pub fn serialize(&self) -> [u8; 33] {
         self.public_key.serialize()
     }
 
@@ -79,7 +90,7 @@ impl TryFrom<&[u8]> for IdentityKey {
 /// The private identity of a user.
 ///
 /// Can be converted to and from [`KeyPair`].
-#[derive(Copy, Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct IdentityKeyPair {
     identity_key: IdentityKey,
     private_key: PrivateKey,
@@ -138,7 +149,7 @@ impl IdentityKeyPair {
         &self,
         other: &IdentityKey,
         rng: &mut R,
-    ) -> Result<Box<[u8]>> {
+    ) -> Result<[u8; 64]> {
         Ok(self.private_key.calculate_signature_for_multipart_message(
             &[
                 ALTERNATE_IDENTITY_SIGNATURE_PREFIX_1,

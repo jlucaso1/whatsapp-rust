@@ -1,34 +1,42 @@
-use crate::node::{Node, NodeContent};
-use indexmap::IndexMap;
+use std::borrow::Cow;
+
+use crate::node::{Attrs, Node, NodeContent, NodeValue};
 
 #[derive(Debug, Default)]
 pub struct NodeBuilder {
-    tag: String,
-    attrs: IndexMap<String, String>,
+    tag: Cow<'static, str>,
+    attrs: Attrs,
     content: Option<NodeContent>,
 }
 
 impl NodeBuilder {
-    pub fn new(tag: impl Into<String>) -> Self {
+    pub fn new(tag: &'static str) -> Self {
         Self {
-            tag: tag.into(),
+            tag: Cow::Borrowed(tag),
             ..Default::default()
         }
     }
 
-    pub fn attr(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.attrs.insert(key.into(), value.into());
+    /// For dynamic tags (rare).
+    pub fn new_dynamic(tag: String) -> Self {
+        Self {
+            tag: Cow::Owned(tag),
+            ..Default::default()
+        }
+    }
+
+    pub fn attr(mut self, key: &'static str, value: impl Into<NodeValue>) -> Self {
+        self.attrs.insert(Cow::Borrowed(key), value.into());
         self
     }
 
-    pub fn attrs<I, K, V>(mut self, attrs: I) -> Self
+    pub fn attrs<I, V>(mut self, attrs: I) -> Self
     where
-        I: IntoIterator<Item = (K, V)>,
-        K: Into<String>,
-        V: Into<String>,
+        I: IntoIterator<Item = (&'static str, V)>,
+        V: Into<NodeValue>,
     {
         for (key, value) in attrs.into_iter() {
-            self.attrs.insert(key.into(), value.into());
+            self.attrs.insert(Cow::Borrowed(key), value.into());
         }
         self
     }

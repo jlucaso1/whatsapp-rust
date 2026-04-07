@@ -1,24 +1,19 @@
-use rand::RngCore;
+use crate::StringEnum;
+use rand::Rng;
 use sha2::{Digest, Sha256};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 use thiserror::Error;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::{self, Jid, JidExt};
 use wacore_binary::node::{Node, NodeContent};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// IQ request type for WhatsApp protocol queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum InfoQueryType {
+    #[str = "set"]
     Set,
+    #[str = "get"]
     Get,
-}
-
-impl InfoQueryType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            InfoQueryType::Set => "set",
-            InfoQueryType::Get => "get",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -66,6 +61,21 @@ impl<'a> InfoQuery<'a> {
         self.timeout = Some(timeout);
         self
     }
+
+    /// Create a GET query from a Jid reference (avoids clone at call site).
+    pub fn get_ref(namespace: &'a str, to: &Jid, content: Option<NodeContent>) -> Self {
+        Self::get(namespace, to.clone(), content)
+    }
+
+    /// Create a SET query from a Jid reference (avoids clone at call site).
+    pub fn set_ref(namespace: &'a str, to: &Jid, content: Option<NodeContent>) -> Self {
+        Self::set(namespace, to.clone(), content)
+    }
+
+    /// Set target from a Jid reference (avoids clone at call site).
+    pub fn with_target_ref(self, target: &Jid) -> Self {
+        self.with_target(target.clone())
+    }
 }
 
 #[derive(Debug, Error)]
@@ -84,22 +94,41 @@ pub enum IqError {
     Network(String),
 }
 
+/// Lightweight server error that can be embedded in `anyhow::Error` and
+/// downcast from any crate. Used as a shared type across crate boundaries
+/// when `wacore::request::IqError` isn't directly available (e.g., errors
+/// originating from the high-level crate's own `IqError`).
+///
+/// To check a specific code: `err.downcast_ref::<ServerErrorCode>().is_some_and(|e| e.code == 406)`
+#[derive(Debug, Clone, Error)]
+#[error("server error: code={code}, text='{text}'")]
+pub struct ServerErrorCode {
+    pub code: u16,
+    pub text: String,
+}
+
+impl ServerErrorCode {
+    pub fn from_anyhow(err: &anyhow::Error) -> Option<&Self> {
+        err.downcast_ref::<Self>()
+    }
+}
+
 pub struct RequestUtils {
     unique_id: String,
-    id_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    id_counter: std::sync::Arc<portable_atomic::AtomicU64>,
 }
 
 impl RequestUtils {
     pub fn new(unique_id: String) -> Self {
         Self {
             unique_id,
-            id_counter: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            id_counter: std::sync::Arc::new(portable_atomic::AtomicU64::new(0)),
         }
     }
 
     pub fn with_counter(
         unique_id: String,
-        id_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
+        id_counter: std::sync::Arc<portable_atomic::AtomicU64>,
     ) -> Self {
         Self {
             unique_id,
@@ -121,10 +150,7 @@ impl RequestUtils {
     pub fn generate_message_id(&self, user_jid: Option<&Jid>) -> String {
         let mut data = Vec::with_capacity(8 + 20 + 16);
 
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
+        let timestamp = crate::time::now_secs() as u64;
         data.extend_from_slice(&timestamp.to_be_bytes());
 
         if let Some(jid) = user_jid {
@@ -134,7 +160,7 @@ impl RequestUtils {
         }
 
         let mut random_bytes = [0u8; 16];
-        rand::rng().fill_bytes(&mut random_bytes);
+        rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut random_bytes);
         data.extend_from_slice(&random_bytes);
 
         let hash = Sha256::digest(&data);
@@ -153,12 +179,12 @@ impl RequestUtils {
             .attr("id", id)
             .attr("xmlns", query.namespace)
             .attr("type", query.query_type.as_str())
-            .attr("to", query.to.to_string());
+            .attr("to", query.to.clone());
 
         if let Some(target) = &query.target
             && !target.is_empty()
         {
-            builder = builder.attr("target", target.to_string());
+            builder = builder.attr("target", target.clone());
         }
 
         if let Some(content) = &query.content {
@@ -184,7 +210,11 @@ impl RequestUtils {
             if let Some(error_node) = error_child {
                 let mut parser = wacore_binary::attrs::AttrParser::new(error_node);
                 let code = parser.optional_u64("code").unwrap_or(0) as u16;
-                let text = parser.optional_string("text").unwrap_or("").to_string();
+                let text = parser
+                    .optional_string("text")
+                    .as_deref()
+                    .unwrap_or("")
+                    .to_string();
                 return Box::new(Err(IqError::ServerError { code, text }));
             }
             return Box::new(Err(IqError::ServerError {
