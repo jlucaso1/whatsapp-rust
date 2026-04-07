@@ -7,40 +7,46 @@ use waproto::whatsapp as wa;
 pub struct MessageUtils;
 
 impl MessageUtils {
-    pub fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
+    fn random_pad_len() -> u8 {
         use rand::RngExt;
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+        let v = rng.random::<u8>() & 0x0F;
+        if v == 0 { 0x0F } else { v }
+    }
 
-        let mut pad_val = rng.random::<u8>() & 0x0F;
-        if pad_val == 0 {
-            pad_val = 0x0F;
-        }
-
-        let padding = vec![pad_val; pad_val as usize];
-        plaintext.extend_from_slice(&padding);
+    pub fn pad_message_v2(mut plaintext: Vec<u8>) -> Vec<u8> {
+        let pad = Self::random_pad_len();
+        plaintext.resize(plaintext.len() + pad as usize, pad);
         plaintext
     }
 
+    /// Encode + pad in a single pre-sized allocation.
+    pub fn encode_and_pad(msg: &wa::Message) -> Vec<u8> {
+        let pad = Self::random_pad_len();
+        let mut buf = Vec::with_capacity(msg.encoded_len() + pad as usize);
+        msg.encode(&mut buf).expect("encode into pre-sized Vec");
+        buf.resize(buf.len() + pad as usize, pad);
+        buf
+    }
+
     pub fn participant_list_hash(devices: &[wacore_binary::jid::Jid]) -> Result<String> {
+        // Hash sorted ad_strings incrementally (avoids join() allocation).
         let mut jids: Vec<String> = devices.iter().map(|j| j.to_ad_string()).collect();
-        jids.sort();
+        jids.sort_unstable();
 
-        let concatenated_jids = jids.join("");
+        let mut h = CryptographicHash::new("SHA-256")
+            .map_err(|e| anyhow!("failed to initialize SHA-256 hasher: {:?}", e))?;
+        for jid in &jids {
+            h.update(jid.as_bytes());
+        }
 
-        // Use finalize_sha256_array() for zero-allocation hash finalization
-        let full_hash = {
-            let mut h = CryptographicHash::new("SHA-256")
-                .map_err(|e| anyhow!("failed to initialize SHA-256 hasher: {:?}", e))?;
-            h.update(concatenated_jids.as_bytes());
-            h.finalize_sha256_array()
-                .map_err(|e| anyhow!("failed to finalize hash: {:?}", e))?
-        };
-
-        let truncated_hash = &full_hash[..6];
+        let full_hash = h
+            .finalize_sha256_array()
+            .map_err(|e| anyhow!("failed to finalize hash: {:?}", e))?;
 
         Ok(format!(
             "2:{hash}",
-            hash = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(truncated_hash)
+            hash = base64::prelude::BASE64_URL_SAFE_NO_PAD.encode(&full_hash[..6])
         ))
     }
 
