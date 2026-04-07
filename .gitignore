@@ -8,3 +8,4 @@
 .env
 docs
 .claude
+__pycache__

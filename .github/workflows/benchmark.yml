@@ -7,21 +7,24 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
-  checks: write
+  deployments: write
+
+concurrency:
+  group: benchmark-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 env:
-  CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: never
+  IAI_CALLGRIND_COLOR: never
   PROTOC_VERSION: "3.25.3"
-  BENCHER_PROJECT: whatsapp-rust
-  BENCHER_TESTBED: ubuntu-latest
-  BENCHER_ADAPTER: rust_iai_callgrind
   SCCACHE_GHA_ENABLED: "true"
   RUSTC_WRAPPER: "sccache"
 
 jobs:
   benchmark:
+    name: iai-callgrind
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -37,59 +40,110 @@ jobs:
 
       - name: Setup sccache
         uses: mozilla-actions/sccache-action@v0.0.9
+
       - name: Cache Rust registry
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ${{ runner.os }}-cargo-bench
           cache-targets: "false"
 
-      - uses: bencherdev/bencher@v0.5.10
-
       - name: Run benchmarks
-        env:
-          BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo bench -p wacore -p wacore-binary -p wacore-libsignal | tee bench_output.txt
+
+      - name: Parse results
         run: |
-          # Common bencher args (shared across all scenarios)
-          BENCHER_ARGS=(
-            --project "$BENCHER_PROJECT"
-            --testbed "$BENCHER_TESTBED"
-            --adapter "$BENCHER_ADAPTER"
-            --github-actions "$GITHUB_TOKEN"
-          )
+          python3 .github/scripts/iai-to-benchmark-json.py \
+            < bench_output.txt \
+            > bench_results.json
 
-          if [ "$GITHUB_EVENT_NAME" == "push" ]; then
-            # Push to main: establish baseline (no GitHub check posting)
-            bencher run \
-              --project "$BENCHER_PROJECT" \
-              --testbed "$BENCHER_TESTBED" \
-              --adapter "$BENCHER_ADAPTER" \
-              --token "$BENCHER_API_TOKEN" \
-              --branch main \
-              --threshold-measure instructions \
-              --threshold-test percentage \
-              --threshold-upper-boundary 0.05 \
-              --thresholds-reset \
-              "cargo bench --workspace"
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            bench_output.txt
+            bench_results.json
+          retention-days: 30
 
-          elif [ -n "$BENCHER_API_TOKEN" ]; then
-            # Pull request with token available: full tracking
-            bencher run \
-              "${BENCHER_ARGS[@]}" \
-              --token "$BENCHER_API_TOKEN" \
-              --branch "${{ github.head_ref }}" \
-              --start-point "${{ github.base_ref }}" \
-              --start-point-clone-thresholds \
-              --start-point-reset \
-              --threshold-measure instructions \
-              --threshold-test percentage \
-              --threshold-upper-boundary 0.05 \
-              --thresholds-reset \
-              --ci-only-thresholds \
-              "cargo bench --workspace"
+      # Push to main: store baseline and update gh-pages charts
+      - name: Store baseline (push to main)
+        if: github.event_name == 'push'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: "whatsapp-rust benchmarks"
+          tool: "customSmallerIsBetter"
+          output-file-path: bench_results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          benchmark-data-dir-path: dev/bench
+          max-items-in-chart: 100
+          summary-always: true
 
-          else
-            # Pull request without token (fork PRs): run benchmarks locally
-            echo "::warning title=Bencher::BENCHER_API_TOKEN not available. Running benchmarks without analytics."
-            cargo bench --workspace
-          fi
+      # Fetch baseline before the action modifies git state
+      - name: Fetch baseline data
+        id: baseline
+        if: github.event_name == 'pull_request'
+        run: |
+          gh api repos/${{ github.repository }}/contents/dev/bench/data.js?ref=gh-pages \
+            --jq '.content' | base64 -d > /tmp/baseline_data.js
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      # PR: compare against baseline
+      - name: Compare against baseline (pull request)
+        if: github.event_name == 'pull_request'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: "whatsapp-rust benchmarks"
+          tool: "customSmallerIsBetter"
+          output-file-path: bench_results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          save-data-file: false
+          benchmark-data-dir-path: dev/bench
+          summary-always: true
+
+      # Custom collapsed PR comment showing regressions, improvements, and unchanged
+      - name: Post benchmark comment
+        if: github.event_name == 'pull_request' && steps.baseline.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+
+            const comment = execSync(
+              'python3 .github/scripts/bench-comment.py bench_results.json /tmp/baseline_data.js',
+              { encoding: 'utf-8' }
+            ).trim();
+
+            if (!comment) {
+              console.log('No comment generated');
+              return;
+            }
+
+            // Find and update existing comment or create new one
+            const marker = '<!-- benchmark-comment -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: comment,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: comment,
+              });
+            }
