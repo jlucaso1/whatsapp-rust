@@ -45,20 +45,7 @@ impl<'a> TcToken<'a> {
 
         let spec = IssuePrivacyTokensSpec::new(jids);
         let response = self.client.execute(spec).await?;
-        let backend = self.client.persistence_manager.backend();
-        let now = wacore::time::now_secs();
-
-        for received in &response.tokens {
-            let entry = TcTokenEntry {
-                token: received.token.clone(),
-                token_timestamp: received.timestamp,
-                sender_timestamp: Some(now),
-            };
-
-            if let Err(e) = backend.put_tc_token(&received.jid.user, &entry).await {
-                log::warn!(target: "Client/TcToken", "Failed to store issued tc_token for {}: {e}", received.jid);
-            }
-        }
+        self.client.store_issued_tc_tokens(&response.tokens).await;
 
         Ok(response.tokens)
     }

@@ -3531,11 +3531,14 @@ impl Client {
     }
 
     /// Creates a normalized StanzaKey by resolving PN to LID JIDs.
-    pub(crate) async fn make_stanza_key(&self, chat: Jid, id: String) -> StanzaKey {
+    pub(crate) async fn make_stanza_key(&self, chat: &Jid, id: &str) -> StanzaKey {
         // Resolve chat JID to LID if possible
-        let chat = self.resolve_encryption_jid(&chat).await;
+        let chat = self.resolve_encryption_jid(chat).await;
 
-        StanzaKey { chat, id }
+        StanzaKey {
+            chat,
+            id: id.to_owned(),
+        }
     }
 
     // get_phone_number_from_lid is in client/lid_pn.rs

@@ -7,6 +7,48 @@ use waproto::whatsapp as wa;
 use super::Client;
 
 impl Client {
+    pub(crate) async fn set_sender_key_status_for_devices(
+        &self,
+        group_jid: &str,
+        device_jids: &[Jid],
+        has_key: bool,
+        exclude_own_devices: bool,
+    ) -> Result<()> {
+        let (own_lid_user, own_pn_user) = if exclude_own_devices {
+            let snapshot = self.persistence_manager.get_device_snapshot().await;
+            (
+                snapshot.lid.as_ref().map(|j| j.user.clone()),
+                snapshot.pn.as_ref().map(|j| j.user.clone()),
+            )
+        } else {
+            (None, None)
+        };
+
+        let device_ids: Vec<String> = device_jids
+            .iter()
+            .filter(|jid| {
+                !exclude_own_devices
+                    || !(own_lid_user.as_deref().is_some_and(|u| u == jid.user)
+                        || own_pn_user.as_deref().is_some_and(|u| u == jid.user))
+            })
+            .map(ToString::to_string)
+            .collect();
+
+        if device_ids.is_empty() {
+            return Ok(());
+        }
+
+        let entries: Vec<(&str, bool)> = device_ids
+            .iter()
+            .map(|jid| (jid.as_str(), has_key))
+            .collect();
+        self.persistence_manager
+            .set_sender_key_status(group_jid, &entries)
+            .await?;
+        self.sender_key_device_cache.invalidate(group_jid).await;
+        Ok(())
+    }
+
     /// Mark device JIDs as needing fresh SKDM (has_key = false).
     /// Filters out our own devices (WA Web: `!isMeDevice(e)` check).
     /// Called from handle_retry_receipt for group/status messages.
@@ -15,37 +57,16 @@ impl Client {
         group_jid: &str,
         device_jids: &[Jid],
     ) -> Result<()> {
-        let snapshot = self.persistence_manager.get_device_snapshot().await;
-        let own_lid_user = snapshot.lid.as_ref().map(|j| j.user.as_str());
-        let own_pn_user = snapshot.pn.as_ref().map(|j| j.user.as_str());
-
-        let filtered: Vec<String> = device_jids
-            .iter()
-            .filter(|jid| {
-                let is_own = own_lid_user.is_some_and(|u| u == jid.user)
-                    || own_pn_user.is_some_and(|u| u == jid.user);
-                !is_own
-            })
-            .map(|jid| jid.to_string())
-            .collect();
-
-        if filtered.is_empty() {
-            return Ok(());
-        }
-
-        let entries: Vec<(&str, bool)> = filtered.iter().map(|s| (s.as_str(), false)).collect();
-        self.persistence_manager
-            .set_sender_key_status(group_jid, &entries)
+        self.set_sender_key_status_for_devices(group_jid, device_jids, false, true)
             .await?;
-        self.sender_key_device_cache.invalidate(group_jid).await;
         Ok(())
     }
 
     /// Take a sent message for retry handling. Checks L1 cache first (if enabled),
     /// then falls back to DB. Matches WA Web's getMessageTable().get() pattern.
-    pub(crate) async fn take_recent_message(&self, to: Jid, id: String) -> Option<wa::Message> {
+    pub(crate) async fn take_recent_message(&self, to: &Jid, id: &str) -> Option<wa::Message> {
         use prost::Message;
-        let key = self.make_stanza_key(to.clone(), id.clone()).await;
+        let key = self.make_stanza_key(to, id).await;
         let chat_str = key.chat.to_string();
         let has_l1_cache = self.cache_config.recent_messages.capacity > 0;
 
@@ -106,7 +127,7 @@ impl Client {
     /// is enabled (capacity > 0) also stores in-memory for fast retrieval.
     /// In DB-only mode (capacity = 0), the DB write is awaited to guarantee persistence.
     /// With L1 cache, the DB write is backgrounded since the cache serves reads immediately.
-    pub(crate) async fn add_recent_message(&self, to: Jid, id: String, msg: &wa::Message) {
+    pub(crate) async fn add_recent_message(&self, to: &Jid, id: &str, msg: &wa::Message) {
         use prost::Message;
         let key = self.make_stanza_key(to, id).await;
         let bytes = msg.encode_to_vec();
@@ -114,12 +135,10 @@ impl Client {
 
         if has_l1_cache {
             // L1 cache serves reads immediately; DB write can be backgrounded
-            self.recent_messages
-                .insert(key.clone(), bytes.clone())
-                .await;
-            let backend = self.persistence_manager.backend();
             let chat_str = key.chat.to_string();
             let msg_id = key.id.clone();
+            self.recent_messages.insert(key, bytes.clone()).await;
+            let backend = self.persistence_manager.backend();
             self.runtime
                 .spawn(Box::pin(async move {
                     if let Err(e) = backend.store_sent_message(&chat_str, &msg_id, &bytes).await {
