@@ -81,9 +81,19 @@ impl Client {
             None
         };
 
-        // Cache key uses the original PN JID because the phone's response
-        // always contains PN JIDs in the WebMessageInfo key.
-        let cache_key = ChatMessageId::new(info.source.chat.clone(), info.id.clone());
+        // Cache key must use PN JID because the phone's response always contains
+        // PN JIDs in WebMessageInfo.key. For LID-migrated DMs, info.source.chat
+        // can be LID while sender_alt holds the PN — prefer the PN form.
+        let cache_chat = if !info.source.is_group && info.source.chat.is_lid() {
+            info.source
+                .sender_alt
+                .as_ref()
+                .map(|jid| jid.to_non_ad())
+                .unwrap_or_else(|| info.source.chat.clone())
+        } else {
+            info.source.chat.clone()
+        };
+        let cache_key = ChatMessageId::new(cache_chat, info.id.clone());
 
         if self.pdo_pending_requests.get(&cache_key).await.is_some() {
             debug!(
@@ -348,7 +358,11 @@ impl Client {
                 message.get_base_message().get_ephemeral_expiration();
         }
 
-        message_info.unavailable_request_id = Some(request_id.to_owned());
+        message_info.unavailable_request_id = if request_id.is_empty() {
+            None
+        } else {
+            Some(request_id.to_owned())
+        };
 
         info!(
             "Dispatching PDO-recovered message {} from {} via phone (request_id={})",
@@ -489,31 +503,30 @@ mod tests {
     use wacore_binary::jid::{DEFAULT_USER_SERVER, Jid, JidExt};
 
     #[test]
-    fn test_pdo_primary_phone_jid_is_device_0() {
-        // PDO sends to device 0 (primary phone)
+    fn test_pdo_peer_target_is_device_0() {
         let own_pn = Jid::pn("559999999999");
-        let primary_phone_jid = own_pn.with_device(0);
+        let peer_target = own_pn.to_non_ad();
 
-        assert_eq!(primary_phone_jid.device, 0);
-        assert!(!primary_phone_jid.is_ad()); // Device 0 is NOT an additional device
+        assert_eq!(peer_target.device, 0);
+        assert!(!peer_target.is_ad());
     }
 
     #[test]
-    fn test_pdo_primary_phone_jid_preserves_user() {
+    fn test_pdo_peer_target_preserves_user() {
         let own_pn = Jid::pn("559999999999");
-        let primary_phone_jid = own_pn.with_device(0);
+        let peer_target = own_pn.to_non_ad();
 
-        assert_eq!(primary_phone_jid.user, "559999999999");
-        assert_eq!(primary_phone_jid.server, DEFAULT_USER_SERVER);
+        assert_eq!(peer_target.user, "559999999999");
+        assert_eq!(peer_target.server, DEFAULT_USER_SERVER);
     }
 
     #[test]
-    fn test_pdo_primary_phone_jid_from_linked_device() {
-        // Even if we're device 33, PDO should send to device 0
+    fn test_pdo_peer_target_from_linked_device() {
         let own_pn = Jid::pn_device("559999999999", 33);
-        let primary_phone_jid = own_pn.with_device(0);
+        let peer_target = own_pn.to_non_ad();
 
-        assert_eq!(primary_phone_jid.user, "559999999999");
-        assert_eq!(primary_phone_jid.device, 0);
+        assert_eq!(peer_target.user, "559999999999");
+        assert_eq!(peer_target.device, 0);
+        assert_eq!(peer_target.agent, 0);
     }
 }
