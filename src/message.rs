@@ -3877,6 +3877,7 @@ mod tests {
             device_sent_meta: None,
             ephemeral_expiration: None,
             is_offline: false,
+            unavailable_request_id: None,
         }
     }
 
