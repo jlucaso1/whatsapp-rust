@@ -274,7 +274,7 @@ impl Client {
             .await;
         let sender_encryption_jid = self.resolve_encryption_jid(&info.source.sender).await;
 
-        let has_unavailable = node.get_optional_child("unavailable").is_some();
+        let unavailable_node = node.get_optional_child("unavailable");
 
         let mut all_enc_nodes = Vec::new();
 
@@ -297,7 +297,7 @@ impl Client {
             }
         }
 
-        if all_enc_nodes.is_empty() && !has_unavailable {
+        if all_enc_nodes.is_empty() && unavailable_node.is_none() {
             log::warn!(
                 "[msg:{}] Received non-newsletter message without <enc> child: {}",
                 info.id,
@@ -306,17 +306,27 @@ impl Client {
             return;
         }
 
-        if has_unavailable {
-            log::info!(
-                "[msg:{}] Message has <unavailable> child — requesting retry via receipt",
-                info.id
+        if let Some(unavailable) = unavailable_node {
+            let unavailable_type =
+                match unavailable.attrs.get("type").map(|v| v.as_str()).as_deref() {
+                    Some("view_once") => crate::types::events::UnavailableType::ViewOnce,
+                    _ => crate::types::events::UnavailableType::Unknown,
+                };
+            log::warn!(
+                "[msg:{}] Message has <unavailable> child (type: {:?}), requesting from phone via PDO",
+                info.id,
+                unavailable_type
             );
-            // Request the sender to re-encrypt for this device.
-            self.handle_decrypt_failure(
-                &info,
-                RetryReason::NoSession,
-                crate::types::events::DecryptFailMode::Show,
-            );
+            // Ack is handled by the framework; PDO asks the primary phone to relay the message
+            self.spawn_pdo_request_with_options(&info, true);
+            self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+                crate::types::events::UndecryptableMessage {
+                    info: (*info).clone(),
+                    is_unavailable: true,
+                    unavailable_type,
+                    decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
+                },
+            ));
             return;
         }
 
