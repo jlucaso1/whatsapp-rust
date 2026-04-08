@@ -307,9 +307,15 @@ impl Client {
         }
 
         if has_unavailable {
-            log::debug!(
-                "[msg:{}] Message has <unavailable> child, skipping decryption",
+            log::info!(
+                "[msg:{}] Message has <unavailable> child — requesting retry via receipt",
                 info.id
+            );
+            // Request the sender to re-encrypt for this device.
+            self.handle_decrypt_failure(
+                &info,
+                RetryReason::NoSession,
+                crate::types::events::DecryptFailMode::Show,
             );
             return;
         }
