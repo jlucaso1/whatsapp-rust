@@ -5,15 +5,14 @@ use waproto::whatsapp as wa;
 
 use crate::StringEnum;
 
-/// Unique identifier for a message stanza within a chat.
-/// Used for deduplication and retry tracking.
+/// Identifies a specific message within a chat.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct StanzaKey {
+pub struct ChatMessageId {
     pub chat: Jid,
     pub id: MessageId,
 }
 
-impl StanzaKey {
+impl ChatMessageId {
     pub fn new(chat: Jid, id: MessageId) -> Self {
         Self { chat, id }
     }
@@ -148,6 +147,9 @@ pub struct MessageInfo {
     pub ephemeral_expiration: Option<u32>,
     /// Whether this message was delivered during offline sync.
     pub is_offline: bool,
+    /// Set when this message was recovered via PDO rather than normal decryption.
+    /// Contains the PDO request message ID.
+    pub unavailable_request_id: Option<String>,
 }
 
 impl MessageInfo {
