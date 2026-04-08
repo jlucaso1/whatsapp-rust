@@ -140,24 +140,25 @@ impl Client {
             info.id, info.source.sender, info.source.chat, peer_target
         );
 
-        self.ensure_e2e_sessions(std::slice::from_ref(&peer_target))
-            .await?;
-
-        match self.send_peer_message(peer_target, &msg).await {
-            Ok(_) => {
-                debug!("PDO request sent successfully for message {}", info.id);
-                Ok(())
-            }
-            Err(e) => {
-                // Remove from pending cache on failure
-                self.pdo_pending_requests.remove(&cache_key).await;
-                warn!(
-                    "Failed to send PDO request for message {}: {:?}",
-                    info.id, e
-                );
-                Err(e)
-            }
+        if let Err(e) = self
+            .ensure_e2e_sessions(std::slice::from_ref(&peer_target))
+            .await
+        {
+            self.pdo_pending_requests.remove(&cache_key).await;
+            return Err(e);
         }
+
+        if let Err(e) = self.send_peer_message(peer_target, &msg).await {
+            self.pdo_pending_requests.remove(&cache_key).await;
+            warn!(
+                "Failed to send PDO request for message {}: {:?}",
+                info.id, e
+            );
+            return Err(e);
+        }
+
+        debug!("PDO request sent successfully for message {}", info.id);
+        Ok(())
     }
 
     /// Request on-demand message history from the primary phone via PDO.
