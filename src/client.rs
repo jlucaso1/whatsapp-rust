@@ -3517,7 +3517,7 @@ impl Client {
     }
 
     /// Creates a normalized ChatMessageId by resolving PN to LID JIDs.
-    pub(crate) async fn make_stanza_key(&self, chat: &Jid, id: &str) -> ChatMessageId {
+    pub(crate) async fn make_chat_message_id(&self, chat: &Jid, id: &str) -> ChatMessageId {
         // Resolve chat JID to LID if possible
         let chat = self.resolve_encryption_jid(chat).await;
 
