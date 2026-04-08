@@ -1192,7 +1192,9 @@ impl Client {
             self.handle_app_state_sync_key_share(keys).await;
         }
 
-        if let Some(protocol_msg) = &msg.protocol_message
+        // PDO responses come from our own account (is_from_me) via device 0 (primary phone)
+        if info.source.is_from_me
+            && let Some(protocol_msg) = &msg.protocol_message
             && let Some(pdo_response) = &protocol_msg.peer_data_operation_request_response_message
         {
             self.handle_pdo_response(pdo_response, info).await;
@@ -3875,6 +3877,7 @@ mod tests {
             device_sent_meta: None,
             ephemeral_expiration: None,
             is_offline: false,
+            unavailable_request_id: None,
         }
     }
 

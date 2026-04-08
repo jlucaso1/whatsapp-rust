@@ -66,7 +66,7 @@ impl Client {
     /// then falls back to DB. Matches WA Web's getMessageTable().get() pattern.
     pub(crate) async fn take_recent_message(&self, to: &Jid, id: &str) -> Option<wa::Message> {
         use prost::Message;
-        let key = self.make_stanza_key(to, id).await;
+        let key = self.make_chat_message_id(to, id).await;
         let chat_str = key.chat.to_string();
         let has_l1_cache = self.cache_config.recent_messages.capacity > 0;
 
@@ -129,7 +129,7 @@ impl Client {
     /// With L1 cache, the DB write is backgrounded since the cache serves reads immediately.
     pub(crate) async fn add_recent_message(&self, to: &Jid, id: &str, msg: &wa::Message) {
         use prost::Message;
-        let key = self.make_stanza_key(to, id).await;
+        let key = self.make_chat_message_id(to, id).await;
         let bytes = msg.encode_to_vec();
         let has_l1_cache = self.cache_config.recent_messages.capacity > 0;
 

@@ -262,7 +262,7 @@ pub enum ClientError {
     NotLoggedIn,
 }
 
-use wacore::types::message::StanzaKey;
+use wacore::types::message::ChatMessageId;
 
 /// Metrics for tracking offline sync progress
 #[derive(Debug)]
@@ -370,7 +370,7 @@ pub struct Client {
 
     /// Cache for recent messages (serialized bytes) for retry functionality.
     /// Uses moka cache with TTL and max capacity for automatic eviction.
-    pub(crate) recent_messages: Cache<StanzaKey, Vec<u8>>,
+    pub(crate) recent_messages: Cache<ChatMessageId, Vec<u8>>,
 
     pub(crate) sender_key_device_cache: crate::sender_key_device_cache::SenderKeyDeviceCache,
 
@@ -436,9 +436,8 @@ pub struct Client {
     /// Each handler receives a `ChatStateEvent` describing the chat, optional participant and state.
     pub(crate) chatstate_handlers: Arc<RwLock<Vec<ChatStateHandler>>>,
 
-    /// Cache for pending PDO (Peer Data Operation) requests.
-    /// Maps message cache keys (chat:id) to pending request info.
-    pub(crate) pdo_pending_requests: Cache<String, crate::pdo::PendingPdoRequest>,
+    pub(crate) pdo_pending_requests:
+        Cache<wacore::types::message::ChatMessageId, crate::pdo::PendingPdoRequest>,
 
     /// LRU cache for device registry (matches WhatsApp Web's 5000 entry limit).
     /// Maps user ID to DeviceListRecord for fast device existence checks.
@@ -3517,12 +3516,12 @@ impl Client {
         })
     }
 
-    /// Creates a normalized StanzaKey by resolving PN to LID JIDs.
-    pub(crate) async fn make_stanza_key(&self, chat: &Jid, id: &str) -> StanzaKey {
+    /// Creates a normalized ChatMessageId by resolving PN to LID JIDs.
+    pub(crate) async fn make_chat_message_id(&self, chat: &Jid, id: &str) -> ChatMessageId {
         // Resolve chat JID to LID if possible
         let chat = self.resolve_encryption_jid(chat).await;
 
-        StanzaKey {
+        ChatMessageId {
             chat,
             id: id.to_owned(),
         }
