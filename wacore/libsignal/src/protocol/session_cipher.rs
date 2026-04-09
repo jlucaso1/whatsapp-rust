@@ -769,7 +769,7 @@ fn decrypt_message_with_state<R: Rng + CryptoRng>(
         let mut buf_wrapper = buffer.borrow_mut();
         let buf = buf_wrapper.get_buffer();
         match aes_256_cbc_decrypt_into(
-            ciphertext.body(),
+            ciphertext.body()?,
             message_keys.cipher_key(),
             message_keys.iv(),
             buf,
