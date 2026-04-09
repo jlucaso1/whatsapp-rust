@@ -13,6 +13,19 @@ use subtle::ConstantTimeEq;
 use crate::protocol::state::{PreKeyId, SignedPreKeyId};
 use crate::protocol::{IdentityKey, PrivateKey, PublicKey, Result, SignalProtocolError, Timestamp};
 
+/// Get-or-init for `OnceLock<Box<[u8]>>` with a fallible initializer.
+fn get_or_try_init_bytes(
+    cache: &OnceLock<Box<[u8]>>,
+    init: impl FnOnce() -> Result<Box<[u8]>>,
+) -> Result<&[u8]> {
+    if let Some(val) = cache.get() {
+        return Ok(val);
+    }
+    let _ = cache.set(init()?);
+    // get() can't be None: even if a racing set() lost, the winner's value is stored
+    Ok(cache.get().expect("just set"))
+}
+
 // Signal's original implementation uses version 4, but WhatsApp Web,
 // Baileys (libsignal-node), and whatsmeow all use version 3.
 pub const CIPHERTEXT_MESSAGE_CURRENT_VERSION: u8 = 3;
@@ -59,15 +72,31 @@ impl CiphertextMessage {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct SignalMessage {
     message_version: u8,
     sender_ratchet_key: PublicKey,
     counter: u32,
-    #[expect(dead_code)]
     previous_counter: u32,
-    ciphertext: Box<[u8]>,
     serialized: Box<[u8]>,
+    ciphertext_cache: OnceLock<Box<[u8]>>,
+}
+
+impl Clone for SignalMessage {
+    fn clone(&self) -> Self {
+        let ciphertext_cache = OnceLock::new();
+        if let Some(ct) = self.ciphertext_cache.get() {
+            let _ = ciphertext_cache.set(ct.clone());
+        }
+        Self {
+            message_version: self.message_version,
+            sender_ratchet_key: self.sender_ratchet_key,
+            counter: self.counter,
+            previous_counter: self.previous_counter,
+            serialized: self.serialized.clone(),
+            ciphertext_cache,
+        }
+    }
 }
 
 impl SignalMessage {
@@ -108,8 +137,8 @@ impl SignalMessage {
             sender_ratchet_key,
             counter,
             previous_counter,
-            ciphertext: ciphertext.into(),
             serialized,
+            ciphertext_cache: OnceLock::new(),
         })
     }
 
@@ -138,9 +167,18 @@ impl SignalMessage {
         self.serialized
     }
 
-    #[inline]
-    pub fn body(&self) -> &[u8] {
-        &self.ciphertext
+    pub fn body(&self) -> Result<&[u8]> {
+        get_or_try_init_bytes(&self.ciphertext_cache, || self.decode_ciphertext())
+    }
+
+    fn decode_ciphertext(&self) -> Result<Box<[u8]>> {
+        let proto_bytes = &self.serialized[1..self.serialized.len() - Self::MAC_LENGTH];
+        let proto = waproto::whatsapp::SignalMessage::decode(proto_bytes)
+            .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
+        proto
+            .ciphertext
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)
+            .map(|v| v.into_boxed_slice())
     }
 
     pub fn verify_mac(
@@ -228,13 +266,16 @@ impl TryFrom<&[u8]> for SignalMessage {
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
             .into_boxed_slice();
 
+        let ciphertext_cache = OnceLock::new();
+        let _ = ciphertext_cache.set(ciphertext);
+
         Ok(SignalMessage {
             message_version,
             sender_ratchet_key,
             counter,
             previous_counter,
-            ciphertext,
             serialized: Box::from(value),
+            ciphertext_cache,
         })
     }
 }
@@ -487,16 +528,7 @@ impl SenderKeyMessage {
     ///
     /// Callers should avoid calling this in hot loops when possible.
     pub fn ciphertext(&self) -> Result<&[u8]> {
-        if let Some(ciphertext) = self.ciphertext_cache.get() {
-            return Ok(ciphertext.as_ref());
-        }
-
-        let ciphertext = self.decode_ciphertext()?;
-        let _ = self.ciphertext_cache.set(ciphertext);
-        match self.ciphertext_cache.get() {
-            Some(ciphertext) => Ok(ciphertext.as_ref()),
-            None => Err(SignalProtocolError::InvalidProtobufEncoding),
-        }
+        get_or_try_init_bytes(&self.ciphertext_cache, || self.decode_ciphertext())
     }
 
     fn decode_ciphertext(&self) -> Result<Box<[u8]>> {
