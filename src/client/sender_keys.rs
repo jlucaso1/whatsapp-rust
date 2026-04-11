@@ -83,7 +83,9 @@ impl Client {
                 let mid = key.id.clone();
                 self.runtime
                     .spawn(Box::pin(async move {
-                        let _ = backend.take_sent_message(&cs, &mid).await;
+                        if let Err(e) = backend.take_sent_message(&cs, &mid).await {
+                            log::warn!("Failed to clean up sent message {cs}:{mid}: {e}");
+                        }
                     }))
                     .detach();
                 return Some(msg);

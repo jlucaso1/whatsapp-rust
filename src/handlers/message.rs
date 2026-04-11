@@ -66,6 +66,9 @@ impl StanzaHandler for MessageHandler {
                 let (tx, rx) = async_channel::unbounded::<Arc<Node>>();
 
                 let client_for_worker = client.clone();
+                let spawn_generation = client
+                    .connection_generation
+                    .load(std::sync::atomic::Ordering::Acquire);
 
                 // Spawn a worker task that processes messages sequentially for this chat.
                 // The worker exits when all tx senders are dropped (cache TTI expiry drops
@@ -76,6 +79,16 @@ impl StanzaHandler for MessageHandler {
                     .runtime
                     .spawn(Box::pin(async move {
                         while let Ok(msg_node) = rx.recv().await {
+                            // Exit if the connection changed — prevents stale workers
+                            // from processing messages with outdated crypto state.
+                            if client_for_worker
+                                .connection_generation
+                                .load(std::sync::atomic::Ordering::Acquire)
+                                != spawn_generation
+                            {
+                                log::debug!(target: "MessageQueue", "Stale worker exiting; remaining messages will be redelivered by server");
+                                break;
+                            }
                             let start = wacore::time::now_millis() as u64;
                             let client = client_for_worker.clone();
                             Box::pin(client.handle_incoming_message(msg_node)).await;

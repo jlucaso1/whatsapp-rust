@@ -134,10 +134,12 @@ fn parse_single_collection(collection: &Node) -> Result<PatchList> {
     let snapshot = None; // external only currently
 
     // patches list
-    let mut patches: Vec<wa::SyncdPatch> = Vec::new();
-    if let Some(patches_node) = collection.get_optional_child("patches")
-        && let Some(children) = patches_node.children()
-    {
+    let children_ref = collection
+        .get_optional_child("patches")
+        .and_then(|n| n.children());
+    let mut patches: Vec<wa::SyncdPatch> =
+        Vec::with_capacity(children_ref.as_ref().map_or(0, |c| c.len()));
+    if let Some(children) = children_ref {
         for child in children {
             if child.tag == "patch"
                 && let Some(wacore_binary::node::NodeContent::Bytes(raw)) = &child.content

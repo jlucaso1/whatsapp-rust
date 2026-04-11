@@ -2568,28 +2568,7 @@ impl Client {
                         Vec::new()
                     }
                 };
-                if !missing.is_empty() {
-                    let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
-                    let mut guard = self.app_state_key_requests.lock().await;
-                    let now = wacore::time::Instant::now();
-                    for key_id in missing {
-                        let hex_id = hex::encode(&key_id);
-                        let should = guard
-                            .get(&hex_id)
-                            .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
-                            .unwrap_or(true);
-                        if should {
-                            guard.insert(hex_id, now);
-                            to_request.push(key_id);
-                        }
-                    }
-                    // Evict stale entries to prevent unbounded growth over long sessions
-                    guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
-                    drop(guard);
-                    if !to_request.is_empty() {
-                        self.request_app_state_keys(&to_request).await;
-                    }
-                }
+                self.request_missing_keys_with_dedup(missing).await;
 
                 // full_sync is true only when this collection had a snapshot
                 // (version was 0 before sync). This prevents server_sync-triggered
@@ -2775,28 +2754,7 @@ impl Client {
                     Vec::new()
                 }
             };
-            if !missing.is_empty() {
-                let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
-                let mut guard = self.app_state_key_requests.lock().await;
-                let now = wacore::time::Instant::now();
-                for key_id in missing {
-                    let hex_id = hex::encode(&key_id);
-                    let should = guard
-                        .get(&hex_id)
-                        .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
-                        .unwrap_or(true);
-                    if should {
-                        guard.insert(hex_id, now);
-                        to_request.push(key_id);
-                    }
-                }
-                // Evict stale entries to prevent unbounded growth over long sessions
-                guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
-                drop(guard);
-                if !to_request.is_empty() {
-                    self.request_app_state_keys(&to_request).await;
-                }
-            }
+            self.request_missing_keys_with_dedup(missing).await;
 
             for m in mutations {
                 debug!(target: "Client/AppState", "Dispatching mutation kind={} index_len={} full_sync={}", m.index.first().map(|s| s.as_str()).unwrap_or(""), m.index.len(), full_sync);
@@ -2816,14 +2774,51 @@ impl Client {
         Ok(())
     }
 
-    async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) {
-        if raw_key_ids.is_empty() {
+    /// Request missing app-state keys with dedup stamps.
+    /// On send failure, removes stamps so keys can be retried next sync.
+    async fn request_missing_keys_with_dedup(&self, missing: Vec<Vec<u8>>) {
+        if missing.is_empty() {
             return;
+        }
+        let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
+        let mut guard = self.app_state_key_requests.lock().await;
+        let now = wacore::time::Instant::now();
+        for key_id in missing {
+            let hex_id = hex::encode(&key_id);
+            let should = guard
+                .get(&hex_id)
+                .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
+                .unwrap_or(true);
+            if should {
+                guard.insert(hex_id, now);
+                to_request.push(key_id);
+            }
+        }
+        guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
+        drop(guard);
+        if !to_request.is_empty()
+            && let Err(e) = self.request_app_state_keys(&to_request).await
+        {
+            warn!("Failed to send app state key request: {e}");
+            let mut guard = self.app_state_key_requests.lock().await;
+            for key_id in &to_request {
+                guard.remove(&hex::encode(key_id));
+            }
+        }
+    }
+
+    async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) -> Result<(), anyhow::Error> {
+        if raw_key_ids.is_empty() {
+            return Ok(());
         }
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let own_jid = match device_snapshot.pn.clone() {
             Some(j) => j,
-            None => return,
+            None => {
+                return Err(anyhow::anyhow!(
+                    "no own JID available for app-state key request"
+                ));
+            }
         };
         let key_ids: Vec<wa::message::AppStateSyncKeyId> = raw_key_ids
             .iter()
@@ -2839,20 +2834,17 @@ impl Client {
             })),
             ..Default::default()
         };
-        if let Err(e) = self
-            .send_message_impl(
-                own_jid,
-                &msg,
-                Some(self.generate_message_id().await),
-                true,
-                false,
-                None,
-                vec![],
-            )
-            .await
-        {
-            warn!("Failed to send app state key request: {e}");
-        }
+        self.send_message_impl(
+            own_jid,
+            &msg,
+            Some(self.generate_message_id().await),
+            true,
+            false,
+            None,
+            vec![],
+        )
+        .await?;
+        Ok(())
     }
 
     /// Send an app state patch to the server for a given collection.

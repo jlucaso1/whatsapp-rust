@@ -172,8 +172,8 @@ impl<'a> Community<'a> {
             .execute(LinkSubgroupsIq::new(community_jid, subgroup_jids))
             .await?;
 
-        let mut linked_jids = Vec::new();
-        let mut failed_groups = Vec::new();
+        let mut linked_jids = Vec::with_capacity(response.groups.len());
+        let mut failed_groups = Vec::with_capacity(response.groups.len());
 
         for group in response.groups {
             if let Some(error) = group.error {
@@ -205,8 +205,8 @@ impl<'a> Community<'a> {
             ))
             .await?;
 
-        let mut unlinked_jids = Vec::new();
-        let mut failed_groups = Vec::new();
+        let mut unlinked_jids = Vec::with_capacity(response.groups.len());
+        let mut failed_groups = Vec::with_capacity(response.groups.len());
 
         for group in response.groups {
             if let Some(error) = group.error {
@@ -292,11 +292,13 @@ impl<'a> Community<'a> {
             .ok_or_else(|| MexError::PayloadParsing("missing data field".into()))?;
 
         let group_query = &data["xwa2_group_query_by_id"];
-        let mut counts = Vec::new();
+        let edges_ref = group_query
+            .get("sub_groups")
+            .and_then(|s| s.get("edges"))
+            .and_then(|e| e.as_array());
+        let mut counts = Vec::with_capacity(edges_ref.map_or(0, |e| e.len()));
 
-        if let Some(sub_groups) = group_query.get("sub_groups")
-            && let Some(edges) = sub_groups.get("edges").and_then(|e| e.as_array())
-        {
+        if let Some(edges) = edges_ref {
             for edge in edges {
                 if let Some(node) = edge.get("node") {
                     let id_str = node["id"].as_str().unwrap_or_default();

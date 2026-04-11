@@ -3,7 +3,6 @@ use async_trait::async_trait;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
-use diesel::sql_query;
 use diesel::sqlite::SqliteConnection;
 use diesel::upsert::excluded;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
@@ -302,176 +301,180 @@ impl SqliteStore {
         device_id: i32,
         device_data: &CoreDevice,
     ) -> Result<()> {
-        let pool = self.pool.clone();
-        let noise_key_data = self.serialize_keypair(&device_data.noise_key)?;
-        let identity_key_data = self.serialize_keypair(&device_data.identity_key)?;
-        let signed_pre_key_data = self.serialize_keypair(&device_data.signed_pre_key)?;
-        let account_data = device_data
+        // Use Arc so retry clones are just atomic increments, not deep copies.
+        let noise_key_data: Arc<[u8]> = self.serialize_keypair(&device_data.noise_key)?.into();
+        let identity_key_data: Arc<[u8]> =
+            self.serialize_keypair(&device_data.identity_key)?.into();
+        let signed_pre_key_data: Arc<[u8]> =
+            self.serialize_keypair(&device_data.signed_pre_key)?.into();
+        let account_data: Option<Arc<[u8]>> = device_data
             .account
             .as_ref()
-            .map(wacore::store::device::account_serde::to_bytes);
+            .map(|a| Arc::from(wacore::store::device::account_serde::to_bytes(a)));
         let registration_id = device_data.registration_id as i32;
         let signed_pre_key_id = device_data.signed_pre_key_id as i32;
-        let signed_pre_key_signature: Vec<u8> = device_data.signed_pre_key_signature.to_vec();
-        let adv_secret_key: Vec<u8> = device_data.adv_secret_key.to_vec();
-        let push_name = device_data.push_name.clone();
+        let signed_pre_key_signature: Arc<[u8]> =
+            Arc::from(&device_data.signed_pre_key_signature[..]);
+        let adv_secret_key: Arc<[u8]> = Arc::from(&device_data.adv_secret_key[..]);
+        let push_name: Arc<str> = Arc::from(device_data.push_name.as_str());
         let app_version_primary = device_data.app_version_primary as i32;
         let app_version_secondary = device_data.app_version_secondary as i32;
         let app_version_tertiary = device_data.app_version_tertiary as i64;
         let app_version_last_fetched_ms = device_data.app_version_last_fetched_ms;
-        let edge_routing_info = device_data.edge_routing_info.clone();
-        let props_hash = device_data.props_hash.clone();
+        let edge_routing_info: Option<Arc<[u8]>> =
+            device_data.edge_routing_info.as_deref().map(Arc::from);
+        let props_hash: Option<Arc<str>> = device_data.props_hash.as_deref().map(Arc::from);
         let next_pre_key_id = device_data.next_pre_key_id as i32;
         let server_has_prekeys = device_data.server_has_prekeys;
-        let nct_salt = device_data.nct_salt.clone();
-        let new_lid = device_data
-            .lid
-            .as_ref()
-            .map(|j| j.to_string())
-            .unwrap_or_default();
-        let new_pn = device_data
-            .pn
-            .as_ref()
-            .map(|j| j.to_string())
-            .unwrap_or_default();
+        let nct_salt: Option<Arc<[u8]>> = device_data.nct_salt.as_deref().map(Arc::from);
+        let new_lid: Arc<str> = Arc::from(
+            device_data
+                .lid
+                .as_ref()
+                .map(|j| j.to_string())
+                .unwrap_or_default()
+                .as_str(),
+        );
+        let new_pn: Arc<str> = Arc::from(
+            device_data
+                .pn
+                .as_ref()
+                .map(|j| j.to_string())
+                .unwrap_or_default()
+                .as_str(),
+        );
 
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+        self.with_retry("save_device_data", || {
+            let noise_key_data = Arc::clone(&noise_key_data);
+            let identity_key_data = Arc::clone(&identity_key_data);
+            let signed_pre_key_data = Arc::clone(&signed_pre_key_data);
+            let account_data = account_data.clone();
+            let signed_pre_key_signature = Arc::clone(&signed_pre_key_signature);
+            let adv_secret_key = Arc::clone(&adv_secret_key);
+            let push_name = Arc::clone(&push_name);
+            let edge_routing_info = edge_routing_info.clone();
+            let props_hash = props_hash.clone();
+            let nct_salt = nct_salt.clone();
+            let new_lid = Arc::clone(&new_lid);
+            let new_pn = Arc::clone(&new_pn);
 
-            diesel::insert_into(device::table)
-                .values((
-                    device::id.eq(device_id),
-                    device::lid.eq(&new_lid),
-                    device::pn.eq(&new_pn),
-                    device::registration_id.eq(registration_id),
-                    device::noise_key.eq(&noise_key_data),
-                    device::identity_key.eq(&identity_key_data),
-                    device::signed_pre_key.eq(&signed_pre_key_data),
-                    device::signed_pre_key_id.eq(signed_pre_key_id),
-                    device::signed_pre_key_signature.eq(&signed_pre_key_signature[..]),
-                    device::adv_secret_key.eq(&adv_secret_key[..]),
-                    device::account.eq(account_data.clone()),
-                    device::push_name.eq(&push_name),
-                    device::app_version_primary.eq(app_version_primary),
-                    device::app_version_secondary.eq(app_version_secondary),
-                    device::app_version_tertiary.eq(app_version_tertiary),
-                    device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
-                    device::edge_routing_info.eq(edge_routing_info.clone()),
-                    device::props_hash.eq(props_hash.clone()),
-                    device::next_pre_key_id.eq(next_pre_key_id),
-                    device::server_has_prekeys.eq(server_has_prekeys),
-                    device::nct_salt.eq(nct_salt.clone()),
-                ))
-                .on_conflict(device::id)
-                .do_update()
-                .set((
-                    device::lid.eq(&new_lid),
-                    device::pn.eq(&new_pn),
-                    device::registration_id.eq(registration_id),
-                    device::noise_key.eq(&noise_key_data),
-                    device::identity_key.eq(&identity_key_data),
-                    device::signed_pre_key.eq(&signed_pre_key_data),
-                    device::signed_pre_key_id.eq(signed_pre_key_id),
-                    device::signed_pre_key_signature.eq(&signed_pre_key_signature[..]),
-                    device::adv_secret_key.eq(&adv_secret_key[..]),
-                    device::account.eq(account_data.clone()),
-                    device::push_name.eq(&push_name),
-                    device::app_version_primary.eq(app_version_primary),
-                    device::app_version_secondary.eq(app_version_secondary),
-                    device::app_version_tertiary.eq(app_version_tertiary),
-                    device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
-                    device::edge_routing_info.eq(edge_routing_info),
-                    device::props_hash.eq(props_hash),
-                    device::next_pre_key_id.eq(next_pre_key_id),
-                    device::server_has_prekeys.eq(server_has_prekeys),
-                    device::nct_salt.eq(nct_salt),
-                ))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-
-            Ok(())
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::insert_into(device::table)
+                    .values((
+                        device::id.eq(device_id),
+                        device::lid.eq(&*new_lid),
+                        device::pn.eq(&*new_pn),
+                        device::registration_id.eq(registration_id),
+                        device::noise_key.eq(&*noise_key_data),
+                        device::identity_key.eq(&*identity_key_data),
+                        device::signed_pre_key.eq(&*signed_pre_key_data),
+                        device::signed_pre_key_id.eq(signed_pre_key_id),
+                        device::signed_pre_key_signature.eq(&*signed_pre_key_signature),
+                        device::adv_secret_key.eq(&*adv_secret_key),
+                        device::account.eq(account_data.as_deref()),
+                        device::push_name.eq(&*push_name),
+                        device::app_version_primary.eq(app_version_primary),
+                        device::app_version_secondary.eq(app_version_secondary),
+                        device::app_version_tertiary.eq(app_version_tertiary),
+                        device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                        device::edge_routing_info.eq(edge_routing_info.as_deref()),
+                        device::props_hash.eq(props_hash.as_deref()),
+                        device::next_pre_key_id.eq(next_pre_key_id),
+                        device::server_has_prekeys.eq(server_has_prekeys),
+                        device::nct_salt.eq(nct_salt.as_deref()),
+                    ))
+                    .on_conflict(device::id)
+                    .do_update()
+                    .set((
+                        device::lid.eq(excluded(device::lid)),
+                        device::pn.eq(excluded(device::pn)),
+                        device::registration_id.eq(excluded(device::registration_id)),
+                        device::noise_key.eq(excluded(device::noise_key)),
+                        device::identity_key.eq(excluded(device::identity_key)),
+                        device::signed_pre_key.eq(excluded(device::signed_pre_key)),
+                        device::signed_pre_key_id.eq(excluded(device::signed_pre_key_id)),
+                        device::signed_pre_key_signature
+                            .eq(excluded(device::signed_pre_key_signature)),
+                        device::adv_secret_key.eq(excluded(device::adv_secret_key)),
+                        device::account.eq(excluded(device::account)),
+                        device::push_name.eq(excluded(device::push_name)),
+                        device::app_version_primary.eq(excluded(device::app_version_primary)),
+                        device::app_version_secondary.eq(excluded(device::app_version_secondary)),
+                        device::app_version_tertiary.eq(excluded(device::app_version_tertiary)),
+                        device::app_version_last_fetched_ms
+                            .eq(excluded(device::app_version_last_fetched_ms)),
+                        device::edge_routing_info.eq(excluded(device::edge_routing_info)),
+                        device::props_hash.eq(excluded(device::props_hash)),
+                        device::next_pre_key_id.eq(excluded(device::next_pre_key_id)),
+                        device::server_has_prekeys.eq(excluded(device::server_has_prekeys)),
+                        device::nct_salt.eq(excluded(device::nct_salt)),
+                    ))
+                    .execute(conn)
+                    .map(|_| ())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-
-        Ok(())
     }
 
     pub async fn create_new_device(&self) -> Result<i32> {
-        use crate::schema::device;
+        let device_id = self.device_id;
+        let new_device = wacore::store::Device::new();
 
-        let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<i32> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+        let noise_key_data: Arc<[u8]> = self.serialize_keypair(&new_device.noise_key)?.into();
+        let identity_key_data: Arc<[u8]> = self.serialize_keypair(&new_device.identity_key)?.into();
+        let signed_pre_key_data: Arc<[u8]> =
+            self.serialize_keypair(&new_device.signed_pre_key)?.into();
+        let registration_id = new_device.registration_id as i32;
+        let signed_pre_key_id = new_device.signed_pre_key_id as i32;
+        let signed_pre_key_signature: Arc<[u8]> =
+            Arc::from(&new_device.signed_pre_key_signature[..]);
+        let adv_secret_key: Arc<[u8]> = Arc::from(&new_device.adv_secret_key[..]);
+        let push_name: Arc<str> = Arc::from(new_device.push_name.as_str());
+        let app_version_primary = new_device.app_version_primary as i32;
+        let app_version_secondary = new_device.app_version_secondary as i32;
+        let app_version_tertiary = new_device.app_version_tertiary as i64;
+        let app_version_last_fetched_ms = new_device.app_version_last_fetched_ms;
+        let next_pre_key_id = new_device.next_pre_key_id as i32;
+        let server_has_prekeys = new_device.server_has_prekeys;
 
-            let new_device = wacore::store::Device::new();
+        self.with_retry("create_new_device", || {
+            let noise_key_data = Arc::clone(&noise_key_data);
+            let identity_key_data = Arc::clone(&identity_key_data);
+            let signed_pre_key_data = Arc::clone(&signed_pre_key_data);
+            let signed_pre_key_signature = Arc::clone(&signed_pre_key_signature);
+            let adv_secret_key = Arc::clone(&adv_secret_key);
+            let push_name = Arc::clone(&push_name);
 
-            let noise_key_data = {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(new_device.noise_key.private_key.serialize());
-                bytes.extend_from_slice(new_device.noise_key.public_key.public_key_bytes());
-                bytes
-            };
-            let identity_key_data = {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(new_device.identity_key.private_key.serialize());
-                bytes.extend_from_slice(new_device.identity_key.public_key.public_key_bytes());
-                bytes
-            };
-            let signed_pre_key_data = {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(new_device.signed_pre_key.private_key.serialize());
-                bytes.extend_from_slice(new_device.signed_pre_key.public_key.public_key_bytes());
-                bytes
-            };
-
-            diesel::insert_into(device::table)
-                .values((
-                    device::lid.eq(""),
-                    device::pn.eq(""),
-                    device::registration_id.eq(new_device.registration_id as i32),
-                    device::noise_key.eq(&noise_key_data),
-                    device::identity_key.eq(&identity_key_data),
-                    device::signed_pre_key.eq(&signed_pre_key_data),
-                    device::signed_pre_key_id.eq(new_device.signed_pre_key_id as i32),
-                    device::signed_pre_key_signature.eq(&new_device.signed_pre_key_signature[..]),
-                    device::adv_secret_key.eq(&new_device.adv_secret_key[..]),
-                    device::account.eq(None::<Vec<u8>>),
-                    device::push_name.eq(&new_device.push_name),
-                    device::app_version_primary.eq(new_device.app_version_primary as i32),
-                    device::app_version_secondary.eq(new_device.app_version_secondary as i32),
-                    device::app_version_tertiary.eq(new_device.app_version_tertiary as i64),
-                    device::app_version_last_fetched_ms.eq(new_device.app_version_last_fetched_ms),
-                    device::edge_routing_info.eq(None::<Vec<u8>>),
-                    device::props_hash.eq(None::<String>),
-                    device::next_pre_key_id.eq(new_device.next_pre_key_id as i32),
-                    device::server_has_prekeys.eq(new_device.server_has_prekeys),
-                    device::nct_salt.eq(None::<Vec<u8>>),
-                ))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-
-            use diesel::sql_types::Integer;
-
-            #[derive(QueryableByName)]
-            struct LastInsertedId {
-                #[diesel(sql_type = Integer)]
-                last_insert_rowid: i32,
-            }
-
-            let device_id: i32 = sql_query("SELECT last_insert_rowid() as last_insert_rowid")
-                .get_result::<LastInsertedId>(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?
-                .last_insert_rowid;
-
-            Ok(device_id)
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::insert_into(device::table)
+                    .values((
+                        device::id.eq(device_id),
+                        device::lid.eq(""),
+                        device::pn.eq(""),
+                        device::registration_id.eq(registration_id),
+                        device::noise_key.eq(&*noise_key_data),
+                        device::identity_key.eq(&*identity_key_data),
+                        device::signed_pre_key.eq(&*signed_pre_key_data),
+                        device::signed_pre_key_id.eq(signed_pre_key_id),
+                        device::signed_pre_key_signature.eq(&*signed_pre_key_signature),
+                        device::adv_secret_key.eq(&*adv_secret_key),
+                        device::account.eq(None::<&[u8]>),
+                        device::push_name.eq(&*push_name),
+                        device::app_version_primary.eq(app_version_primary),
+                        device::app_version_secondary.eq(app_version_secondary),
+                        device::app_version_tertiary.eq(app_version_tertiary),
+                        device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                        device::edge_routing_info.eq(None::<&[u8]>),
+                        device::props_hash.eq(None::<&str>),
+                        device::next_pre_key_id.eq(next_pre_key_id),
+                        device::server_has_prekeys.eq(server_has_prekeys),
+                        device::nct_salt.eq(None::<&[u8]>),
+                    ))
+                    .execute(conn)
+                    .map(|_| device_id)
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
     pub async fn device_exists(&self, device_id: i32) -> Result<bool> {
@@ -2764,5 +2767,39 @@ mod tests {
 
         let g2 = store.get_sender_key_devices(group2).await.unwrap();
         assert!(g2.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_new_device_uses_configured_device_id() {
+        use portable_atomic::AtomicU64;
+        use std::sync::atomic::Ordering;
+        static COUNTER: AtomicU64 = AtomicU64::new(100);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let db_name = format!(
+            "file:memdb_devid_{}_{}?mode=memory&cache=shared",
+            std::process::id(),
+            id
+        );
+
+        let device_id = 42;
+        let store = SqliteStore::new_for_device(&db_name, device_id)
+            .await
+            .expect("Failed to create test store");
+
+        assert!(!store.device_exists(device_id).await.unwrap());
+        let returned_id = store.create_new_device().await.unwrap();
+        assert_eq!(returned_id, device_id);
+        assert!(store.device_exists(device_id).await.unwrap());
+
+        // Row 1 should NOT exist (would if auto-increment was used)
+        if device_id != 1 {
+            assert!(!store.device_exists(1).await.unwrap());
+        }
+
+        let loaded = store.load_device_data_for_device(device_id).await.unwrap();
+        assert!(
+            loaded.is_some(),
+            "device data should be loadable by configured id"
+        );
     }
 }

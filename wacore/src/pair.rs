@@ -300,7 +300,7 @@ impl PairUtils {
             .private_key
             .calculate_agreement(&their_public_key)?;
 
-        let mut final_message = Vec::new();
+        let mut final_message = Vec::with_capacity(64 + 32 + 32);
         final_message.extend_from_slice(&account_signature);
         final_message.extend_from_slice(master_ephemeral.public_key.public_key_bytes());
         final_message.extend_from_slice(identity_key.public_key.public_key_bytes());

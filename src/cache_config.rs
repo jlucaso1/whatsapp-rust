@@ -178,11 +178,11 @@ pub struct CacheConfig {
     pub sender_key_devices_cache: CacheEntryConfig,
 
     // --- Coordination caches (capacity-only, no TTL) ---
-    /// Per-device Signal session lock capacity. Default: 2000.
+    /// Per-device Signal session lock capacity. Default: 10000.
     pub session_locks_capacity: u64,
-    /// Per-chat message processing queue capacity. Default: 2000.
+    /// Per-chat message processing queue capacity. Default: 5000.
     pub message_queues_capacity: u64,
-    /// Per-chat message enqueue lock capacity. Default: 2000.
+    /// Per-chat message enqueue lock capacity. Default: 5000.
     pub message_enqueue_locks_capacity: u64,
 
     // --- Sent message DB cleanup ---
@@ -253,9 +253,12 @@ impl Default for CacheConfig {
             message_retry_counts: CacheEntryConfig::new(five_min, 1_000),
             pdo_pending_requests: CacheEntryConfig::new(Some(Duration::from_secs(30)), 500),
             sender_key_devices_cache: CacheEntryConfig::new(one_hour, 500),
-            session_locks_capacity: 2_000,
-            message_queues_capacity: 2_000,
-            message_enqueue_locks_capacity: 2_000,
+            // Coordination caches hold live mutexes/senders; capacity eviction
+            // while a reference is held creates a second lock for the same key,
+            // breaking serialization. Size generously to avoid eviction pressure.
+            session_locks_capacity: 10_000,
+            message_queues_capacity: 5_000,
+            message_enqueue_locks_capacity: 5_000,
             sent_message_ttl_secs: 300,
             cache_stores: CacheStores::default(),
         }
