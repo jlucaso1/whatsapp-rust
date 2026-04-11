@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1775883824579,
+  "lastUpdate": 1775891320630,
   "repoUrl": "https://github.com/jlucaso1/whatsapp-rust",
   "entries": {
     "whatsapp-rust benchmarks": [
@@ -1569,6 +1569,325 @@ window.BENCHMARK_DATA = {
           {
             "name": "libsignal_benchmark::signature_group::bench_signature_verification verify:setup_keypair_with_message()",
             "value": 123513473,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::signature_group::bench_key_generation keygen",
+            "value": 2830452,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::session_optimization_group::bench_decrypt_with_previous_session previous_session:setup_with_archived_sessions()",
+            "value": 46970,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::session_optimization_group::bench_out_of_order_decryption out_of_order:setup_out_of_order_messages()",
+            "value": 5119851,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::session_optimization_group::bench_promote_matching_session promote:setup_promote_matching_session()",
+            "value": 299173,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::session_optimization_group::bench_message_key_eviction eviction:setup_message_key_eviction()",
+            "value": 14247117,
+            "unit": "instructions"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "55464917+jlucaso1@users.noreply.github.com",
+            "name": "João Lucas",
+            "username": "jlucaso1"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c24b5edd392d74628f367c584737d43ed58d705",
+          "message": "perf!: use CompactString for NodeValue, NodeContent, and Jid.user (#512)",
+          "timestamp": "2026-04-11T04:03:05-03:00",
+          "tree_id": "cf61bddde419ba19fa482f1faee5cfd357269734",
+          "url": "https://github.com/jlucaso1/whatsapp-rust/commit/0c24b5edd392d74628f367c584737d43ed58d705"
+        },
+        "date": 1775891319901,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "reporting_token_benchmark::content_extraction_group::bench_content_extraction simple:setup_simple_message()",
+            "value": 3879,
+            "unit": "instructions"
+          },
+          {
+            "name": "reporting_token_benchmark::content_extraction_group::bench_content_extraction extended:setup_extended_message()",
+            "value": 11851,
+            "unit": "instructions"
+          },
+          {
+            "name": "reporting_token_benchmark::key_derivation_group::bench_key_derivation",
+            "value": 43398,
+            "unit": "instructions"
+          },
+          {
+            "name": "reporting_token_benchmark::token_calculation_group::bench_token_calculation",
+            "value": 19365,
+            "unit": "instructions"
+          },
+          {
+            "name": "reporting_token_benchmark::full_generation_group::bench_full_token_generation simple:setup_full_gen_simple()",
+            "value": 68822,
+            "unit": "instructions"
+          },
+          {
+            "name": "reporting_token_benchmark::full_generation_group::bench_full_token_generation extended:setup_full_gen_extended()",
+            "value": 76789,
+            "unit": "instructions"
+          },
+          {
+            "name": "reporting_token_benchmark::message_encoding_group::bench_message_encoding simple:setup_simple_message()",
+            "value": 2214,
+            "unit": "instructions"
+          },
+          {
+            "name": "reporting_token_benchmark::message_encoding_group::bench_message_encoding extended:setup_extended_message()",
+            "value": 5939,
+            "unit": "instructions"
+          },
+          {
+            "name": "send_receive_benchmark::dm_send::bench_dm_send text:setup_dm_send()",
+            "value": 179770,
+            "unit": "instructions"
+          },
+          {
+            "name": "send_receive_benchmark::dm_recv::bench_dm_recv text:setup_dm_recv()",
+            "value": 193146,
+            "unit": "instructions"
+          },
+          {
+            "name": "send_receive_benchmark::group_send::bench_group_send group_10:setup_group_send_10()",
+            "value": 894920,
+            "unit": "instructions"
+          },
+          {
+            "name": "send_receive_benchmark::group_send::bench_group_send group_50:setup_group_send_50()",
+            "value": 997331,
+            "unit": "instructions"
+          },
+          {
+            "name": "send_receive_benchmark::group_send::bench_group_send group_256:setup_group_send_256()",
+            "value": 1552797,
+            "unit": "instructions"
+          },
+          {
+            "name": "send_receive_benchmark::group_send_skdm::bench_group_send_skdm skdm_10:setup_group_skdm_10()",
+            "value": 2790271,
+            "unit": "instructions"
+          },
+          {
+            "name": "send_receive_benchmark::group_send_skdm::bench_group_send_skdm skdm_50:setup_group_skdm_50()",
+            "value": 10328303,
+            "unit": "instructions"
+          },
+          {
+            "name": "send_receive_benchmark::group_send_skdm::bench_group_send_skdm skdm_256:setup_group_skdm_256()",
+            "value": 49426381,
+            "unit": "instructions"
+          },
+          {
+            "name": "send_receive_benchmark::group_recv::bench_group_recv text:setup_group_recv()",
+            "value": 12693442,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_allocating",
+            "value": 95389,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_auto_allocating",
+            "value": 95422,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_exact_allocating",
+            "value": 115722,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_reusing_buffer",
+            "value": 105315,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_reusing_buffer_vec_writer",
+            "value": 95489,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_long_string",
+            "value": 15662,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_auto_long_string",
+            "value": 15706,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_exact_long_string",
+            "value": 17798,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_huge_bytes_allocating",
+            "value": 533097,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_auto_huge_bytes_allocating",
+            "value": 532663,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_exact_huge_bytes_allocating",
+            "value": 534118,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_many_children_allocating",
+            "value": 13379449,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_auto_many_children_allocating",
+            "value": 13379193,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::marshal_group::bench_marshal_exact_many_children_allocating",
+            "value": 26860794,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::unmarshal_group::bench_unmarshal small:setup_small_marshaled()",
+            "value": 2716,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::unmarshal_group::bench_unmarshal large:setup_large_marshaled()",
+            "value": 40257,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::unpack_group::bench_unpack_uncompressed",
+            "value": 773,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::unpack_group::bench_unpack_compressed",
+            "value": 556090,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::attr_parser_group::bench_attr_parser attr_lookup:setup_attr_marshaled()",
+            "value": 6008,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::roundtrip_group::bench_roundtrip small:setup_small_marshaled()",
+            "value": 7431,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::roundtrip_group::bench_roundtrip large:setup_large_marshaled()",
+            "value": 89832,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::roundtrip_group::bench_roundtrip_auto small:setup_small_marshaled()",
+            "value": 7454,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::roundtrip_group::bench_roundtrip_auto large:setup_large_marshaled()",
+            "value": 89863,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::roundtrip_group::bench_roundtrip_exact small:setup_small_marshaled()",
+            "value": 8966,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::roundtrip_group::bench_roundtrip_exact large:setup_large_marshaled()",
+            "value": 105408,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::child_iteration_group::bench_get_children_by_tag",
+            "value": 498603,
+            "unit": "instructions"
+          },
+          {
+            "name": "binary_benchmark::jid_optimization_group::bench_jid_to_owned_access jid_access:setup_jid_heavy_marshaled()",
+            "value": 17414,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::dm_group::bench_dm_session_establishment setup:setup_dm_users()",
+            "value": 17375559,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::dm_group::bench_dm_encrypt_first_message first_msg:setup_dm_session()",
+            "value": 162069,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::dm_group::bench_dm_decrypt_first_message decrypt_prekey:setup_dm_with_first_message()",
+            "value": 5512660,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::dm_group::bench_dm_encrypt_subsequent_message subsequent:setup_established_dm_session()",
+            "value": 163085,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::group_messaging_group::bench_group_create_distribution_message create:setup_group_sender()",
+            "value": 298493,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::group_messaging_group::bench_group_encrypt_message encrypt:setup_group_with_distribution()",
+            "value": 713231,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::group_messaging_group::bench_group_decrypt_message decrypt:setup_group_with_encrypted_message()",
+            "value": 12583400,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::conversation_group::bench_full_dm_conversation full:setup_conversation_data()",
+            "value": 27247322,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::signature_group::bench_signature_creation sign:setup_keypair_with_message()",
+            "value": 3467011,
+            "unit": "instructions"
+          },
+          {
+            "name": "libsignal_benchmark::signature_group::bench_signature_verification verify:setup_keypair_with_message()",
+            "value": 125393753,
             "unit": "instructions"
           },
           {
