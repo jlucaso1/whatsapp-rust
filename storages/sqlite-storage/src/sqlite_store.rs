@@ -415,67 +415,64 @@ impl SqliteStore {
     }
 
     pub async fn create_new_device(&self) -> Result<i32> {
-        use crate::schema::device;
-
-        let pool = self.pool.clone();
         let device_id = self.device_id;
-        tokio::task::spawn_blocking(move || -> Result<i32> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+        let new_device = wacore::store::Device::new();
 
-            let new_device = wacore::store::Device::new();
+        let noise_key_data: Arc<[u8]> = self.serialize_keypair(&new_device.noise_key)?.into();
+        let identity_key_data: Arc<[u8]> = self.serialize_keypair(&new_device.identity_key)?.into();
+        let signed_pre_key_data: Arc<[u8]> =
+            self.serialize_keypair(&new_device.signed_pre_key)?.into();
+        let registration_id = new_device.registration_id as i32;
+        let signed_pre_key_id = new_device.signed_pre_key_id as i32;
+        let signed_pre_key_signature: Arc<[u8]> =
+            Arc::from(&new_device.signed_pre_key_signature[..]);
+        let adv_secret_key: Arc<[u8]> = Arc::from(&new_device.adv_secret_key[..]);
+        let push_name: Arc<str> = Arc::from(new_device.push_name.as_str());
+        let app_version_primary = new_device.app_version_primary as i32;
+        let app_version_secondary = new_device.app_version_secondary as i32;
+        let app_version_tertiary = new_device.app_version_tertiary as i64;
+        let app_version_last_fetched_ms = new_device.app_version_last_fetched_ms;
+        let next_pre_key_id = new_device.next_pre_key_id as i32;
+        let server_has_prekeys = new_device.server_has_prekeys;
 
-            let noise_key_data = {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(new_device.noise_key.private_key.serialize());
-                bytes.extend_from_slice(new_device.noise_key.public_key.public_key_bytes());
-                bytes
-            };
-            let identity_key_data = {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(new_device.identity_key.private_key.serialize());
-                bytes.extend_from_slice(new_device.identity_key.public_key.public_key_bytes());
-                bytes
-            };
-            let signed_pre_key_data = {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(new_device.signed_pre_key.private_key.serialize());
-                bytes.extend_from_slice(new_device.signed_pre_key.public_key.public_key_bytes());
-                bytes
-            };
+        self.with_retry("create_new_device", || {
+            let noise_key_data = Arc::clone(&noise_key_data);
+            let identity_key_data = Arc::clone(&identity_key_data);
+            let signed_pre_key_data = Arc::clone(&signed_pre_key_data);
+            let signed_pre_key_signature = Arc::clone(&signed_pre_key_signature);
+            let adv_secret_key = Arc::clone(&adv_secret_key);
+            let push_name = Arc::clone(&push_name);
 
-            diesel::insert_into(device::table)
-                .values((
-                    device::id.eq(device_id),
-                    device::lid.eq(""),
-                    device::pn.eq(""),
-                    device::registration_id.eq(new_device.registration_id as i32),
-                    device::noise_key.eq(&noise_key_data),
-                    device::identity_key.eq(&identity_key_data),
-                    device::signed_pre_key.eq(&signed_pre_key_data),
-                    device::signed_pre_key_id.eq(new_device.signed_pre_key_id as i32),
-                    device::signed_pre_key_signature.eq(&new_device.signed_pre_key_signature[..]),
-                    device::adv_secret_key.eq(&new_device.adv_secret_key[..]),
-                    device::account.eq(None::<Vec<u8>>),
-                    device::push_name.eq(&new_device.push_name),
-                    device::app_version_primary.eq(new_device.app_version_primary as i32),
-                    device::app_version_secondary.eq(new_device.app_version_secondary as i32),
-                    device::app_version_tertiary.eq(new_device.app_version_tertiary as i64),
-                    device::app_version_last_fetched_ms.eq(new_device.app_version_last_fetched_ms),
-                    device::edge_routing_info.eq(None::<Vec<u8>>),
-                    device::props_hash.eq(None::<String>),
-                    device::next_pre_key_id.eq(new_device.next_pre_key_id as i32),
-                    device::server_has_prekeys.eq(new_device.server_has_prekeys),
-                    device::nct_salt.eq(None::<Vec<u8>>),
-                ))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-
-            Ok(device_id)
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::insert_into(device::table)
+                    .values((
+                        device::id.eq(device_id),
+                        device::lid.eq(""),
+                        device::pn.eq(""),
+                        device::registration_id.eq(registration_id),
+                        device::noise_key.eq(&*noise_key_data),
+                        device::identity_key.eq(&*identity_key_data),
+                        device::signed_pre_key.eq(&*signed_pre_key_data),
+                        device::signed_pre_key_id.eq(signed_pre_key_id),
+                        device::signed_pre_key_signature.eq(&*signed_pre_key_signature),
+                        device::adv_secret_key.eq(&*adv_secret_key),
+                        device::account.eq(None::<&[u8]>),
+                        device::push_name.eq(&*push_name),
+                        device::app_version_primary.eq(app_version_primary),
+                        device::app_version_secondary.eq(app_version_secondary),
+                        device::app_version_tertiary.eq(app_version_tertiary),
+                        device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                        device::edge_routing_info.eq(None::<&[u8]>),
+                        device::props_hash.eq(None::<&str>),
+                        device::next_pre_key_id.eq(next_pre_key_id),
+                        device::server_has_prekeys.eq(server_has_prekeys),
+                        device::nct_salt.eq(None::<&[u8]>),
+                    ))
+                    .execute(conn)
+                    .map(|_| device_id)
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
     pub async fn device_exists(&self, device_id: i32) -> Result<bool> {

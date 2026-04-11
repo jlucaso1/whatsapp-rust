@@ -178,11 +178,11 @@ pub struct CacheConfig {
     pub sender_key_devices_cache: CacheEntryConfig,
 
     // --- Coordination caches (capacity-only, no TTL) ---
-    /// Per-device Signal session lock capacity. Default: 2000.
+    /// Per-device Signal session lock capacity. Default: 10000.
     pub session_locks_capacity: u64,
-    /// Per-chat message processing queue capacity. Default: 2000.
+    /// Per-chat message processing queue capacity. Default: 5000.
     pub message_queues_capacity: u64,
-    /// Per-chat message enqueue lock capacity. Default: 2000.
+    /// Per-chat message enqueue lock capacity. Default: 5000.
     pub message_enqueue_locks_capacity: u64,
 
     // --- Sent message DB cleanup ---

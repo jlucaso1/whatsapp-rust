@@ -494,7 +494,12 @@ impl Client {
             None
         };
 
-        self.send_node(stanza).await?;
+        if let Err(e) = self.send_node(stanza).await {
+            if ack.is_some() {
+                self.response_waiters.lock().await.remove(&request_id);
+            }
+            return Err(e.into());
+        }
 
         if let Some((rx, phash)) = ack {
             self.spawn_phash_validation(rx, phash, to.clone(), false, request_id.clone());
@@ -1126,7 +1131,12 @@ impl Client {
             None
         };
 
-        self.send_node(stanza_to_send).await?;
+        if let Err(e) = self.send_node(stanza_to_send).await {
+            if let Some((_, _, ref msg_id)) = ack {
+                self.response_waiters.lock().await.remove(msg_id);
+            }
+            return Err(e.into());
+        }
 
         if let Some((rx, phash, msg_id)) = ack {
             self.spawn_phash_validation(rx, phash, tc_issue_target.clone(), true, msg_id);

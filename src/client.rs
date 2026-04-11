@@ -2837,7 +2837,11 @@ impl Client {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let own_jid = match device_snapshot.pn.clone() {
             Some(j) => j,
-            None => return Ok(()),
+            None => {
+                return Err(anyhow::anyhow!(
+                    "no own JID available for app-state key request"
+                ));
+            }
         };
         let key_ids: Vec<wa::message::AppStateSyncKeyId> = raw_key_ids
             .iter()
