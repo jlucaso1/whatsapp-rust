@@ -27,7 +27,7 @@ use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 /// IQ namespace for A/B props.
@@ -341,7 +341,7 @@ impl IqSpec for PropsSpec {
 
         InfoQuery::get(
             PROPS_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![builder.build()])),
         )
     }

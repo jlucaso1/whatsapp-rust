@@ -22,7 +22,7 @@ use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
@@ -351,7 +351,7 @@ impl IqSpec for MediaConnSpec {
 
         InfoQuery::set(
             "w:m",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![media_conn_node])),
         )
     }

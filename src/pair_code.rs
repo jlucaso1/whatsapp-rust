@@ -53,7 +53,7 @@ use log::{error, info, warn};
 use std::sync::Arc;
 use wacore::libsignal::protocol::KeyPair;
 use wacore::pair_code::{PairCodeError, PairCodeState, PairCodeUtils};
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::Jid;
 use wacore_binary::node::{Node, NodeContent};
 
 // Re-export types for user convenience
@@ -176,7 +176,7 @@ impl Client {
         let query = InfoQuery {
             query_type: InfoQueryType::Set,
             namespace: "md",
-            to: Jid::new("", SERVER_JID),
+            to: Jid::new("", wacore_binary::jid::Server::Pn),
             target: None,
             content: Some(NodeContent::Nodes(
                 iq_content

@@ -11,7 +11,7 @@ fn mapped_server(s: &str) -> &str {
 pub fn write_protocol_address_to(jid: &Jid, buf: &mut String) {
     use std::fmt::Write;
     buf.clear();
-    let server = mapped_server(&jid.server);
+    let server = mapped_server(jid.server.as_str());
     buf.push_str(&jid.user);
     if jid.device != 0 {
         buf.push(':');
@@ -24,8 +24,8 @@ pub fn write_protocol_address_to(jid: &Jid, buf: &mut String) {
 
 /// Consistent ordering for deadlock-free multi-lock acquisition.
 pub fn cmp_for_lock_order(a: &Jid, b: &Jid) -> std::cmp::Ordering {
-    mapped_server(&a.server)
-        .cmp(mapped_server(&b.server))
+    mapped_server(a.server.as_str())
+        .cmp(mapped_server(b.server.as_str()))
         .then_with(|| a.user.cmp(&b.user))
         .then_with(|| a.device.cmp(&b.device))
 }
@@ -69,7 +69,7 @@ pub trait JidExt {
 impl JidExt for Jid {
     fn to_signal_address_string(&self) -> String {
         use std::fmt::Write;
-        let server = mapped_server(&self.server);
+        let server = mapped_server(self.server.as_str());
         let mut result = String::with_capacity(self.user.len() + 7 + server.len());
         result.push_str(&self.user);
         if self.device != 0 {

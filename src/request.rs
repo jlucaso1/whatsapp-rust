@@ -100,7 +100,7 @@ impl Client {
     /// use wacore::request::{InfoQuery, InfoQueryType};
     /// use wacore_binary::builder::NodeBuilder;
     /// use wacore_binary::node::NodeContent;
-    /// use wacore_binary::jid::{Jid, SERVER_JID};
+    /// use wacore_binary::jid::{Jid, Server};
     ///
     /// // This is a simplified example - real usage requires proper setup
     /// # async fn example(client: &whatsapp_rust::Client) -> Result<(), Box<dyn std::error::Error>> {
@@ -108,7 +108,7 @@ impl Client {
     ///     .attr("type", "available")
     ///     .build();
     ///
-    /// let server_jid = Jid::new("", SERVER_JID);
+    /// let server_jid = Jid::new("", Server::Pn);
     ///
     /// let query = InfoQuery {
     ///     query_type: InfoQueryType::Set,

@@ -97,7 +97,7 @@ impl Client {
                     );
                     self.clear_device_record(
                         &user_list.user.user,
-                        &user_list.user.server,
+                        user_list.user.server.as_str(),
                         existing,
                     )
                     .await;

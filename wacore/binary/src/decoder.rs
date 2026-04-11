@@ -108,8 +108,10 @@ impl<'a> Decoder<'a> {
 
     fn read_jid_pair(&mut self) -> Result<JidRef<'a>> {
         let user_val = self.read_value_as_string()?;
-        let server = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
+        let server_str = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
         let user = user_val.unwrap_or(Cow::Borrowed(""));
+        let server =
+            crate::jid::Server::try_from(server_str.as_ref()).unwrap_or(crate::jid::Server::Pn);
         Ok(JidRef {
             user,
             server,
@@ -129,14 +131,11 @@ impl<'a> Decoder<'a> {
         // Domain type mapping — must mirror encoder's server_to_domain_type().
         // WA Web: 0=WHATSAPP, 1=LID, even+bit7=HOSTED, 129=HOSTED_LID, else throw.
         let server = match agent {
-            0 => Cow::Borrowed(crate::jid::DEFAULT_USER_SERVER),
-            1 => Cow::Borrowed(crate::jid::HIDDEN_USER_SERVER),
-            128 => Cow::Borrowed(crate::jid::HOSTED_SERVER),
-            129 => Cow::Borrowed(crate::jid::HOSTED_LID_SERVER),
-            n if (n & 128) != 0 && (n & 1) == 0 => {
-                // WA Web treats any even number with bit 7 set as HOSTED
-                Cow::Borrowed(crate::jid::HOSTED_SERVER)
-            }
+            0 => crate::jid::Server::Pn,
+            1 => crate::jid::Server::Lid,
+            128 => crate::jid::Server::Hosted,
+            129 => crate::jid::Server::HostedLid,
+            n if (n & 128) != 0 && (n & 1) == 0 => crate::jid::Server::Hosted,
             _ => {
                 return Err(BinaryError::AttrParse(format!(
                     "AD_JID invalid domain type: {agent}"
@@ -159,13 +158,13 @@ impl<'a> Decoder<'a> {
             .ok_or(BinaryError::InvalidNode)?;
         let device = self.read_u16_be()?;
         let integrator = self.read_u16_be()?;
-        let server = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
-        if server != crate::jid::INTEROP_SERVER {
+        let server_str = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
+        if server_str.as_ref() != crate::jid::INTEROP_SERVER {
             return Err(BinaryError::InvalidNode);
         }
         Ok(JidRef {
             user,
-            server,
+            server: crate::jid::Server::Interop,
             device,
             integrator,
             agent: 0,
@@ -177,13 +176,13 @@ impl<'a> Decoder<'a> {
             .read_value_as_string()?
             .ok_or(BinaryError::InvalidNode)?;
         let device = self.read_u16_be()?;
-        let server = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
-        if server != crate::jid::MESSENGER_SERVER {
+        let server_str = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
+        if server_str.as_ref() != crate::jid::MESSENGER_SERVER {
             return Err(BinaryError::InvalidNode);
         }
         Ok(JidRef {
             user,
-            server,
+            server: crate::jid::Server::Messenger,
             device,
             agent: 0,
             integrator: 0,

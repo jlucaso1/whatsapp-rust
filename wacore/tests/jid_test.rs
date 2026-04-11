@@ -40,7 +40,10 @@ fn test_jid_parsing_and_serialization() {
 fn test_invalid_jid_parsing() {
     assert!(Jid::from_str("invalidjid").is_err());
 
-    assert!(Jid::from_str("user@server:device").is_ok());
+    // Unknown servers are now rejected by the Server enum
+    assert!(Jid::from_str("user@server:device").is_err());
+    // But known servers with device work fine
+    assert!(Jid::from_str("user@s.whatsapp.net").is_ok());
 }
 
 #[test]

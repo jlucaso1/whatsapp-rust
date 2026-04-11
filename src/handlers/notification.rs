@@ -369,7 +369,7 @@ async fn handle_identity_change(client: &Arc<Client>, node: &Node) {
     // Deletes non-primary sessions + all sender key device tracking
     if let Some(record) = client.load_device_record(&from_jid.user).await {
         client
-            .clear_device_record(&from_jid.user, &from_jid.server, &record)
+            .clear_device_record(&from_jid.user, from_jid.server.as_str(), &record)
             .await;
     }
 

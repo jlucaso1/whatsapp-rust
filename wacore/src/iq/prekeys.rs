@@ -44,7 +44,7 @@ use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 // Re-export PreKeyBundle for convenience
@@ -97,7 +97,7 @@ impl IqSpec for PreKeyCountSpec {
 
         InfoQuery::get(
             "encrypt",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![count_node])),
         )
     }
@@ -158,7 +158,7 @@ impl IqSpec for PreKeyFetchSpec {
 
         InfoQuery::get(
             "encrypt",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![content])),
         )
     }
@@ -238,7 +238,7 @@ impl IqSpec for DigestKeyBundleSpec {
 
         InfoQuery::get(
             "encrypt",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![digest_node])),
         )
     }
@@ -383,7 +383,7 @@ impl IqSpec for PreKeyUploadSpec {
 
         InfoQuery::set(
             "encrypt",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(content)),
         )
     }

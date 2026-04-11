@@ -54,7 +54,7 @@ use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use crate::types::message::AddressingMode;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 /// IQ namespace for privacy settings.
@@ -191,7 +191,7 @@ impl IqSpec for PrivacySettingsSpec {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::get(
             PRIVACY_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("privacy").build(),
             ])),
@@ -323,7 +323,7 @@ impl IqSpec for SetPrivacySettingSpec {
 
         InfoQuery::set(
             PRIVACY_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 privacy_node.children([category_node.build()]).build(),
             ])),
@@ -370,7 +370,7 @@ impl IqSpec for SetDefaultDisappearingModeSpec {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::set(
             "disappearing_mode",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("disappearing_mode")
                     .attr("duration", self.duration.to_string())
@@ -634,12 +634,12 @@ mod tests {
                 users: vec![
                     DisallowedListUserEntry {
                         action: DisallowedListAction::Add,
-                        jid: Jid::new("100000000000001", "lid"),
-                        pn_jid: Some(Jid::new("5511999999999", "s.whatsapp.net")),
+                        jid: Jid::new("100000000000001", Server::Lid),
+                        pn_jid: Some(Jid::new("5511999999999", Server::Pn)),
                     },
                     DisallowedListUserEntry {
                         action: DisallowedListAction::Remove,
-                        jid: Jid::new("100000000000002", "lid"),
+                        jid: Jid::new("100000000000002", Server::Lid),
                         pn_jid: None,
                     },
                 ],

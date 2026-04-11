@@ -20,7 +20,7 @@
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use crate::types::spam_report::{SpamReportRequest, SpamReportResult, build_spam_list_node};
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 // Re-export types for convenience
@@ -48,7 +48,7 @@ impl IqSpec for SpamReportSpec {
 
         InfoQuery::set(
             "spam",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![spam_list_node])),
         )
     }

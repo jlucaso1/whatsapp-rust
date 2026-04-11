@@ -2,7 +2,7 @@ use crate::StringEnum;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 pub const DIRTY_NAMESPACE: &str = "urn:xmpp:whatsapp:dirty";
@@ -110,7 +110,7 @@ impl IqSpec for CleanDirtyBitsSpec {
 
         InfoQuery::set(
             DIRTY_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(children)),
         )
     }

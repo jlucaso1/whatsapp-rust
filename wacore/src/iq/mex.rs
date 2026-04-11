@@ -22,7 +22,7 @@ use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 /// MEX GraphQL error extensions.
@@ -134,7 +134,7 @@ impl IqSpec for MexQuerySpec {
 
         InfoQuery::get(
             "w:mex",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![query_node])),
         )
     }

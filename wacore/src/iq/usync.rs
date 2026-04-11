@@ -57,7 +57,7 @@ use anyhow::anyhow;
 use log::warn;
 use std::collections::HashMap;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 /// Usync mode.
@@ -294,7 +294,7 @@ impl IqSpec for IsOnWhatsAppSpec {
 
         InfoQuery::get(
             "usync",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![usync_node])),
         )
     }
@@ -407,7 +407,7 @@ impl IqSpec for UserInfoSpec {
 
         InfoQuery::get(
             "usync",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![usync_node])),
         )
     }
@@ -532,7 +532,7 @@ impl IqSpec for DeviceListSpec {
 
         InfoQuery::get(
             "usync",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![usync_node])),
         )
     }
@@ -697,7 +697,7 @@ impl IqSpec for LidQuerySpec {
 
         InfoQuery::get(
             "usync",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![usync_node])),
         )
     }

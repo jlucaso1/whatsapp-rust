@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use std::num::NonZeroU32;
 use typed_builder::TypedBuilder;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{GROUP_SERVER, Jid};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 // Re-export AddressingMode from types::message for convenience
@@ -820,7 +820,7 @@ impl IqSpec for GroupParticipatingIq {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::get(
             GROUP_IQ_NAMESPACE,
-            Jid::new("", GROUP_SERVER),
+            Jid::new("", Server::Group),
             Some(NodeContent::Nodes(vec![
                 GroupParticipatingRequest::new().into_node(),
             ])),
@@ -851,7 +851,7 @@ impl IqSpec for GroupCreateIq {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::set(
             GROUP_IQ_NAMESPACE,
-            Jid::new("", GROUP_SERVER),
+            Jid::new("", Server::Group),
             Some(NodeContent::Nodes(vec![build_create_group_node(
                 &self.options,
             )])),
@@ -1042,7 +1042,7 @@ impl IqSpec for LeaveGroupIq {
 
         InfoQuery::set(
             GROUP_IQ_NAMESPACE,
-            Jid::new("", GROUP_SERVER),
+            Jid::new("", Server::Group),
             Some(NodeContent::Nodes(vec![leave_node])),
         )
     }
@@ -1935,7 +1935,7 @@ impl IqSpec for AcceptGroupInviteIq {
     type Response = JoinGroupResult;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        let to = Jid::new("", GROUP_SERVER);
+        let to = Jid::new("", Server::Group);
         InfoQuery::set_ref(
             GROUP_IQ_NAMESPACE,
             &to,
@@ -2022,7 +2022,7 @@ impl IqSpec for GetGroupInviteInfoIq {
     type Response = GroupInfoResponse;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        let to = Jid::new("", GROUP_SERVER);
+        let to = Jid::new("", Server::Group);
         InfoQuery::get_ref(
             GROUP_IQ_NAMESPACE,
             &to,
@@ -2386,7 +2386,7 @@ mod tests {
         assert_eq!(iq.namespace, GROUP_IQ_NAMESPACE);
         assert_eq!(iq.query_type, InfoQueryType::Set);
         // Leave goes to g.us, not the group JID
-        assert_eq!(iq.to.server, GROUP_SERVER);
+        assert_eq!(iq.to.server, Server::Group);
     }
 
     #[test]

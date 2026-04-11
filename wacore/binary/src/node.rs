@@ -401,7 +401,7 @@ impl Node {
                         NodeValue::String(s) => ValueRef::String(Cow::Borrowed(s.as_str())),
                         NodeValue::Jid(j) => ValueRef::Jid(JidRef {
                             user: Cow::Borrowed(&j.user),
-                            server: Cow::Borrowed(&j.server),
+                            server: j.server,
                             agent: j.agent,
                             device: j.device,
                             integrator: j.integrator,

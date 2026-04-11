@@ -22,7 +22,7 @@
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 /// IQ namespace for passive mode.
@@ -61,7 +61,7 @@ impl IqSpec for PassiveModeSpec {
 
         InfoQuery::set(
             PASSIVE_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![child_node])),
         )
     }

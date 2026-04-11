@@ -27,7 +27,7 @@ use crate::iq::tctoken::build_tc_token_node;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 /// Profile picture information.
@@ -122,7 +122,7 @@ impl IqSpec for ProfilePictureSpec {
 
         InfoQuery::get(
             "w:profile:picture",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![picture_builder.build()])),
         )
         .with_target_ref(&self.jid)
@@ -268,7 +268,7 @@ impl IqSpec for SetProfilePictureSpec {
 
         let mut iq = InfoQuery::set(
             "w:profile:picture",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![picture_builder.build()])),
         );
 

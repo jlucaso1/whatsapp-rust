@@ -12,7 +12,7 @@
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use std::time::Duration;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::Node;
 
 /// Keepalive ping to keep the connection alive.
@@ -39,7 +39,7 @@ impl IqSpec for KeepaliveSpec {
     type Response = ();
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        let mut iq = InfoQuery::get("w:p", Jid::new("", SERVER_JID), None);
+        let mut iq = InfoQuery::get("w:p", Jid::new("", Server::Pn), None);
         if let Some(timeout) = self.timeout {
             iq = iq.with_timeout(timeout);
         }

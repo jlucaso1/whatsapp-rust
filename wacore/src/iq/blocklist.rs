@@ -11,7 +11,7 @@ use crate::request::InfoQuery;
 use anyhow::Result;
 use log::warn;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 /// IQ namespace for blocklist operations.
 pub const BLOCKLIST_IQ_NAMESPACE: &str = "blocklist";
@@ -113,7 +113,7 @@ impl IqSpec for GetBlocklistSpec {
     type Response = Vec<BlocklistEntry>;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        InfoQuery::get(BLOCKLIST_IQ_NAMESPACE, Jid::new("", SERVER_JID), None)
+        InfoQuery::get(BLOCKLIST_IQ_NAMESPACE, Jid::new("", Server::Pn), None)
     }
 
     fn parse_response(&self, response: &Node) -> Result<Self::Response> {
@@ -154,7 +154,7 @@ impl IqSpec for UpdateBlocklistSpec {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::set(
             BLOCKLIST_IQ_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![self.request.clone().into_node()])),
         )
     }

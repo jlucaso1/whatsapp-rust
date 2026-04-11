@@ -5,7 +5,7 @@ use crate::iq::node::optional_attr;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
+use wacore_binary::jid::{Jid, Server};
 use wacore_binary::node::{Node, NodeContent};
 
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
@@ -114,7 +114,7 @@ impl IqSpec for BusinessProfileSpec {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::get(
             "w:biz",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("business_profile")
                     .attr("v", "244")
