@@ -1119,12 +1119,11 @@ impl Client {
             .attrs()
             .optional_string("phash")
             .map(|s| s.into_owned())
-        {
-            let msg_id = stanza_to_send
+            && let Some(msg_id) = stanza_to_send
                 .attrs()
                 .optional_string("id")
                 .map(|s| s.into_owned())
-                .unwrap_or_default();
+        {
             let rx = self.register_ack_waiter(&msg_id).await;
             Some((rx, phash, msg_id))
         } else {

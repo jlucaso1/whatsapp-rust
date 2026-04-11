@@ -2768,4 +2768,38 @@ mod tests {
         let g2 = store.get_sender_key_devices(group2).await.unwrap();
         assert!(g2.is_empty());
     }
+
+    #[tokio::test]
+    async fn test_create_new_device_uses_configured_device_id() {
+        use portable_atomic::AtomicU64;
+        use std::sync::atomic::Ordering;
+        static COUNTER: AtomicU64 = AtomicU64::new(100);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let db_name = format!(
+            "file:memdb_devid_{}_{}?mode=memory&cache=shared",
+            std::process::id(),
+            id
+        );
+
+        let device_id = 42;
+        let store = SqliteStore::new_for_device(&db_name, device_id)
+            .await
+            .expect("Failed to create test store");
+
+        assert!(!store.device_exists(device_id).await.unwrap());
+        let returned_id = store.create_new_device().await.unwrap();
+        assert_eq!(returned_id, device_id);
+        assert!(store.device_exists(device_id).await.unwrap());
+
+        // Row 1 should NOT exist (would if auto-increment was used)
+        if device_id != 1 {
+            assert!(!store.device_exists(1).await.unwrap());
+        }
+
+        let loaded = store.load_device_data_for_device(device_id).await.unwrap();
+        assert!(
+            loaded.is_some(),
+            "device data should be loadable by configured id"
+        );
+    }
 }
