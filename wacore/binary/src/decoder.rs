@@ -110,8 +110,9 @@ impl<'a> Decoder<'a> {
         let user_val = self.read_value_as_string()?;
         let server_str = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
         let user = user_val.unwrap_or(Cow::Borrowed(""));
-        let server =
-            crate::jid::Server::try_from(server_str.as_ref()).unwrap_or(crate::jid::Server::Pn);
+        let server = crate::jid::Server::try_from(server_str.as_ref()).map_err(|_| {
+            BinaryError::AttrParse(format!("JID_PAIR unknown server: {}", server_str))
+        })?;
         Ok(JidRef {
             user,
             server,
@@ -130,17 +131,15 @@ impl<'a> Decoder<'a> {
 
         // Domain type mapping — must mirror encoder's server_to_domain_type().
         // WA Web: 0=WHATSAPP, 1=LID, even+bit7=HOSTED, 129=HOSTED_LID, else throw.
+        // server_to_domain_type encodes Pn/unknown as the agent value directly,
+        // so unmapped agents round-trip as Pn with the original agent preserved.
         let server = match agent {
             0 => crate::jid::Server::Pn,
             1 => crate::jid::Server::Lid,
             128 => crate::jid::Server::Hosted,
             129 => crate::jid::Server::HostedLid,
             n if (n & 128) != 0 && (n & 1) == 0 => crate::jid::Server::Hosted,
-            _ => {
-                return Err(BinaryError::AttrParse(format!(
-                    "AD_JID invalid domain type: {agent}"
-                )));
-            }
+            _ => crate::jid::Server::Pn,
         };
 
         Ok(JidRef {

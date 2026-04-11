@@ -288,7 +288,7 @@ fn bench_attr_parser(marshaled: Vec<u8>) {
     // Skip the flag byte at position 0
     let node_ref = unmarshal_ref(&marshaled[1..]).unwrap();
 
-    let mut parser = node_ref.attr_parser();
+    let mut parser = node_ref.attrs();
     black_box(parser.optional_string("xmlns"));
     black_box(parser.optional_string("type"));
     black_box(parser.optional_jid("from"));

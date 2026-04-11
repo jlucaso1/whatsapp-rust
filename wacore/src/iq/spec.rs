@@ -1,5 +1,4 @@
 use crate::request::InfoQuery;
-use wacore_binary::node::Node;
 
 /// A reusable IQ specification that pairs a request builder with a response parser.
 ///
@@ -13,5 +12,8 @@ pub trait IqSpec {
     fn build_iq(&self) -> InfoQuery<'static>;
 
     /// Parse the IQ response node into the typed response.
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error>;
+    fn parse_response(
+        &self,
+        response: &wacore_binary::NodeRef<'_>,
+    ) -> Result<Self::Response, anyhow::Error>;
 }

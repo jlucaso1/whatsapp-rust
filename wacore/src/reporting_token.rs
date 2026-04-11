@@ -22,9 +22,9 @@ use hkdf::Hkdf;
 use hmac::{Hmac, KeyInit, Mac};
 use prost::Message;
 use sha2::Sha256;
+use wacore_binary::Jid;
+use wacore_binary::Node;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::Node;
 use waproto::whatsapp as wa;
 
 /// Wire type constants for protobuf parsing
@@ -857,7 +857,7 @@ mod tests {
 
     #[test]
     fn test_build_reporting_node() {
-        use wacore_binary::node::NodeContent;
+        use wacore_binary::NodeContent;
 
         let expected_token = [
             0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC, 0xDE, 0xF0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66,

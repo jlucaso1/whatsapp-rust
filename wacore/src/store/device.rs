@@ -3,7 +3,7 @@ use once_cell::sync::Lazy;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 use waproto::whatsapp as wa;
 
 /// Protobuf-bytes serde for `AdvSignedDeviceIdentity` (prost types lack `Deserialize`).

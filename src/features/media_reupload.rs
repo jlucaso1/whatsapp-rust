@@ -14,7 +14,7 @@ pub use wacore::media_retry::MediaRetryResult;
 use wacore::media_retry::{
     build_media_retry_receipt, encrypt_media_retry_receipt, parse_media_retry_notification,
 };
-use wacore_binary::jid::{Jid, JidExt as _};
+use wacore_binary::{Jid, JidExt as _};
 
 const MEDIA_RETRY_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -108,7 +108,7 @@ impl<'a> MediaReupload<'a> {
         );
 
         // Parse and decrypt the response
-        parse_media_retry_notification(&notification_node, req.media_key)
+        parse_media_retry_notification(notification_node.get(), req.media_key)
     }
 }
 

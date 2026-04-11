@@ -22,8 +22,8 @@ use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, Server};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{Node, NodeContent, NodeRef};
 
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum HostType {
@@ -189,7 +189,7 @@ impl ProtocolNode for MediaConnHostExtended {
         builder.build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         if node.tag != "host" {
             return Err(anyhow!("expected <host>, got <{}>", node.tag));
         }
@@ -198,7 +198,7 @@ impl ProtocolNode for MediaConnHostExtended {
         let hostname = attrs
             .optional_string("hostname")
             .ok_or_else(|| anyhow!("missing hostname attribute"))?
-            .to_string();
+            .into_owned();
         let host_type = attrs
             .optional_string("type")
             .map(|s| HostType::from(s.as_ref()))
@@ -300,7 +300,7 @@ impl ProtocolNode for MediaConnResponseExtended {
         builder.build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         if node.tag != "media_conn" {
             return Err(anyhow!("expected <media_conn>, got <{}>", node.tag));
         }
@@ -309,17 +309,17 @@ impl ProtocolNode for MediaConnResponseExtended {
         let auth = attrs
             .optional_string("auth")
             .ok_or_else(|| anyhow!("missing auth attribute"))?
-            .to_string();
+            .into_owned();
         let ttl = attrs.optional_u64("ttl").unwrap_or(0);
         let auth_ttl = attrs.optional_u64("auth_ttl");
         let max_buckets = attrs.optional_u64("max_buckets");
         let ip_token = attrs.optional_string("ip_token").map(|s| s.into_owned());
         let set_ip_token = attrs.optional_u64("set_ip_token");
 
-        let mut hosts = Vec::new();
-        for host_node in node.get_children_by_tag("host") {
-            hosts.push(MediaConnHostExtended::try_from_node(host_node)?);
-        }
+        let hosts = node
+            .get_children_by_tag("host")
+            .map(MediaConnHostExtended::try_from_node_ref)
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
             auth,
@@ -356,7 +356,7 @@ impl IqSpec for MediaConnSpec {
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let media_conn_node = response
             .get_optional_child("media_conn")
             .ok_or_else(|| anyhow!("Missing media_conn node in response"))?;
@@ -375,7 +375,7 @@ impl IqSpec for MediaConnSpec {
         let mut hosts: Vec<MediaConnHost> = media_conn_node
             .get_children_by_tag("host")
             .filter_map(|host_node| {
-                let ext = MediaConnHostExtended::try_from_node(host_node).ok()?;
+                let ext = MediaConnHostExtended::try_from_node_ref(host_node).ok()?;
                 Some(MediaConnHost {
                     hostname: ext.hostname,
                     host_type: ext.host_type,
@@ -444,7 +444,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
 
         assert_eq!(result.auth, "test-auth-token");
         assert_eq!(result.ttl, 3600);
@@ -460,7 +460,7 @@ mod tests {
 
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
-        let result = spec.parse_response(&response);
+        let result = spec.parse_response(&response.as_node_ref());
         assert!(result.is_err());
     }
 

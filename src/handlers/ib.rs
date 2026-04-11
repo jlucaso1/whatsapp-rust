@@ -7,8 +7,6 @@ use std::sync::Arc;
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::iq::dirty::{DirtyBit, DirtyType};
 
-use wacore_binary::node::{Node, NodeContent};
-
 /// Handler for `<ib>` (information broadcast) stanzas.
 ///
 /// Processes various server notifications including:
@@ -26,13 +24,18 @@ impl StanzaHandler for IbHandler {
         "ib"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        handle_ib_impl(client, &node).await;
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<wacore_binary::OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
+        handle_ib_impl(client, node.get()).await;
         true
     }
 }
 
-async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
+async fn handle_ib_impl(client: Arc<Client>, node: &wacore_binary::NodeRef<'_>) {
     for child in node.children().unwrap_or_default() {
         match child.tag.as_ref() {
             "dirty" => {
@@ -105,35 +108,27 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 // Edge routing info is used for optimized reconnection to WhatsApp servers.
                 // When present, it should be sent as a pre-intro before the Noise handshake.
                 // Format on wire: ED (2 bytes) + length (3 bytes BE) + routing_data + WA header
-                if let Some(routing_info_node) = child.get_optional_child("routing_info") {
-                    if let Some(NodeContent::Bytes(routing_bytes)) = &routing_info_node.content {
-                        if !routing_bytes.is_empty() {
-                            debug!(
-                                "Received edge routing info ({} bytes), storing for reconnection",
-                                routing_bytes.len()
-                            );
-                            // Spawn to avoid blocking the read loop on Device write lock.
-                            let routing_bytes = routing_bytes.clone();
-                            let client_clone = client.clone();
-                            client
-                                .runtime
-                                .spawn(Box::pin(async move {
-                                    client_clone
-                                        .persistence_manager
-                                        .modify_device(|device| {
-                                            device.edge_routing_info = Some(routing_bytes);
-                                        })
-                                        .await;
-                                }))
-                                .detach();
-                        } else {
-                            debug!("Received empty edge routing info, ignoring");
-                        }
-                    } else {
-                        debug!("Edge routing info node has no bytes content");
-                    }
-                } else {
-                    debug!("Edge routing stanza has no routing_info child");
+                if let Some(routing_info_node) = child.get_optional_child("routing_info")
+                    && let Some(routing_bytes) = routing_info_node.content_bytes()
+                    && !routing_bytes.is_empty()
+                {
+                    debug!(
+                        "Received edge routing info ({} bytes), storing for reconnection",
+                        routing_bytes.len()
+                    );
+                    let routing_bytes = routing_bytes.to_vec();
+                    let client_clone = client.clone();
+                    client
+                        .runtime
+                        .spawn(Box::pin(async move {
+                            client_clone
+                                .persistence_manager
+                                .modify_device(|device| {
+                                    device.edge_routing_info = Some(routing_bytes);
+                                })
+                                .await;
+                        }))
+                        .detach();
                 }
             }
             "offline_preview" => {

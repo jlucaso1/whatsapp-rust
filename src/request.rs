@@ -1,11 +1,12 @@
 use crate::client::Client;
 use crate::socket::error::SocketError;
 use futures::FutureExt;
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use thiserror::Error;
 use wacore::runtime::timeout as rt_timeout;
-use wacore_binary::node::Node;
+use wacore_binary::Node;
 
 pub use wacore::request::{InfoQuery, InfoQueryType, RequestUtils};
 
@@ -91,7 +92,7 @@ impl Client {
     ///
     /// # Returns
     ///
-    /// * `Ok(Node)` - The response node from the server
+    /// * `Ok(Arc<OwnedNodeRef>)` - The response node from the server (zero-copy, borrowed from decode buffer)
     /// * `Err(IqError)` - Various error conditions including timeout, connection issues, or server errors
     ///
     /// # Example
@@ -99,8 +100,8 @@ impl Client {
     /// ```rust,no_run
     /// use wacore::request::{InfoQuery, InfoQueryType};
     /// use wacore_binary::builder::NodeBuilder;
-    /// use wacore_binary::node::NodeContent;
-    /// use wacore_binary::jid::{Jid, Server};
+    /// use wacore_binary::NodeContent;
+    /// use wacore_binary::{Jid, Server};
     ///
     /// // This is a simplified example - real usage requires proper setup
     /// # async fn example(client: &whatsapp_rust::Client) -> Result<(), Box<dyn std::error::Error>> {
@@ -121,10 +122,14 @@ impl Client {
     /// };
     ///
     /// let response = client.send_iq(query).await?;
+    /// // Access the node via response.get()
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn send_iq(&self, query: InfoQuery<'_>) -> Result<Node, IqError> {
+    pub async fn send_iq(
+        &self,
+        query: InfoQuery<'_>,
+    ) -> Result<Arc<wacore_binary::OwnedNodeRef>, IqError> {
         // Fail fast if the client is shutting down
         if !self.is_running.load(Ordering::Relaxed) {
             return Err(IqError::NotConnected);
@@ -172,7 +177,7 @@ impl Client {
         futures::select! {
             result = rt_timeout(&*self.runtime, iq_timeout, rx).fuse() => {
                 match result {
-                    Ok(Ok(response_node)) => match *request_utils.parse_iq_response(&response_node) {
+                    Ok(Ok(response_node)) => match request_utils.parse_iq_response(response_node.get()) {
                         Ok(()) => Ok(response_node),
                         Err(e) => Err(e.into()),
                     },
@@ -209,6 +214,7 @@ impl Client {
     {
         let iq = spec.build_iq();
         let response = self.send_iq(iq).await?;
-        spec.parse_response(&response).map_err(IqError::ParseError)
+        spec.parse_response(response.get())
+            .map_err(IqError::ParseError)
     }
 }

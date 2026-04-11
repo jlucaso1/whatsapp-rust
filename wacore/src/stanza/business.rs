@@ -2,11 +2,10 @@
 //!
 //! Reference: WhatsApp Web `WAWebHandleBusinessNotification`
 
-use crate::iq::node::{optional_attr, optional_child};
 use anyhow::{Result, anyhow};
 use serde::Serialize;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::Jid;
+use wacore_binary::NodeRef;
 
 /// Business notification type based on child element.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -51,15 +50,16 @@ pub struct VerifiedName {
 }
 
 impl VerifiedName {
-    pub fn try_from_node(node: &Node) -> Result<Self> {
+    pub fn try_from_node(node: &NodeRef<'_>) -> Result<Self> {
+        use wacore_binary::NodeContentRef;
         let name = node
             .attrs()
             .optional_string("name")
             .map(|s| s.into_owned())
             .or_else(|| {
                 node.get_optional_child_by_tag(&["name"])
-                    .and_then(|n| match &n.content {
-                        Some(NodeContent::String(s)) => Some(s.to_string()),
+                    .and_then(|n| match n.content.as_deref() {
+                        Some(NodeContentRef::String(s)) => Some(s.to_string()),
                         _ => None,
                     })
             });
@@ -72,8 +72,8 @@ impl VerifiedName {
             .attrs()
             .optional_string("issuer")
             .map(|s| s.into_owned());
-        let certificate = match &node.content {
-            Some(NodeContent::Bytes(b)) => Some(b.clone()),
+        let certificate = match node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) => Some(b.to_vec()),
             _ => None,
         };
 
@@ -119,30 +119,33 @@ pub struct BusinessNotification {
 }
 
 impl BusinessNotification {
-    pub fn try_parse(node: &Node) -> Result<Self> {
+    pub fn try_parse(node: &NodeRef<'_>) -> Result<Self> {
         if node.tag != "notification" {
             return Err(anyhow!("expected <notification>, got <{}>", node.tag));
         }
-        if !node.attrs.get("type").is_some_and(|v| v == "business") {
+        if node
+            .get_attr("type")
+            .map(|v| v.as_str())
+            .is_none_or(|s| s != "business")
+        {
             return Err(anyhow!("expected type='business'"));
         }
 
-        let from = node
-            .attrs()
+        let mut attrs = node.attrs();
+        let from = attrs
             .optional_jid("from")
             .ok_or_else(|| anyhow!("notification missing required 'from' attribute"))?;
-
-        let stanza_id = optional_attr(node, "id")
-            .map(|s| s.into_owned())
-            .unwrap_or_default();
-
-        let timestamp = match node.attrs().optional_u64("t") {
+        let stanza_id = node
+            .get_attr("id")
+            .map(|v| v.as_str())
+            .unwrap_or_default()
+            .into_owned();
+        let timestamp = match attrs.optional_u64("t") {
             Some(t) => i64::try_from(t)
                 .map_err(|_| anyhow!("notification timestamp {} exceeds i64::MAX", t))?,
             None => 0,
         };
 
-        // Parse based on child elements per WhatsApp Web priority order
         let (
             notification_type,
             jid,
@@ -169,7 +172,7 @@ impl BusinessNotification {
 
     #[allow(clippy::type_complexity)]
     fn parse_content(
-        node: &Node,
+        node: &NodeRef<'_>,
     ) -> Result<(
         BusinessNotificationType,
         Option<Jid>,
@@ -179,7 +182,9 @@ impl BusinessNotification {
         Vec<String>,
         Vec<BusinessSubscription>,
     )> {
-        if let Some(remove_node) = optional_child(node, "remove") {
+        use wacore_binary::NodeContentRef;
+
+        if let Some(remove_node) = node.get_optional_child("remove") {
             if let Some(jid) = remove_node.attrs().optional_jid("jid") {
                 return Ok((
                     BusinessNotificationType::RemoveJid,
@@ -203,7 +208,7 @@ impl BusinessNotification {
             }
         }
 
-        if let Some(vn_node) = optional_child(node, "verified_name") {
+        if let Some(vn_node) = node.get_optional_child("verified_name") {
             let verified_name = VerifiedName::try_from_node(vn_node)?;
             if let Some(jid) = vn_node.attrs().optional_jid("jid") {
                 return Ok((
@@ -228,7 +233,7 @@ impl BusinessNotification {
             }
         }
 
-        if let Some(profile_node) = optional_child(node, "profile") {
+        if let Some(profile_node) = node.get_optional_child("profile") {
             if let Some(hash) = profile_node.attrs().optional_string("hash") {
                 return Ok((
                     BusinessNotificationType::ProfileHash,
@@ -251,7 +256,7 @@ impl BusinessNotification {
             ));
         }
 
-        if let Some(catalog_node) = optional_child(node, "product_catalog")
+        if let Some(catalog_node) = node.get_optional_child("product_catalog")
             && let Some(children) = catalog_node.children()
         {
             let mut product_ids = Vec::new();
@@ -260,7 +265,7 @@ impl BusinessNotification {
             for child in children {
                 if child.tag == "product"
                     && let Some(id_node) = child.get_optional_child_by_tag(&["id"])
-                    && let Some(NodeContent::String(id)) = &id_node.content
+                    && let Some(NodeContentRef::String(id)) = id_node.content.as_deref()
                 {
                     product_ids.push(id.to_string());
                 } else if child.tag == "collection"
@@ -294,7 +299,7 @@ impl BusinessNotification {
             }
         }
 
-        if let Some(subs_node) = optional_child(node, "subscriptions") {
+        if let Some(subs_node) = node.get_optional_child("subscriptions") {
             let mut subscriptions = Vec::new();
             if let Some(children) = subs_node.children() {
                 for child in children.iter().filter(|c| c.tag == "subscription") {
@@ -383,7 +388,7 @@ mod tests {
                 .build()])
             .build();
 
-        let parsed = BusinessNotification::try_parse(&node).unwrap();
+        let parsed = BusinessNotification::try_parse(&node.as_node_ref()).unwrap();
         assert_eq!(
             parsed.notification_type,
             BusinessNotificationType::RemoveJid
@@ -406,7 +411,7 @@ mod tests {
                 .build()])
             .build();
 
-        let parsed = BusinessNotification::try_parse(&node).unwrap();
+        let parsed = BusinessNotification::try_parse(&node.as_node_ref()).unwrap();
         assert_eq!(
             parsed.notification_type,
             BusinessNotificationType::RemoveHash
@@ -429,7 +434,7 @@ mod tests {
                 .build()])
             .build();
 
-        let parsed = BusinessNotification::try_parse(&node).unwrap();
+        let parsed = BusinessNotification::try_parse(&node.as_node_ref()).unwrap();
         assert_eq!(
             parsed.notification_type,
             BusinessNotificationType::VerifiedNameJid
@@ -452,7 +457,7 @@ mod tests {
             .children([NodeBuilder::new("profile").build()])
             .build();
 
-        let parsed = BusinessNotification::try_parse(&node).unwrap();
+        let parsed = BusinessNotification::try_parse(&node.as_node_ref()).unwrap();
         assert_eq!(parsed.notification_type, BusinessNotificationType::Profile);
         assert!(parsed.is_profile_update());
     }
@@ -469,7 +474,7 @@ mod tests {
                 .build()])
             .build();
 
-        let parsed = BusinessNotification::try_parse(&node).unwrap();
+        let parsed = BusinessNotification::try_parse(&node.as_node_ref()).unwrap();
         assert_eq!(
             parsed.notification_type,
             BusinessNotificationType::ProfileHash
@@ -496,7 +501,7 @@ mod tests {
                 .build()])
             .build();
 
-        let parsed = BusinessNotification::try_parse(&node).unwrap();
+        let parsed = BusinessNotification::try_parse(&node.as_node_ref()).unwrap();
         assert_eq!(parsed.notification_type, BusinessNotificationType::Product);
         assert_eq!(parsed.product_ids, vec!["product_1", "product_2"]);
     }
@@ -517,7 +522,7 @@ mod tests {
                 .build()])
             .build();
 
-        let parsed = BusinessNotification::try_parse(&node).unwrap();
+        let parsed = BusinessNotification::try_parse(&node.as_node_ref()).unwrap();
         assert_eq!(
             parsed.notification_type,
             BusinessNotificationType::Subscriptions
@@ -538,7 +543,7 @@ mod tests {
             .children([NodeBuilder::new("ctwa_suggestion").build()])
             .build();
 
-        let parsed = BusinessNotification::try_parse(&node).unwrap();
+        let parsed = BusinessNotification::try_parse(&node.as_node_ref()).unwrap();
         assert_eq!(parsed.notification_type, BusinessNotificationType::Unknown);
     }
 
@@ -549,7 +554,7 @@ mod tests {
             .attr("from", "15551234567@s.whatsapp.net")
             .build();
 
-        let result = BusinessNotification::try_parse(&node);
+        let result = BusinessNotification::try_parse(&node.as_node_ref());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("type='business'"));
     }

@@ -9,8 +9,8 @@ use prost::Message;
 
 use sha2::Sha256;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::Node;
+use wacore_binary::{Jid, SERVER_JID};
+use wacore_binary::{Node, NodeRef};
 use waproto::whatsapp as wa;
 use waproto::whatsapp::AdvEncryptionType;
 
@@ -80,6 +80,21 @@ impl PairUtils {
         } else {
             None
         }
+    }
+
+    /// Builds acknowledgment node for a pairing request from a NodeRef.
+    pub fn build_ack_node_ref(request_node: &NodeRef<'_>) -> Option<Node> {
+        let to = request_node.get_attr("from").map(|v| v.as_str())?;
+        let id = request_node.get_attr("id").map(|v| v.as_str())?;
+        Some(
+            NodeBuilder::new("iq")
+                .attrs([
+                    ("to", to.to_string()),
+                    ("id", id.to_string()),
+                    ("type", "result".to_string()),
+                ])
+                .build(),
+        )
     }
 
     /// Builds pair error node

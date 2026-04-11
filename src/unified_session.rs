@@ -10,7 +10,7 @@ use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use wacore::ib::{IbStanza, UnifiedSession};
 use wacore::protocol::ProtocolNode;
-use wacore_binary::node::Node;
+use wacore_binary::Node;
 
 /// Manager for unified session telemetry.
 pub struct UnifiedSessionManager {
@@ -43,8 +43,8 @@ impl UnifiedSessionManager {
     }
 
     /// Update server time offset from node's `t` attribute (Unix timestamp in seconds).
-    pub fn update_server_time_offset(&self, node: &Node) {
-        if let Some(t_val) = node.attrs.get("t").map(|v| v.as_str())
+    pub fn update_server_time_offset(&self, node: &wacore_binary::NodeRef<'_>) {
+        if let Some(t_val) = node.get_attr("t").map(|v| v.as_str())
             && let Ok(server_time) = t_val.parse::<i64>()
             && server_time > 0
         {
@@ -62,8 +62,13 @@ impl UnifiedSessionManager {
     ///
     /// This gives a more accurate clock skew estimate by assuming the server
     /// timestamp corresponds to the midpoint of the round trip.
-    pub fn update_server_time_offset_with_rtt(&self, node: &Node, start_time_ms: i64, rtt_ms: i64) {
-        if let Some(t_val) = node.attrs.get("t").map(|v| v.as_str())
+    pub fn update_server_time_offset_with_rtt(
+        &self,
+        node: &wacore_binary::NodeRef<'_>,
+        start_time_ms: i64,
+        rtt_ms: i64,
+    ) {
+        if let Some(t_val) = node.get_attr("t").map(|v| v.as_str())
             && let Ok(server_time) = t_val.parse::<i64>()
             && server_time > 0
         {
@@ -143,7 +148,7 @@ mod tests {
             .attr("t", server_time.to_string())
             .build();
 
-        manager.update_server_time_offset(&node);
+        manager.update_server_time_offset(&node.as_node_ref());
 
         let offset = manager.server_time_offset_ms();
         assert!(
@@ -158,17 +163,17 @@ mod tests {
         let manager = UnifiedSessionManager::new();
 
         let node = NodeBuilder::new("success").build();
-        manager.update_server_time_offset(&node);
+        manager.update_server_time_offset(&node.as_node_ref());
         assert_eq!(manager.server_time_offset_ms(), 0);
 
         let node = NodeBuilder::new("success")
             .attr("t", "not_a_number")
             .build();
-        manager.update_server_time_offset(&node);
+        manager.update_server_time_offset(&node.as_node_ref());
         assert_eq!(manager.server_time_offset_ms(), 0);
 
         let node = NodeBuilder::new("success").attr("t", "0").build();
-        manager.update_server_time_offset(&node);
+        manager.update_server_time_offset(&node.as_node_ref());
         assert_eq!(manager.server_time_offset_ms(), 0);
     }
 
@@ -233,7 +238,7 @@ mod tests {
         let node = NodeBuilder::new("success")
             .attr("t", (wacore::time::now_secs() + 10).to_string())
             .build();
-        manager.update_server_time_offset(&node);
+        manager.update_server_time_offset(&node.as_node_ref());
         let (_, seq1) = manager.prepare_send().await.unwrap();
         assert_eq!(seq1, 1);
 

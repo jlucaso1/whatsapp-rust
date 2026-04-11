@@ -6,7 +6,7 @@ use crate::client::Client;
 use log::{debug, warn};
 use std::collections::HashSet;
 use wacore::iq::usync::DeviceListSpec;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 impl Client {
     pub(crate) async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {

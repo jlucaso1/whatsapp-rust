@@ -38,7 +38,7 @@ fn test_attr_parser_ref_zero_copy_access() {
     let marshaled_with_flag = marshal(&original_node).expect("Marshal failed");
     let node_ref = unmarshal_ref(&marshaled_with_flag[1..]).expect("unmarshal_ref failed");
 
-    let mut parser = node_ref.attr_parser();
+    let mut parser = node_ref.attrs();
     assert_eq!(parser.optional_string("xmlns").as_deref(), Some("test"));
     assert_eq!(parser.optional_string("type").as_deref(), Some("result"));
     assert!(parser.ok());
@@ -46,7 +46,7 @@ fn test_attr_parser_ref_zero_copy_access() {
         .finish()
         .expect("Expected parser to finish without errors");
 
-    let mut parser_with_error = node_ref.attr_parser();
+    let mut parser_with_error = node_ref.attrs();
     assert!(!parser_with_error.bool("missing"));
     assert!(parser_with_error.finish().is_err());
 }
@@ -82,16 +82,14 @@ fn test_unmarshal_ref_known_good_data() {
         node_ref
             .get_attr("location")
             .expect("test data should be valid")
-            .as_str()
-            .expect("location should be a string"),
+            .as_str(),
         "frc"
     );
     assert_eq!(
         node_ref
             .get_attr("props")
             .expect("test data should be valid")
-            .as_str()
-            .expect("props should be a string"),
+            .as_str(),
         "27"
     );
 }

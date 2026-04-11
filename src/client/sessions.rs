@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use wacore::libsignal::store::SessionStore;
 use wacore::types::jid::JidExt;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 use super::Client;
 use crate::types::events::{Event, OfflineSyncCompleted};
@@ -315,7 +315,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wacore_binary::jid::{DEFAULT_USER_SERVER, HIDDEN_USER_SERVER, JidExt};
+    use wacore_binary::{JidExt, Server};
 
     #[test]
     fn test_primary_phone_jid_creation_from_pn() {
@@ -323,7 +323,7 @@ mod tests {
         let primary_phone_jid = own_pn.with_device(0);
 
         assert_eq!(primary_phone_jid.user, "559999999999");
-        assert_eq!(primary_phone_jid.server, DEFAULT_USER_SERVER);
+        assert_eq!(primary_phone_jid.server, Server::Pn);
         assert_eq!(primary_phone_jid.device, 0);
         assert_eq!(primary_phone_jid.agent, 0);
         assert_eq!(primary_phone_jid.to_string(), "559999999999@s.whatsapp.net");
@@ -336,7 +336,7 @@ mod tests {
         let primary_phone_jid = own_pn.with_device(0);
 
         assert_eq!(primary_phone_jid.user, "559999999999");
-        assert_eq!(primary_phone_jid.server, DEFAULT_USER_SERVER);
+        assert_eq!(primary_phone_jid.server, Server::Pn);
         assert_eq!(primary_phone_jid.device, 0);
     }
 
@@ -358,7 +358,7 @@ mod tests {
         let primary_phone_jid = own_lid.with_device(0);
 
         assert_eq!(primary_phone_jid.user, "100000000000001");
-        assert_eq!(primary_phone_jid.server, HIDDEN_USER_SERVER);
+        assert_eq!(primary_phone_jid.server, Server::Lid);
         assert_eq!(primary_phone_jid.device, 0);
         assert!(!primary_phone_jid.is_ad());
     }
@@ -373,7 +373,7 @@ mod tests {
 
         let parsed: Jid = jid_string.parse().expect("JID should be parseable");
         assert_eq!(parsed.user, "559999999999");
-        assert_eq!(parsed.server, DEFAULT_USER_SERVER);
+        assert_eq!(parsed.server, Server::Pn);
         assert_eq!(parsed.device, 0);
     }
 
@@ -591,7 +591,7 @@ mod tests {
     #[test]
     fn test_session_establishment_lookup_normalization() {
         use std::collections::HashMap;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         // Represents the bundle map returned by fetch_pre_keys
         // (keys are normalized by parsing logic as verified in wacore/src/prekeys.rs)

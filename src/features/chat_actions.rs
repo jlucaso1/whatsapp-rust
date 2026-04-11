@@ -14,7 +14,7 @@ use wacore::types::events::{
     ArchiveUpdate, ContactUpdate, DeleteChatUpdate, DeleteMessageForMeUpdate, Event,
     MarkChatAsReadUpdate, MuteUpdate, PinUpdate, StarUpdate,
 };
-use wacore_binary::jid::{Jid, JidExt};
+use wacore_binary::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
 /// WA Web uses `-1` for indefinite mute.

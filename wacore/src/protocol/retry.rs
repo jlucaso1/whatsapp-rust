@@ -5,7 +5,7 @@
 //! (session management, message resend, cache interaction) remains in
 //! `whatsapp-rust/src/retry.rs`.
 
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Node, NodeContent};
 
 /// Maximum retry attempts we'll honor (matches WhatsApp Web's MAX_RETRY = 5).
 /// We refuse to resend if the requester has already retried this many times.
@@ -106,7 +106,7 @@ pub fn should_include_keys(retry_count: u8, reason: RetryReason) -> bool {
 mod tests {
     use super::*;
     use std::borrow::Cow;
-    use wacore_binary::node::Attrs;
+    use wacore_binary::Attrs;
 
     #[test]
     fn get_bytes_content_extracts_bytes() {

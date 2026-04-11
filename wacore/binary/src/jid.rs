@@ -163,7 +163,6 @@ pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
 /// Maps to the wire protocol's AD_JID domain type (u8) and the `@server` suffix
 /// in JID string representation.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum Server {
     #[default]
@@ -178,6 +177,21 @@ pub enum Server {
     Interop = 8,
     Bot = 9,
     Legacy = 10,
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Server {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Server {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = <&str>::deserialize(deserializer)?;
+        Server::try_from(s).map_err(serde::de::Error::custom)
+    }
 }
 
 impl Server {
@@ -294,7 +308,11 @@ pub trait JidExt {
     fn integrator(&self) -> u16;
 
     fn is_ad(&self) -> bool {
-        self.device() > 0 && matches!(self.server(), Server::Pn | Server::Lid | Server::Hosted)
+        self.device() > 0
+            && matches!(
+                self.server(),
+                Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+            )
     }
 
     fn is_interop(&self) -> bool {
@@ -354,7 +372,7 @@ pub struct Jid {
     pub integrator: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, yoke::Yokeable)]
 pub struct JidRef<'a> {
     pub user: Cow<'a, str>,
     pub server: Server,
@@ -489,7 +507,7 @@ impl Jid {
 
     pub fn actual_agent(&self) -> u8 {
         match self.server {
-            Server::Pn => 0,
+            Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid => 0,
             _ => self.agent,
         }
     }
@@ -622,8 +640,7 @@ impl FromStr for Jid {
 
         if user_part.is_empty() && Server::try_from(server).is_err() {
             return Err(JidError::InvalidFormat(format!(
-                "Invalid JID format: unknown server '{}'",
-                server
+                "unknown server '{server}'"
             )));
         }
 
@@ -659,25 +676,13 @@ impl FromStr for Jid {
             && let Some((u, last_part)) = user.rsplit_once('.')
             && let Ok(num_val) = last_part.parse::<u16>()
         {
+            if num_val > u8::MAX as u16 {
+                return Err(JidError::InvalidFormat(format!(
+                    "Agent component out of range: {num_val}"
+                )));
+            }
             user = u;
             agent = num_val as u8;
-        }
-
-        if let Some((u, last_part)) = user_part.rsplit_once('.')
-            && let Ok(num_val) = last_part.parse::<u16>()
-        {
-            if server == DEFAULT_USER_SERVER {
-                user = u;
-                device = num_val;
-            } else {
-                user = u;
-                if num_val > u8::MAX as u16 {
-                    return Err(JidError::InvalidFormat(format!(
-                        "Agent component out of range: {num_val}"
-                    )));
-                }
-                agent = num_val as u8;
-            }
         }
 
         Ok(Jid {
@@ -706,7 +711,10 @@ impl fmt::Display for Jid {
                 // This is a guess based on the failure. The old JS logic is complex.
                 // We will only append the agent if the server is NOT s.whatsapp.net or lid.
                 // AND the server is not one that is derived *from* the agent (like 'hosted').
-                if !matches!(self.server, Server::Pn | Server::Lid | Server::Hosted) {
+                if !matches!(
+                    self.server,
+                    Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+                ) {
                     write!(f, ".{}", self.agent)?;
                 }
             }
@@ -727,7 +735,12 @@ impl<'a> fmt::Display for JidRef<'a> {
         } else {
             write!(f, "{}", self.user)?;
 
-            if self.agent > 0 && !matches!(self.server, Server::Pn | Server::Lid | Server::Hosted) {
+            if self.agent > 0
+                && !matches!(
+                    self.server,
+                    Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+                )
+            {
                 write!(f, ".{}", self.agent)?;
             }
 

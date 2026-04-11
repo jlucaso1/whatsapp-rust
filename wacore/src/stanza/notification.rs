@@ -10,7 +10,7 @@
 //! the handler.  If more parsing logic is added to the handler in the future,
 //! it should be extracted here as pure functions.
 
-use wacore_binary::node::Node;
+use wacore_binary::Node;
 
 /// Extract a notification timestamp from a node's `t` attribute.
 ///

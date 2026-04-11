@@ -1,5 +1,5 @@
 use crate::store::Device;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 use waproto::whatsapp as wa;
 
 #[derive(Debug, Clone)]

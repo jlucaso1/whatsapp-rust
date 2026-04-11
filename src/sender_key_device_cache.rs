@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crate::cache::Cache;
 use crate::cache_config::CacheEntryConfig;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 /// Pre-parsed, pre-indexed sender key device map for one group.
 #[derive(Clone, Debug)]

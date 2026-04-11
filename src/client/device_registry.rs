@@ -5,7 +5,7 @@
 
 use anyhow::Result;
 use log::{debug, info, warn};
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 use super::Client;
 
@@ -97,7 +97,7 @@ impl Client {
     }
 
     /// WA Web: `isFromKnownDevice(author)` — local check only, no network.
-    pub(crate) async fn is_from_known_device(&self, sender: &wacore_binary::jid::Jid) -> bool {
+    pub(crate) async fn is_from_known_device(&self, sender: &wacore_binary::Jid) -> bool {
         let device_id = sender.device as u32;
         self.has_device(&sender.user, device_id).await
     }
@@ -300,15 +300,10 @@ impl Client {
     /// `patch_device_remove`.
     async fn delete_sessions_for_devices(&self, user: &str, device_ids: &[u16]) {
         let lookup = self.resolve_lookup_keys(user).await;
-        let servers = [
-            wacore_binary::jid::HIDDEN_USER_SERVER,
-            wacore_binary::jid::DEFAULT_USER_SERVER,
-        ];
-        for &srv in &servers {
+        let servers = [wacore_binary::Server::Lid, wacore_binary::Server::Pn];
+        for server in servers {
             for key in lookup.all_keys() {
                 for &device_id in device_ids {
-                    let server = wacore_binary::jid::Server::try_from(srv)
-                        .unwrap_or(wacore_binary::jid::Server::Pn);
                     let mut jid = Jid::new(key, server);
                     jid.device = device_id;
                     let addr = wacore::types::jid::JidExt::to_protocol_address(&jid);
@@ -744,7 +739,7 @@ mod tests {
         wacore::stanza::devices::DeviceElement {
             jid: Jid {
                 user: "15551234567".into(),
-                server: wacore_binary::jid::Server::Pn,
+                server: wacore_binary::Server::Pn,
                 device: device_id,
                 ..Default::default()
             },

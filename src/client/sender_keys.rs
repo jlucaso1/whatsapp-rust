@@ -1,7 +1,7 @@
 //! Sender key tracking and message cache methods for Client.
 
 use anyhow::Result;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 use waproto::whatsapp as wa;
 
 use super::Client;

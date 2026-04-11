@@ -5,7 +5,7 @@
 use crate::protocol::ProtocolNode;
 use anyhow::Result;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::node::Node;
+use wacore_binary::{Node, NodeRef};
 
 /// Unified session telemetry node.
 ///
@@ -78,7 +78,7 @@ impl ProtocolNode for IbStanza {
             .build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self> {
         if node.tag != "ib" {
             return Err(anyhow::anyhow!("expected <ib>, got <{}>", node.tag));
         }
@@ -86,7 +86,9 @@ impl ProtocolNode for IbStanza {
         if let Some(children) = node.children() {
             for child in children {
                 if child.tag == "unified_session" {
-                    return Ok(Self::unified_session(UnifiedSession::try_from_node(child)?));
+                    return Ok(Self::unified_session(UnifiedSession::try_from_node_ref(
+                        child,
+                    )?));
                 }
             }
         }

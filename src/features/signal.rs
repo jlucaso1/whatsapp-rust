@@ -12,8 +12,8 @@ use wacore::libsignal::store::sender_key_name::SenderKeyName;
 use wacore::message_processing::EncType;
 use wacore::messages::MessageUtils;
 use wacore::types::jid::JidExt;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::Node;
+use wacore_binary::Jid;
+use wacore_binary::Node;
 
 use crate::client::Client;
 

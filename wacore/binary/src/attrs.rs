@@ -55,7 +55,7 @@ impl<'a> AttrParserRef<'a> {
     /// - String variant: Cow::Borrowed — zero copy
     /// - JID variant: Cow::Owned — allocates only when needed
     pub fn optional_string(&mut self, key: &str) -> Option<Cow<'a, str>> {
-        self.get_raw(key, false).map(|v| v.to_string_cow())
+        self.get_raw(key, false).map(|v| v.as_str())
     }
 
     /// Get a required string attribute, returning an error if missing.
@@ -94,7 +94,7 @@ impl<'a> AttrParserRef<'a> {
     }
 
     fn get_string_value(&mut self, key: &str, require: bool) -> Option<Cow<'a, str>> {
-        self.get_raw(key, require).map(|v| v.to_string_cow())
+        self.get_raw(key, require).map(|v| v.as_str())
     }
 
     fn get_bool(&mut self, key: &str, require: bool) -> Option<bool> {

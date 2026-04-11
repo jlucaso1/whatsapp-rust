@@ -1,5 +1,5 @@
 use wacore::StringEnum;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 use waproto::whatsapp as wa;
 
 use crate::client::Client;

@@ -326,7 +326,7 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                 builder.build()
             }
 
-            fn try_from_node(node: &::wacore_binary::node::Node) -> ::anyhow::Result<Self> {
+            fn try_from_node_ref(node: &::wacore_binary::node::NodeRef<'_>) -> ::anyhow::Result<Self> {
                 if node.tag != #tag {
                     return Err(::anyhow::anyhow!("expected <{}>, got <{}>", #tag, node.tag));
                 }
@@ -388,7 +388,7 @@ fn generate_empty_impl(name: &syn::Ident, tag: &str) -> proc_macro2::TokenStream
                 ::wacore_binary::builder::NodeBuilder::new(#tag).build()
             }
 
-            fn try_from_node(node: &::wacore_binary::node::Node) -> ::anyhow::Result<Self> {
+            fn try_from_node_ref(node: &::wacore_binary::node::NodeRef<'_>) -> ::anyhow::Result<Self> {
                 if node.tag != #tag {
                     return Err(::anyhow::anyhow!("expected <{}>, got <{}>", #tag, node.tag));
                 }

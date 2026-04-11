@@ -14,10 +14,10 @@ use futures::FutureExt;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
-use wacore::xml::DisplayableNode;
+use wacore::xml::{DisplayableNode, DisplayableNodeRef};
+use wacore_binary::JidExt;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::JidExt;
-use wacore_binary::node::{Attrs, Node, NodeValue};
+use wacore_binary::{Attrs, Node, NodeValue};
 
 use crate::appstate_sync::AppStateProcessor;
 use crate::handlers::chatstate::ChatStateEvent;
@@ -30,7 +30,7 @@ use log::{debug, error, info, trace, warn};
 
 use rand::{Rng, RngExt};
 use scopeguard;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 use portable_atomic::AtomicU64;
 use std::sync::Arc;
@@ -78,16 +78,21 @@ impl NodeFilter {
         self.attr("from", jid.to_string())
     }
 
-    fn matches(&self, node: &Node) -> bool {
-        node.tag == self.tag
-            && self
-                .attrs
-                .iter()
-                .all(|(k, v)| node.attrs.get(k.as_str()).is_some_and(|attr| *attr == *v))
+    fn matches(&self, node: &wacore_binary::NodeRef<'_>) -> bool {
+        node.tag == self.tag.as_str()
+            && self.attrs.iter().all(|(k, v)| {
+                node.get_attr(k.as_str())
+                    .is_some_and(|attr| attr.as_str() == v.as_str())
+            })
     }
 }
 
 struct NodeWaiter {
+    filter: NodeFilter,
+    tx: futures::channel::oneshot::Sender<Arc<wacore_binary::OwnedNodeRef>>,
+}
+
+struct SentNodeWaiter {
     filter: NodeFilter,
     tx: futures::channel::oneshot::Sender<Arc<Node>>,
 }
@@ -95,8 +100,9 @@ struct NodeWaiter {
 fn resolve_waiters(
     waiters_mutex: &std::sync::Mutex<Vec<NodeWaiter>>,
     counter: &AtomicUsize,
-    node: &Arc<Node>,
+    node: &Arc<wacore_binary::OwnedNodeRef>,
 ) {
+    let nr = node.get();
     let mut waiters = waiters_mutex
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -105,7 +111,7 @@ fn resolve_waiters(
         if waiters[i].tx.is_canceled() {
             waiters.swap_remove(i);
             counter.fetch_sub(1, Ordering::Release);
-        } else if waiters[i].filter.matches(node) {
+        } else if waiters[i].filter.matches(nr) {
             let w = waiters.swap_remove(i);
             counter.fetch_sub(1, Ordering::Release);
             let _ = w.tx.send(Arc::clone(node));
@@ -304,8 +310,9 @@ pub struct Client {
     pub(crate) transport_factory: Arc<dyn crate::transport::TransportFactory>,
     pub(crate) noise_socket: Arc<Mutex<Option<Arc<NoiseSocket>>>>,
 
-    pub(crate) response_waiters:
-        Arc<Mutex<HashMap<String, futures::channel::oneshot::Sender<wacore_binary::Node>>>>,
+    pub(crate) response_waiters: Arc<
+        Mutex<HashMap<String, futures::channel::oneshot::Sender<Arc<wacore_binary::OwnedNodeRef>>>>,
+    >,
 
     /// Generic node waiters for waiting on specific stanzas by tag/attributes.
     /// Uses std::sync::Mutex (not tokio) since the critical section is trivial.
@@ -313,7 +320,7 @@ pub struct Client {
     node_waiters: std::sync::Mutex<Vec<NodeWaiter>>,
     node_waiter_count: AtomicUsize,
     /// Waiters for raw outgoing nodes before encryption.
-    sent_node_waiters: std::sync::Mutex<Vec<NodeWaiter>>,
+    sent_node_waiters: std::sync::Mutex<Vec<SentNodeWaiter>>,
     sent_node_waiter_count: AtomicUsize,
 
     pub(crate) unique_id: String,
@@ -342,7 +349,8 @@ pub struct Client {
     /// Per-chat message queues for sequential message processing.
     /// Prevents race conditions where a later message is processed before
     /// the PreKey message that establishes the Signal session.
-    pub(crate) message_queues: Cache<String, async_channel::Sender<Arc<Node>>>,
+    pub(crate) message_queues:
+        Cache<String, async_channel::Sender<Arc<wacore_binary::OwnedNodeRef>>>,
 
     /// Cache for LID to Phone Number mappings (bidirectional).
     /// When we receive a message with sender_lid/sender_pn attributes, we store the mapping here.
@@ -1411,7 +1419,7 @@ impl Client {
                                         //   is set up before offline messages are processed
                                         // - Everything else: spawned concurrently for parallelism
                                         let process_inline = matches!(
-                                            node.tag.as_ref(),
+                                            node.tag(),
                                             "success" | "failure" | "stream:error" | "message" | "ib"
                                         );
 
@@ -1470,12 +1478,12 @@ impl Client {
         }
     }
 
-    /// Decrypt a frame and return the parsed node.
+    /// Decrypt a frame and return the parsed node as a zero-copy OwnedNodeRef.
     /// This must be called sequentially due to noise protocol counter requirements.
     pub(crate) async fn decrypt_frame(
         self: &Arc<Self>,
         encrypted_frame: &bytes::Bytes,
-    ) -> Option<wacore_binary::node::Node> {
+    ) -> Option<wacore_binary::OwnedNodeRef> {
         let noise_socket = match self.get_noise_socket().await {
             Ok(s) => s,
             Err(_) => {
@@ -1500,8 +1508,10 @@ impl Client {
             }
         };
 
-        match wacore_binary::marshal::unmarshal_ref(unpacked_data_cow.as_ref()) {
-            Ok(node_ref) => Some(node_ref.to_owned()),
+        // Convert Cow to owned Vec for yoke to own the buffer
+        let buffer = unpacked_data_cow.into_owned();
+        match wacore_binary::OwnedNodeRef::new(buffer) {
+            Ok(owned) => Some(owned),
             Err(e) => {
                 log::warn!(target: "Client/Recv", "Failed to unmarshal node: {e}");
                 None
@@ -1512,24 +1522,28 @@ impl Client {
     /// Process an already-decrypted node.
     /// This can be spawned concurrently since it doesn't depend on noise protocol state.
     /// The node is wrapped in Arc to avoid cloning when passing through handlers.
-    pub(crate) async fn process_decrypted_node(self: &Arc<Self>, node: wacore_binary::node::Node) {
+    pub(crate) async fn process_decrypted_node(
+        self: &Arc<Self>,
+        node: wacore_binary::OwnedNodeRef,
+    ) {
         // Wrap in Arc once - all handlers will share this same allocation
         let node_arc = Arc::new(node);
         self.process_node(node_arc).await;
     }
 
     /// Process a node wrapped in Arc. Handlers receive the Arc and can share/store it cheaply.
-    pub(crate) async fn process_node(self: &Arc<Self>, node: Arc<Node>) {
-        use wacore::xml::DisplayableNode;
+    pub(crate) async fn process_node(self: &Arc<Self>, node: Arc<wacore_binary::OwnedNodeRef>) {
+        use wacore::xml::DisplayableNodeRef;
+        let nr = node.get();
 
         // --- Offline Sync Tracking ---
-        if node.tag.as_ref() == "ib" {
+        if nr.tag.as_ref() == "ib" {
             // Check for offline_preview child to get expected count
-            if let Some(preview) = node.get_optional_child("offline_preview") {
+            if let Some(preview) = nr.get_optional_child("offline_preview") {
                 let count: usize = preview
-                    .attrs
-                    .get("count")
-                    .and_then(|v| v.as_str().parse().ok())
+                    .get_attr("count")
+                    .map(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
                     .unwrap_or(0);
 
                 if count == 0 {
@@ -1555,7 +1569,7 @@ impl Client {
                     debug!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
                 }
             } else if self.offline_sync_metrics.active.load(Ordering::Acquire)
-                && node.get_optional_child("offline").is_some()
+                && nr.get_optional_child("offline").is_some()
             {
                 // Handle end marker: <ib><offline count="N"/> signals sync completion
                 // Only <ib> with an <offline> child is a real end marker.
@@ -1578,7 +1592,7 @@ impl Client {
         // Track progress if active
         if self.offline_sync_metrics.active.load(Ordering::Acquire) {
             // Check for 'offline' attribute on relevant stanzas
-            if node.attrs.contains_key("offline") {
+            if nr.get_attr("offline").is_some() {
                 let processed = self
                     .offline_sync_metrics
                     .processed_messages
@@ -1607,15 +1621,15 @@ impl Client {
         }
         // --- End Tracking ---
 
-        if node.tag.as_ref() == "iq"
-            && let Some(sync_node) = node.get_optional_child("sync")
+        if nr.tag.as_ref() == "iq"
+            && let Some(sync_node) = nr.get_optional_child("sync")
             && let Some(collection_node) = sync_node.get_optional_child("collection")
         {
             let name = collection_node.attrs().optional_string("name");
             let name = name.as_deref().unwrap_or("<unknown>");
             debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
         } else {
-            debug!(target: "Client/Recv","{}", DisplayableNode(&node));
+            debug!(target: "Client/Recv","{}", DisplayableNodeRef(nr));
         }
 
         // Prepare deferred ACK cancellation flag (sent after dispatch unless cancelled)
@@ -1629,7 +1643,7 @@ impl Client {
                 .dispatch(&Event::RawNode(Arc::clone(&node)));
         }
 
-        if node.tag.as_ref() == "xmlstreamend" {
+        if nr.tag.as_ref() == "xmlstreamend" {
             if self.expected_disconnect.load(Ordering::Relaxed) {
                 debug!("Received <xmlstreamend/>, expected disconnect.");
             } else {
@@ -1644,14 +1658,13 @@ impl Client {
             self.resolve_node_waiters(&node);
         }
 
-        if node.tag.as_ref() == "iq"
-            && let Some(id) = node.attrs.get("id").map(|v| v.as_str())
+        if nr.tag.as_ref() == "iq"
+            && let Some(id) = nr.get_attr("id").map(|v| v.as_str())
         {
             // Single lock acquisition: try to remove the waiter directly.
             let waiter = self.response_waiters.lock().await.remove(id.as_ref());
             if let Some(waiter) = waiter {
-                let owned_node = Arc::try_unwrap(node).unwrap_or_else(|arc| (*arc).clone());
-                if waiter.send(owned_node).is_err() {
+                if waiter.send(Arc::clone(&node)).is_err() {
                     warn!(target: "Client/IQ", "Failed to send IQ response to waiter. Receiver was likely dropped.");
                 }
                 return;
@@ -1667,38 +1680,38 @@ impl Client {
         {
             warn!(
                 "Received unknown top-level node: {}",
-                DisplayableNode(&node)
+                DisplayableNodeRef(nr)
             );
         }
 
         // Send the deferred ACK if applicable and not cancelled by handler
-        if self.should_ack(&node) && !cancelled {
+        if self.should_ack(nr) && !cancelled {
             self.maybe_deferred_ack(node).await;
         }
     }
 
-    /// Determine if a Node should be acknowledged with <ack/>.
-    fn should_ack(&self, node: &Node) -> bool {
+    /// Determine if a node should be acknowledged with <ack/>.
+    fn should_ack(&self, node: &wacore_binary::NodeRef<'_>) -> bool {
         matches!(
             node.tag.as_ref(),
             "message" | "receipt" | "notification" | "call"
-        ) && node.attrs.contains_key("id")
-            && node.attrs.contains_key("from")
+        ) && node.get_attr("id").is_some()
+            && node.get_attr("from").is_some()
     }
 
     /// Possibly send a deferred ack: either immediately or via spawned task.
     /// Handlers can cancel by setting `cancelled` to true.
-    /// Uses Arc<Node> to avoid cloning when spawning the async task.
-    async fn maybe_deferred_ack(self: &Arc<Self>, node: Arc<Node>) {
+    /// Uses Arc<OwnedNodeRef> to avoid cloning when spawning the async task.
+    async fn maybe_deferred_ack(self: &Arc<Self>, node: Arc<wacore_binary::OwnedNodeRef>) {
         if self.synchronous_ack {
-            if let Err(e) = self.send_ack_for(&node).await {
+            if let Err(e) = self.send_ack_for(node.get()).await {
                 warn!("Failed to send ack: {e:?}");
             }
         } else {
             let this = self.clone();
             self.runtime
                 .spawn(Box::pin(async move {
-                    if let Err(e) = this.send_ack_for(&node).await
+                    if let Err(e) = this.send_ack_for(node.get()).await
                         && !matches!(e, ClientError::NotConnected)
                     {
                         warn!("Failed to send ack: {e:?}");
@@ -1709,7 +1722,7 @@ impl Client {
     }
 
     /// Build and send an <ack/> node corresponding to the given stanza.
-    async fn send_ack_for(&self, node: &Node) -> Result<(), ClientError> {
+    async fn send_ack_for(&self, node: &wacore_binary::NodeRef<'_>) -> Result<(), ClientError> {
         if self.expected_disconnect.load(Ordering::Relaxed) {
             return Ok(());
         }
@@ -1854,7 +1867,7 @@ impl Client {
     /// Get business profile for a WhatsApp Business account.
     pub async fn get_business_profile(
         &self,
-        jid: &wacore_binary::jid::Jid,
+        jid: &wacore_binary::Jid,
     ) -> Result<Option<wacore::iq::business::BusinessProfile>, crate::request::IqError> {
         use wacore::iq::business::BusinessProfileSpec;
         self.execute(BusinessProfileSpec::new(jid)).await
@@ -1864,7 +1877,7 @@ impl Client {
     pub async fn reject_call(
         &self,
         call_id: &str,
-        call_from: &wacore_binary::jid::Jid,
+        call_from: &wacore_binary::Jid,
     ) -> Result<(), anyhow::Error> {
         anyhow::ensure!(!call_id.is_empty(), "call_id cannot be empty");
         let id = self.generate_request_id();
@@ -1891,7 +1904,7 @@ impl Client {
         self.execute(DigestKeyBundleSpec::new()).await.map(|_| ())
     }
 
-    pub(crate) async fn handle_success(self: &Arc<Self>, node: &wacore_binary::node::Node) {
+    pub(crate) async fn handle_success(self: &Arc<Self>, node: &wacore_binary::NodeRef<'_>) {
         // Skip processing if an expected disconnect is pending (e.g., 515 received).
         // This prevents race conditions where a spawned success handler runs after
         // cleanup_connection_state has already reset is_logged_in.
@@ -1920,7 +1933,7 @@ impl Client {
         self.update_server_time_offset(node);
 
         // Extract LID from the node before spawning (node isn't Send).
-        let lid_from_server = match node.attrs.get("lid") {
+        let lid_from_server = match node.get_attr("lid") {
             Some(lid_value) => match lid_value.to_jid() {
                 Some(lid) => Some(lid),
                 None => {
@@ -2256,12 +2269,12 @@ impl Client {
     ///
     /// If an ack with an ID that matches a pending task in `response_waiters`,
     /// the task is resolved and the function returns `true`. Otherwise, returns `false`.
-    pub(crate) async fn handle_ack_response(&self, node: Node) -> bool {
+    pub(crate) async fn handle_ack_response(&self, node: &wacore_binary::NodeRef<'_>) -> bool {
         // Surface privacy-token nack codes for diagnosability
-        if let Some(error_code) = node.attrs.get("error") {
+        if let Some(error_code) = node.get_attr("error") {
             let code = error_code.as_str();
-            let id = node.attrs.get("id").map(|v| v.as_str().into_owned());
-            match &*code {
+            let id = node.get_attr("id").map(|v| v.as_str().into_owned());
+            match code.as_ref() {
                 "463" => {
                     warn!(
                         target: "Client/Ack",
@@ -2283,19 +2296,30 @@ impl Client {
             }
         }
 
-        let id_opt = node.attrs.get("id").map(|v| v.as_str().into_owned());
+        let id_opt = node.get_attr("id").map(|v| v.as_str().into_owned());
         if let Some(id) = id_opt
             && let Some(waiter) = self.response_waiters.lock().await.remove(&id)
         {
-            if waiter.send(node).is_err() {
-                warn!(target: "Client/Ack", "Failed to send ACK response to waiter for ID {id}. Receiver was likely dropped.");
+            // ACK responses are infrequent; re-encode into OwnedNodeRef for the channel.
+            // marshal_ref prepends a leading 0x00 format byte; OwnedNodeRef::new expects raw
+            // protocol bytes without it, matching what unpack() produces from the network.
+            match wacore_binary::marshal::marshal_ref(node)
+                .and_then(|bytes| wacore_binary::OwnedNodeRef::new(bytes[1..].to_vec()))
+            {
+                Ok(onr) => {
+                    if waiter.send(Arc::new(onr)).is_err() {
+                        warn!(target: "Client/Ack", "Failed to send ACK response to waiter for ID {id}. Receiver was likely dropped.");
+                    }
+                }
+                Err(e) => {
+                    warn!(target: "Client/Ack", "Failed to re-encode ACK node for waiter: {e}");
+                }
             }
             return true;
         }
         false
     }
 
-    #[allow(dead_code)] // Used by per-collection callers (e.g., critical sync gating)
     pub(crate) async fn fetch_app_state_with_retry(&self, name: WAPatchName) -> anyhow::Result<()> {
         // In-flight dedup: skip if this collection is already being synced.
         // Matches WA Web's WAWebSyncdCollectionsStateMachine which tracks in-flight syncs
@@ -2316,7 +2340,6 @@ impl Client {
         result
     }
 
-    #[allow(dead_code)]
     async fn fetch_app_state_with_retry_inner(&self, name: WAPatchName) -> anyhow::Result<()> {
         let mut attempt = 0u32;
         loop {
@@ -2456,7 +2479,7 @@ impl Client {
                 to: server_jid().clone(),
                 target: None,
                 id: None,
-                content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
+                content: Some(wacore_binary::NodeContent::Nodes(vec![sync_node])),
                 timeout: Some(Duration::from_secs(30)),
             };
 
@@ -2466,7 +2489,9 @@ impl Client {
             let mut pre_downloaded: std::collections::HashMap<String, Vec<u8>> =
                 std::collections::HashMap::new();
 
-            if let Ok(patch_lists) = wacore::appstate::patch_decode::parse_patch_lists(&resp) {
+            if let Ok(patch_lists) =
+                wacore::appstate::patch_decode::parse_patch_lists_ref(resp.get())
+            {
                 for pl in &patch_lists {
                     // Download external snapshot
                     if let Some(ext) = &pl.snapshot_ref
@@ -2525,7 +2550,9 @@ impl Client {
 
             // Parse and process all collections from the response
             let proc = self.get_app_state_processor().await;
-            let results = proc.decode_multi_patch_list(&resp, &download, true).await?;
+            let results = proc
+                .decode_multi_patch_list_ref(resp.get(), &download, true)
+                .await?;
 
             let mut needs_refetch = Vec::new();
 
@@ -2664,7 +2691,7 @@ impl Client {
                 to: server_jid().clone(),
                 target: None,
                 id: None,
-                content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
+                content: Some(wacore_binary::NodeContent::Nodes(vec![sync_node])),
                 timeout: None,
             };
 
@@ -2682,7 +2709,7 @@ impl Client {
             let mut pre_downloaded: std::collections::HashMap<String, Vec<u8>> =
                 std::collections::HashMap::new();
 
-            if let Ok(pl) = wacore::appstate::patch_decode::parse_patch_list(&resp) {
+            if let Ok(pl) = wacore::appstate::patch_decode::parse_patch_list_ref(resp.get()) {
                 debug!(target: "Client/AppState", "Parsed patch list for {:?}: has_snapshot_ref={} has_more_patches={} patches_count={}",
                     name, pl.snapshot_ref.is_some(), pl.has_more_patches, pl.patches.len());
 
@@ -2740,8 +2767,9 @@ impl Client {
             };
 
             let proc = self.get_app_state_processor().await;
-            let (mutations, new_state, list) =
-                proc.decode_patch_list(&resp, &download, true).await?;
+            let (mutations, new_state, list) = proc
+                .decode_patch_list_ref(resp.get(), &download, true)
+                .await?;
             let decode_elapsed = _decode_start.elapsed();
             if decode_elapsed.as_millis() > 500 {
                 debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
@@ -2871,7 +2899,7 @@ impl Client {
             to: server_jid().clone(),
             target: None,
             id: None,
-            content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
+            content: Some(wacore_binary::NodeContent::Nodes(vec![sync_node])),
             timeout: None,
         };
 
@@ -2973,7 +3001,7 @@ impl Client {
         }
     }
 
-    pub(crate) async fn handle_stream_error(&self, node: &wacore_binary::node::Node) {
+    pub(crate) async fn handle_stream_error(&self, node: &wacore_binary::NodeRef<'_>) {
         self.is_logged_in.store(false, Ordering::Relaxed);
 
         let mut attrs = node.attrs();
@@ -3063,12 +3091,12 @@ impl Client {
                     info!("Got 503 service unavailable, will auto-reconnect.");
                 }
                 _ => {
-                    error!("Unknown stream error: {}", DisplayableNode(node));
+                    error!("Unknown stream error: {}", DisplayableNodeRef(node));
                     self.expected_disconnect.store(true, Ordering::Relaxed);
                     self.core.event_bus.dispatch(&Event::StreamError(
                         crate::types::events::StreamError {
                             code: code.to_string(),
-                            raw: Some(node.clone()),
+                            raw: Some(node.to_owned()),
                         },
                     ));
                 }
@@ -3091,7 +3119,7 @@ impl Client {
         self.shutdown_notifier.notify(usize::MAX);
     }
 
-    pub(crate) async fn handle_connect_failure(&self, node: &wacore_binary::node::Node) {
+    pub(crate) async fn handle_connect_failure(&self, node: &wacore_binary::NodeRef<'_>) {
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.shutdown_notifier.notify(usize::MAX);
 
@@ -3120,7 +3148,10 @@ impl Client {
             let expire_secs = attrs.optional_u64("expire").unwrap_or(0);
             let expire_duration =
                 chrono::Duration::try_seconds(expire_secs as i64).unwrap_or_default();
-            warn!("Temporary ban connect failure: {}", DisplayableNode(node));
+            warn!(
+                "Temporary ban connect failure: {}",
+                DisplayableNodeRef(node)
+            );
             self.core.event_bus.dispatch(&Event::TemporaryBan(
                 crate::types::events::TemporaryBan {
                     code: crate::types::events::TempBanReason::from(ban_code),
@@ -3133,7 +3164,7 @@ impl Client {
                 .event_bus
                 .dispatch(&Event::ClientOutdated(crate::types::events::ClientOutdated));
         } else {
-            warn!("Unknown connect failure: {}", DisplayableNode(node));
+            warn!("Unknown connect failure: {}", DisplayableNodeRef(node));
             self.core.event_bus.dispatch(&Event::ConnectFailure(
                 crate::types::events::ConnectFailure {
                     reason,
@@ -3142,19 +3173,18 @@ impl Client {
                         .as_deref()
                         .unwrap_or("")
                         .to_string(),
-                    raw: Some(node.clone()),
+                    raw: Some(node.to_owned()),
                 },
             ));
         }
     }
 
-    pub(crate) async fn handle_iq(self: &Arc<Self>, node: &wacore_binary::node::Node) -> bool {
-        if node.attrs.get("type").is_some_and(|s| s == "get")
+    pub(crate) async fn handle_iq(self: &Arc<Self>, node: &wacore_binary::NodeRef<'_>) -> bool {
+        if node.get_attr("type").is_some_and(|s| s.as_str() == "get")
             && (node.get_optional_child("ping").is_some()
                 || node
-                    .attrs
-                    .get("xmlns")
-                    .is_some_and(|s| s == "urn:xmpp:ping"))
+                    .get_attr("xmlns")
+                    .is_some_and(|s| s.as_str() == "urn:xmpp:ping"))
         {
             info!("Received ping, sending pong.");
             let mut parser = node.attrs();
@@ -3167,7 +3197,6 @@ impl Client {
             return true;
         }
 
-        // Pass Node directly to pair handling
         if pair::handle_iq(self, node).await {
             return true;
         }
@@ -3203,7 +3232,7 @@ impl Client {
     pub fn wait_for_node(
         &self,
         filter: NodeFilter,
-    ) -> futures::channel::oneshot::Receiver<Arc<Node>> {
+    ) -> futures::channel::oneshot::Receiver<Arc<wacore_binary::OwnedNodeRef>> {
         let (tx, rx) = futures::channel::oneshot::channel();
         self.node_waiter_count.fetch_add(1, Ordering::Release);
         let mut waiters = self
@@ -3229,18 +3258,35 @@ impl Client {
             .sent_node_waiters
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        waiters.push(NodeWaiter { filter, tx });
+        waiters.push(SentNodeWaiter { filter, tx });
         rx
     }
 
     /// Check pending node waiters against an incoming node.
     /// Only called when `node_waiter_count > 0`.
-    fn resolve_node_waiters(&self, node: &Arc<Node>) {
+    fn resolve_node_waiters(&self, node: &Arc<wacore_binary::OwnedNodeRef>) {
         resolve_waiters(&self.node_waiters, &self.node_waiter_count, node);
     }
 
     fn resolve_sent_node_waiters(&self, node: &Arc<Node>) {
-        resolve_waiters(&self.sent_node_waiters, &self.sent_node_waiter_count, node);
+        let nr = node.as_node_ref();
+        let mut waiters = self
+            .sent_node_waiters
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut i = 0;
+        while i < waiters.len() {
+            if waiters[i].tx.is_canceled() {
+                waiters.swap_remove(i);
+                self.sent_node_waiter_count.fetch_sub(1, Ordering::Release);
+            } else if waiters[i].filter.matches(&nr) {
+                let w = waiters.swap_remove(i);
+                self.sent_node_waiter_count.fetch_sub(1, Ordering::Release);
+                let _ = w.tx.send(Arc::clone(node));
+            } else {
+                i += 1;
+            }
+        }
     }
 
     fn clear_sent_node_waiters(&self) {
@@ -3256,7 +3302,7 @@ impl Client {
         }
     }
 
-    pub(crate) fn update_server_time_offset(&self, node: &wacore_binary::node::Node) {
+    pub(crate) fn update_server_time_offset(&self, node: &wacore_binary::NodeRef<'_>) {
         self.unified_session.update_server_time_offset(node);
     }
 
@@ -3418,7 +3464,7 @@ impl Client {
     pub(crate) async fn register_ack_waiter(
         &self,
         message_id: &str,
-    ) -> futures::channel::oneshot::Receiver<wacore_binary::Node> {
+    ) -> futures::channel::oneshot::Receiver<std::sync::Arc<wacore_binary::OwnedNodeRef>> {
         let (tx, rx) = futures::channel::oneshot::channel();
         self.response_waiters
             .lock()
@@ -3569,7 +3615,7 @@ impl Client {
 ///
 /// Matches WhatsApp Web (`WAWebCommsHandleStanza`): only includes `id`
 /// when the server ping carried one.
-fn build_pong(to: String, id: Option<&str>) -> wacore_binary::node::Node {
+fn build_pong(to: String, id: Option<&str>) -> wacore_binary::Node {
     let mut builder = NodeBuilder::new("iq").attr("to", to).attr("type", "result");
     if let Some(id) = id {
         builder = builder.attr("id", id);
@@ -3589,25 +3635,30 @@ fn build_pong(to: String, id: Option<&str>) -> wacore_binary::node::Node {
 /// `ackString = maybeAttrString("type")` — so `type` is only included when
 /// explicitly present on the incoming receipt (delivery receipts normally
 /// have no type attribute, meaning the ack also has no type).
-fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
-    let id = node.attrs.get("id")?.clone();
-    let from = node.attrs.get("from")?.clone();
-    let participant = node.attrs.get("participant").cloned();
+fn build_ack_node(node: &wacore_binary::NodeRef<'_>, own_device_pn: Option<&Jid>) -> Option<Node> {
+    let id = NodeValue::from(node.get_attr("id")?.as_str().as_ref());
+    let from = NodeValue::from(node.get_attr("from")?.as_str().as_ref());
+    let participant = node
+        .get_attr("participant")
+        .map(|v| NodeValue::from(v.as_str().as_ref()));
+
+    let tag = node.tag.as_ref();
 
     // Whatsmeow: echo type for all stanza tags EXCEPT "message".
     // WA Web additionally omits type for notification type="encrypt" with <identity/> child.
-    let typ = if node.tag != "message" && !is_encrypt_identity_notification(node) {
-        node.attrs.get("type").cloned()
+    let typ = if tag != "message" && !is_encrypt_identity_notification(node) {
+        node.get_attr("type")
+            .map(|v| NodeValue::from(v.as_str().as_ref()))
     } else {
         None
     };
 
     let mut attrs = Attrs::new();
-    attrs.insert("class", NodeValue::from(node.tag.as_ref()));
+    attrs.insert("class", NodeValue::from(tag));
     attrs.insert("id", id);
     attrs.insert("to", from);
 
-    if node.tag == "message"
+    if tag == "message"
         && let Some(own_device_pn) = own_device_pn
     {
         attrs.insert("from", NodeValue::Jid(own_device_pn.clone()));
@@ -3627,9 +3678,11 @@ fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
 }
 
 /// WA Web omits `type` when ACKing `<notification type="encrypt"><identity/></notification>`.
-fn is_encrypt_identity_notification(node: &Node) -> bool {
+fn is_encrypt_identity_notification(node: &wacore_binary::NodeRef<'_>) -> bool {
     node.tag == "notification"
-        && node.attrs.get("type").is_some_and(|v| v == "encrypt")
+        && node
+            .get_attr("type")
+            .is_some_and(|v| v.as_str() == "encrypt")
         && node.get_optional_child("identity").is_some()
 }
 
@@ -3668,7 +3721,7 @@ mod tests {
     use crate::lid_pn_cache::LearningSource;
     use crate::test_utils::MockHttpClient;
     use futures::channel::oneshot;
-    use wacore_binary::jid::SERVER_JID;
+    use wacore_binary::SERVER_JID;
 
     #[tokio::test]
     async fn test_ack_behavior_for_incoming_stanzas() {
@@ -3690,7 +3743,7 @@ mod tests {
         // --- Assertions ---
 
         // Verify that we still ack other critical stanzas (regression check).
-        use wacore_binary::node::{Attrs, Node, NodeContent};
+        use wacore_binary::{Attrs, Node, NodeContent};
 
         let mut receipt_attrs = Attrs::new();
         receipt_attrs.insert("from".to_string(), "@s.whatsapp.net".to_string());
@@ -3711,11 +3764,11 @@ mod tests {
         );
 
         assert!(
-            client.should_ack(&receipt_node),
+            client.should_ack(&receipt_node.as_node_ref()),
             "should_ack must still return TRUE for <receipt> stanzas."
         );
         assert!(
-            client.should_ack(&notification_node),
+            client.should_ack(&notification_node.as_node_ref()),
             "should_ack must still return TRUE for <notification> stanzas."
         );
 
@@ -3761,7 +3814,7 @@ mod tests {
             .build();
 
         // 3. Handle the ack
-        let handled = client.handle_ack_response(ack_node).await;
+        let handled = client.handle_ack_response(&ack_node.as_node_ref()).await;
         assert!(
             handled,
             "handle_ack_response should return true when waiter exists"
@@ -3772,9 +3825,9 @@ mod tests {
             Ok(Ok(response_node)) => {
                 assert!(
                     response_node
-                        .attrs
-                        .get("id")
-                        .is_some_and(|v| v == test_id.as_str()),
+                        .get()
+                        .get_attr("id")
+                        .is_some_and(|v| v.as_str() == test_id.as_str()),
                     "Response node should have correct ID"
                 );
             }
@@ -3817,7 +3870,7 @@ mod tests {
             .build();
 
         // Should return false since there's no waiter
-        let handled = client.handle_ack_response(ack_node).await;
+        let handled = client.handle_ack_response(&ack_node.as_node_ref()).await;
         assert!(
             !handled,
             "handle_ack_response should return false when no waiter exists"
@@ -4350,7 +4403,7 @@ mod tests {
     #[tokio::test]
     async fn test_ensure_e2e_sessions_waits_for_offline_sync() {
         use std::sync::atomic::Ordering;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         let backend = Arc::new(
             crate::store::SqliteStore::new("file:memdb_ensure_e2e_waits?mode=memory&cache=shared")
@@ -4435,7 +4488,7 @@ mod tests {
     #[tokio::test]
     async fn test_immediate_session_does_not_wait_for_offline_sync() {
         use std::sync::atomic::Ordering;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         let backend = Arc::new(
             crate::store::SqliteStore::new("file:memdb_immediate_no_wait?mode=memory&cache=shared")
@@ -4516,7 +4569,7 @@ mod tests {
         use wacore::libsignal::protocol::SessionRecord;
         use wacore::libsignal::store::SessionStore;
         use wacore::types::jid::JidExt;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         let backend = Arc::new(
             crate::store::SqliteStore::new("file:memdb_skip_existing?mode=memory&cache=shared")
@@ -4705,7 +4758,7 @@ mod tests {
             .build();
 
         // Update the offset
-        client.update_server_time_offset(&node);
+        client.update_server_time_offset(&node.as_node_ref());
 
         // The offset should be approximately 10 * 1000 = 10000 ms
         // Allow some tolerance for timing differences during the test
@@ -4718,7 +4771,7 @@ mod tests {
 
         // Test with no 't' attribute - should not change offset
         let node_no_t = NodeBuilder::new("success").build();
-        client.update_server_time_offset(&node_no_t);
+        client.update_server_time_offset(&node_no_t.as_node_ref());
         let offset_after = client.unified_session.server_time_offset_ms();
         assert!(
             (offset_after - offset).abs() < 100, // Should be same (or very close)
@@ -4729,7 +4782,7 @@ mod tests {
         let node_invalid = NodeBuilder::new("success")
             .attr("t", "not_a_number")
             .build();
-        client.update_server_time_offset(&node_invalid);
+        client.update_server_time_offset(&node_invalid.as_node_ref());
         let offset_after_invalid = client.unified_session.server_time_offset_ms();
         assert!(
             (offset_after_invalid - offset).abs() < 100,
@@ -4738,7 +4791,7 @@ mod tests {
 
         // Test with negative/zero 't' - should not change offset
         let node_zero = NodeBuilder::new("success").attr("t", "0").build();
-        client.update_server_time_offset(&node_zero);
+        client.update_server_time_offset(&node_zero.as_node_ref());
         let offset_after_zero = client.unified_session.server_time_offset_ms();
         assert!(
             (offset_after_zero - offset).abs() < 100,
@@ -4844,6 +4897,10 @@ mod tests {
         info!("✅ test_unified_session_protocol_node passed");
     }
 
+    fn node_to_owned_ref(node: Node) -> Arc<wacore_binary::OwnedNodeRef> {
+        crate::test_utils::node_to_owned_ref(&node)
+    }
+
     /// Helper to create a test client for offline sync tests
     async fn create_offline_sync_test_client() -> Arc<Client> {
         let backend = crate::test_utils::create_test_backend().await;
@@ -4877,7 +4934,7 @@ mod tests {
                 .build()])
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert!(
             client.offline_sync_metrics.active.load(Ordering::Acquire),
             "<ib><thread_metadata> should NOT end offline sync"
@@ -4900,7 +4957,7 @@ mod tests {
                 .build()])
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert!(
             client.offline_sync_metrics.active.load(Ordering::Acquire),
             "<ib><edge_routing> should NOT end offline sync"
@@ -4922,7 +4979,7 @@ mod tests {
                 .build()])
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert!(
             client.offline_sync_metrics.active.load(Ordering::Acquire),
             "<ib><dirty> should NOT end offline sync"
@@ -4945,7 +5002,7 @@ mod tests {
             .children([NodeBuilder::new("offline").attr("count", "301").build()])
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert!(
             !client.offline_sync_metrics.active.load(Ordering::Acquire),
             "<ib><offline count='301'/> should end offline sync"
@@ -4966,7 +5023,7 @@ mod tests {
                 .build()])
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert!(
             client.offline_sync_metrics.active.load(Ordering::Acquire),
             "offline_preview with count>0 should activate sync"
@@ -5000,7 +5057,7 @@ mod tests {
             .attr("type", "text")
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert_eq!(
             client
                 .offline_sync_metrics
@@ -5057,7 +5114,7 @@ mod tests {
             .children([NodeBuilder::new("ping").build()])
             .build();
 
-        let handled = client.handle_iq(&ping_node).await;
+        let handled = client.handle_iq(&ping_node.as_node_ref()).await;
         assert!(
             handled,
             "handle_iq must recognize ping with <ping> child element"
@@ -5091,7 +5148,7 @@ mod tests {
             .attr("xmlns", "urn:xmpp:ping")
             .build();
 
-        let handled = client.handle_iq(&ping_node).await;
+        let handled = client.handle_iq(&ping_node.as_node_ref()).await;
         assert!(
             handled,
             "handle_iq must recognize ping with xmlns=\"urn:xmpp:ping\" attribute (no children)"
@@ -5125,7 +5182,7 @@ mod tests {
             .children([NodeBuilder::new("ping").build()])
             .build();
 
-        let handled = client.handle_iq(&ping_node).await;
+        let handled = client.handle_iq(&ping_node.as_node_ref()).await;
         assert!(
             handled,
             "handle_iq must handle ping with both child and xmlns"
@@ -5157,7 +5214,7 @@ mod tests {
             .attr("xmlns", "some:other:namespace")
             .build();
 
-        let handled = client.handle_iq(&non_ping_node).await;
+        let handled = client.handle_iq(&non_ping_node.as_node_ref()).await;
         assert!(
             !handled,
             "handle_iq must NOT treat non-ping xmlns as a ping"
@@ -5189,7 +5246,7 @@ mod tests {
             .attr("xmlns", "urn:xmpp:ping")
             .build();
 
-        let handled = client.handle_iq(&result_node).await;
+        let handled = client.handle_iq(&result_node.as_node_ref()).await;
         assert!(
             !handled,
             "handle_iq must NOT respond to type=\"result\" even with ping xmlns"
@@ -5229,7 +5286,7 @@ mod tests {
             .build();
 
         assert!(
-            is_encrypt_identity_notification(&node),
+            is_encrypt_identity_notification(&node.as_node_ref()),
             "identity-change notification ACK must omit type to match WA Web"
         );
     }
@@ -5244,7 +5301,7 @@ mod tests {
             .build();
 
         assert!(
-            !is_encrypt_identity_notification(&node),
+            !is_encrypt_identity_notification(&node.as_node_ref()),
             "device notification is not an encrypt+identity notification"
         );
     }
@@ -5263,7 +5320,7 @@ mod tests {
             .parse()
             .expect("own device PN JID should parse");
 
-        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+        let ack = build_ack_node(&incoming.as_node_ref(), Some(&own_device_pn))
             .expect("message ack should be buildable");
 
         assert_eq!(ack.tag, "ack");
@@ -5303,7 +5360,7 @@ mod tests {
             .parse()
             .expect("own device PN JID should parse");
 
-        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+        let ack = build_ack_node(&incoming.as_node_ref(), Some(&own_device_pn))
             .expect("notification ack should be buildable");
 
         assert!(ack.attrs.get("class").is_some_and(|v| v == "notification"));
@@ -5329,7 +5386,7 @@ mod tests {
             .parse()
             .expect("own device PN JID should parse");
 
-        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+        let ack = build_ack_node(&incoming.as_node_ref(), Some(&own_device_pn))
             .expect("receipt ack should be buildable");
 
         assert!(ack.attrs.get("class").is_some_and(|v| v == "receipt"));
@@ -5355,7 +5412,7 @@ mod tests {
             .parse()
             .expect("own device PN JID should parse");
 
-        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+        let ack = build_ack_node(&incoming.as_node_ref(), Some(&own_device_pn))
             .expect("receipt ack should be buildable");
 
         assert!(ack.attrs.get("class").is_some_and(|v| v == "receipt"));
@@ -5394,7 +5451,7 @@ mod tests {
             .attr("xmlns", "urn:xmpp:ping")
             .build();
 
-        let handled = client.handle_iq(&ping_node).await;
+        let handled = client.handle_iq(&ping_node.as_node_ref()).await;
         assert!(
             handled,
             "handle_iq must recognize ping without id attribute"
@@ -5451,7 +5508,7 @@ mod tests {
     async fn test_stream_error_401_disables_reconnect() {
         let client = create_offline_sync_test_client().await;
         let node = NodeBuilder::new("stream:error").attr("code", "401").build();
-        client.handle_stream_error(&node).await;
+        client.handle_stream_error(&node.as_node_ref()).await;
         assert!(
             !client.enable_auto_reconnect.load(Ordering::Relaxed),
             "401 should disable auto-reconnect"
@@ -5462,7 +5519,7 @@ mod tests {
     async fn test_stream_error_409_disables_reconnect() {
         let client = create_offline_sync_test_client().await;
         let node = NodeBuilder::new("stream:error").attr("code", "409").build();
-        client.handle_stream_error(&node).await;
+        client.handle_stream_error(&node.as_node_ref()).await;
         assert!(
             !client.enable_auto_reconnect.load(Ordering::Relaxed),
             "409 should disable auto-reconnect"
@@ -5474,7 +5531,7 @@ mod tests {
         let client = create_offline_sync_test_client().await;
         let before = client.auto_reconnect_errors.load(Ordering::Relaxed);
         let node = NodeBuilder::new("stream:error").attr("code", "429").build();
-        client.handle_stream_error(&node).await;
+        client.handle_stream_error(&node.as_node_ref()).await;
         assert!(
             client.enable_auto_reconnect.load(Ordering::Relaxed),
             "429 should keep auto-reconnect enabled"
@@ -5491,7 +5548,7 @@ mod tests {
     async fn test_stream_error_503_keeps_reconnect() {
         let client = create_offline_sync_test_client().await;
         let node = NodeBuilder::new("stream:error").attr("code", "503").build();
-        client.handle_stream_error(&node).await;
+        client.handle_stream_error(&node.as_node_ref()).await;
         assert!(
             client.enable_auto_reconnect.load(Ordering::Relaxed),
             "503 should keep auto-reconnect enabled"
@@ -5615,7 +5672,7 @@ mod tests {
             .attr("participant", "236395184570386@lid")
             .build();
 
-        let result = client.send_ack_for(&receipt).await;
+        let result = client.send_ack_for(&receipt.as_node_ref()).await;
         assert!(
             matches!(result, Err(ClientError::NotConnected)),
             "send_ack_for must return Err(NotConnected) when disconnected, got: {result:?}"
@@ -5649,7 +5706,7 @@ mod tests {
             .attr("id", "TEST-RECEIPT-ID")
             .build();
 
-        let result = client.send_ack_for(&receipt).await;
+        let result = client.send_ack_for(&receipt.as_node_ref()).await;
         assert!(
             result.is_ok(),
             "send_ack_for should return Ok during expected disconnect"

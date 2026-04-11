@@ -3,7 +3,7 @@
 //! Provides type-safe message stanzas with JID-aware attributes.
 
 use crate::ProtocolNode;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 /// Typed 1-to-1 or generic message stanza with JID-safe attributes.
 ///

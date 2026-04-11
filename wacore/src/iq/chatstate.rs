@@ -20,12 +20,12 @@
 //! ```
 
 use crate::StringEnum;
-use crate::iq::node::optional_jid;
 use crate::protocol::ProtocolNode;
 use anyhow::Result;
 use thiserror::Error;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::Node;
+use wacore_binary::Jid;
+use wacore_binary::Node;
+use wacore_binary::NodeRef;
 
 /// Error type for chatstate parsing failures.
 #[derive(Debug, Error)]
@@ -75,11 +75,15 @@ impl ReceivedChatState {
     /// - `<composing/>` → Typing
     /// - `<composing media="audio"/>` → RecordingAudio
     /// - `<paused/>` → Idle
-    pub fn from_child_node(child: &Node) -> Self {
+    pub fn from_child_node(child: &NodeRef<'_>) -> Self {
         match child.tag.as_ref() {
             "composing" => {
                 // Check for media="audio" to distinguish recording from typing
-                if child.attrs.get("media").is_some_and(|v| v == "audio") {
+                if child
+                    .get_attr("media")
+                    .map(|v| v.as_str())
+                    .is_some_and(|s| s == "audio")
+                {
                     Self::RecordingAudio
                 } else {
                     Self::Typing
@@ -128,15 +132,16 @@ impl ChatstateStanza {
     ///
     /// Use this method when you need to distinguish between different failure modes
     /// (e.g., to ignore self-echo chatstates without logging warnings).
-    pub fn parse(node: &Node) -> Result<Self, ChatstateParseError> {
+    pub fn parse(node: &NodeRef<'_>) -> Result<Self, ChatstateParseError> {
         if node.tag != "chatstate" {
             return Err(ChatstateParseError::WrongTag(node.tag.to_string()));
         }
 
-        let from = match optional_jid(node, "from")? {
+        let mut attrs = node.attrs();
+        let from = match attrs.optional_jid("from") {
             Some(jid) => jid,
             None => {
-                if optional_jid(node, "to")?.is_some() {
+                if attrs.optional_jid("to").is_some() {
                     return Err(ChatstateParseError::SelfEcho);
                 }
                 return Err(ChatstateParseError::MissingFrom);
@@ -144,7 +149,7 @@ impl ChatstateStanza {
         };
 
         // Parse 'participant' attribute (optional, present in groups)
-        let source = match optional_jid(node, "participant")? {
+        let source = match attrs.optional_jid("participant") {
             Some(participant) => ChatstateSource::Group { from, participant },
             None => ChatstateSource::User { from },
         };
@@ -170,7 +175,7 @@ impl ProtocolNode for ChatstateStanza {
         unimplemented!("ChatstateStanza is incoming-only")
     }
 
-    fn try_from_node(node: &Node) -> Result<Self> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self> {
         Self::parse(node).map_err(Into::into)
     }
 }
@@ -267,7 +272,7 @@ mod tests {
             .children([NodeBuilder::new("composing").build()])
             .build();
 
-        let result = ChatstateStanza::parse(&node);
+        let result = ChatstateStanza::parse(&node.as_node_ref());
         assert!(matches!(result, Err(ChatstateParseError::MissingFrom)));
     }
 
@@ -279,7 +284,7 @@ mod tests {
             .children([NodeBuilder::new("composing").build()])
             .build();
 
-        let result = ChatstateStanza::parse(&node);
+        let result = ChatstateStanza::parse(&node.as_node_ref());
         assert!(matches!(result, Err(ChatstateParseError::SelfEcho)));
     }
 
@@ -289,7 +294,7 @@ mod tests {
             .attr("from", "1234567890@s.whatsapp.net")
             .build();
 
-        let result = ChatstateStanza::parse(&node);
+        let result = ChatstateStanza::parse(&node.as_node_ref());
         assert!(matches!(result, Err(ChatstateParseError::WrongTag(_))));
     }
 
@@ -322,7 +327,7 @@ mod tests {
             .children([NodeBuilder::new("composing").build()])
             .build();
 
-        let stanza = ChatstateStanza::parse(&node).unwrap();
+        let stanza = ChatstateStanza::parse(&node.as_node_ref()).unwrap();
         assert!(matches!(stanza.source, ChatstateSource::User { .. }));
         assert_eq!(stanza.state, ReceivedChatState::Typing);
 
@@ -336,7 +341,7 @@ mod tests {
     fn test_parse_jid_attribute_as_jid_type() {
         // In the binary protocol, JID attributes are stored as actual JID types,
         // not strings. This test simulates that by passing a Jid directly to attr().
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         let jid: Jid = "236395184570386@lid".parse().unwrap();
         let node = NodeBuilder::new("chatstate")
@@ -344,7 +349,7 @@ mod tests {
             .children([NodeBuilder::new("composing").build()])
             .build();
 
-        let stanza = ChatstateStanza::parse(&node).unwrap();
+        let stanza = ChatstateStanza::parse(&node.as_node_ref()).unwrap();
         assert!(matches!(stanza.source, ChatstateSource::User { .. }));
         assert_eq!(stanza.state, ReceivedChatState::Typing);
 
@@ -357,7 +362,7 @@ mod tests {
     #[test]
     fn test_parse_group_chatstate_with_jid_types() {
         // Test group chatstate with JID-typed attributes (as binary protocol stores them)
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         let group_jid: Jid = "123456789-1234567890@g.us".parse().unwrap();
         let participant_jid: Jid = "236395184570386@lid".parse().unwrap();
@@ -368,7 +373,7 @@ mod tests {
             .children([NodeBuilder::new("composing").build()])
             .build();
 
-        let stanza = ChatstateStanza::parse(&node).unwrap();
+        let stanza = ChatstateStanza::parse(&node.as_node_ref()).unwrap();
         assert!(matches!(stanza.source, ChatstateSource::Group { .. }));
         assert_eq!(stanza.state, ReceivedChatState::Typing);
 

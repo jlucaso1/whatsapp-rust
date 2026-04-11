@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use wacore_binary::jid::{Jid, JidExt};
+use wacore_binary::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
 /// Invokes a callback macro with the list of all message types that have `context_info`.

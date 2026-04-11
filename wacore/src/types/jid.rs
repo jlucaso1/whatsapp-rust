@@ -1,5 +1,5 @@
 use crate::libsignal::protocol::ProtocolAddress;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 /// Map server names to WhatsApp Web's internal Signal address format.
 #[inline]

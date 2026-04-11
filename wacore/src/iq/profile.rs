@@ -14,8 +14,7 @@ use std::borrow::Cow;
 
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
-use wacore_binary::jid::DEFAULT_USER_SERVER;
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Node, NodeContent, NodeRef, Server};
 
 /// IQ spec for setting the user's own status text (about).
 pub struct SetStatusTextSpec {
@@ -34,7 +33,7 @@ impl IqSpec for SetStatusTextSpec {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::set(
             "status",
-            DEFAULT_USER_SERVER.parse().expect("valid server JID"),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![Node {
                 tag: Cow::Borrowed("status"),
                 attrs: Default::default(),
@@ -43,7 +42,7 @@ impl IqSpec for SetStatusTextSpec {
         )
     }
 
-    fn parse_response(&self, _response: &Node) -> anyhow::Result<Self::Response> {
+    fn parse_response(&self, _response: &NodeRef<'_>) -> anyhow::Result<Self::Response> {
         Ok(())
     }
 }

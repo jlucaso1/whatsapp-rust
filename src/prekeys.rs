@@ -15,7 +15,7 @@ use wacore::iq::prekeys::{
 use wacore::libsignal::protocol::{KeyPair, PreKeyBundle, PublicKey};
 use wacore::libsignal::store::record_helpers::new_pre_key_record;
 use wacore::store::commands::DeviceCommand;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 pub use wacore::prekeys::PreKeyUtils;
 

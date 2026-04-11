@@ -27,8 +27,8 @@ use crate::iq::tctoken::build_tc_token_node;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, Server};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{NodeContent, NodeRef};
 
 /// Profile picture information.
 #[derive(Debug, Clone)]
@@ -128,7 +128,7 @@ impl IqSpec for ProfilePictureSpec {
         .with_target_ref(&self.jid)
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let picture_node = match response.get_optional_child("picture") {
             Some(p) => p,
             None => return Ok(None),
@@ -279,7 +279,7 @@ impl IqSpec for SetProfilePictureSpec {
         iq
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         if self.image_data.is_some() {
             // Set operation: server must return <picture id="..."/>
             let picture_node = response
@@ -350,7 +350,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert!(result.is_some());
 
         let pic = result.unwrap();
@@ -374,7 +374,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert!(result.is_none());
     }
 
@@ -385,7 +385,7 @@ mod tests {
 
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert!(result.is_none());
     }
 
@@ -490,7 +490,7 @@ mod tests {
             .children([NodeBuilder::new("picture").attr("id", "987654321").build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.id, "987654321");
     }
 }
