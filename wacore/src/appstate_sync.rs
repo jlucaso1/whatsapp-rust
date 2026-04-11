@@ -441,7 +441,7 @@ impl AppStateProcessor {
 
     pub async fn get_missing_key_ids(&self, pl: &PatchList) -> Result<Vec<Vec<u8>>> {
         let key_ids = collect_key_ids_from_patch_list(pl.snapshot.as_ref(), &pl.patches);
-        let mut missing = Vec::new();
+        let mut missing = Vec::with_capacity(key_ids.len());
         for id in key_ids {
             if self.backend.get_sync_key(&id).await?.is_none() {
                 missing.push(id);

@@ -20,8 +20,8 @@ fn evict_clean_entries<V>(
     if overflow == 0 {
         return;
     }
-    let mut negative = Vec::new();
-    let mut positive = Vec::new();
+    let mut negative = Vec::with_capacity(overflow);
+    let mut positive = Vec::with_capacity(overflow);
     for (k, v) in cache.iter() {
         if dirty.contains(k.as_ref()) {
             continue;

@@ -56,7 +56,7 @@ impl Client {
                 );
             }
 
-            let mut fetched_devices = Vec::new();
+            let mut fetched_devices = Vec::with_capacity(response.device_lists.len());
 
             for user_list in &response.device_lists {
                 // Update device registry (single source of truth for device lists).
