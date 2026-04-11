@@ -267,7 +267,7 @@ mod tests {
                 Node::new(
                     "text",
                     Attrs::new(),
-                    Some(NodeContent::String("hello".repeat(40))),
+                    Some(NodeContent::String("hello".repeat(40).into())),
                 ),
             ])),
         )

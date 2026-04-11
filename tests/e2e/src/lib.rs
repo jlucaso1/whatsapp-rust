@@ -209,13 +209,13 @@ impl TestClient {
     /// available, otherwise it falls back to the phone-number user part.
     pub async fn tc_token_key(&self) -> anyhow::Result<String> {
         if let Some(lid) = self.client.get_lid().await {
-            return Ok(lid.user);
+            return Ok(lid.user.to_string());
         }
 
         self.client
             .get_pn()
             .await
-            .map(|jid| jid.user)
+            .map(|jid| jid.user.to_string())
             .ok_or_else(|| anyhow::anyhow!("Client should have a JID after connect"))
     }
 

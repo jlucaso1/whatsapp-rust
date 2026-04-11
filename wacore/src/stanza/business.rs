@@ -59,7 +59,7 @@ impl VerifiedName {
             .or_else(|| {
                 node.get_optional_child_by_tag(&["name"])
                     .and_then(|n| match &n.content {
-                        Some(NodeContent::String(s)) => Some(s.clone()),
+                        Some(NodeContent::String(s)) => Some(s.to_string()),
                         _ => None,
                     })
             });
@@ -262,7 +262,7 @@ impl BusinessNotification {
                     && let Some(id_node) = child.get_optional_child_by_tag(&["id"])
                     && let Some(NodeContent::String(id)) = &id_node.content
                 {
-                    product_ids.push(id.clone());
+                    product_ids.push(id.to_string());
                 } else if child.tag == "collection"
                     && let Some(id) = child.attrs().optional_string("id")
                 {

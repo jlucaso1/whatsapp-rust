@@ -7,9 +7,9 @@ use wacore_binary::node::Node;
 #[derive(Debug, Clone)]
 pub struct UsyncLidMapping {
     /// The phone number user part (e.g., "559980000001")
-    pub phone_number: String,
+    pub phone_number: wacore_binary::CompactString,
     /// The LID user part (e.g., "100000012345678")
-    pub lid: String,
+    pub lid: wacore_binary::CompactString,
 }
 
 #[derive(Debug, Clone)]

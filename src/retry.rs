@@ -954,7 +954,7 @@ mod tests {
         let node_str = Node {
             tag: Cow::Borrowed("test"),
             attrs: Attrs::new(),
-            content: Some(NodeContent::String("hello".to_string())),
+            content: Some(NodeContent::String("hello".into())),
         };
         assert_eq!(get_bytes_content(&node_str), None);
 

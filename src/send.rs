@@ -1216,18 +1216,23 @@ impl Client {
 
         // Resolve the destination to a LID user string once — reused for
         // tctoken lookup, issuance, and cstoken HMAC input.
-        let resolved_lid_user = if to.is_lid() {
-            Some(to.user.clone())
+        let cached_lid = if to.is_lid() {
+            None
         } else {
             self.lid_pn_cache.get_current_lid(&to.user).await
         };
-        let token_jid = resolved_lid_user.as_deref().unwrap_or(&to.user).to_string();
+        let resolved_lid_user: Option<&str> = if to.is_lid() {
+            Some(&to.user)
+        } else {
+            cached_lid.as_deref()
+        };
+        let token_jid: &str = resolved_lid_user.unwrap_or(&to.user);
 
         let backend = self.persistence_manager.backend();
         let tc_config = self.tc_token_config().await;
 
         // Look up existing tctoken
-        let existing = match backend.get_tc_token(&token_jid).await {
+        let existing = match backend.get_tc_token(token_jid).await {
             Ok(entry) => entry,
             Err(e) => {
                 log::warn!(target: "Client/TcToken", "Failed to get tc_token for {}: {e}", token_jid);
@@ -1255,7 +1260,7 @@ impl Client {
                         && !entry.token.is_empty() =>
                 {
                     extra_nodes.push(build_tc_token_node(&entry.token));
-                    return (should_issue_after_send, Some(token_jid));
+                    return (should_issue_after_send, Some(token_jid.to_string()));
                 }
                 _ => {
                     // cstoken fallback — gated by wa_nct_token_send_enabled
@@ -1271,7 +1276,7 @@ impl Client {
                         // HMAC input is "user@lid" (account LID without device suffix),
                         // matching WA Web's accountLid.toString()
                         let recipient_lid =
-                            wacore_binary::jid::Jid::new(lid_user, "lid").to_string();
+                            wacore_binary::jid::Jid::new(*lid_user, "lid").to_string();
                         let cs_token = compute_cs_token(salt, &recipient_lid);
                         extra_nodes.push(build_cs_token_node(&cs_token));
                         log::debug!(target: "Client/CsToken", "Attached cstoken for {} (NCT fallback)", to);
@@ -1409,17 +1414,15 @@ impl Client {
             return;
         };
 
-        let token_jid = if sender.is_lid() {
-            sender.user.clone()
+        let resolved_lid = if sender.is_lid() {
+            None
         } else {
-            match self.lid_pn_cache.get_current_lid(&sender.user).await {
-                Some(lid) => lid,
-                None => sender.user.clone(),
-            }
+            self.lid_pn_cache.get_current_lid(&sender.user).await
         };
+        let token_jid: &str = resolved_lid.as_deref().unwrap_or(&sender.user);
 
         let backend = self.persistence_manager.backend();
-        let entry = match backend.get_tc_token(&token_jid).await {
+        let entry = match backend.get_tc_token(token_jid).await {
             Ok(Some(e)) => e,
             _ => return,
         };
@@ -1469,18 +1472,16 @@ impl Client {
     pub(crate) async fn lookup_tc_token_for_jid(&self, jid: &Jid) -> Option<Vec<u8>> {
         use wacore::iq::tctoken::is_tc_token_expired_with;
 
-        let token_jid = if jid.is_lid() {
-            jid.user.clone()
+        let resolved_lid = if jid.is_lid() {
+            None
         } else {
-            match self.lid_pn_cache.get_current_lid(&jid.user).await {
-                Some(lid) => lid,
-                None => jid.user.clone(),
-            }
+            self.lid_pn_cache.get_current_lid(&jid.user).await
         };
+        let token_jid: &str = resolved_lid.as_deref().unwrap_or(&jid.user);
 
         let tc_config = self.tc_token_config().await;
         let backend = self.persistence_manager.backend();
-        match backend.get_tc_token(&token_jid).await {
+        match backend.get_tc_token(token_jid).await {
             Ok(Some(entry))
                 if !entry.token.is_empty()
                     && !is_tc_token_expired_with(entry.token_timestamp, &tc_config) =>

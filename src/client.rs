@@ -3603,7 +3603,7 @@ fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
     };
 
     let mut attrs = Attrs::new();
-    attrs.insert("class", NodeValue::String(node.tag.to_string()));
+    attrs.insert("class", NodeValue::from(node.tag.as_ref()));
     attrs.insert("id", id);
     attrs.insert("to", from);
 
@@ -3698,7 +3698,7 @@ mod tests {
         let receipt_node = Node::new(
             "receipt",
             receipt_attrs,
-            Some(NodeContent::String("test".to_string())),
+            Some(NodeContent::String("test".into())),
         );
 
         let mut notification_attrs = Attrs::new();
@@ -3707,7 +3707,7 @@ mod tests {
         let notification_node = Node::new(
             "notification",
             notification_attrs,
-            Some(NodeContent::String("test".to_string())),
+            Some(NodeContent::String("test".into())),
         );
 
         assert!(

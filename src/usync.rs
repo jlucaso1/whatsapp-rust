@@ -142,7 +142,7 @@ impl Client {
                 }
 
                 let device_list = wacore::store::traits::DeviceListRecord {
-                    user: user_list.user.user.clone(),
+                    user: user_list.user.user.to_string(),
                     devices,
                     timestamp: wacore::time::now_secs(),
                     phash: user_list.phash.clone(),

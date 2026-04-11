@@ -2343,13 +2343,13 @@ mod tests {
         // Simulate a LID group with phone number mappings
         let mut lid_to_pn_map = HashMap::new();
         lid_to_pn_map.insert(
-            "100000000000001.1".to_string(),
+            wacore_binary::CompactString::from("100000000000001.1"),
             "15551234567@s.whatsapp.net"
                 .parse()
                 .expect("test JID should be valid"),
         );
         lid_to_pn_map.insert(
-            "987654321000000.2".to_string(),
+            wacore_binary::CompactString::from("987654321000000.2"),
             "551234567890@s.whatsapp.net"
                 .parse()
                 .expect("test JID should be valid"),
@@ -2410,7 +2410,7 @@ mod tests {
 
         let mut lid_to_pn_map = HashMap::new();
         lid_to_pn_map.insert(
-            "100000000000001.1".to_string(),
+            wacore_binary::CompactString::from("100000000000001.1"),
             "15551234567@s.whatsapp.net"
                 .parse()
                 .expect("test JID should be valid"),
@@ -2473,7 +2473,7 @@ mod tests {
         let own_base_jid = own_lid.to_non_ad();
         let own_jid_to_check = if own_base_jid.is_lid() {
             lid_to_pn_map
-                .get(&own_base_jid.user)
+                .get(own_base_jid.user.as_str())
                 .map(|pn| pn.to_non_ad())
                 .unwrap_or_else(|| own_base_jid.clone())
         } else {
@@ -3590,7 +3590,7 @@ mod tests {
             } else if let Some(lid_user) = client.lid_pn_cache.get_current_lid(&sender.user).await {
                 // Use the cached LID
                 Jid {
-                    user: lid_user,
+                    user: lid_user.into(),
                     server: wacore_binary::jid::cow_server_from_str(lid_server),
                     device: sender.device,
                     agent: sender.agent,
@@ -3707,7 +3707,7 @@ mod tests {
             } else if let Some(lid_user) = client.lid_pn_cache.get_current_lid(&sender.user).await {
                 // This is the path we're testing - fallback to cached LID
                 Jid {
-                    user: lid_user,
+                    user: lid_user.into(),
                     server: wacore_binary::jid::cow_server_from_str(lid_server),
                     device: sender.device,
                     agent: sender.agent,
@@ -3809,7 +3809,7 @@ mod tests {
                 }
             } else if let Some(lid_user) = client.lid_pn_cache.get_current_lid(&sender.user).await {
                 Jid {
-                    user: lid_user,
+                    user: lid_user.into(),
                     server: wacore_binary::jid::cow_server_from_str(lid_server),
                     device: sender.device,
                     agent: sender.agent,

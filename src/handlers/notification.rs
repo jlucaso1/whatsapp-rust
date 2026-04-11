@@ -622,7 +622,7 @@ async fn handle_account_sync_devices(client: &Arc<Client>, node: &Node, devices_
     // Build DeviceListRecord for storage
     // Note: update_device_list() will automatically store under LID if mapping is known
     let device_list = DeviceListRecord {
-        user: from_jid.user.clone(),
+        user: from_jid.user.to_string(),
         devices: devices
             .iter()
             .map(|d| DeviceInfo {
@@ -683,37 +683,38 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
 
     // Resolve the sender to a LID key for storage.
     // WA Web uses `sender_lid` attr if present, otherwise resolves from `from`.
-    let sender_lid = node
+    let sender_lid_jid = node
         .attrs()
         .optional_jid("sender_lid")
-        .map(|j| j.user.clone());
+        .filter(|j| !j.user.is_empty());
 
-    let sender_lid = match sender_lid {
-        Some(lid) if !lid.is_empty() => lid,
-        _ => {
-            // Fall back to resolving from the `from` JID via LID-PN cache
-            let from = match &from_jid {
-                Some(jid) => jid,
+    // Resolve to a LID key. We borrow from Jid.user (CompactString) or from
+    // get_current_lid (String), then pass as &str to the storage layer.
+    let resolved_lid: Option<String>;
+    let sender_lid: &str = if let Some(ref lid_jid) = sender_lid_jid {
+        &lid_jid.user
+    } else {
+        let from = match &from_jid {
+            Some(jid) => jid,
+            None => {
+                warn!(target: "Client/TcToken", "privacy_token notification missing 'from' attribute");
+                return;
+            }
+        };
+
+        if from.is_lid() {
+            &from.user
+        } else {
+            resolved_lid = client.lid_pn_cache.get_current_lid(&from.user).await;
+            match &resolved_lid {
+                Some(lid) => lid.as_str(),
                 None => {
-                    warn!(target: "Client/TcToken", "privacy_token notification missing 'from' attribute");
-                    return;
-                }
-            };
-
-            if from.is_lid() {
-                from.user.clone()
-            } else {
-                // Try to resolve phone number to LID
-                match client.lid_pn_cache.get_current_lid(&from.user).await {
-                    Some(lid) => lid,
-                    None => {
-                        debug!(
-                            target: "Client/TcToken",
-                            "Cannot resolve LID for privacy_token sender {}, storing under PN",
-                            from
-                        );
-                        from.user.clone()
-                    }
+                    debug!(
+                        target: "Client/TcToken",
+                        "Cannot resolve LID for privacy_token sender {}, storing under PN",
+                        from
+                    );
+                    &from.user
                 }
             }
         }
@@ -737,7 +738,7 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
     let mut token_stored = false;
 
     for received in &received_tokens {
-        match backend.get_tc_token(&sender_lid).await {
+        match backend.get_tc_token(sender_lid).await {
             Ok(Some(existing)) => {
                 // Skip if token bytes are identical and timestamp hasn't advanced
                 if existing.token == received.token {
@@ -747,7 +748,7 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
                             token_timestamp: received.timestamp,
                             ..existing
                         };
-                        if let Err(e) = backend.put_tc_token(&sender_lid, &refreshed).await {
+                        if let Err(e) = backend.put_tc_token(sender_lid, &refreshed).await {
                             warn!(target: "Client/TcToken", "Failed to refresh tc_token timestamp for {}: {e}", sender_lid);
                         }
                     }
@@ -771,7 +772,7 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
                     sender_timestamp: existing.sender_timestamp,
                 };
 
-                if let Err(e) = backend.put_tc_token(&sender_lid, &entry).await {
+                if let Err(e) = backend.put_tc_token(sender_lid, &entry).await {
                     warn!(target: "Client/TcToken", "Failed to update tc_token for {}: {e}", sender_lid);
                 } else {
                     debug!(target: "Client/TcToken", "Updated tc_token for {} (t={})", sender_lid, received.timestamp);
@@ -786,7 +787,7 @@ async fn handle_privacy_token_notification(client: &Arc<Client>, node: &Node) {
                     sender_timestamp: None,
                 };
 
-                if let Err(e) = backend.put_tc_token(&sender_lid, &entry).await {
+                if let Err(e) = backend.put_tc_token(sender_lid, &entry).await {
                     warn!(target: "Client/TcToken", "Failed to store tc_token for {}: {e}", sender_lid);
                 } else {
                     debug!(target: "Client/TcToken", "Stored new tc_token for {} (t={})", sender_lid, received.timestamp);
@@ -1003,7 +1004,7 @@ fn handle_status_notification(client: &Arc<Client>, node: &Node) {
 
     if let Some(set_node) = node.get_optional_child("set") {
         let status_text = match &set_node.content {
-            Some(wacore_binary::node::NodeContent::String(s)) => s.clone(),
+            Some(wacore_binary::node::NodeContent::String(s)) => s.to_string(),
             Some(wacore_binary::node::NodeContent::Bytes(b)) => {
                 String::from_utf8_lossy(b).into_owned()
             }

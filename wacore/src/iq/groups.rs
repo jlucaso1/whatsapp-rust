@@ -643,7 +643,8 @@ impl ProtocolNode for GroupInfoResponse {
         let description_node = node.get_optional_child_by_tag(&["description"]);
         let description = description_node
             .and_then(|n| n.get_optional_child("body"))
-            .and_then(|body| body.content_as_string());
+            .and_then(|body| body.content_as_string())
+            .map(|s| s.to_string());
         let description_id = description_node
             .and_then(|n| n.attrs().optional_string("id"))
             .map(|s| s.to_string());

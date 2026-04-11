@@ -123,7 +123,7 @@ mod tests {
         let node = Node {
             tag: Cow::Borrowed("test"),
             attrs: Attrs::new(),
-            content: Some(NodeContent::String("hello".to_string())),
+            content: Some(NodeContent::String("hello".into())),
         };
         assert_eq!(get_bytes_content(&node), None);
     }

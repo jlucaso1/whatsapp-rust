@@ -187,13 +187,7 @@ impl User {
                 .unwrap();
         });
 
-        let jid = Jid {
-            user: user.to_string(),
-            server: wacore_binary::jid::cow_server_from_str(server),
-            device: 0,
-            agent: 0,
-            integrator: 0,
-        };
+        let jid = Jid::new(user, server);
         let address = jid.to_protocol_address();
 
         Self {

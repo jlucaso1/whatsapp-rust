@@ -1,3 +1,4 @@
+use compact_str::CompactString;
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
@@ -269,7 +270,7 @@ pub trait JidExt {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Jid {
-    pub user: String,
+    pub user: CompactString,
     pub server: Cow<'static, str>,
     pub agent: u8,
     pub device: u16,
@@ -301,7 +302,7 @@ impl JidExt for Jid {
 }
 
 impl Jid {
-    pub fn new(user: impl Into<String>, server: &str) -> Self {
+    pub fn new(user: impl Into<CompactString>, server: &str) -> Self {
         Self {
             user: user.into(),
             server: cow_server_from_str(server),
@@ -310,7 +311,7 @@ impl Jid {
     }
 
     /// Create a phone number JID (s.whatsapp.net)
-    pub fn pn(user: impl Into<String>) -> Self {
+    pub fn pn(user: impl Into<CompactString>) -> Self {
         Self {
             user: user.into(),
             server: Cow::Borrowed(DEFAULT_USER_SERVER),
@@ -319,7 +320,7 @@ impl Jid {
     }
 
     /// Create a LID JID (lid server)
-    pub fn lid(user: impl Into<String>) -> Self {
+    pub fn lid(user: impl Into<CompactString>) -> Self {
         Self {
             user: user.into(),
             server: Cow::Borrowed(HIDDEN_USER_SERVER),
@@ -330,7 +331,7 @@ impl Jid {
     /// Creates the `status@broadcast` JID used for status/story updates.
     pub fn status_broadcast() -> Self {
         Self {
-            user: STATUS_BROADCAST_USER.to_string(),
+            user: CompactString::from(STATUS_BROADCAST_USER),
             server: Cow::Borrowed(BROADCAST_SERVER),
             agent: 0,
             device: 0,
@@ -339,7 +340,7 @@ impl Jid {
     }
 
     /// Create a group JID (g.us).
-    pub fn group(id: impl Into<String>) -> Self {
+    pub fn group(id: impl Into<CompactString>) -> Self {
         Self {
             user: id.into(),
             server: Cow::Borrowed(GROUP_SERVER),
@@ -348,7 +349,7 @@ impl Jid {
     }
 
     /// Create a newsletter (channel) JID (newsletter server).
-    pub fn newsletter(id: impl Into<String>) -> Self {
+    pub fn newsletter(id: impl Into<CompactString>) -> Self {
         Self {
             user: id.into(),
             server: Cow::Borrowed(NEWSLETTER_SERVER),
@@ -357,7 +358,7 @@ impl Jid {
     }
 
     /// Create a phone number JID with device ID
-    pub fn pn_device(user: impl Into<String>, device: u16) -> Self {
+    pub fn pn_device(user: impl Into<CompactString>, device: u16) -> Self {
         Self {
             user: user.into(),
             server: Cow::Borrowed(DEFAULT_USER_SERVER),
@@ -367,7 +368,7 @@ impl Jid {
     }
 
     /// Create a LID JID with device ID
-    pub fn lid_device(user: impl Into<String>, device: u16) -> Self {
+    pub fn lid_device(user: impl Into<CompactString>, device: u16) -> Self {
         Self {
             user: user.into(),
             server: Cow::Borrowed(HIDDEN_USER_SERVER),
@@ -514,7 +515,7 @@ impl<'a> JidRef<'a> {
 
     pub fn to_owned(&self) -> Jid {
         Jid {
-            user: self.user.to_string(),
+            user: CompactString::from(self.user.as_ref()),
             server: cow_server_from_str(&self.server),
             agent: self.agent,
             device: self.device,
@@ -548,7 +549,7 @@ impl FromStr for Jid {
         // Try fast path first for well-formed JIDs
         if let Some(parts) = parse_jid_fast(s) {
             return Ok(Jid {
-                user: parts.user.to_string(),
+                user: CompactString::from(parts.user),
                 server: cow_server_from_str(parts.server),
                 agent: parts.agent,
                 device: parts.device,
@@ -594,7 +595,7 @@ impl FromStr for Jid {
                 (user_part, 0)
             };
             return Ok(Jid {
-                user: user.to_string(),
+                user: CompactString::from(user),
                 server: cow_server_from_str(server),
                 device,
                 agent: 0,
@@ -639,7 +640,7 @@ impl FromStr for Jid {
         }
 
         Ok(Jid {
-            user: user.to_string(),
+            user: CompactString::from(user),
             server: cow_server_from_str(server),
             agent,
             device,
@@ -847,7 +848,7 @@ mod tests {
         // Failure Case 1: An AD-JID for s.whatsapp.net decoded with an agent.
         // The Display trait MUST NOT show the agent number.
         let jid1 = Jid {
-            user: "1234567890".to_string(),
+            user: "1234567890".into(),
             server: Cow::Borrowed("s.whatsapp.net"),
             device: 15,
             agent: 2, // This agent would be decoded from binary but should be ignored in display
@@ -860,7 +861,7 @@ mod tests {
         // Failure Case 2: A LID JID with a device, decoded with an agent.
         // The Display trait MUST NOT show the agent number.
         let jid2 = Jid {
-            user: "12345.6789".to_string(),
+            user: "12345.6789".into(),
             server: Cow::Borrowed("lid"),
             device: 25,
             agent: 1, // This agent would be decoded from binary but should be ignored in display
@@ -873,7 +874,7 @@ mod tests {
         // Failure Case 3: A JID that was decoded as "hosted" because of its agent.
         // The Display trait MUST NOT show the agent number.
         let jid3 = Jid {
-            user: "1234567890".to_string(),
+            user: "1234567890".into(),
             server: Cow::Borrowed("hosted"),
             device: 15,
             agent: 2,
@@ -885,7 +886,7 @@ mod tests {
 
         // Verification Case: A generic JID where the agent SHOULD be displayed.
         let jid4 = Jid {
-            user: "user".to_string(),
+            user: "user".into(),
             server: Cow::Owned("custom.net".to_string()),
             device: 10,
             agent: 5,

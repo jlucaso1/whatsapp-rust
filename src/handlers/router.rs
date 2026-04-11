@@ -149,7 +149,7 @@ mod tests {
         let node = Arc::new(Node::new(
             "test",
             attrs,
-            Some(NodeContent::String("test".to_string())),
+            Some(NodeContent::String("test".into())),
         ));
 
         // Create a minimal client for testing with an in-memory database
@@ -187,7 +187,7 @@ mod tests {
         let node = Arc::new(Node::new(
             "unknown",
             attrs,
-            Some(NodeContent::String("test".to_string())),
+            Some(NodeContent::String("test".into())),
         ));
 
         // Create a minimal client for testing with an in-memory database
