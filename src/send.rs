@@ -483,20 +483,21 @@ impl Client {
             .ensure_status_participants(prepared.node, &group_info)
             .await?;
 
-        let our_phash = stanza
+        let ack = if let Some(phash) = stanza
             .attrs()
             .optional_string("phash")
-            .map(|s| s.into_owned());
-        let ack_rx = if our_phash.is_some() {
-            Some(self.register_ack_waiter(&request_id).await)
+            .map(|s| s.into_owned())
+        {
+            let rx = self.register_ack_waiter(&request_id).await;
+            Some((rx, phash))
         } else {
             None
         };
 
         self.send_node(stanza).await?;
 
-        if let Some(rx) = ack_rx {
-            self.spawn_phash_validation(rx, our_phash.unwrap(), to.clone(), false);
+        if let Some((rx, phash)) = ack {
+            self.spawn_phash_validation(rx, phash, to.clone(), false, request_id.clone());
         }
 
         self.update_sender_key_devices(&to_str, &prepared.skdm_devices)
@@ -635,6 +636,7 @@ impl Client {
         our_phash: String,
         jid: Jid,
         invalidate_group_cache: bool,
+        message_id: String,
     ) {
         let Some(client) = self.self_weak.get().and_then(|w| w.upgrade()) else {
             return;
@@ -648,7 +650,11 @@ impl Client {
                 .await
                 {
                     Ok(Ok(node)) => node,
-                    _ => return,
+                    _ => {
+                        // Remove leaked waiter to prevent keepalive suppression
+                        client.response_waiters.lock().await.remove(&message_id);
+                        return;
+                    }
                 };
                 if let Some(server) = ack.attrs().optional_string("phash")
                     && *server != our_phash
@@ -1104,24 +1110,26 @@ impl Client {
             .await?
         };
 
-        let our_phash = stanza_to_send
+        let ack = if let Some(phash) = stanza_to_send
             .attrs()
             .optional_string("phash")
-            .map(|s| s.into_owned());
-        let ack_rx = if our_phash.is_some() {
-            let msg_id = stanza_to_send.attrs().optional_string("id");
-            Some(
-                self.register_ack_waiter(msg_id.as_deref().unwrap_or_default())
-                    .await,
-            )
+            .map(|s| s.into_owned())
+        {
+            let msg_id = stanza_to_send
+                .attrs()
+                .optional_string("id")
+                .map(|s| s.into_owned())
+                .unwrap_or_default();
+            let rx = self.register_ack_waiter(&msg_id).await;
+            Some((rx, phash, msg_id))
         } else {
             None
         };
 
         self.send_node(stanza_to_send).await?;
 
-        if let Some(rx) = ack_rx {
-            self.spawn_phash_validation(rx, our_phash.unwrap(), tc_issue_target.clone(), true);
+        if let Some((rx, phash, msg_id)) = ack {
+            self.spawn_phash_validation(rx, phash, tc_issue_target.clone(), true, msg_id);
         }
 
         if let Some(update) = skdm_update {
