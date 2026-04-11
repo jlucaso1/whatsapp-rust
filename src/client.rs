@@ -2568,35 +2568,7 @@ impl Client {
                         Vec::new()
                     }
                 };
-                if !missing.is_empty() {
-                    let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
-                    let mut guard = self.app_state_key_requests.lock().await;
-                    let now = wacore::time::Instant::now();
-                    for key_id in missing {
-                        let hex_id = hex::encode(&key_id);
-                        let should = guard
-                            .get(&hex_id)
-                            .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
-                            .unwrap_or(true);
-                        if should {
-                            guard.insert(hex_id, now);
-                            to_request.push(key_id);
-                        }
-                    }
-                    // Evict stale entries to prevent unbounded growth over long sessions
-                    guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
-                    drop(guard);
-                    if !to_request.is_empty()
-                        && let Err(e) = self.request_app_state_keys(&to_request).await
-                    {
-                        warn!("Failed to send app state key request: {e}");
-                        // Remove stamps so these keys can be retried next sync
-                        let mut guard = self.app_state_key_requests.lock().await;
-                        for key_id in &to_request {
-                            guard.remove(&hex::encode(key_id));
-                        }
-                    }
-                }
+                self.request_missing_keys_with_dedup(missing).await;
 
                 // full_sync is true only when this collection had a snapshot
                 // (version was 0 before sync). This prevents server_sync-triggered
@@ -2782,35 +2754,7 @@ impl Client {
                     Vec::new()
                 }
             };
-            if !missing.is_empty() {
-                let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
-                let mut guard = self.app_state_key_requests.lock().await;
-                let now = wacore::time::Instant::now();
-                for key_id in missing {
-                    let hex_id = hex::encode(&key_id);
-                    let should = guard
-                        .get(&hex_id)
-                        .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
-                        .unwrap_or(true);
-                    if should {
-                        guard.insert(hex_id, now);
-                        to_request.push(key_id);
-                    }
-                }
-                // Evict stale entries to prevent unbounded growth over long sessions
-                guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
-                drop(guard);
-                if !to_request.is_empty()
-                    && let Err(e) = self.request_app_state_keys(&to_request).await
-                {
-                    warn!("Failed to send app state key request: {e}");
-                    // Remove stamps so these keys can be retried next sync
-                    let mut guard = self.app_state_key_requests.lock().await;
-                    for key_id in &to_request {
-                        guard.remove(&hex::encode(key_id));
-                    }
-                }
-            }
+            self.request_missing_keys_with_dedup(missing).await;
 
             for m in mutations {
                 debug!(target: "Client/AppState", "Dispatching mutation kind={} index_len={} full_sync={}", m.index.first().map(|s| s.as_str()).unwrap_or(""), m.index.len(), full_sync);
@@ -2828,6 +2772,39 @@ impl Client {
 
         debug!(target: "Client/AppState", "Completed and saved app state sync for {:?} (final version={})", name, state.version);
         Ok(())
+    }
+
+    /// Request missing app-state keys with dedup stamps.
+    /// On send failure, removes stamps so keys can be retried next sync.
+    async fn request_missing_keys_with_dedup(&self, missing: Vec<Vec<u8>>) {
+        if missing.is_empty() {
+            return;
+        }
+        let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
+        let mut guard = self.app_state_key_requests.lock().await;
+        let now = wacore::time::Instant::now();
+        for key_id in missing {
+            let hex_id = hex::encode(&key_id);
+            let should = guard
+                .get(&hex_id)
+                .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
+                .unwrap_or(true);
+            if should {
+                guard.insert(hex_id, now);
+                to_request.push(key_id);
+            }
+        }
+        guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
+        drop(guard);
+        if !to_request.is_empty()
+            && let Err(e) = self.request_app_state_keys(&to_request).await
+        {
+            warn!("Failed to send app state key request: {e}");
+            let mut guard = self.app_state_key_requests.lock().await;
+            for key_id in &to_request {
+                guard.remove(&hex::encode(key_id));
+            }
+        }
     }
 
     async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) -> Result<(), anyhow::Error> {

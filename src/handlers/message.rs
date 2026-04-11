@@ -86,6 +86,7 @@ impl StanzaHandler for MessageHandler {
                                 .load(std::sync::atomic::Ordering::Acquire)
                                 != spawn_generation
                             {
+                                log::debug!(target: "MessageQueue", "Stale worker exiting; remaining messages will be redelivered by server");
                                 break;
                             }
                             let start = wacore::time::now_millis() as u64;

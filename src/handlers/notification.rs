@@ -104,12 +104,12 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                 let client_clone = client.clone();
                 let generation = client
                     .connection_generation
-                    .load(std::sync::atomic::Ordering::SeqCst);
+                    .load(std::sync::atomic::Ordering::Acquire);
                 client.runtime.spawn(Box::pin(async move {
                     // Check if connection was replaced before starting sync
                     if client_clone
                         .connection_generation
-                        .load(std::sync::atomic::Ordering::SeqCst)
+                        .load(std::sync::atomic::Ordering::Acquire)
                         != generation
                     {
                         log::debug!(target: "Client/AppState", "server_sync task cancelled: connection generation changed");
@@ -152,7 +152,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                         // against a stale connection after the awaited work above.
                         if client_clone
                             .connection_generation
-                            .load(std::sync::atomic::Ordering::SeqCst)
+                            .load(std::sync::atomic::Ordering::Acquire)
                             != generation
                         {
                             log::debug!(target: "Client/AppState", "server_sync task cancelled: connection generation changed during version check");

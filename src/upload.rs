@@ -165,7 +165,7 @@ where
                         }
                         UploadExistsResult::Resume { byte_offset } => {
                             let offset = byte_offset as usize;
-                            if offset > enc.data_to_upload.len() {
+                            if offset >= enc.data_to_upload.len() {
                                 log::warn!(
                                     "Server resume offset {offset} exceeds data length {}; uploading from start",
                                     enc.data_to_upload.len()

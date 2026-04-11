@@ -386,26 +386,28 @@ impl SqliteStore {
                     .on_conflict(device::id)
                     .do_update()
                     .set((
-                        device::lid.eq(&*new_lid),
-                        device::pn.eq(&*new_pn),
-                        device::registration_id.eq(registration_id),
-                        device::noise_key.eq(&*noise_key_data),
-                        device::identity_key.eq(&*identity_key_data),
-                        device::signed_pre_key.eq(&*signed_pre_key_data),
-                        device::signed_pre_key_id.eq(signed_pre_key_id),
-                        device::signed_pre_key_signature.eq(&*signed_pre_key_signature),
-                        device::adv_secret_key.eq(&*adv_secret_key),
-                        device::account.eq(account_data.as_deref()),
-                        device::push_name.eq(&*push_name),
-                        device::app_version_primary.eq(app_version_primary),
-                        device::app_version_secondary.eq(app_version_secondary),
-                        device::app_version_tertiary.eq(app_version_tertiary),
-                        device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
-                        device::edge_routing_info.eq(edge_routing_info.as_deref()),
-                        device::props_hash.eq(props_hash.as_deref()),
-                        device::next_pre_key_id.eq(next_pre_key_id),
-                        device::server_has_prekeys.eq(server_has_prekeys),
-                        device::nct_salt.eq(nct_salt.as_deref()),
+                        device::lid.eq(excluded(device::lid)),
+                        device::pn.eq(excluded(device::pn)),
+                        device::registration_id.eq(excluded(device::registration_id)),
+                        device::noise_key.eq(excluded(device::noise_key)),
+                        device::identity_key.eq(excluded(device::identity_key)),
+                        device::signed_pre_key.eq(excluded(device::signed_pre_key)),
+                        device::signed_pre_key_id.eq(excluded(device::signed_pre_key_id)),
+                        device::signed_pre_key_signature
+                            .eq(excluded(device::signed_pre_key_signature)),
+                        device::adv_secret_key.eq(excluded(device::adv_secret_key)),
+                        device::account.eq(excluded(device::account)),
+                        device::push_name.eq(excluded(device::push_name)),
+                        device::app_version_primary.eq(excluded(device::app_version_primary)),
+                        device::app_version_secondary.eq(excluded(device::app_version_secondary)),
+                        device::app_version_tertiary.eq(excluded(device::app_version_tertiary)),
+                        device::app_version_last_fetched_ms
+                            .eq(excluded(device::app_version_last_fetched_ms)),
+                        device::edge_routing_info.eq(excluded(device::edge_routing_info)),
+                        device::props_hash.eq(excluded(device::props_hash)),
+                        device::next_pre_key_id.eq(excluded(device::next_pre_key_id)),
+                        device::server_has_prekeys.eq(excluded(device::server_has_prekeys)),
+                        device::nct_salt.eq(excluded(device::nct_salt)),
                     ))
                     .execute(conn)
                     .map(|_| ())
