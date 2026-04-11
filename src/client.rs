@@ -2586,8 +2586,15 @@ impl Client {
                     // Evict stale entries to prevent unbounded growth over long sessions
                     guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
                     drop(guard);
-                    if !to_request.is_empty() {
-                        self.request_app_state_keys(&to_request).await;
+                    if !to_request.is_empty()
+                        && let Err(e) = self.request_app_state_keys(&to_request).await
+                    {
+                        warn!("Failed to send app state key request: {e}");
+                        // Remove stamps so these keys can be retried next sync
+                        let mut guard = self.app_state_key_requests.lock().await;
+                        for key_id in &to_request {
+                            guard.remove(&hex::encode(key_id));
+                        }
                     }
                 }
 
@@ -2793,8 +2800,15 @@ impl Client {
                 // Evict stale entries to prevent unbounded growth over long sessions
                 guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
                 drop(guard);
-                if !to_request.is_empty() {
-                    self.request_app_state_keys(&to_request).await;
+                if !to_request.is_empty()
+                    && let Err(e) = self.request_app_state_keys(&to_request).await
+                {
+                    warn!("Failed to send app state key request: {e}");
+                    // Remove stamps so these keys can be retried next sync
+                    let mut guard = self.app_state_key_requests.lock().await;
+                    for key_id in &to_request {
+                        guard.remove(&hex::encode(key_id));
+                    }
                 }
             }
 
@@ -2816,14 +2830,14 @@ impl Client {
         Ok(())
     }
 
-    async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) {
+    async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) -> Result<(), anyhow::Error> {
         if raw_key_ids.is_empty() {
-            return;
+            return Ok(());
         }
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let own_jid = match device_snapshot.pn.clone() {
             Some(j) => j,
-            None => return,
+            None => return Ok(()),
         };
         let key_ids: Vec<wa::message::AppStateSyncKeyId> = raw_key_ids
             .iter()
@@ -2839,20 +2853,17 @@ impl Client {
             })),
             ..Default::default()
         };
-        if let Err(e) = self
-            .send_message_impl(
-                own_jid,
-                &msg,
-                Some(self.generate_message_id().await),
-                true,
-                false,
-                None,
-                vec![],
-            )
-            .await
-        {
-            warn!("Failed to send app state key request: {e}");
-        }
+        self.send_message_impl(
+            own_jid,
+            &msg,
+            Some(self.generate_message_id().await),
+            true,
+            false,
+            None,
+            vec![],
+        )
+        .await?;
+        Ok(())
     }
 
     /// Send an app state patch to the server for a given collection.
