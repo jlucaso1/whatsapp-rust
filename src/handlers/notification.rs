@@ -148,6 +148,16 @@ async fn handle_notification_impl(client: &Arc<Client>, node: &Node) {
                             log::debug!(target: "Client/AppState", "Skipping server_sync: client is shutting down");
                             return;
                         }
+                        // Re-check generation after version filtering to avoid syncing
+                        // against a stale connection after the awaited work above.
+                        if client_clone
+                            .connection_generation
+                            .load(std::sync::atomic::Ordering::SeqCst)
+                            != generation
+                        {
+                            log::debug!(target: "Client/AppState", "server_sync task cancelled: connection generation changed during version check");
+                            return;
+                        }
                         if let Err(e) = client_clone.sync_collections_batched(to_sync).await
                             && !client_clone.is_shutting_down()
                         {
