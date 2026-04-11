@@ -58,7 +58,7 @@ impl IqSpec for SpamReportSpec {
         let report_id = response
             .get_optional_child_by_tag(&["report_id"])
             .and_then(|n| match &n.content {
-                Some(NodeContent::String(s)) => Some(s.clone()),
+                Some(NodeContent::String(s)) => Some(s.to_string()),
                 _ => None,
             });
 

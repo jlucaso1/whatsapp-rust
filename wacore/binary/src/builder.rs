@@ -51,7 +51,7 @@ impl NodeBuilder {
         self
     }
 
-    pub fn string_content(mut self, s: impl Into<String>) -> Self {
+    pub fn string_content(mut self, s: impl Into<crate::CompactString>) -> Self {
         self.content = Some(NodeContent::String(s.into()));
         self
     }

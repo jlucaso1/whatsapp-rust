@@ -100,7 +100,7 @@ fn build_user_nodes(users: &[IsOnWhatsAppUser]) -> Vec<Node> {
         .map(|user| {
             if user.jid.is_pn() {
                 let phone = if user.jid.user.starts_with('+') {
-                    user.jid.user.clone()
+                    user.jid.user.to_string()
                 } else {
                     format!("+{}", user.jid.user)
                 };
@@ -153,7 +153,7 @@ fn parse_user_common_fields(user_node: &Node) -> Option<ParsedUserFields> {
                 return None;
             }
             match &status_node.content {
-                Some(NodeContent::String(s)) if !s.is_empty() => Some(s.clone()),
+                Some(NodeContent::String(s)) if !s.is_empty() => Some(s.to_string()),
                 _ => None,
             }
         });

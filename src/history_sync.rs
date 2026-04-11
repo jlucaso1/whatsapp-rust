@@ -348,20 +348,18 @@ impl Client {
             return;
         }
 
-        let token_key = if jid.is_lid() {
-            jid.user.clone()
+        let resolved_lid = if jid.is_lid() {
+            None
         } else {
-            self.lid_pn_cache
-                .get_current_lid(&jid.user)
-                .await
-                .unwrap_or_else(|| jid.user.clone())
+            self.lid_pn_cache.get_current_lid(&jid.user).await
         };
+        let token_key: &str = resolved_lid.as_deref().unwrap_or(&jid.user);
 
         let backend = self.persistence_manager.backend();
 
         // Avoid clobbering a newer local sender_timestamp from post-send issuance
         let incoming_sender_ts = conv.tc_token_sender_timestamp.map(|ts| ts as i64);
-        let merged_sender_ts = if let Ok(Some(existing)) = backend.get_tc_token(&token_key).await {
+        let merged_sender_ts = if let Ok(Some(existing)) = backend.get_tc_token(token_key).await {
             if (existing.token_timestamp as u64) > timestamp {
                 return;
             }
@@ -380,7 +378,7 @@ impl Client {
             sender_timestamp: merged_sender_ts,
         };
 
-        if let Err(e) = backend.put_tc_token(&token_key, &entry).await {
+        if let Err(e) = backend.put_tc_token(token_key, &entry).await {
             log::warn!(
                 target: "Client/TcToken",
                 "Failed to store history sync tctoken for {}: {e}",

@@ -13,6 +13,7 @@ pub mod token;
 pub mod util;
 
 pub use attrs::{AttrParser, AttrParserRef};
+pub use compact_str::CompactString;
 pub use error::{BinaryError, Result};
 pub use marshal::{
     marshal, marshal_auto, marshal_exact, marshal_ref, marshal_ref_auto, marshal_ref_exact,

@@ -64,6 +64,16 @@ struct InMemoryState {
     device: Option<Device>,
 }
 
+/// Default TTL for sent messages (seconds). Matches the client's
+/// `sent_message_ttl_secs` default of 300s.
+const DEFAULT_SENT_MESSAGE_TTL_SECS: i64 = 300;
+
+/// Eviction runs inline when the map exceeds this many entries.
+const SENT_MESSAGE_EVICT_THRESHOLD: usize = 64;
+
+/// Minimum interval between eviction scans (seconds).
+const SENT_MESSAGE_EVICT_INTERVAL_SECS: i64 = 30;
+
 /// In-memory implementation of the full [`Backend`] trait.
 ///
 /// Thread-safe and runtime-agnostic (uses [`async_lock::Mutex`]).
@@ -71,6 +81,8 @@ struct InMemoryState {
 pub struct InMemoryBackend {
     state: Mutex<InMemoryState>,
     next_device_id: AtomicI32,
+    sent_message_ttl_secs: i64,
+    last_eviction: std::sync::atomic::AtomicI64,
 }
 
 impl InMemoryBackend {
@@ -79,7 +91,17 @@ impl InMemoryBackend {
         Self {
             state: Mutex::new(InMemoryState::default()),
             next_device_id: AtomicI32::new(1),
+            sent_message_ttl_secs: DEFAULT_SENT_MESSAGE_TTL_SECS,
+            last_eviction: std::sync::atomic::AtomicI64::new(0),
         }
+    }
+
+    /// Create with a custom sent-message TTL. Values ≤ 0 are ignored.
+    pub fn with_sent_message_ttl(mut self, ttl_secs: i64) -> Self {
+        if ttl_secs > 0 {
+            self.sent_message_ttl_secs = ttl_secs;
+        }
+        self
     }
 }
 
@@ -478,7 +500,24 @@ impl ProtocolStore for InMemoryBackend {
         payload: &[u8],
     ) -> Result<()> {
         let now = crate::time::now_secs();
-        self.state.lock().await.sent_messages.insert(
+        let mut s = self.state.lock().await;
+
+        // Amortized eviction: only scan when the map is large AND enough time
+        // has passed since the last eviction to avoid O(n) work on every insert.
+        if s.sent_messages.len() >= SENT_MESSAGE_EVICT_THRESHOLD {
+            let last = self
+                .last_eviction
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let interval = SENT_MESSAGE_EVICT_INTERVAL_SECS.min(self.sent_message_ttl_secs);
+            if now - last >= interval {
+                let cutoff = now - self.sent_message_ttl_secs;
+                s.sent_messages.retain(|_, e| e.timestamp >= cutoff);
+                self.last_eviction
+                    .store(now, std::sync::atomic::Ordering::Relaxed);
+            }
+        }
+
+        s.sent_messages.insert(
             (chat_jid.to_string(), message_id.to_string()),
             SentMessageEntry {
                 payload: payload.to_vec(),

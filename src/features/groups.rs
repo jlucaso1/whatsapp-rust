@@ -140,19 +140,20 @@ impl<'a> Groups<'a> {
 
         let participants: Vec<Jid> = group.participants.iter().map(|p| p.jid.clone()).collect();
 
-        let lid_to_pn_map: HashMap<String, Jid> = if group.addressing_mode == AddressingMode::Lid {
-            group
-                .participants
-                .iter()
-                .filter_map(|p| {
-                    p.phone_number
-                        .as_ref()
-                        .map(|pn| (p.jid.user.clone(), pn.clone()))
-                })
-                .collect()
-        } else {
-            HashMap::new()
-        };
+        let lid_to_pn_map: HashMap<wacore_binary::CompactString, Jid> =
+            if group.addressing_mode == AddressingMode::Lid {
+                group
+                    .participants
+                    .iter()
+                    .filter_map(|p| {
+                        p.phone_number
+                            .as_ref()
+                            .map(|pn| (p.jid.user.clone(), pn.clone()))
+                    })
+                    .collect()
+            } else {
+                HashMap::new()
+            };
 
         let mut info = GroupInfo::new(participants, group.addressing_mode);
         if !lid_to_pn_map.is_empty() {
@@ -544,17 +545,14 @@ impl<'a> Groups<'a> {
     /// LID mapping return `None` instead of falling back to the PN user.
     async fn resolve_token_key(&self, jid: &Jid, only_lid: bool) -> Option<String> {
         if jid.is_lid() {
-            Some(jid.user.clone())
-        } else if only_lid {
-            self.client.lid_pn_cache.get_current_lid(&jid.user).await
+            Some(jid.user.to_string())
         } else {
-            Some(
-                self.client
-                    .lid_pn_cache
-                    .get_current_lid(&jid.user)
-                    .await
-                    .unwrap_or_else(|| jid.user.clone()),
-            )
+            let lid = self.client.lid_pn_cache.get_current_lid(&jid.user).await;
+            if only_lid {
+                lid
+            } else {
+                Some(lid.unwrap_or_else(|| jid.user.to_string()))
+            }
         }
     }
 

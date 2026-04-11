@@ -2,11 +2,11 @@ use chrono::Local;
 use log::{error, info};
 use std::sync::Arc;
 use wacore::proto_helpers::MessageExt;
+use wacore::store::InMemoryBackend;
 use wacore::types::events::Event;
 use waproto::whatsapp as wa;
 use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::bot::{Bot, MessageContext};
-use whatsapp_rust::store::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
@@ -31,14 +31,7 @@ fn main() {
         .expect("Failed to build tokio runtime");
 
     rt.block_on(async {
-        let backend = match SqliteStore::new("file::memory:?cache=shared").await {
-            Ok(store) => Arc::new(store),
-            Err(e) => {
-                error!("Failed to create SQLite backend: {}", e);
-                return;
-            }
-        };
-        info!("SQLite backend initialized successfully.");
+        let backend = Arc::new(InMemoryBackend::new().with_sent_message_ttl(30));
 
         let mut transport_factory = TokioWebSocketTransportFactory::new();
         if let Ok(ws_url) = std::env::var("WHATSAPP_WS_URL") {

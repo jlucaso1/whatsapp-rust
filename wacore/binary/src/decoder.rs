@@ -507,7 +507,7 @@ mod tests {
         let node = Node::new(
             "message",
             Attrs::new(),
-            Some(crate::node::NodeContent::String("receipt".to_string())),
+            Some(crate::node::NodeContent::String("receipt".into())),
         );
 
         let mut buffer = Vec::new();
@@ -537,7 +537,7 @@ mod tests {
         let node = Node::new(
             "test",
             Attrs::new(),
-            Some(crate::node::NodeContent::String(test_str.to_string())),
+            Some(crate::node::NodeContent::String(test_str.into())),
         );
 
         let mut buffer = Vec::new();

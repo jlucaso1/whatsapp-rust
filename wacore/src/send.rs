@@ -1240,7 +1240,7 @@ pub async fn prepare_group_stanza<
         if let Some(ref dist) = distribution_list {
             for d in dist {
                 if !encrypted_set.contains(d) {
-                    user_set.insert(d.user.clone());
+                    user_set.insert(d.user.to_string());
                 }
             }
         }
@@ -1313,12 +1313,13 @@ pub fn ensure_status_participants(
         // <participants> already exists (from SKDM distribution).
         // Add bare <to> user JID entries for users whose devices are NOT
         // already represented by SKDM device-level entries.
-        let existing_users: std::collections::HashSet<String> = participants_node
-            .children()
-            .unwrap_or_default()
-            .iter()
-            .filter_map(|n| n.attrs.get("jid").and_then(|v| v.to_jid()).map(|j| j.user))
-            .collect();
+        let existing_users: std::collections::HashSet<wacore_binary::CompactString> =
+            participants_node
+                .children()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|n| n.attrs.get("jid").and_then(|v| v.to_jid()).map(|j| j.user))
+                .collect();
 
         let new_to_nodes: Vec<Node> = bare_to_nodes
             .into_iter()
@@ -1850,7 +1851,10 @@ mod tests {
         let pn_device_jid = Jid::pn_device(phone, device_id);
 
         // Step 1: Look up LID for the phone number (using direct HashMap access)
-        let lid_user = resolver.phone_to_lid.get(&pn_device_jid.user).cloned();
+        let lid_user = resolver
+            .phone_to_lid
+            .get(pn_device_jid.user.as_str())
+            .cloned();
         assert!(lid_user.is_some(), "Should find LID for phone");
         let lid_user = lid_user.expect("phone should have LID mapping");
 
@@ -1900,7 +1904,10 @@ mod tests {
         let pn_device_jid = Jid::pn_device(phone, companion_device_id);
 
         // Look up LID using direct HashMap access
-        let lid_user = resolver.phone_to_lid.get(&pn_device_jid.user).cloned();
+        let lid_user = resolver
+            .phone_to_lid
+            .get(pn_device_jid.user.as_str())
+            .cloned();
 
         // Construct LID JID
         let lid_jid = Jid::lid_device(

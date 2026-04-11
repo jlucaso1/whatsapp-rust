@@ -1,6 +1,7 @@
 use crate::attrs::{AttrParser, AttrParserRef};
 use crate::jid::{Jid, JidRef};
 use crate::token;
+use compact_str::CompactString;
 use std::borrow::Cow;
 
 /// Intern a string as a `Cow::Borrowed(&'static str)` if it matches a known token,
@@ -26,13 +27,13 @@ fn intern_cow(s: &str) -> Cow<'static, str> {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeValue {
-    String(String),
+    String(CompactString),
     Jid(Jid),
 }
 
 impl Default for NodeValue {
     fn default() -> Self {
-        NodeValue::String(String::new())
+        NodeValue::String(CompactString::default())
     }
 }
 
@@ -123,21 +124,28 @@ impl PartialEq<String> for NodeValue {
 impl From<String> for NodeValue {
     #[inline]
     fn from(s: String) -> Self {
-        NodeValue::String(s)
+        NodeValue::String(CompactString::from(s))
     }
 }
 
 impl From<&str> for NodeValue {
     #[inline]
     fn from(s: &str) -> Self {
-        NodeValue::String(s.to_string())
+        NodeValue::String(CompactString::from(s))
     }
 }
 
 impl From<&String> for NodeValue {
     #[inline]
     fn from(s: &String) -> Self {
-        NodeValue::String(s.clone())
+        NodeValue::String(CompactString::from(s.as_str()))
+    }
+}
+
+impl From<CompactString> for NodeValue {
+    #[inline]
+    fn from(s: CompactString) -> Self {
+        NodeValue::String(s)
     }
 }
 
@@ -328,7 +336,7 @@ pub type NodeVec<'a> = Vec<NodeRef<'a>>;
 #[derive(Debug, Clone, PartialEq)]
 pub enum NodeContent {
     Bytes(Vec<u8>),
-    String(String),
+    String(CompactString),
     Nodes(Vec<Node>),
 }
 
@@ -344,7 +352,7 @@ impl NodeContent {
     pub fn as_content_ref(&self) -> NodeContentRef<'_> {
         match self {
             NodeContent::Bytes(b) => NodeContentRef::Bytes(Cow::Borrowed(b)),
-            NodeContent::String(s) => NodeContentRef::String(Cow::Borrowed(s)),
+            NodeContent::String(s) => NodeContentRef::String(Cow::Borrowed(s.as_str())),
             NodeContent::Nodes(nodes) => {
                 NodeContentRef::Nodes(Box::new(nodes.iter().map(|n| n.as_node_ref()).collect()))
             }
@@ -446,10 +454,12 @@ impl Node {
     }
 
     /// Extract text content, handling both String and Bytes (lossy UTF-8).
-    pub fn content_as_string(&self) -> Option<String> {
+    pub fn content_as_string(&self) -> Option<CompactString> {
         match &self.content {
             Some(NodeContent::String(s)) => Some(s.clone()),
-            Some(NodeContent::Bytes(b)) => Some(String::from_utf8_lossy(b).into_owned()),
+            Some(NodeContent::Bytes(b)) => {
+                Some(CompactString::from(String::from_utf8_lossy(b).as_ref()))
+            }
             _ => None,
         }
     }
@@ -526,7 +536,7 @@ impl<'a> NodeRef<'a> {
                 .iter()
                 .map(|(k, v)| {
                     let value = match v {
-                        ValueRef::String(s) => NodeValue::String(s.to_string()),
+                        ValueRef::String(s) => NodeValue::String(CompactString::from(s.as_ref())),
                         ValueRef::Jid(j) => NodeValue::Jid(j.to_owned()),
                     };
                     (intern_cow(k), value)
@@ -534,7 +544,7 @@ impl<'a> NodeRef<'a> {
                 .collect::<Attrs>(),
             content: self.content.as_deref().map(|c| match c {
                 NodeContentRef::Bytes(b) => NodeContent::Bytes(b.to_vec()),
-                NodeContentRef::String(s) => NodeContent::String(s.to_string()),
+                NodeContentRef::String(s) => NodeContent::String(CompactString::from(s.as_ref())),
                 NodeContentRef::Nodes(nodes) => {
                     NodeContent::Nodes(nodes.iter().map(|n| n.to_owned()).collect())
                 }

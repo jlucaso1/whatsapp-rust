@@ -1,6 +1,7 @@
 pub use wacore::{
     iq::privacy as privacy_settings, proto_helpers, sticker_pack, store::traits, webp,
 };
+pub use wacore_binary::CompactString;
 pub use wacore_binary::builder::NodeBuilder;
 pub use wacore_binary::jid::Jid;
 pub use waproto;

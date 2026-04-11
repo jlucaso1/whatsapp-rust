@@ -222,7 +222,8 @@ mod tests {
                 |jid| jid.user == "has_session", // Only "has_session" has a session
                 move |batch| {
                     let jids = fetched_jids_clone.clone();
-                    let batch_users: Vec<String> = batch.iter().map(|j| j.user.clone()).collect();
+                    let batch_users: Vec<String> =
+                        batch.iter().map(|j| j.user.to_string()).collect();
                     async move {
                         jids.lock().unwrap().extend(batch_users);
                         Ok(())

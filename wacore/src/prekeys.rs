@@ -1,6 +1,7 @@
 use crate::libsignal::protocol::{IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId};
 use crate::xml::DisplayableNode;
 use std::collections::HashMap;
+use wacore_binary::CompactString;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::jid::Jid;
 use wacore_binary::node::{Node, NodeContent};
@@ -114,7 +115,7 @@ impl PreKeyUtils {
                 && let Some((user_base, device_str)) = jid.user.split_once(':')
                 && let Ok(device) = device_str.parse::<u16>()
             {
-                jid.user = user_base.to_string();
+                jid.user = CompactString::from(user_base);
                 jid.device = device;
             }
             let bundle = match Self::node_to_pre_key_bundle(&jid, user_node) {
@@ -311,7 +312,7 @@ mod tests {
             .into_node();
 
         let raw_jid = Jid {
-            user: "100000012345678:33".to_string(),
+            user: "100000012345678:33".into(),
             server: Cow::Borrowed("lid"),
             agent: 1,
             device: 0,

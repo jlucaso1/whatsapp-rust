@@ -277,6 +277,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             } else {
                 node.get_optional_child("body")
                     .and_then(|body| body.content_as_string())
+                    .map(|s| s.to_string())
             };
             GroupNotificationAction::Description { id, description }
         }
@@ -308,7 +309,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
         }
         "member_add_mode" => {
             let mode = match &node.content {
-                Some(NodeContent::String(s)) => s.clone(),
+                Some(NodeContent::String(s)) => s.to_string(),
                 Some(NodeContent::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
                 _ => String::new(),
             };

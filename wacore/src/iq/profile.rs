@@ -38,7 +38,7 @@ impl IqSpec for SetStatusTextSpec {
             Some(NodeContent::Nodes(vec![Node {
                 tag: Cow::Borrowed("status"),
                 attrs: Default::default(),
-                content: Some(NodeContent::String(self.text.clone())),
+                content: Some(NodeContent::String(self.text.as_str().into())),
             }])),
         )
     }

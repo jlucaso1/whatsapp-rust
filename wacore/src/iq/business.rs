@@ -54,7 +54,7 @@ impl serde::Serialize for BusinessHourMode {
 
 fn node_text(node: &Node) -> Option<String> {
     match &node.content {
-        Some(NodeContent::String(s)) => Some(s.clone()),
+        Some(NodeContent::String(s)) => Some(s.to_string()),
         Some(NodeContent::Bytes(b)) => String::from_utf8(b.clone()).ok(),
         _ => None,
     }

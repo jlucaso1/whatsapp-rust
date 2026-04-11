@@ -938,7 +938,7 @@ mod tests {
         let node = Node::new(
             "message",
             Attrs::new(),
-            Some(NodeContent::String("receipt".to_string())),
+            Some(NodeContent::String("receipt".into())),
         );
 
         let mut buffer = Vec::new();
@@ -958,7 +958,7 @@ mod tests {
         let node = Node::new(
             "test",
             Attrs::new(),
-            Some(NodeContent::String(test_str.to_string())),
+            Some(NodeContent::String(test_str.into())),
         );
 
         let mut buffer = Vec::new();
@@ -1166,7 +1166,7 @@ mod tests {
         attrs.insert("key", ""); // Empty value
         attrs.insert("", "value"); // Empty key
 
-        let node = Node::new("test", attrs, Some(NodeContent::String("".to_string())));
+        let node = Node::new("test", attrs, Some(NodeContent::String("".into())));
 
         let mut buffer = Vec::new();
         let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
@@ -1178,11 +1178,11 @@ mod tests {
         assert_eq!(decoded.tag, "test");
         assert_eq!(
             decoded.attrs.get("key"),
-            Some(&NodeValue::String("".to_string()))
+            Some(&NodeValue::String("".into()))
         );
         assert_eq!(
             decoded.attrs.get(""),
-            Some(&NodeValue::String("value".to_string()))
+            Some(&NodeValue::String("value".into()))
         );
 
         // Empty strings are encoded as BINARY_8 + 0, which decodes as empty bytes
@@ -1230,7 +1230,7 @@ mod tests {
         let node = Node::new(
             "msg",
             Attrs::new(),
-            Some(NodeContent::String(long_text.clone())),
+            Some(NodeContent::String(long_text.as_str().into())),
         );
         let mut buffer = Vec::new();
         let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
@@ -1257,11 +1257,7 @@ mod tests {
         use crate::decoder::Decoder;
 
         let value = "foo:bar@s.whatsapp.net";
-        let node = Node::new(
-            "msg",
-            Attrs::new(),
-            Some(NodeContent::String(value.to_string())),
-        );
+        let node = Node::new("msg", Attrs::new(), Some(NodeContent::String(value.into())));
 
         let mut buffer = Vec::new();
         let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;
@@ -1281,11 +1277,7 @@ mod tests {
         use crate::decoder::Decoder;
 
         let value = "hello_world@s.whatsapp.net";
-        let node = Node::new(
-            "msg",
-            Attrs::new(),
-            Some(NodeContent::String(value.to_string())),
-        );
+        let node = Node::new("msg", Attrs::new(), Some(NodeContent::String(value.into())));
 
         let mut buffer = Vec::new();
         let mut encoder = Encoder::new(Cursor::new(&mut buffer))?;

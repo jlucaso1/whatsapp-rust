@@ -16,9 +16,10 @@ crate-type = ["cdylib", "rlib"]
 [features]
 default = ["simd"]
 simd = []
-serde = ["dep:serde"]
+serde = ["dep:serde", "compact_str/serde"]
 
 [dependencies]
+compact_str = { workspace = true }
 flate2 = { workspace = true }
 phf = { version = "0.13.1", default-features = false }
 serde = { workspace = true, optional = true }
