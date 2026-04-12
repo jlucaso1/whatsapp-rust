@@ -38,15 +38,13 @@ impl Client {
     fn dispatch_parsed_message(self: &Arc<Self>, msg: wa::Message, info: &Arc<MessageInfo>) {
         use wacore::proto_helpers::MessageExt;
 
-        let info = if info.ephemeral_expiration.is_none()
+        let mut info = Arc::clone(info);
+        if info.ephemeral_expiration.is_none()
             && msg.get_base_message().get_ephemeral_expiration().is_some()
         {
-            let mut owned = (**info).clone();
-            owned.ephemeral_expiration = msg.get_base_message().get_ephemeral_expiration();
-            Arc::new(owned)
-        } else {
-            Arc::clone(info)
-        };
+            Arc::make_mut(&mut info).ephemeral_expiration =
+                msg.get_base_message().get_ephemeral_expiration();
+        }
 
         let client_clone = self.clone();
         let info_for_receipt = Arc::clone(&info);
