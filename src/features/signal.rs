@@ -3,7 +3,6 @@
 //! Encryption, decryption, session management, and participant node creation.
 
 use anyhow::{Result, anyhow};
-use prost::Message as ProtoMessage;
 use wacore::libsignal::protocol::{
     CiphertextMessage, PreKeySignalMessage, SignalMessage, UsePQRatchet, message_decrypt,
     message_encrypt,
@@ -270,7 +269,7 @@ impl<'a> Signal<'a> {
             _session_guards.push(mutex.lock().await);
         }
 
-        let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+        let plaintext = MessageUtils::encode_and_pad(message);
         let mut adapter = self.client.signal_adapter().await;
         let mediatype = wacore::send::media_type_from_message(message);
         let hide_decrypt_fail = wacore::send::should_hide_decrypt_fail(message);

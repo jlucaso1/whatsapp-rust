@@ -403,8 +403,6 @@ where
             .await?
             .is_some()
         {
-            // Session exists under direct address, use it
-            jid_to_encryption_jid.insert(device_jid, device_jid.clone());
             continue;
         }
 
@@ -728,7 +726,7 @@ pub async fn prepare_dm_stanza<
         ..Default::default()
     };
 
-    let own_devices_plaintext = MessageUtils::pad_message_v2(dsm.encode_to_vec());
+    let own_devices_plaintext = MessageUtils::encode_and_pad(&dsm);
 
     let total_devices = all_devices.len();
     let (recipient_devices, own_other_devices) =
@@ -1118,8 +1116,7 @@ pub async fn prepare_group_stanza<
             }),
             ..Default::default()
         };
-        let skdm_plaintext_to_encrypt =
-            MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
+        let skdm_plaintext_to_encrypt = MessageUtils::encode_and_pad(&skdm_wrapper_msg);
 
         // WA Web's GroupSkmsgJob wraps ensureE2ESessions in try/catch — logs error
         // but does NOT rethrow. SKDM distribution failure must not prevent the group

@@ -46,25 +46,25 @@ impl Client {
 
         debug!("Received receipt type '{receipt_type:?}' for message {id} from {from}");
 
-        let sender = if from.is_group() {
+        let is_group = from.is_group();
+        let sender = if is_group {
             participant.unwrap_or_else(|| from.clone())
         } else {
             from.clone()
         };
 
         let receipt = Receipt {
-            message_ids: vec![id.clone()],
+            message_ids: vec![id],
             source: crate::types::message::MessageSource {
-                chat: from.clone(),
-                sender: sender.clone(),
+                chat: from,
+                sender,
                 ..Default::default()
             },
             timestamp: wacore::time::now_utc(),
-            r#type: receipt_type.clone(),
-            message_sender: sender.clone(),
+            r#type: receipt_type,
         };
 
-        if receipt_type == ReceiptType::Retry {
+        if receipt.r#type == ReceiptType::Retry {
             let client_clone = Arc::clone(self);
             let node_clone = Arc::clone(&node);
             self.runtime
@@ -81,7 +81,7 @@ impl Client {
                     }
                 }))
                 .detach();
-        } else if receipt_type == ReceiptType::EncRekeyRetry {
+        } else if receipt.r#type == ReceiptType::EncRekeyRetry {
             // WA Web: both "retry" and "enc_rekey_retry" route through
             // handleMessageRetryRequest, but enc_rekey_retry branches to the
             // VoIP stack's resendEncRekeyRetry(peerJid, retryCount).
@@ -97,7 +97,7 @@ impl Client {
                         .optional_string("call-id")
                         .as_deref()
                         .unwrap_or_default(),
-                    from,
+                    receipt.source.chat,
                     child_attrs
                         .optional_string("call-creator")
                         .as_deref()
