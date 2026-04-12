@@ -48,16 +48,14 @@ fn main() {
         let mut bot = builder
             .on_event(move |event, client| async move {
                 match &*event {
-                    Event::Message(_, _) => {
-                        let ctx = MessageContext::from_event(&event, client).unwrap();
-
-                        if let Some(text) = ctx.message.text_content()
+                    Event::Message(msg, _) => {
+                        if let Some(text) = msg.text_content()
                             && text == "ping"
                         {
+                            let ctx = MessageContext::from_event(&event, client).unwrap();
                             info!("Received text ping, sending pong...");
 
                             let pong_text = format!("pong {}", ctx.info.id);
-
                             let reply_message = wa::Message {
                                 conversation: Some(pong_text),
                                 ..Default::default()

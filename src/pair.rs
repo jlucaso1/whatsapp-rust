@@ -115,9 +115,6 @@ pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
                         .detach();
 
                     *client.pairing_cancellation_tx.lock().await = Some(stop_tx);
-
-                    // We no longer dispatch the raw Event::Qr
-                    // client.core.event_bus.dispatch(Event::Qr(Qr { codes }));
                     true
                 }
                 "pair-success" => {

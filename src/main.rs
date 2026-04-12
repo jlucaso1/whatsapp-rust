@@ -103,9 +103,13 @@ fn main() {
                         info!("");
                         info!("========================================");
                     }
-                    Event::Message(_, _) => {
-                        let ctx = MessageContext::from_event(&event, client).unwrap();
-                        handle_message(&ctx).await;
+                    Event::Message(msg, _) => {
+                        if build_media_pong(msg).is_some()
+                            || msg.text_content() == Some(PING_TRIGGER)
+                        {
+                            let ctx = MessageContext::from_event(&event, client).unwrap();
+                            handle_message(&ctx).await;
+                        }
                     }
                     Event::Connected(_) => info!("✅ Bot connected successfully!"),
                     Event::LoggedOut(_) => error!("❌ Bot was logged out!"),

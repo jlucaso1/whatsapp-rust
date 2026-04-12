@@ -188,12 +188,16 @@ impl CoreEventBus {
     }
 
     pub fn dispatch(&self, event: Event) {
-        let handlers = self.handlers.read().expect("RwLock should not be poisoned");
+        let handlers = self
+            .handlers
+            .read()
+            .expect("RwLock should not be poisoned")
+            .clone();
         if handlers.is_empty() {
             return;
         }
         let event = Arc::new(event);
-        for handler in handlers.iter() {
+        for handler in &handlers {
             handler.handle_event(Arc::clone(&event));
         }
     }
