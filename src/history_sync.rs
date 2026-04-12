@@ -222,7 +222,7 @@ impl Client {
                 // Wrap Bytes in LazyConversation using from_bytes (true zero-copy)
                 // Parsing only happens if the event handler calls .conversation() or .get()
                 let lazy_conv = LazyConversation::from_bytes(raw_bytes);
-                self.core.event_bus.dispatch(&Event::JoinedGroup(lazy_conv));
+                self.core.event_bus.dispatch(Event::JoinedGroup(lazy_conv));
             }
 
             // Drop receiver before awaiting the blocking task. If we broke out

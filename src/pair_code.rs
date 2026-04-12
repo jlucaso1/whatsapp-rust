@@ -212,7 +212,7 @@ impl Client {
         };
 
         // Dispatch event for user to display the code
-        self.core.event_bus.dispatch(&Event::PairingCode {
+        self.core.event_bus.dispatch(Event::PairingCode {
             code: code.clone(),
             timeout: PairCodeUtils::code_validity(),
         });

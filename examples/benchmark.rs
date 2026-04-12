@@ -47,21 +47,15 @@ fn main() {
 
         let mut bot = builder
             .on_event(move |event, client| async move {
-                match event {
+                match &*event {
                     Event::Message(msg, info) => {
-                        let ctx = MessageContext {
-                            message: msg,
-                            info,
-                            client,
-                        };
-
-                        if let Some(text) = ctx.message.text_content()
+                        if let Some(text) = msg.text_content()
                             && text == "ping"
                         {
+                            let ctx = MessageContext::from_parts(msg, info, client);
                             info!("Received text ping, sending pong...");
 
                             let pong_text = format!("pong {}", ctx.info.id);
-
                             let reply_message = wa::Message {
                                 conversation: Some(pong_text),
                                 ..Default::default()

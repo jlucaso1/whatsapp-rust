@@ -108,9 +108,9 @@ impl Client {
                         .unwrap_or(1),
                 );
             }
-            self.core.event_bus.dispatch(&Event::Receipt(receipt));
+            self.core.event_bus.dispatch(Event::Receipt(receipt));
         } else {
-            self.core.event_bus.dispatch(&Event::Receipt(receipt));
+            self.core.event_bus.dispatch(Event::Receipt(receipt));
         }
     }
 
@@ -204,36 +204,11 @@ impl Client {
 mod tests {
     use super::*;
     use crate::store::persistence_manager::PersistenceManager;
-    use crate::test_utils::MockHttpClient;
+    use crate::test_utils::{MockHttpClient, TestEventCollector};
     use crate::types::message::{MessageInfo, MessageSource};
-    use std::sync::Mutex;
-    use wacore::types::events::EventHandler;
 
     fn node_to_arc(node: wacore_binary::Node) -> Arc<OwnedNodeRef> {
         crate::test_utils::node_to_owned_ref(&node)
-    }
-
-    #[derive(Default)]
-    struct TestEventCollector {
-        events: Mutex<Vec<Event>>,
-    }
-
-    impl EventHandler for TestEventCollector {
-        fn handle_event(&self, event: &Event) {
-            self.events
-                .lock()
-                .expect("collector mutex should not be poisoned")
-                .push(event.clone());
-        }
-    }
-
-    impl TestEventCollector {
-        fn events(&self) -> Vec<Event> {
-            self.events
-                .lock()
-                .expect("collector mutex should not be poisoned")
-                .clone()
-        }
     }
 
     #[tokio::test]
@@ -534,7 +509,7 @@ mod tests {
         let events = collector.events();
         let receipt_events: Vec<_> = events
             .iter()
-            .filter_map(|e| match e {
+            .filter_map(|e| match &**e {
                 Event::Receipt(r) => Some(r),
                 _ => None,
             })
@@ -573,7 +548,7 @@ mod tests {
         let events = collector.events();
         let receipt_events: Vec<_> = events
             .iter()
-            .filter_map(|e| match e {
+            .filter_map(|e| match &**e {
                 Event::Receipt(r) => Some(r),
                 _ => None,
             })

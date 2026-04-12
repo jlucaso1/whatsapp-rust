@@ -544,7 +544,7 @@ impl Client {
         self.is_ready.store(true, Ordering::Relaxed);
         self.core
             .event_bus
-            .dispatch(&Event::Connected(crate::types::events::Connected));
+            .dispatch(Event::Connected(crate::types::events::Connected));
         self.connected_notifier.notify(usize::MAX);
     }
 
@@ -939,7 +939,7 @@ impl Client {
 
         self.core
             .event_bus
-            .dispatch(&Event::ChatPresence(ChatPresenceUpdate {
+            .dispatch(Event::ChatPresence(ChatPresenceUpdate {
                 source: MessageSource {
                     chat,
                     sender,
@@ -1014,7 +1014,7 @@ impl Client {
                 if unexpected_disconnect {
                     self.core
                         .event_bus
-                        .dispatch(&Event::Disconnected(crate::types::events::Disconnected));
+                        .dispatch(Event::Disconnected(crate::types::events::Disconnected));
                 }
             }
 
@@ -1147,7 +1147,7 @@ impl Client {
 
         self.core
             .event_bus
-            .dispatch(&Event::LoggedOut(crate::types::events::LoggedOut {
+            .dispatch(Event::LoggedOut(crate::types::events::LoggedOut {
                 on_connect: false,
                 reason: ConnectFailureReason::LoggedOut,
             }));
@@ -1640,7 +1640,7 @@ impl Client {
         if self.raw_node_forwarding.load(Ordering::Relaxed) {
             self.core
                 .event_bus
-                .dispatch(&Event::RawNode(Arc::clone(&node)));
+                .dispatch(Event::RawNode(Arc::clone(&node)));
         }
 
         if nr.tag.as_ref() == "xmlstreamend" {
@@ -2980,7 +2980,7 @@ impl Client {
                 self.persistence_manager
                     .process_command(DeviceCommand::SetPushName(new_name.clone()))
                     .await;
-                bus.dispatch(&Event::SelfPushNameUpdated(
+                bus.dispatch(Event::SelfPushNameUpdated(
                     crate::types::events::SelfPushNameUpdated {
                         from_server: true,
                         old_name: old.clone(),
@@ -3037,7 +3037,7 @@ impl Client {
                     reason: ConnectFailureReason::LoggedOut,
                 })
             };
-            self.core.event_bus.dispatch(&event);
+            self.core.event_bus.dispatch(event);
             should_disconnect = true;
         } else {
             match code {
@@ -3052,7 +3052,7 @@ impl Client {
                     info!("Got 516 stream error (device removed). Logging out.");
                     self.expected_disconnect.store(true, Ordering::Relaxed);
                     self.enable_auto_reconnect.store(false, Ordering::Relaxed);
-                    self.core.event_bus.dispatch(&Event::LoggedOut(
+                    self.core.event_bus.dispatch(Event::LoggedOut(
                         crate::types::events::LoggedOut {
                             on_connect: false,
                             reason: ConnectFailureReason::LoggedOut,
@@ -3064,7 +3064,7 @@ impl Client {
                     info!("Got 401 stream error (unauthorized). Logging out.");
                     self.expected_disconnect.store(true, Ordering::Relaxed);
                     self.enable_auto_reconnect.store(false, Ordering::Relaxed);
-                    self.core.event_bus.dispatch(&Event::LoggedOut(
+                    self.core.event_bus.dispatch(Event::LoggedOut(
                         crate::types::events::LoggedOut {
                             on_connect: false,
                             reason: ConnectFailureReason::LoggedOut,
@@ -3078,7 +3078,7 @@ impl Client {
                     self.enable_auto_reconnect.store(false, Ordering::Relaxed);
                     self.core
                         .event_bus
-                        .dispatch(&Event::StreamReplaced(crate::types::events::StreamReplaced));
+                        .dispatch(Event::StreamReplaced(crate::types::events::StreamReplaced));
                     should_disconnect = true;
                 }
                 "429" => {
@@ -3093,7 +3093,7 @@ impl Client {
                 _ => {
                     error!("Unknown stream error: {}", DisplayableNodeRef(node));
                     self.expected_disconnect.store(true, Ordering::Relaxed);
-                    self.core.event_bus.dispatch(&Event::StreamError(
+                    self.core.event_bus.dispatch(Event::StreamError(
                         crate::types::events::StreamError {
                             code: code.to_string(),
                             raw: Some(node.to_owned()),
@@ -3137,7 +3137,7 @@ impl Client {
             info!("Got {reason:?} connect failure, logging out.");
             self.core
                 .event_bus
-                .dispatch(&wacore::types::events::Event::LoggedOut(
+                .dispatch(wacore::types::events::Event::LoggedOut(
                     crate::types::events::LoggedOut {
                         on_connect: true,
                         reason,
@@ -3152,20 +3152,20 @@ impl Client {
                 "Temporary ban connect failure: {}",
                 DisplayableNodeRef(node)
             );
-            self.core.event_bus.dispatch(&Event::TemporaryBan(
-                crate::types::events::TemporaryBan {
+            self.core
+                .event_bus
+                .dispatch(Event::TemporaryBan(crate::types::events::TemporaryBan {
                     code: crate::types::events::TempBanReason::from(ban_code),
                     expire: expire_duration,
-                },
-            ));
+                }));
         } else if let ConnectFailureReason::ClientOutdated = reason {
             error!("Client is outdated and was rejected by server.");
             self.core
                 .event_bus
-                .dispatch(&Event::ClientOutdated(crate::types::events::ClientOutdated));
+                .dispatch(Event::ClientOutdated(crate::types::events::ClientOutdated));
         } else {
             warn!("Unknown connect failure: {}", DisplayableNodeRef(node));
-            self.core.event_bus.dispatch(&Event::ConnectFailure(
+            self.core.event_bus.dispatch(Event::ConnectFailure(
                 crate::types::events::ConnectFailure {
                     reason,
                     message: attrs
@@ -3486,7 +3486,7 @@ impl Client {
             .process_command(DeviceCommand::SetPushName(new_name.clone()))
             .await;
 
-        self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
+        self.core.event_bus.dispatch(Event::SelfPushNameUpdated(
             crate::types::events::SelfPushNameUpdated {
                 from_server: true,
                 old_name,

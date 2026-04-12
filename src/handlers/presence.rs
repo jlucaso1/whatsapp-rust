@@ -55,7 +55,7 @@ impl StanzaHandler for PresenceHandler {
         client
             .core
             .event_bus
-            .dispatch(&Event::Presence(PresenceUpdate {
+            .dispatch(Event::Presence(PresenceUpdate {
                 from: from_jid,
                 unavailable,
                 last_seen,
