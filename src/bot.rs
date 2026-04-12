@@ -551,7 +551,7 @@ impl<B, T, H, R> BotBuilder<B, T, H, R> {
     ///         platform_display: "Chrome (Linux)".to_string(),
     ///     })
     ///     .on_event(|event, client| async move {
-    ///         match event {
+    ///         match &*event {
     ///             Event::PairingCode { code, timeout } => {
     ///                 println!("Enter this code on your phone: {}", code);
     ///             }
