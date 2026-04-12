@@ -1,5 +1,5 @@
+use crate::node::NodeStr;
 use compact_str::CompactString;
-use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
 
@@ -374,7 +374,7 @@ pub struct Jid {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, yoke::Yokeable)]
 pub struct JidRef<'a> {
-    pub user: Cow<'a, str>,
+    pub user: NodeStr<'a>,
     pub server: Server,
     pub agent: u8,
     pub device: u16,
@@ -505,13 +505,6 @@ impl Jid {
         }
     }
 
-    pub fn actual_agent(&self) -> u8 {
-        match self.server {
-            Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid => 0,
-            _ => self.agent,
-        }
-    }
-
     pub fn to_non_ad(&self) -> Self {
         Self {
             user: self.user.clone(),
@@ -596,16 +589,6 @@ impl<'a> JidExt for JidRef<'a> {
 }
 
 impl<'a> JidRef<'a> {
-    pub fn new(user: Cow<'a, str>, server: Server) -> Self {
-        Self {
-            user,
-            server,
-            agent: 0,
-            device: 0,
-            integrator: 0,
-        }
-    }
-
     pub fn to_owned(&self) -> Jid {
         Jid {
             user: CompactString::from(self.user.as_ref()),
