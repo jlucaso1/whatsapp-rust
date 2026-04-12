@@ -36,13 +36,17 @@ pub struct MessageContext {
 }
 
 impl MessageContext {
-    pub fn from_event(event: &Event, client: Arc<Client>) -> Option<Self> {
-        let (msg, info) = event.as_message()?;
-        Some(Self {
-            message: Box::new(msg.clone()),
+    pub fn from_parts(message: &wa::Message, info: &MessageInfo, client: Arc<Client>) -> Self {
+        Self {
+            message: Box::new(message.clone()),
             info: info.clone(),
             client,
-        })
+        }
+    }
+
+    pub fn from_event(event: &Event, client: Arc<Client>) -> Option<Self> {
+        let (msg, info) = event.as_message()?;
+        Some(Self::from_parts(msg, info, client))
     }
 
     pub async fn send_message(

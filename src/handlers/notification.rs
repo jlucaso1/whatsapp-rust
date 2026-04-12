@@ -1806,11 +1806,14 @@ mod tests {
         handle_notification_impl(&client, node_to_arc(node)).await;
 
         let events = collector.events();
-        assert!(matches!(
-            events.as_slice(),
-            [Event::ContactUpdated(ContactUpdated { jid, .. })]
-            if jid == &Jid::pn("5511999999999")
-        ));
+        assert!(
+            events.len() == 1
+                && matches!(
+                    &*events[0],
+                    Event::ContactUpdated(ContactUpdated { jid, .. })
+                    if jid == &Jid::pn("5511999999999")
+                )
+        );
     }
 
     #[tokio::test]
@@ -1854,16 +1857,19 @@ mod tests {
         );
 
         let events = collector.events();
-        assert!(matches!(
-            events.as_slice(),
-            [Event::ContactNumberChanged(ContactNumberChanged {
-                old_jid, new_jid, old_lid, new_lid, ..
-            })]
-            if old_jid == &Jid::pn("5511999999999")
-                && new_jid == &Jid::pn("5511888888888")
-                && old_lid.is_some()
-                && new_lid.is_some()
-        ));
+        assert!(
+            events.len() == 1
+                && matches!(
+                    &*events[0],
+                    Event::ContactNumberChanged(ContactNumberChanged {
+                        old_jid, new_jid, old_lid, new_lid, ..
+                    })
+                    if old_jid == &Jid::pn("5511999999999")
+                        && new_jid == &Jid::pn("5511888888888")
+                        && old_lid.is_some()
+                        && new_lid.is_some()
+                )
+        );
     }
 
     #[tokio::test]
@@ -1904,11 +1910,14 @@ mod tests {
         handle_notification_impl(&client, node_to_arc(node)).await;
 
         let events = collector.events();
-        assert!(matches!(
-            events.as_slice(),
-            [Event::ContactSyncRequested(ContactSyncRequested { after, .. })]
-            if after.is_some()
-        ));
+        assert!(
+            events.len() == 1
+                && matches!(
+                    &*events[0],
+                    Event::ContactSyncRequested(ContactSyncRequested { after, .. })
+                    if after.is_some()
+                )
+        );
     }
 
     #[tokio::test]
@@ -2010,7 +2019,9 @@ mod tests {
         // Should have dispatched IdentityChange event
         let events = collector.events();
         assert!(
-            events.iter().any(|e| matches!(e, Event::IdentityChange(_))),
+            events
+                .iter()
+                .any(|e| matches!(&**e, Event::IdentityChange(_))),
             "should dispatch IdentityChange event, got: {:?}",
             events
         );
@@ -2181,7 +2192,7 @@ mod tests {
             collector
                 .events()
                 .iter()
-                .any(|e| matches!(e, Event::IdentityChange(_))),
+                .any(|e| matches!(&**e, Event::IdentityChange(_))),
             "offline identity change should still dispatch event"
         );
     }

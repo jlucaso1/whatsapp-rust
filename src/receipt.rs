@@ -509,7 +509,7 @@ mod tests {
         let events = collector.events();
         let receipt_events: Vec<_> = events
             .iter()
-            .filter_map(|e| match e {
+            .filter_map(|e| match &**e {
                 Event::Receipt(r) => Some(r),
                 _ => None,
             })
@@ -548,7 +548,7 @@ mod tests {
         let events = collector.events();
         let receipt_events: Vec<_> = events
             .iter()
-            .filter_map(|e| match e {
+            .filter_map(|e| match &**e {
                 Event::Receipt(r) => Some(r),
                 _ => None,
             })

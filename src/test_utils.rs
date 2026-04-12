@@ -126,7 +126,7 @@ use wacore::types::events::{Event, EventHandler};
 
 #[derive(Default)]
 pub struct TestEventCollector {
-    events: Mutex<Vec<Event>>,
+    events: Mutex<Vec<Arc<Event>>>,
 }
 
 impl EventHandler for TestEventCollector {
@@ -134,12 +134,12 @@ impl EventHandler for TestEventCollector {
         self.events
             .lock()
             .expect("collector mutex should not be poisoned")
-            .push((*event).clone());
+            .push(event);
     }
 }
 
 impl TestEventCollector {
-    pub fn events(&self) -> Vec<Event> {
+    pub fn events(&self) -> Vec<Arc<Event>> {
         self.events
             .lock()
             .expect("collector mutex should not be poisoned")
