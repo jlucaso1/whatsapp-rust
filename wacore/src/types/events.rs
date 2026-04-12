@@ -695,7 +695,6 @@ pub struct Receipt {
     pub message_ids: Vec<MessageId>,
     pub timestamp: DateTime<Utc>,
     pub r#type: ReceiptType,
-    pub message_sender: Jid,
 }
 
 #[derive(Debug, Clone, Serialize)]
