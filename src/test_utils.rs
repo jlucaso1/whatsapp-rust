@@ -121,6 +121,32 @@ pub async fn create_test_client_with_failing_http(name: &str) -> Arc<Client> {
     client
 }
 
+use std::sync::Mutex;
+use wacore::types::events::{Event, EventHandler};
+
+#[derive(Default)]
+pub struct TestEventCollector {
+    events: Mutex<Vec<Event>>,
+}
+
+impl EventHandler for TestEventCollector {
+    fn handle_event(&self, event: Arc<Event>) {
+        self.events
+            .lock()
+            .expect("collector mutex should not be poisoned")
+            .push((*event).clone());
+    }
+}
+
+impl TestEventCollector {
+    pub fn events(&self) -> Vec<Event> {
+        self.events
+            .lock()
+            .expect("collector mutex should not be poisoned")
+            .clone()
+    }
+}
+
 pub async fn create_test_backend() -> Arc<dyn Backend> {
     use portable_atomic::AtomicU64;
     use std::sync::atomic::Ordering;

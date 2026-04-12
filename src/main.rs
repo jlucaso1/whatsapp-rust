@@ -103,12 +103,8 @@ fn main() {
                         info!("");
                         info!("========================================");
                     }
-                    Event::Message(msg, info) => {
-                        let ctx = MessageContext {
-                            message: msg.clone(),
-                            info: info.clone(),
-                            client,
-                        };
+                    Event::Message(_, _) => {
+                        let ctx = MessageContext::from_event(&event, client).unwrap();
                         handle_message(&ctx).await;
                     }
                     Event::Connected(_) => info!("✅ Bot connected successfully!"),

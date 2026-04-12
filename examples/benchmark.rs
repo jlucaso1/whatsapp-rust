@@ -48,12 +48,8 @@ fn main() {
         let mut bot = builder
             .on_event(move |event, client| async move {
                 match &*event {
-                    Event::Message(msg, info) => {
-                        let ctx = MessageContext {
-                            message: msg.clone(),
-                            info: info.clone(),
-                            client,
-                        };
+                    Event::Message(_, _) => {
+                        let ctx = MessageContext::from_event(&event, client).unwrap();
 
                         if let Some(text) = ctx.message.text_content()
                             && text == "ping"

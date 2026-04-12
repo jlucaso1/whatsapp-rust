@@ -12,50 +12,11 @@ use wacore_binary::OwnedNodeRef;
 use wacore_binary::{Jid, MessageId};
 use waproto::whatsapp::{self as wa, HistorySync};
 
-/// Wrapper for large event data that uses Arc for cheap cloning.
-/// This avoids cloning large protobuf messages when dispatching events.
-#[derive(Debug, Clone)]
-pub struct SharedData<T>(pub Arc<T>);
-
-impl<T> SharedData<T> {
-    pub fn new(data: T) -> Self {
-        Self(Arc::new(data))
-    }
-}
-
-impl<T> std::ops::Deref for SharedData<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T: Serialize> Serialize for SharedData<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
 /// A lazily-parsed conversation from history sync.
 ///
-/// The raw protobuf bytes are stored and only parsed when accessed.
-/// This allows emitting events without the cost of parsing if the
-/// consumer doesn't actually need the conversation data.
-///
-/// Uses `bytes::Bytes` for zero-copy reference counting. Cloning is O(1)
-/// and parsing only happens once on first access.
-///
-/// Clones get their own `OnceLock` (no `Arc` overhead). This is correct
-/// because the original is dropped right after event dispatch — only the
-/// cloned copy in the spawned handler task ever calls `.get()`.
-///
-/// **Multi-handler note**: if the event bus fans out to N handlers, each
-/// clone parses independently. This is acceptable because parsing is
-/// idempotent and the common case is a single handler. If multi-handler
-/// parsing cost becomes an issue, wrap `parsed` in `Arc<OnceLock<T>>`.
+/// Raw protobuf bytes are stored and only parsed on first access.
+/// With `Arc<Event>` dispatch, all handlers share the same `LazyConversation`
+/// so `OnceLock` gives parse-once semantics for free.
 #[derive(Clone)]
 pub struct LazyConversation {
     /// Raw protobuf bytes using Bytes for zero-copy cloning.
@@ -465,6 +426,16 @@ pub enum Event {
     /// Gated by `Client::set_raw_node_forwarding(true)` to avoid overhead when unused.
     #[serde(skip)]
     RawNode(Arc<OwnedNodeRef>),
+}
+
+impl Event {
+    pub fn as_message(&self) -> Option<(&wa::Message, &MessageInfo)> {
+        if let Event::Message(msg, info) = self {
+            Some((msg, info))
+        } else {
+            None
+        }
+    }
 }
 
 /// A newsletter live update notification, typically containing updated

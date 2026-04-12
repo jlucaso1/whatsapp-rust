@@ -149,19 +149,18 @@ async fn test_mixed_offline_event_ordering() -> anyhow::Result<()> {
             .await;
 
         match result {
-            Ok(ref event) if matches!(**event, Event::Message(_, _)) => {
-                if let Event::Message(msg, _) = &**event {
-                    let text = msg.conversation.clone().unwrap_or_default();
-                    info!("C received message: {text}");
-                    messages_received.push(text);
-                }
+            Ok(ref event) if event.as_message().is_some() => {
+                let (msg, _) = event.as_message().unwrap();
+                let text = msg.conversation.clone().unwrap_or_default();
+                info!("C received message: {text}");
+                messages_received.push(text);
             }
             Ok(ref event) if matches!(**event, Event::Notification(_)) => {
                 info!("C received group notification");
                 notifications_received += 1;
             }
             Ok(_) => {}
-            Err(_) => break, // timeout — no more events
+            Err(_) => break,
         }
     }
 
@@ -440,19 +439,16 @@ async fn test_offline_multi_sender_group_messages() -> anyhow::Result<()> {
             .await;
 
         match result {
-            Ok(ref event) if matches!(**event, Event::Message(_, _)) => {
-                if let Event::Message(msg, _) = &**event
-                    && let Some(text) = &msg.conversation
-                {
+            Ok(ref event) if event.as_message().is_some() => {
+                let (msg, _) = event.as_message().unwrap();
+                if let Some(text) = &msg.conversation {
                     info!("C received: {text}");
                     received_texts.insert(text.clone());
                 }
             }
-            Ok(ref event) if matches!(**event, Event::Notification(_)) => {
-                // Group notifications are expected, just skip
-            }
+            Ok(ref event) if matches!(**event, Event::Notification(_)) => {}
             Ok(_) => {}
-            Err(_) => break, // no more events within timeout
+            Err(_) => break,
         }
 
         // Early exit once all expected messages are collected

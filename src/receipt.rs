@@ -204,36 +204,11 @@ impl Client {
 mod tests {
     use super::*;
     use crate::store::persistence_manager::PersistenceManager;
-    use crate::test_utils::MockHttpClient;
+    use crate::test_utils::{MockHttpClient, TestEventCollector};
     use crate::types::message::{MessageInfo, MessageSource};
-    use std::sync::Mutex;
-    use wacore::types::events::EventHandler;
 
     fn node_to_arc(node: wacore_binary::Node) -> Arc<OwnedNodeRef> {
         crate::test_utils::node_to_owned_ref(&node)
-    }
-
-    #[derive(Default)]
-    struct TestEventCollector {
-        events: Mutex<Vec<Event>>,
-    }
-
-    impl EventHandler for TestEventCollector {
-        fn handle_event(&self, event: Arc<Event>) {
-            self.events
-                .lock()
-                .expect("collector mutex should not be poisoned")
-                .push((*event).clone());
-        }
-    }
-
-    impl TestEventCollector {
-        fn events(&self) -> Vec<Event> {
-            self.events
-                .lock()
-                .expect("collector mutex should not be poisoned")
-                .clone()
-        }
     }
 
     #[tokio::test]

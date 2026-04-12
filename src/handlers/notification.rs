@@ -1425,38 +1425,15 @@ fn handle_disappearing_mode_notification(client: &Arc<Client>, node: &NodeRef<'_
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::create_test_client;
-    use std::sync::{Arc, Mutex};
+    use crate::test_utils::{TestEventCollector, create_test_client};
+    use std::sync::Arc;
     use wacore::stanza::devices::DeviceNotificationType;
-    use wacore::types::events::{DeviceListUpdateType, EventHandler};
+    use wacore::types::events::DeviceListUpdateType;
     use wacore_binary::Node;
     use wacore_binary::builder::NodeBuilder;
 
     fn node_to_arc(node: Node) -> Arc<OwnedNodeRef> {
         crate::test_utils::node_to_owned_ref(&node)
-    }
-
-    #[derive(Default)]
-    struct TestEventCollector {
-        events: Mutex<Vec<Event>>,
-    }
-
-    impl EventHandler for TestEventCollector {
-        fn handle_event(&self, event: Arc<Event>) {
-            self.events
-                .lock()
-                .expect("collector mutex should not be poisoned")
-                .push((*event).clone());
-        }
-    }
-
-    impl TestEventCollector {
-        fn events(&self) -> Vec<Event> {
-            self.events
-                .lock()
-                .expect("collector mutex should not be poisoned")
-                .clone()
-        }
     }
 
     #[test]
