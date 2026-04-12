@@ -103,11 +103,11 @@ fn main() {
                         info!("");
                         info!("========================================");
                     }
-                    Event::Message(msg, _)
+                    Event::Message(msg, info)
                         if build_media_pong(msg).is_some()
                             || msg.text_content() == Some(PING_TRIGGER) =>
                     {
-                        let ctx = MessageContext::from_event(&event, client).unwrap();
+                        let ctx = MessageContext::from_parts(msg, info, client);
                         handle_message(&ctx).await;
                     }
                     Event::Connected(_) => info!("✅ Bot connected successfully!"),
