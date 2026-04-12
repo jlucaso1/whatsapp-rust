@@ -11,7 +11,7 @@ pub struct AttrParser<'a> {
 }
 
 pub struct AttrParserRef<'a> {
-    pub attrs: &'a [(NodeStr<'a>, ValueRef<'a>)],
+    pub(crate) attrs: &'a [(NodeStr<'a>, ValueRef<'a>)],
     pub errors: Vec<BinaryError>,
 }
 

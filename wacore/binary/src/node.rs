@@ -12,6 +12,18 @@ pub enum NodeStr<'a> {
     Owned(CompactString),
 }
 
+impl NodeStr<'_> {
+    /// Clone-preserving conversion. Avoids re-parsing the inner CompactString
+    /// when converting owned NodeStr values in `to_owned()` paths.
+    #[inline]
+    pub fn to_compact_string(&self) -> CompactString {
+        match self {
+            NodeStr::Borrowed(s) => CompactString::from(*s),
+            NodeStr::Owned(cs) => cs.clone(),
+        }
+    }
+}
+
 impl Default for NodeStr<'_> {
     #[inline]
     fn default() -> Self {
@@ -609,7 +621,7 @@ impl<'a> NodeRef<'a> {
     /// Extract text content, handling both String and Bytes (lossy UTF-8).
     pub fn content_as_string(&self) -> Option<CompactString> {
         match self.content.as_deref() {
-            Some(NodeContentRef::String(s)) => Some(CompactString::from(s.as_ref())),
+            Some(NodeContentRef::String(s)) => Some(s.to_compact_string()),
             Some(NodeContentRef::Bytes(b)) => Some(CompactString::from(
                 String::from_utf8_lossy(b.as_ref()).as_ref(),
             )),
@@ -648,7 +660,7 @@ impl<'a> NodeRef<'a> {
                 .iter()
                 .map(|(k, v)| {
                     let value = match v {
-                        ValueRef::String(s) => NodeValue::String(CompactString::from(s.as_ref())),
+                        ValueRef::String(s) => NodeValue::String(s.to_compact_string()),
                         ValueRef::Jid(j) => NodeValue::Jid(j.to_owned()),
                     };
                     (intern_cow(k), value)
@@ -656,7 +668,7 @@ impl<'a> NodeRef<'a> {
                 .collect::<Attrs>(),
             content: self.content.as_deref().map(|c| match c {
                 NodeContentRef::Bytes(b) => NodeContent::Bytes(b.to_vec()),
-                NodeContentRef::String(s) => NodeContent::String(CompactString::from(s.as_ref())),
+                NodeContentRef::String(s) => NodeContent::String(s.to_compact_string()),
                 NodeContentRef::Nodes(nodes) => {
                     NodeContent::Nodes(nodes.iter().map(|n| n.to_owned()).collect())
                 }

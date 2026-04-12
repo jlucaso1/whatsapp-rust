@@ -591,7 +591,7 @@ impl<'a> JidExt for JidRef<'a> {
 impl<'a> JidRef<'a> {
     pub fn to_owned(&self) -> Jid {
         Jid {
-            user: CompactString::from(self.user.as_ref()),
+            user: self.user.to_compact_string(),
             server: self.server,
             agent: self.agent,
             device: self.device,

@@ -4,8 +4,16 @@ use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeStr, NodeVec, ValueRef}
 use crate::token;
 use compact_str::CompactString;
 use std::borrow::Cow;
+use std::fmt::Write;
 #[cfg(feature = "simd")]
 use std::simd::{Simd, prelude::*, u8x16};
+
+/// Format a JidRef directly into CompactString, avoiding the intermediate String.
+fn jid_ref_to_compact(j: &JidRef<'_>) -> CompactString {
+    let mut s = CompactString::default();
+    write!(s, "{}", j).expect("JidRef Display cannot fail");
+    s
+}
 
 pub(crate) struct Decoder<'a> {
     data: &'a [u8],
@@ -211,16 +219,16 @@ impl<'a> Decoder<'a> {
             }
             token::JID_PAIR => self
                 .read_jid_pair()
-                .map(|j| Some(NodeStr::Owned(CompactString::from(j.to_string())))),
+                .map(|j| Some(NodeStr::Owned(jid_ref_to_compact(&j)))),
             token::AD_JID => self
                 .read_ad_jid()
-                .map(|j| Some(NodeStr::Owned(CompactString::from(j.to_string())))),
+                .map(|j| Some(NodeStr::Owned(jid_ref_to_compact(&j)))),
             token::INTEROP_JID => self
                 .read_interop_jid()
-                .map(|j| Some(NodeStr::Owned(CompactString::from(j.to_string())))),
+                .map(|j| Some(NodeStr::Owned(jid_ref_to_compact(&j)))),
             token::FB_JID => self
                 .read_fb_jid()
-                .map(|j| Some(NodeStr::Owned(CompactString::from(j.to_string())))),
+                .map(|j| Some(NodeStr::Owned(jid_ref_to_compact(&j)))),
             token::NIBBLE_8 | token::HEX_8 => {
                 self.read_packed(tag).map(|s| Some(NodeStr::Owned(s)))
             }
