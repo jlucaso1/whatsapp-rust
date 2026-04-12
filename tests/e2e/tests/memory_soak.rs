@@ -58,7 +58,7 @@ async fn snapshot(label: &str, round: usize, client: &whatsapp_rust::client::Cli
     let heap_bytes = dhat::HeapStats::get().curr_bytes;
 
     info!(
-        "[round {round:>4}] {label} | RSS={rss}K | moka(recent_msg={},session_locks={},msg_queues={},device_reg={}) | unbounded(signal_sess={},signal_id={},signal_sk={},resp_waiters={},pending_retries={},presence_subs={},app_state_kr={},app_state_sync={})",
+        "[round {round:>4}] {label} | RSS={rss}K | moka(recent_msg={},session_locks={},chat_lanes={},device_reg={}) | unbounded(signal_sess={},signal_id={},signal_sk={},resp_waiters={},pending_retries={},presence_subs={},app_state_kr={},app_state_sync={})",
         diag.recent_messages,
         diag.session_locks,
         diag.chat_lanes,

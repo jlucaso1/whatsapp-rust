@@ -26,9 +26,11 @@ impl StanzaHandler for MessageHandler {
         &self,
         client: Arc<Client>,
         node: Arc<wacore_binary::OwnedNodeRef>,
-        _cancelled: &mut bool,
+        cancelled: &mut bool,
     ) -> bool {
         let chat_jid = match node.attrs().optional_jid("from") {
+            // Normalize AD metadata so the same chat always maps to one lane
+            Some(jid) if jid.device > 0 || jid.agent > 0 => jid.to_non_ad(),
             Some(jid) => jid,
             None => {
                 warn!("Message stanza missing required 'from' attribute");
@@ -88,6 +90,8 @@ impl StanzaHandler for MessageHandler {
 
         if let Err(e) = lane.queue_tx.try_send(node) {
             warn!("Failed to enqueue message for processing: {e}");
+            // Cancel ack so server redelivers
+            *cancelled = true;
         }
 
         true

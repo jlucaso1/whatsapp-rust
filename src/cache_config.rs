@@ -195,9 +195,8 @@ pub struct CacheConfig {
     /// backend instead of the default in-process moka cache. Fields left as
     /// `None` keep the default moka behaviour.
     ///
-    /// Coordination caches (`session_locks`, `chat_lanes`), the signal
-    /// write-behind cache, and
-    /// `pdo_pending_requests` always stay in-process — they hold live Rust
+    /// Coordination caches (`session_locks`, `chat_lanes`), the signal write-behind
+    /// cache, and `pdo_pending_requests` always stay in-process — they hold live Rust
     /// objects (mutexes, channel senders, oneshot senders) that cannot be
     /// serialised to an external store.
     pub cache_stores: CacheStores,
