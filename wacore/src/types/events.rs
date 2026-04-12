@@ -440,6 +440,11 @@ impl Event {
             None
         }
     }
+
+    pub fn message_text(&self) -> Option<&str> {
+        let (msg, _) = self.as_message()?;
+        msg.conversation.as_deref()
+    }
 }
 
 /// A newsletter live update notification, typically containing updated

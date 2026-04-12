@@ -314,11 +314,7 @@ impl TestClient {
     ) -> anyhow::Result<Arc<Event>> {
         let text = text.to_string();
         self.wait_for_event(timeout_secs, move |e| {
-            matches!(
-                e,
-                Event::Message(msg, _)
-                if msg.conversation.as_deref() == Some(text.as_str())
-            )
+            e.message_text() == Some(text.as_str())
         })
         .await
     }

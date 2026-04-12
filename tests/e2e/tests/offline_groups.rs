@@ -149,8 +149,7 @@ async fn test_mixed_offline_event_ordering() -> anyhow::Result<()> {
             .await;
 
         match result {
-            Ok(ref event) if event.as_message().is_some() => {
-                let (msg, _) = event.as_message().unwrap();
+            Ok(ref event) if let Some((msg, _)) = event.as_message() => {
                 let text = msg.conversation.clone().unwrap_or_default();
                 info!("C received message: {text}");
                 messages_received.push(text);
@@ -439,8 +438,7 @@ async fn test_offline_multi_sender_group_messages() -> anyhow::Result<()> {
             .await;
 
         match result {
-            Ok(ref event) if event.as_message().is_some() => {
-                let (msg, _) = event.as_message().unwrap();
+            Ok(ref event) if let Some((msg, _)) = event.as_message() => {
                 if let Some(text) = &msg.conversation {
                     info!("C received: {text}");
                     received_texts.insert(text.clone());
