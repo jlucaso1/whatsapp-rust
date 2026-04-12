@@ -373,7 +373,7 @@ impl Client {
             .event_bus
             .dispatch(wacore::types::events::Event::Message(
                 Box::new(message),
-                message_info,
+                Arc::new(message_info),
             ));
     }
 
