@@ -25,4 +25,6 @@ pub use marshal::{
     marshal, marshal_auto, marshal_exact, marshal_ref, marshal_ref_auto, marshal_ref_exact,
     marshal_ref_to, marshal_ref_to_vec, marshal_to, marshal_to_vec,
 };
-pub use node::{Attrs, Node, NodeContent, NodeContentRef, NodeRef, NodeValue, OwnedNodeRef};
+pub use node::{
+    Attrs, Node, NodeContent, NodeContentRef, NodeRef, NodeStr, NodeValue, OwnedNodeRef,
+};

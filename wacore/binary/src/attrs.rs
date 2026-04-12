@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use crate::error::{BinaryError, Result};
 use crate::jid::Jid;
-use crate::node::{Attrs, Node, NodeRef, NodeValue, ValueRef};
+use crate::node::{Attrs, Node, NodeRef, NodeStr, NodeValue, ValueRef};
 
 pub struct AttrParser<'a> {
     pub attrs: &'a Attrs,
@@ -11,7 +11,7 @@ pub struct AttrParser<'a> {
 }
 
 pub struct AttrParserRef<'a> {
-    pub attrs: &'a [(Cow<'a, str>, ValueRef<'a>)],
+    pub(crate) attrs: &'a [(NodeStr<'a>, ValueRef<'a>)],
     pub errors: Vec<BinaryError>,
 }
 
@@ -36,11 +36,7 @@ impl<'a> AttrParserRef<'a> {
     }
 
     fn get_raw(&mut self, key: &str, require: bool) -> Option<&'a ValueRef<'a>> {
-        let val = self
-            .attrs
-            .iter()
-            .find(|(k, _)| k.as_ref() == key)
-            .map(|(_, v)| v);
+        let val = self.attrs.iter().find(|(k, _)| **k == *key).map(|(_, v)| v);
 
         if require && val.is_none() {
             self.errors.push(BinaryError::AttrParse(format!(

@@ -4,6 +4,107 @@ use crate::token;
 use compact_str::CompactString;
 use std::borrow::Cow;
 
+/// Borrowed-or-inline string for decoded nodes. Short owned values (≤24 bytes)
+/// are stored inline via `CompactString`, avoiding heap allocation.
+#[derive(Clone, yoke::Yokeable)]
+pub enum NodeStr<'a> {
+    Borrowed(&'a str),
+    Owned(CompactString),
+}
+
+impl NodeStr<'_> {
+    /// Clone-preserving conversion. Avoids re-parsing the inner CompactString
+    /// when converting owned NodeStr values in `to_owned()` paths.
+    #[inline]
+    pub fn to_compact_string(&self) -> CompactString {
+        match self {
+            NodeStr::Borrowed(s) => CompactString::from(*s),
+            NodeStr::Owned(cs) => cs.clone(),
+        }
+    }
+}
+
+impl Default for NodeStr<'_> {
+    #[inline]
+    fn default() -> Self {
+        NodeStr::Borrowed("")
+    }
+}
+
+impl std::ops::Deref for NodeStr<'_> {
+    type Target = str;
+    #[inline(always)]
+    fn deref(&self) -> &str {
+        match self {
+            NodeStr::Borrowed(s) => s,
+            NodeStr::Owned(cs) => cs.as_str(),
+        }
+    }
+}
+
+impl AsRef<str> for NodeStr<'_> {
+    #[inline(always)]
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
+impl std::fmt::Debug for NodeStr<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&**self, f)
+    }
+}
+
+impl std::fmt::Display for NodeStr<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self)
+    }
+}
+
+impl PartialEq for NodeStr<'_> {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        **self == **other
+    }
+}
+
+impl Eq for NodeStr<'_> {}
+
+impl std::hash::Hash for NodeStr<'_> {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        (**self).hash(state)
+    }
+}
+
+impl PartialEq<str> for NodeStr<'_> {
+    #[inline]
+    fn eq(&self, other: &str) -> bool {
+        &**self == other
+    }
+}
+
+impl PartialEq<&str> for NodeStr<'_> {
+    #[inline]
+    fn eq(&self, other: &&str) -> bool {
+        &**self == *other
+    }
+}
+
+impl<'a> From<&'a str> for NodeStr<'a> {
+    #[inline]
+    fn from(s: &'a str) -> Self {
+        NodeStr::Borrowed(s)
+    }
+}
+
+impl From<CompactString> for NodeStr<'_> {
+    #[inline]
+    fn from(s: CompactString) -> Self {
+        NodeStr::Owned(s)
+    }
+}
+
 /// Intern a string as a `Cow::Borrowed(&'static str)` if it matches a known token,
 /// otherwise allocate a `Cow::Owned(String)`. This avoids heap allocations for the
 /// vast majority of tag names and attribute keys which are protocol tokens.
@@ -273,24 +374,24 @@ impl FromIterator<(Cow<'static, str>, NodeValue)> for Attrs {
         Self(iter.into_iter().collect())
     }
 }
-pub type AttrsRef<'a> = Vec<(Cow<'a, str>, ValueRef<'a>)>;
+pub type AttrsRef<'a> = Vec<(NodeStr<'a>, ValueRef<'a>)>;
 
 /// A decoded attribute value that can be either a string or a structured JID.
 /// This avoids string allocation when decoding JID tokens - the JidRef is returned
 /// directly and only converted to a string when actually needed.
 #[derive(Debug, Clone, PartialEq, yoke::Yokeable)]
 pub enum ValueRef<'a> {
-    String(Cow<'a, str>),
+    String(NodeStr<'a>),
     Jid(JidRef<'a>),
 }
 
 impl<'a> ValueRef<'a> {
-    /// String view of the value. Works for both variants.
-    /// - String variant: Cow::Borrowed — zero copy
+    /// String view of the value. Borrows from `self`.
+    /// - String variant: borrows the inner str — zero copy
     /// - Jid variant: Cow::Owned — allocates only when needed
-    pub fn as_str(&self) -> Cow<'a, str> {
+    pub fn as_str(&self) -> Cow<'_, str> {
         match self {
-            ValueRef::String(s) => s.clone(),
+            ValueRef::String(s) => Cow::Borrowed(s),
             ValueRef::Jid(j) => Cow::Owned(j.to_string()),
         }
     }
@@ -336,7 +437,7 @@ pub enum NodeContent {
 #[derive(Debug, Clone, PartialEq, yoke::Yokeable)]
 pub enum NodeContentRef<'a> {
     Bytes(Cow<'a, [u8]>),
-    String(Cow<'a, str>),
+    String(NodeStr<'a>),
     Nodes(Box<NodeVec<'a>>),
 }
 
@@ -345,7 +446,7 @@ impl NodeContent {
     pub fn as_content_ref(&self) -> NodeContentRef<'_> {
         match self {
             NodeContent::Bytes(b) => NodeContentRef::Bytes(Cow::Borrowed(b)),
-            NodeContent::String(s) => NodeContentRef::String(Cow::Borrowed(s.as_str())),
+            NodeContent::String(s) => NodeContentRef::String(NodeStr::Borrowed(s.as_str())),
             NodeContent::Nodes(nodes) => {
                 NodeContentRef::Nodes(Box::new(nodes.iter().map(|n| n.as_node_ref()).collect()))
             }
@@ -363,7 +464,7 @@ pub struct Node {
 
 #[derive(Debug, Clone, PartialEq, yoke::Yokeable)]
 pub struct NodeRef<'a> {
-    pub tag: Cow<'a, str>,
+    pub tag: NodeStr<'a>,
     pub attrs: AttrsRef<'a>,
     pub content: Option<Box<NodeContentRef<'a>>>,
 }
@@ -385,22 +486,22 @@ impl Node {
     /// The returned NodeRef borrows from self.
     pub fn as_node_ref(&self) -> NodeRef<'_> {
         NodeRef {
-            tag: Cow::Borrowed(self.tag.as_ref()),
+            tag: NodeStr::Borrowed(self.tag.as_ref()),
             attrs: self
                 .attrs
                 .iter()
                 .map(|(k, v)| {
                     let value_ref = match v {
-                        NodeValue::String(s) => ValueRef::String(Cow::Borrowed(s.as_str())),
+                        NodeValue::String(s) => ValueRef::String(NodeStr::Borrowed(s.as_str())),
                         NodeValue::Jid(j) => ValueRef::Jid(JidRef {
-                            user: Cow::Borrowed(&j.user),
+                            user: NodeStr::Borrowed(&j.user),
                             server: j.server,
                             agent: j.agent,
                             device: j.device,
                             integrator: j.integrator,
                         }),
                     };
-                    (Cow::Borrowed(k.as_ref()), value_ref)
+                    (NodeStr::Borrowed(k.as_ref()), value_ref)
                 })
                 .collect(),
             content: self.content.as_ref().map(|c| Box::new(c.as_content_ref())),
@@ -459,11 +560,7 @@ impl Node {
 }
 
 impl<'a> NodeRef<'a> {
-    pub fn new(
-        tag: Cow<'a, str>,
-        attrs: AttrsRef<'a>,
-        content: Option<NodeContentRef<'a>>,
-    ) -> Self {
+    pub fn new(tag: NodeStr<'a>, attrs: AttrsRef<'a>, content: Option<NodeContentRef<'a>>) -> Self {
         Self {
             tag,
             attrs,
@@ -486,7 +583,7 @@ impl<'a> NodeRef<'a> {
         self.attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v)
     }
 
-    pub fn attrs_iter(&self) -> impl Iterator<Item = (&Cow<'a, str>, &ValueRef<'a>)> {
+    pub fn attrs_iter(&self) -> impl Iterator<Item = (&NodeStr<'a>, &ValueRef<'a>)> {
         self.attrs.iter().map(|(k, v)| (k, v))
     }
 
@@ -524,7 +621,7 @@ impl<'a> NodeRef<'a> {
     /// Extract text content, handling both String and Bytes (lossy UTF-8).
     pub fn content_as_string(&self) -> Option<CompactString> {
         match self.content.as_deref() {
-            Some(NodeContentRef::String(s)) => Some(CompactString::from(s.as_ref())),
+            Some(NodeContentRef::String(s)) => Some(s.to_compact_string()),
             Some(NodeContentRef::Bytes(b)) => Some(CompactString::from(
                 String::from_utf8_lossy(b.as_ref()).as_ref(),
             )),
@@ -563,7 +660,7 @@ impl<'a> NodeRef<'a> {
                 .iter()
                 .map(|(k, v)| {
                     let value = match v {
-                        ValueRef::String(s) => NodeValue::String(CompactString::from(s.as_ref())),
+                        ValueRef::String(s) => NodeValue::String(s.to_compact_string()),
                         ValueRef::Jid(j) => NodeValue::Jid(j.to_owned()),
                     };
                     (intern_cow(k), value)
@@ -571,7 +668,7 @@ impl<'a> NodeRef<'a> {
                 .collect::<Attrs>(),
             content: self.content.as_deref().map(|c| match c {
                 NodeContentRef::Bytes(b) => NodeContent::Bytes(b.to_vec()),
-                NodeContentRef::String(s) => NodeContent::String(CompactString::from(s.as_ref())),
+                NodeContentRef::String(s) => NodeContent::String(s.to_compact_string()),
                 NodeContentRef::Nodes(nodes) => {
                     NodeContent::Nodes(nodes.iter().map(|n| n.to_owned()).collect())
                 }

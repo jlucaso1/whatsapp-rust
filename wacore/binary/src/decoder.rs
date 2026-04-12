@@ -1,10 +1,19 @@
 use crate::error::{BinaryError, Result};
 use crate::jid::JidRef;
-use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeVec, ValueRef};
+use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeStr, NodeVec, ValueRef};
 use crate::token;
+use compact_str::CompactString;
 use std::borrow::Cow;
+use std::fmt::Write;
 #[cfg(feature = "simd")]
 use std::simd::{Simd, prelude::*, u8x16};
+
+/// Format a JidRef directly into CompactString, avoiding the intermediate String.
+fn jid_ref_to_compact(j: &JidRef<'_>) -> CompactString {
+    let mut s = CompactString::default();
+    write!(s, "{}", j).expect("JidRef Display cannot fail");
+    s
+}
 
 pub(crate) struct Decoder<'a> {
     data: &'a [u8],
@@ -88,10 +97,10 @@ impl<'a> Decoder<'a> {
     }
 
     #[inline(always)]
-    fn read_string(&mut self, len: usize) -> Result<Cow<'a, str>> {
+    fn read_string(&mut self, len: usize) -> Result<NodeStr<'a>> {
         let bytes = self.read_bytes(len)?;
         match std::str::from_utf8(bytes) {
-            Ok(s) => Ok(Cow::Borrowed(s)),
+            Ok(s) => Ok(NodeStr::Borrowed(s)),
             Err(e) => Err(BinaryError::InvalidUtf8(e)),
         }
     }
@@ -107,9 +116,8 @@ impl<'a> Decoder<'a> {
     }
 
     fn read_jid_pair(&mut self) -> Result<JidRef<'a>> {
-        let user_val = self.read_value_as_string()?;
-        let server_str = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
-        let user = user_val.unwrap_or(Cow::Borrowed(""));
+        let user = self.read_value_as_string()?.unwrap_or_default();
+        let server_str = self.read_value_as_string()?.unwrap_or_default();
         let server = crate::jid::Server::try_from(server_str.as_ref()).map_err(|_| {
             BinaryError::AttrParse(format!("JID_PAIR unknown server: {}", server_str))
         })?;
@@ -125,7 +133,7 @@ impl<'a> Decoder<'a> {
     fn read_ad_jid(&mut self) -> Result<JidRef<'a>> {
         let agent = self.read_u8()?;
         let device = self.read_u8()? as u16;
-        let user = self
+        let user: NodeStr<'a> = self
             .read_value_as_string()?
             .ok_or(BinaryError::InvalidNode)?;
 
@@ -157,7 +165,7 @@ impl<'a> Decoder<'a> {
             .ok_or(BinaryError::InvalidNode)?;
         let device = self.read_u16_be()?;
         let integrator = self.read_u16_be()?;
-        let server_str = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
+        let server_str = self.read_value_as_string()?.unwrap_or_default();
         if server_str.as_ref() != crate::jid::INTEROP_SERVER {
             return Err(BinaryError::InvalidNode);
         }
@@ -175,7 +183,7 @@ impl<'a> Decoder<'a> {
             .read_value_as_string()?
             .ok_or(BinaryError::InvalidNode)?;
         let device = self.read_u16_be()?;
-        let server_str = self.read_value_as_string()?.unwrap_or(Cow::Borrowed(""));
+        let server_str = self.read_value_as_string()?.unwrap_or_default();
         if server_str.as_ref() != crate::jid::MESSENGER_SERVER {
             return Err(BinaryError::InvalidNode);
         }
@@ -188,13 +196,13 @@ impl<'a> Decoder<'a> {
         })
     }
 
-    fn read_value_as_string(&mut self) -> Result<Option<Cow<'a, str>>> {
+    fn read_value_as_string(&mut self) -> Result<Option<NodeStr<'a>>> {
         let tag = self.read_u8()?;
         self.read_value_as_string_from_tag(tag)
     }
 
     #[inline(always)]
-    fn read_value_as_string_from_tag(&mut self, tag: u8) -> Result<Option<Cow<'a, str>>> {
+    fn read_value_as_string_from_tag(&mut self, tag: u8) -> Result<Option<NodeStr<'a>>> {
         match tag {
             token::LIST_EMPTY => Ok(None),
             token::BINARY_8 => {
@@ -211,27 +219,31 @@ impl<'a> Decoder<'a> {
             }
             token::JID_PAIR => self
                 .read_jid_pair()
-                .map(|j| Some(Cow::Owned(j.to_string()))),
-            token::AD_JID => self.read_ad_jid().map(|j| Some(Cow::Owned(j.to_string()))),
+                .map(|j| Some(NodeStr::Owned(jid_ref_to_compact(&j)))),
+            token::AD_JID => self
+                .read_ad_jid()
+                .map(|j| Some(NodeStr::Owned(jid_ref_to_compact(&j)))),
             token::INTEROP_JID => self
                 .read_interop_jid()
-                .map(|j| Some(Cow::Owned(j.to_string()))),
-            token::FB_JID => self.read_fb_jid().map(|j| Some(Cow::Owned(j.to_string()))),
-            token::NIBBLE_8 | token::HEX_8 => self.read_packed(tag).map(|s| Some(Cow::Owned(s))),
+                .map(|j| Some(NodeStr::Owned(jid_ref_to_compact(&j)))),
+            token::FB_JID => self
+                .read_fb_jid()
+                .map(|j| Some(NodeStr::Owned(jid_ref_to_compact(&j)))),
+            token::NIBBLE_8 | token::HEX_8 => {
+                self.read_packed(tag).map(|s| Some(NodeStr::Owned(s)))
+            }
             tag @ token::DICTIONARY_0..=token::DICTIONARY_3 => {
                 let index = self.read_u8()?;
                 token::get_double_token(tag - token::DICTIONARY_0, index)
-                    .map(|s| Some(Cow::Borrowed(s)))
+                    .map(|s| Some(NodeStr::Borrowed(s)))
                     .ok_or(BinaryError::InvalidToken(tag))
             }
             _ => token::get_single_token(tag)
-                .map(|s| Some(Cow::Borrowed(s)))
+                .map(|s| Some(NodeStr::Borrowed(s)))
                 .ok_or(BinaryError::InvalidToken(tag)),
         }
     }
 
-    /// Read a value that can be either a string or a JID.
-    /// This avoids string allocation for JID tokens by returning the JidRef directly.
     fn read_value(&mut self) -> Result<Option<ValueRef<'a>>> {
         let tag = self.read_u8()?;
         match tag {
@@ -248,56 +260,58 @@ impl<'a> Decoder<'a> {
                 let size = self.read_u32_be()? as usize;
                 self.read_string(size).map(|s| Some(ValueRef::String(s)))
             }
-            // JID tokens - return JidRef directly without string allocation
             token::JID_PAIR => self.read_jid_pair().map(|j| Some(ValueRef::Jid(j))),
             token::AD_JID => self.read_ad_jid().map(|j| Some(ValueRef::Jid(j))),
             token::INTEROP_JID => self.read_interop_jid().map(|j| Some(ValueRef::Jid(j))),
             token::FB_JID => self.read_fb_jid().map(|j| Some(ValueRef::Jid(j))),
             token::NIBBLE_8 | token::HEX_8 => self
                 .read_packed(tag)
-                .map(|s| Some(ValueRef::String(Cow::Owned(s)))),
+                .map(|s| Some(ValueRef::String(NodeStr::Owned(s)))),
             tag @ token::DICTIONARY_0..=token::DICTIONARY_3 => {
                 let index = self.read_u8()?;
                 token::get_double_token(tag - token::DICTIONARY_0, index)
-                    .map(|s| Some(ValueRef::String(Cow::Borrowed(s))))
+                    .map(|s| Some(ValueRef::String(NodeStr::Borrowed(s))))
                     .ok_or(BinaryError::InvalidToken(tag))
             }
             _ => token::get_single_token(tag)
-                .map(|s| Some(ValueRef::String(Cow::Borrowed(s))))
+                .map(|s| Some(ValueRef::String(NodeStr::Borrowed(s))))
                 .ok_or(BinaryError::InvalidToken(tag)),
         }
     }
 
-    fn read_packed(&mut self, tag: u8) -> Result<String> {
+    /// Decode packed nibble/hex into a stack buffer, then create CompactString.
+    /// Max unpacked length is 254 bytes (127 packed × 2), so the stack buffer
+    /// is always sufficient. Short values (≤24 bytes) are stored inline.
+    fn read_packed(&mut self, tag: u8) -> Result<CompactString> {
         let packed_len_byte = self.read_u8()?;
         let is_half_byte = (packed_len_byte & 0x80) != 0;
         let len = (packed_len_byte & 0x7F) as usize;
 
         if len == 0 {
-            return Ok(String::new());
+            return Ok(CompactString::default());
         }
 
-        let raw_len = if is_half_byte { (len * 2) - 1 } else { len * 2 };
         let packed_data = self.read_bytes(len)?;
-        let mut unpacked_bytes = Vec::with_capacity(raw_len);
+        let mut buf = [0u8; 254];
+        let mut pos = 0;
 
         match tag {
-            token::HEX_8 => Self::decode_packed_hex(packed_data, &mut unpacked_bytes),
-            token::NIBBLE_8 => Self::decode_packed_nibble(packed_data, &mut unpacked_bytes)?,
+            token::HEX_8 => Self::decode_packed_hex(packed_data, &mut buf, &mut pos),
+            token::NIBBLE_8 => Self::decode_packed_nibble(packed_data, &mut buf, &mut pos)?,
             _ => return Err(BinaryError::InvalidToken(tag)),
         }
 
-        if is_half_byte {
-            unpacked_bytes.pop();
+        if is_half_byte && pos > 0 {
+            pos -= 1;
         }
 
-        // Lookup tables produce only ASCII bytes ('0'..'9', 'A'..'F', '-', '.', '\0'),
-        // so from_utf8 will never fail. Use the safe version to avoid unsafe.
-        Ok(String::from_utf8(unpacked_bytes).expect("packed decode produced non-ASCII"))
+        // All output bytes are ASCII, so from_utf8 cannot fail.
+        let s = std::str::from_utf8(&buf[..pos]).expect("packed decode produced non-ASCII");
+        Ok(CompactString::from(s))
     }
 
     #[inline]
-    fn decode_packed_hex(packed_data: &[u8], unpacked_bytes: &mut Vec<u8>) {
+    fn decode_packed_hex(packed_data: &[u8], out: &mut [u8], pos: &mut usize) {
         #[cfg(feature = "simd")]
         let packed_data = {
             const HEX_LOOKUP: [u8; 16] = *b"0123456789ABCDEF";
@@ -305,7 +319,6 @@ impl<'a> Decoder<'a> {
             let low_mask = Simd::splat(0x0F);
 
             let (chunks, remainder) = packed_data.as_chunks::<16>();
-            unpacked_bytes.reserve(chunks.len() * 32);
             for chunk in chunks {
                 let data = u8x16::from_array(*chunk);
                 let high_nibbles = (data >> 4) & low_mask;
@@ -313,8 +326,10 @@ impl<'a> Decoder<'a> {
                 let high_chars = lookup_table.swizzle_dyn(high_nibbles);
                 let low_chars = lookup_table.swizzle_dyn(low_nibbles);
                 let (lo, hi) = Simd::interleave(high_chars, low_chars);
-                unpacked_bytes.extend_from_slice(lo.as_array());
-                unpacked_bytes.extend_from_slice(hi.as_array());
+                out[*pos..*pos + 16].copy_from_slice(lo.as_array());
+                *pos += 16;
+                out[*pos..*pos + 16].copy_from_slice(hi.as_array());
+                *pos += 16;
             }
             remainder
         };
@@ -322,13 +337,15 @@ impl<'a> Decoder<'a> {
         for &byte in packed_data {
             let high = (byte & 0xF0) >> 4;
             let low = byte & 0x0F;
-            unpacked_bytes.push(Self::unpack_hex(high));
-            unpacked_bytes.push(Self::unpack_hex(low));
+            out[*pos] = Self::unpack_hex(high);
+            *pos += 1;
+            out[*pos] = Self::unpack_hex(low);
+            *pos += 1;
         }
     }
 
     #[inline]
-    fn decode_packed_nibble(packed_data: &[u8], unpacked_bytes: &mut Vec<u8>) -> Result<()> {
+    fn decode_packed_nibble(packed_data: &[u8], out: &mut [u8], pos: &mut usize) -> Result<()> {
         #[cfg(feature = "simd")]
         let packed_data = {
             const NIBBLE_LOOKUP: [u8; 16] = *b"0123456789-.\x00\x00\x00\x00";
@@ -338,7 +355,6 @@ impl<'a> Decoder<'a> {
             let f15 = Simd::splat(15);
 
             let (chunks, remainder) = packed_data.as_chunks::<16>();
-            unpacked_bytes.reserve(chunks.len() * 32);
             for chunk in chunks {
                 let data = u8x16::from_array(*chunk);
 
@@ -348,7 +364,6 @@ impl<'a> Decoder<'a> {
                 let hi_valid = high_nibbles.simd_le(le11) | high_nibbles.simd_eq(f15);
                 let lo_valid = low_nibbles.simd_le(le11) | low_nibbles.simd_eq(f15);
                 if !(hi_valid & lo_valid).all() {
-                    // Validate first, then decode scalar as a conservative fallback.
                     for byte in *chunk {
                         let high = (byte & 0xF0) >> 4;
                         let low = byte & 0x0F;
@@ -358,8 +373,10 @@ impl<'a> Decoder<'a> {
                     for byte in *chunk {
                         let high = (byte & 0xF0) >> 4;
                         let low = byte & 0x0F;
-                        unpacked_bytes.push(Self::unpack_nibble(high)?);
-                        unpacked_bytes.push(Self::unpack_nibble(low)?);
+                        out[*pos] = Self::unpack_nibble(high)?;
+                        *pos += 1;
+                        out[*pos] = Self::unpack_nibble(low)?;
+                        *pos += 1;
                     }
                     continue;
                 }
@@ -367,8 +384,10 @@ impl<'a> Decoder<'a> {
                 let high_chars = lookup_table.swizzle_dyn(high_nibbles);
                 let low_chars = lookup_table.swizzle_dyn(low_nibbles);
                 let (lo, hi) = Simd::interleave(high_chars, low_chars);
-                unpacked_bytes.extend_from_slice(lo.as_array());
-                unpacked_bytes.extend_from_slice(hi.as_array());
+                out[*pos..*pos + 16].copy_from_slice(lo.as_array());
+                *pos += 16;
+                out[*pos..*pos + 16].copy_from_slice(hi.as_array());
+                *pos += 16;
             }
             remainder
         };
@@ -376,8 +395,10 @@ impl<'a> Decoder<'a> {
         for &byte in packed_data {
             let high = (byte & 0xF0) >> 4;
             let low = byte & 0x0F;
-            unpacked_bytes.push(Self::unpack_nibble(high)?);
-            unpacked_bytes.push(Self::unpack_nibble(low)?);
+            out[*pos] = Self::unpack_nibble(high)?;
+            *pos += 1;
+            out[*pos] = Self::unpack_nibble(low)?;
+            *pos += 1;
         }
 
         Ok(())
@@ -409,10 +430,9 @@ impl<'a> Decoder<'a> {
             let key = self
                 .read_value_as_string()?
                 .ok_or(BinaryError::NonStringKey)?;
-            // Use read_value to get ValueRef - avoids string allocation for JIDs
             let value = self
                 .read_value()?
-                .unwrap_or(ValueRef::String(Cow::Borrowed("")));
+                .unwrap_or(ValueRef::String(NodeStr::Borrowed("")));
             attrs.push((key, value));
         }
         Ok(attrs)
