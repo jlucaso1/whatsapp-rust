@@ -33,7 +33,7 @@ impl Default for NodeStr<'_> {
 
 impl std::ops::Deref for NodeStr<'_> {
     type Target = str;
-    #[inline]
+    #[inline(always)]
     fn deref(&self) -> &str {
         match self {
             NodeStr::Borrowed(s) => s,
@@ -43,7 +43,7 @@ impl std::ops::Deref for NodeStr<'_> {
 }
 
 impl AsRef<str> for NodeStr<'_> {
-    #[inline]
+    #[inline(always)]
     fn as_ref(&self) -> &str {
         self
     }
