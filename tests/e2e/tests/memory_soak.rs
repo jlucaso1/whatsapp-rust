@@ -61,7 +61,7 @@ async fn snapshot(label: &str, round: usize, client: &whatsapp_rust::client::Cli
         "[round {round:>4}] {label} | RSS={rss}K | moka(recent_msg={},session_locks={},msg_queues={},device_reg={}) | unbounded(signal_sess={},signal_id={},signal_sk={},resp_waiters={},pending_retries={},presence_subs={},app_state_kr={},app_state_sync={})",
         diag.recent_messages,
         diag.session_locks,
-        diag.message_queues,
+        diag.chat_lanes,
         diag.device_registry_cache,
         diag.signal_cache_sessions,
         diag.signal_cache_identities,
@@ -187,16 +187,7 @@ fn analyze_growth(label: &str, snapshots: &[Snapshot]) {
             first.diag.session_locks,
             last.diag.session_locks,
         ),
-        (
-            "message_queues",
-            first.diag.message_queues,
-            last.diag.message_queues,
-        ),
-        (
-            "message_enqueue_locks",
-            first.diag.message_enqueue_locks,
-            last.diag.message_enqueue_locks,
-        ),
+        ("chat_lanes", first.diag.chat_lanes, last.diag.chat_lanes),
         (
             "device_registry_cache",
             first.diag.device_registry_cache,
