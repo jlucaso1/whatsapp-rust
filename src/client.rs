@@ -271,6 +271,16 @@ pub enum ClientError {
     NotLoggedIn,
 }
 
+impl ClientError {
+    pub fn is_transport_unavailable(&self) -> bool {
+        match self {
+            ClientError::NotConnected => true,
+            ClientError::EncryptSend(e) => e.is_transport_unavailable(),
+            _ => false,
+        }
+    }
+}
+
 use wacore::types::message::ChatMessageId;
 
 /// Metrics for tracking offline sync progress
@@ -1694,7 +1704,9 @@ impl Client {
     /// Uses Arc<OwnedNodeRef> to avoid cloning when spawning the async task.
     async fn maybe_deferred_ack(self: &Arc<Self>, node: Arc<wacore_binary::OwnedNodeRef>) {
         if self.synchronous_ack {
-            if let Err(e) = self.send_ack_for(node.get()).await {
+            if let Err(e) = self.send_ack_for(node.get()).await
+                && !e.is_transport_unavailable()
+            {
                 warn!("Failed to send ack: {e:?}");
             }
         } else {
@@ -1702,7 +1714,7 @@ impl Client {
             self.runtime
                 .spawn(Box::pin(async move {
                     if let Err(e) = this.send_ack_for(node.get()).await
-                        && !matches!(e, ClientError::NotConnected)
+                        && !e.is_transport_unavailable()
                     {
                         warn!("Failed to send ack: {e:?}");
                     }
