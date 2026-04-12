@@ -9,7 +9,7 @@ import json
 import re
 import sys
 
-THRESHOLD = 0.05  # 5%
+THRESHOLD = 0.02  # 2%
 
 
 def load_baseline(data_js_path: str, bench_name: str) -> dict[str, int]:
@@ -84,7 +84,9 @@ def main():
     lines.append("## Benchmark Results\n")
 
     if regressions:
-        lines.append(f"**{len(regressions)} regression(s)** detected (>{THRESHOLD*100:.0f}% threshold):\n")
+        lines.append(
+            f"**{len(regressions)} regression(s)** detected (>{THRESHOLD * 100:.0f}% threshold):\n"
+        )
         lines.append("| Benchmark | Current | Baseline | Change |")
         lines.append("|-----------|---------|----------|--------|")
         for r in regressions:
@@ -104,7 +106,9 @@ def main():
         lines.append("")
 
     if unchanged:
-        lines.append(f"<details>\n<summary>{len(unchanged)} unchanged benchmark(s)</summary>\n")
+        lines.append(
+            f"<details>\n<summary>{len(unchanged)} unchanged benchmark(s)</summary>\n"
+        )
         lines.append("| Benchmark | Current | Baseline | Change |")
         lines.append("|-----------|---------|----------|--------|")
         for r in unchanged:
