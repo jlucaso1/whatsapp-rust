@@ -365,6 +365,8 @@ where
     let mut jids_needing_prekeys = Vec::with_capacity(devices.len());
     let mut had_406 = false;
 
+    let mut reusable_addr = crate::types::jid::make_reusable_protocol_address();
+
     for device_jid in devices {
         // WhatsApp Web's SignalAddress.toString() normalizes PN → LID before
         // creating signal addresses. We do the same: check LID session FIRST.
@@ -374,11 +376,11 @@ where
         {
             // Construct the LID JID with the same device ID
             let lid_jid = Jid::lid_device(lid_user, device_jid.device);
-            let lid_address = lid_jid.to_protocol_address();
+            lid_jid.reset_protocol_address(&mut reusable_addr);
 
             if stores
                 .session_store
-                .load_session(&lid_address)
+                .load_session(&reusable_addr)
                 .await?
                 .is_some()
             {
@@ -394,10 +396,10 @@ where
         }
 
         // Fall back to direct address lookup (for LID JIDs or PN without LID mapping)
-        let signal_address = device_jid.to_protocol_address();
+        device_jid.reset_protocol_address(&mut reusable_addr);
         if stores
             .session_store
-            .load_session(&signal_address)
+            .load_session(&reusable_addr)
             .await?
             .is_some()
         {
@@ -491,14 +493,12 @@ where
                 encryption_jid.agent = 0;
             }
 
-            let signal_address = encryption_jid.to_protocol_address();
-            // Fix: Use the normalized device_jid to lookup the bundle
-            // Use centralized normalization logic to avoid mismatches
+            encryption_jid.reset_protocol_address(&mut reusable_addr);
             let lookup_jid = device_jid.normalize_for_prekey_bundle();
             match prekey_bundles.get(&lookup_jid) {
                 Some(bundle) => {
                     match process_prekey_bundle(
-                        &signal_address,
+                        &reusable_addr,
                         stores.session_store,
                         stores.identity_store,
                         bundle,
@@ -536,7 +536,7 @@ where
                             // Save the new identity (this replaces the old one)
                             if let Err(e) = stores
                                 .identity_store
-                                .save_identity(&signal_address, new_identity)
+                                .save_identity(&reusable_addr, new_identity)
                                 .await
                             {
                                 log::warn!(
@@ -554,7 +554,7 @@ where
 
                             // Retry processing the prekey bundle with the updated identity
                             match process_prekey_bundle(
-                                &signal_address,
+                                &reusable_addr,
                                 stores.session_store,
                                 stores.identity_store,
                                 bundle,
@@ -583,7 +583,7 @@ where
                             // Propagate other unexpected errors
                             return Err(anyhow::anyhow!(
                                 "Failed to process pre-key bundle for {}: {:?}",
-                                signal_address,
+                                reusable_addr,
                                 e
                             ));
                         }
@@ -592,7 +592,7 @@ where
                 None => {
                     log::warn!(
                         "No pre-key bundle returned for device {}. This device will be skipped for encryption.",
-                        &signal_address
+                        &reusable_addr
                     );
                 }
             }
@@ -605,11 +605,11 @@ where
 
     for device_jid in devices {
         let encryption_jid = jid_to_encryption_jid.get(device_jid).unwrap_or(device_jid);
-        let signal_address = encryption_jid.to_protocol_address();
+        encryption_jid.reset_protocol_address(&mut reusable_addr);
 
         match message_encrypt(
             plaintext_to_encrypt,
-            &signal_address,
+            &reusable_addr,
             stores.session_store,
             stores.identity_store,
         )
@@ -645,7 +645,7 @@ where
             Err(e) => {
                 log::warn!(
                     "Failed to encrypt for device {}: {}. Skipping.",
-                    &signal_address,
+                    &reusable_addr,
                     e
                 );
             }

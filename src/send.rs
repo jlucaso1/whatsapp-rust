@@ -1515,7 +1515,7 @@ impl Client {
         jids: &[Jid],
     ) -> Vec<std::sync::Arc<async_lock::Mutex<()>>> {
         let mut mutexes = Vec::with_capacity(jids.len());
-        let mut buf = String::with_capacity(64);
+        let mut buf = wacore::types::jid::make_address_buffer();
         for jid in jids {
             wacore::types::jid::write_protocol_address_to(jid, &mut buf);
             mutexes.push(self.session_lock_for(&buf).await);
