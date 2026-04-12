@@ -82,6 +82,7 @@ wacore-derive = { path = "./wacore/derive", version = "0.5.0" }
 wacore-libsignal = { path = "./wacore/libsignal", version = "0.5.0" }
 wacore-noise = { path = "./wacore/noise", version = "0.5.0" }
 waproto = { path = "./waproto", version = "0.5.0" }
+yoke = { version = "0.7", features = ["derive"] }
 
 [features]
 debug-diagnostics = ["wacore/debug-diagnostics"]

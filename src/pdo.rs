@@ -24,7 +24,7 @@ use std::time::Duration;
 use wacore::types::message::{
     ChatMessageId, EditAttribute, MessageCategory, MessageSource, MsgMetaInfo,
 };
-use wacore_binary::jid::{Jid, JidExt};
+use wacore_binary::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
 #[derive(Clone, Debug)]
@@ -463,7 +463,7 @@ impl Client {
         if info.source.is_from_me {
             return;
         }
-        if info.source.chat.server == wacore_binary::jid::BROADCAST_SERVER {
+        if info.source.chat.server == wacore_binary::Server::Broadcast {
             return;
         }
 
@@ -500,7 +500,7 @@ impl Client {
 
 #[cfg(test)]
 mod tests {
-    use wacore_binary::jid::{DEFAULT_USER_SERVER, Jid, JidExt};
+    use wacore_binary::{Jid, JidExt, Server};
 
     #[test]
     fn test_pdo_peer_target_is_device_0() {
@@ -517,7 +517,7 @@ mod tests {
         let peer_target = own_pn.to_non_ad();
 
         assert_eq!(peer_target.user, "559999999999");
-        assert_eq!(peer_target.server, DEFAULT_USER_SERVER);
+        assert_eq!(peer_target.server, Server::Pn);
     }
 
     #[test]

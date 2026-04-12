@@ -20,8 +20,8 @@
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use crate::types::spam_report::{SpamReportRequest, SpamReportResult, build_spam_list_node};
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{NodeContent, NodeContentRef, NodeRef};
 
 // Re-export types for convenience
 pub use crate::types::spam_report::{
@@ -48,17 +48,17 @@ impl IqSpec for SpamReportSpec {
 
         InfoQuery::set(
             "spam",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![spam_list_node])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         // Extract report_id from response if present
         let report_id = response
             .get_optional_child_by_tag(&["report_id"])
-            .and_then(|n| match &n.content {
-                Some(NodeContent::String(s)) => Some(s.to_string()),
+            .and_then(|n| match n.content.as_deref() {
+                Some(NodeContentRef::String(s)) => Some(s.to_string()),
                 _ => None,
             });
 
@@ -119,7 +119,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.report_id, Some("REPORT_ABC123".to_string()));
     }
 
@@ -136,7 +136,7 @@ mod tests {
 
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.report_id, None);
     }
 }

@@ -7,7 +7,7 @@ mod tests {
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
-    use wacore_binary::jid::Jid;
+    use wacore_binary::Jid;
 
     fn make_jid(user: &str) -> Jid {
         Jid::pn(user)

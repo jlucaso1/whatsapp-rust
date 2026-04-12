@@ -14,7 +14,7 @@ use wacore::iq::groups::{
     DeleteCommunityIq, GetLinkedGroupsParticipantsIq, GroupCreateIq, GroupCreateOptions,
     JoinLinkedGroupIq, LinkSubgroupsIq, QueryLinkedGroupIq, UnlinkSubgroupsIq,
 };
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 // Types
 

@@ -11,7 +11,7 @@
 
 use anyhow::Result;
 use log::debug;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 use super::Client;
 use crate::lid_pn_cache::{LearningSource, LidPnEntry};
@@ -136,18 +136,15 @@ impl Client {
     /// For PN JIDs, this checks if a LID mapping exists and returns the LID.
     /// This ensures that sending and receiving use the same session lock.
     pub(crate) async fn resolve_encryption_jid(&self, target: &Jid) -> Jid {
-        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
-        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
-
-        if target.server == lid_server {
+        if target.is_lid() {
             // Already a LID - use it directly
             target.clone()
-        } else if target.server == pn_server {
+        } else if target.is_pn() {
             // PN JID - check if we have a LID mapping
             if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&target.user).await {
                 let lid_jid = Jid {
                     user: lid_user.into(),
-                    server: wacore_binary::jid::cow_server_from_str(lid_server),
+                    server: wacore_binary::Server::Lid,
                     device: target.device,
                     agent: target.agent,
                     integrator: target.integrator,
@@ -259,7 +256,7 @@ mod tests {
     use crate::lid_pn_cache::LearningSource;
     use crate::test_utils::create_test_client;
     use std::sync::Arc;
-    use wacore_binary::jid::HIDDEN_USER_SERVER;
+    use wacore_binary::Server;
 
     #[tokio::test]
     async fn test_resolve_encryption_jid_pn_to_lid() {
@@ -277,7 +274,7 @@ mod tests {
         let resolved = client.resolve_encryption_jid(&pn_jid).await;
 
         assert_eq!(resolved.user, lid);
-        assert_eq!(resolved.server, HIDDEN_USER_SERVER);
+        assert_eq!(resolved.server, Server::Lid);
     }
 
     #[tokio::test]

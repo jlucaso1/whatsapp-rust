@@ -9,12 +9,15 @@ use thiserror::Error;
 
 use crate::appstate::hash::HashState;
 use crate::appstate::keys::ExpandedAppStateKeys;
-use crate::appstate::patch_decode::{PatchList, WAPatchName, parse_patch_list, parse_patch_lists};
+use crate::appstate::patch_decode::{
+    PatchList, WAPatchName, parse_patch_list, parse_patch_list_ref, parse_patch_lists,
+    parse_patch_lists_ref,
+};
 use crate::appstate::{
     collect_key_ids_from_patch_list, expand_app_state_keys, process_patch, process_snapshot,
 };
 use crate::store::traits::Backend;
-use wacore_binary::node::Node;
+use wacore_binary::{Node, NodeRef};
 use waproto::whatsapp as wa;
 
 // Re-export Mutation from appstate for convenience
@@ -92,6 +95,66 @@ impl AppStateProcessor {
         Ok(())
     }
 
+    pub async fn decode_patch_list_ref<FDownload>(
+        &self,
+        stanza_root: &NodeRef<'_>,
+        download: FDownload,
+        validate_macs: bool,
+    ) -> Result<(Vec<Mutation>, HashState, PatchList)>
+    where
+        FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
+    {
+        let mut pl = parse_patch_list_ref(stanza_root)?;
+
+        // Download external snapshot if present (matches WhatsApp Web behavior)
+        if pl.snapshot.is_none()
+            && let Some(ext) = &pl.snapshot_ref
+            && let Ok(data) = download(ext)
+            && let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice())
+        {
+            pl.snapshot = Some(snapshot);
+        }
+
+        // Download external mutations for each patch (matches WhatsApp Web behavior)
+        for patch in &mut pl.patches {
+            if let Some(ext) = &patch.external_mutations {
+                let patch_version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+                match download(ext) {
+                    Ok(data) => match wa::SyncdMutations::decode(data.as_slice()) {
+                        Ok(ext_mutations) => {
+                            log::trace!(
+                                target: "AppState",
+                                "Downloaded external mutations for patch v{}: {} mutations (inline had {})",
+                                patch_version,
+                                ext_mutations.mutations.len(),
+                                patch.mutations.len()
+                            );
+                            patch.mutations = ext_mutations.mutations;
+                        }
+                        Err(e) => {
+                            log::warn!(
+                                target: "AppState",
+                                "Failed to decode external mutations for patch v{}: {}",
+                                patch_version,
+                                e
+                            );
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!(
+                            target: "AppState",
+                            "Failed to download external mutations for patch v{}: {}",
+                            patch_version,
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
+        self.process_patch_list(pl, validate_macs).await
+    }
+
     pub async fn decode_patch_list<FDownload>(
         &self,
         stanza_root: &Node,
@@ -153,6 +216,20 @@ impl AppStateProcessor {
         self.process_patch_list(pl, validate_macs).await
     }
 
+    pub async fn decode_multi_patch_list_ref<FDownload>(
+        &self,
+        stanza_root: &NodeRef<'_>,
+        download: &FDownload,
+        validate_macs: bool,
+    ) -> Result<Vec<(Vec<Mutation>, HashState, PatchList)>>
+    where
+        FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
+    {
+        let patch_lists = parse_patch_lists_ref(stanza_root)?;
+        self.process_patch_lists(patch_lists, download, validate_macs)
+            .await
+    }
+
     /// Decode a multi-collection IQ response into per-collection results.
     /// Each collection is parsed and processed independently.
     pub async fn decode_multi_patch_list<FDownload>(
@@ -165,6 +242,19 @@ impl AppStateProcessor {
         FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
     {
         let patch_lists = parse_patch_lists(stanza_root)?;
+        self.process_patch_lists(patch_lists, download, validate_macs)
+            .await
+    }
+
+    async fn process_patch_lists<FDownload>(
+        &self,
+        patch_lists: Vec<PatchList>,
+        download: &FDownload,
+        validate_macs: bool,
+    ) -> Result<Vec<(Vec<Mutation>, HashState, PatchList)>>
+    where
+        FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
+    {
         let mut results = Vec::with_capacity(patch_lists.len());
 
         for mut pl in patch_lists {

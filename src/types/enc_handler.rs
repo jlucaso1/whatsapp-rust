@@ -2,7 +2,7 @@ use crate::client::Client;
 use crate::types::message::MessageInfo;
 use anyhow::Result;
 use std::sync::Arc;
-use wacore_binary::node::Node;
+use wacore_binary::Node;
 
 /// Trait for handling custom encrypted message types
 #[async_trait::async_trait]
@@ -28,7 +28,7 @@ mod tests {
     use anyhow::Result;
     use async_lock::Mutex;
     use std::sync::Arc;
-    use wacore_binary::node::Node;
+    use wacore_binary::Node;
 
     /// Mock handler for testing custom enc types
     #[derive(Debug)]

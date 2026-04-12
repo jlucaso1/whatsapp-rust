@@ -6,11 +6,11 @@ use wacore::client::context::SendContextResolver;
 use wacore::libsignal::protocol::SignalProtocolError;
 use wacore::types::jid::JidExt;
 use wacore::types::message::AddressingMode;
-use wacore_binary::builder::NodeBuilder;
 #[cfg(test)]
-use wacore_binary::jid::DeviceKey;
-use wacore_binary::jid::{Jid, JidExt as _};
-use wacore_binary::node::Node;
+use wacore_binary::DeviceKey;
+use wacore_binary::Node;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::{Jid, JidExt as _, Server};
 use waproto::whatsapp as wa;
 
 /// Options for [`Client::send_message_with_options`].
@@ -336,8 +336,7 @@ impl Client {
             }
             if jid.is_lid() {
                 if let Some(pn) = self.lid_pn_cache.get_phone_number(&jid.user).await {
-                    resolved_recipients
-                        .push(Jid::new(&pn, wacore_binary::jid::DEFAULT_USER_SERVER));
+                    resolved_recipients.push(Jid::new(&pn, Server::Pn));
                 } else {
                     return Err(anyhow!(
                         "No PN mapping for LID {}. Ensure the recipient has been \
@@ -637,7 +636,7 @@ impl Client {
     /// On mismatch, invalidates sender key device cache and group info cache.
     fn spawn_phash_validation(
         &self,
-        rx: futures::channel::oneshot::Receiver<wacore_binary::Node>,
+        rx: futures::channel::oneshot::Receiver<std::sync::Arc<wacore_binary::OwnedNodeRef>>,
         our_phash: String,
         jid: Jid,
         invalidate_group_cache: bool,
@@ -661,8 +660,8 @@ impl Client {
                         return;
                     }
                 };
-                if let Some(server) = ack.attrs().optional_string("phash")
-                    && *server != our_phash
+                if let Some(server) = ack.get().get_attr("phash").map(|v| v.as_str())
+                    && server != our_phash
                 {
                     log::warn!(
                         "Phash mismatch for {jid}: ours={our_phash}, server={server}. Invalidating caches."
@@ -1276,7 +1275,7 @@ impl Client {
                         // HMAC input is "user@lid" (account LID without device suffix),
                         // matching WA Web's accountLid.toString()
                         let recipient_lid =
-                            wacore_binary::jid::Jid::new(*lid_user, "lid").to_string();
+                            wacore_binary::Jid::new(*lid_user, Server::Lid).to_string();
                         let cs_token = compute_cs_token(salt, &recipient_lid);
                         extra_nodes.push(build_cs_token_node(&cs_token));
                         log::debug!(target: "Client/CsToken", "Attached cstoken for {} (NCT fallback)", to);
@@ -1563,7 +1562,7 @@ impl Client {
         }
 
         if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&jid.user).await {
-            Jid::new(&lid_user, "lid")
+            Jid::new(&lid_user, Server::Lid)
         } else {
             jid.to_non_ad()
         }
@@ -1584,7 +1583,7 @@ impl Client {
             self.resolve_to_lid_jid(jid).await
         } else if jid.is_lid() {
             if let Some(pn) = self.lid_pn_cache.get_phone_number(&jid.user).await {
-                Jid::new(&pn, "s.whatsapp.net")
+                Jid::new(&pn, Server::Pn)
             } else {
                 jid.to_non_ad()
             }

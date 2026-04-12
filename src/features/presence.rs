@@ -3,9 +3,9 @@ use log::{debug, warn};
 use thiserror::Error;
 use wacore::StringEnum;
 use wacore::iq::tctoken::build_tc_token_node;
+use wacore_binary::Jid;
+use wacore_binary::Node;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::Node;
 
 #[derive(Debug, Error)]
 pub enum PresenceError {

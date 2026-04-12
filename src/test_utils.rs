@@ -1,6 +1,18 @@
 use std::sync::Arc;
 
 use crate::Client;
+use wacore_binary::{Node, OwnedNodeRef};
+
+/// Marshal a `Node` into an `Arc<OwnedNodeRef>` for use in tests.
+pub fn node_to_owned_ref(node: &Node) -> Arc<OwnedNodeRef> {
+    let bytes = wacore_binary::marshal::marshal(node).expect("marshal should succeed");
+    // marshal() prepends a leading format byte; OwnedNodeRef::new expects raw protocol bytes
+    {
+        let mut bytes = bytes;
+        bytes.remove(0);
+        Arc::new(OwnedNodeRef::new(bytes).expect("OwnedNodeRef::new should succeed"))
+    }
+}
 use crate::http::{HttpClient, HttpRequest, HttpResponse};
 use crate::runtime_impl::TokioRuntime;
 use crate::store::SqliteStore;

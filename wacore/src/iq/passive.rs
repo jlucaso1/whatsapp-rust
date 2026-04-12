@@ -22,8 +22,8 @@
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{NodeContent, NodeRef};
 
 /// IQ namespace for passive mode.
 pub const PASSIVE_NAMESPACE: &str = "passive";
@@ -61,12 +61,12 @@ impl IqSpec for PassiveModeSpec {
 
         InfoQuery::set(
             PASSIVE_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![child_node])),
         )
     }
 
-    fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, _response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         // Passive mode just needs a successful response
         Ok(())
     }
@@ -113,7 +113,7 @@ mod tests {
         let spec = PassiveModeSpec::passive();
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
-        let result = spec.parse_response(&response);
+        let result = spec.parse_response(&response.as_node_ref());
         assert!(result.is_ok());
     }
 }

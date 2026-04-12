@@ -10,7 +10,7 @@ use log::debug;
 use std::collections::HashMap;
 use wacore::iq::contacts::{ProfilePictureSpec, ProfilePictureType};
 use wacore::iq::usync::{IsOnWhatsAppQueryType, IsOnWhatsAppSpec, IsOnWhatsAppUser, UserInfoSpec};
-use wacore_binary::jid::{Jid, JidExt};
+use wacore_binary::{Jid, JidExt};
 
 // Re-export types from wacore
 pub use wacore::iq::contacts::ProfilePicture;

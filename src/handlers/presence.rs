@@ -6,7 +6,6 @@ use async_trait::async_trait;
 use log::debug;
 use std::sync::Arc;
 use wacore::types::events::{Event, PresenceUpdate};
-use wacore_binary::node::Node;
 
 /// Handler for `<presence>` stanzas.
 ///
@@ -21,8 +20,14 @@ impl StanzaHandler for PresenceHandler {
         "presence"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        let from_jid = match node.attrs.get("from").and_then(|v| v.to_jid()) {
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<wacore_binary::OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
+        let nr = node.get();
+        let from_jid = match nr.get_attr("from").and_then(|v| v.to_jid()) {
             Some(jid) => jid,
             None => {
                 debug!(target: "PresenceHandler", "Presence stanza missing or invalid 'from' attribute");
@@ -30,13 +35,15 @@ impl StanzaHandler for PresenceHandler {
             }
         };
 
-        let unavailable = node.attrs.get("type").is_some_and(|v| v == "unavailable");
+        let unavailable = nr
+            .get_attr("type")
+            .is_some_and(|v| v.as_str() == "unavailable");
 
         // Parse last_seen from 'last' attribute if present
-        let last_seen = node
-            .attrs
-            .get("last")
-            .and_then(|v| v.as_str().parse::<i64>().ok())
+        let last_seen = nr
+            .get_attr("last")
+            .map(|v| v.as_str())
+            .and_then(|s| s.parse::<i64>().ok())
             .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
 
         debug!(

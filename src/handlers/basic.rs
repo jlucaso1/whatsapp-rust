@@ -2,11 +2,9 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use async_trait::async_trait;
 use std::sync::Arc;
-use wacore_binary::node::Node;
+use wacore_binary::OwnedNodeRef;
 
 /// Handler for `<success>` stanzas.
-///
-/// Processes successful authentication/connection events.
 #[derive(Default)]
 pub struct SuccessHandler;
 
@@ -17,15 +15,18 @@ impl StanzaHandler for SuccessHandler {
         "success"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        client.handle_success(&node).await;
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
+        client.handle_success(node.get()).await;
         true
     }
 }
 
 /// Handler for `<failure>` stanzas.
-///
-/// Processes connection or authentication failures.
 #[derive(Default)]
 pub struct FailureHandler;
 
@@ -36,15 +37,18 @@ impl StanzaHandler for FailureHandler {
         "failure"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        client.handle_connect_failure(&node).await;
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
+        client.handle_connect_failure(node.get()).await;
         true
     }
 }
 
 /// Handler for `<stream:error>` stanzas.
-///
-/// Processes stream-level errors that may require connection reset.
 #[derive(Default)]
 pub struct StreamErrorHandler;
 
@@ -55,15 +59,18 @@ impl StanzaHandler for StreamErrorHandler {
         "stream:error"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        client.handle_stream_error(&node).await;
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
+        client.handle_stream_error(node.get()).await;
         true
     }
 }
 
 /// Handler for `<ack>` stanzas.
-///
-/// Processes acknowledgment messages.
 #[derive(Default)]
 pub struct AckHandler;
 
@@ -74,13 +81,13 @@ impl StanzaHandler for AckHandler {
         "ack"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        // Delegate to the client to check if any task is waiting for this ack.
-        // The client will resolve pending response waiters if the ID matches.
-        // Try to unwrap Arc or clone Node if there are other references
-        let owned_node = Arc::try_unwrap(node).unwrap_or_else(|arc| (*arc).clone());
-        client.handle_ack_response(owned_node).await;
-        // We return `true` because this handler's purpose is to consume all <ack> stanzas.
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
+        client.handle_ack_response(node.get()).await;
         true
     }
 }

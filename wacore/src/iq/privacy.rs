@@ -54,8 +54,8 @@ use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use crate::types::message::AddressingMode;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{Node, NodeContent, NodeRef};
 
 /// IQ namespace for privacy settings.
 pub const PRIVACY_NAMESPACE: &str = "privacy";
@@ -191,14 +191,14 @@ impl IqSpec for PrivacySettingsSpec {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::get(
             PRIVACY_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("privacy").build(),
             ])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         use crate::iq::node::{optional_attr, required_child};
 
         let privacy_node = required_child(response, "privacy")?;
@@ -323,7 +323,7 @@ impl IqSpec for SetPrivacySettingSpec {
 
         InfoQuery::set(
             PRIVACY_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 privacy_node.children([category_node.build()]).build(),
             ])),
@@ -332,7 +332,7 @@ impl IqSpec for SetPrivacySettingSpec {
 
     /// Parse the SET response. WA Web's `setPrivacyParser` extracts `{name, value, dhash}`
     /// per category; we only need the dhash for disallowed-list conflict resolution.
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         use crate::iq::node::optional_attr;
 
         let dhash = response.get_optional_child("privacy").and_then(|privacy| {
@@ -370,7 +370,7 @@ impl IqSpec for SetDefaultDisappearingModeSpec {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::set(
             "disappearing_mode",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("disappearing_mode")
                     .attr("duration", self.duration.to_string())
@@ -379,7 +379,7 @@ impl IqSpec for SetDefaultDisappearingModeSpec {
         )
     }
 
-    fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, _response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         Ok(())
     }
 }
@@ -429,7 +429,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.settings.len(), 3);
 
         assert_eq!(result.settings[0].category, PrivacyCategory::Last);
@@ -489,7 +489,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.settings.len(), 9);
 
         assert_eq!(result.settings[0].category, PrivacyCategory::Last);
@@ -596,7 +596,8 @@ mod tests {
     // --- SET spec tests ---
 
     fn attr_str<'a>(node: &'a Node, key: &str) -> Option<Cow<'a, str>> {
-        crate::iq::node::optional_attr(node, key)
+        let node_ref = node.as_node_ref();
+        crate::iq::node::optional_attr(&node_ref, key).map(|c| Cow::Owned(c.into_owned()))
     }
 
     #[test]
@@ -634,12 +635,12 @@ mod tests {
                 users: vec![
                     DisallowedListUserEntry {
                         action: DisallowedListAction::Add,
-                        jid: Jid::new("100000000000001", "lid"),
-                        pn_jid: Some(Jid::new("5511999999999", "s.whatsapp.net")),
+                        jid: Jid::new("100000000000001", Server::Lid),
+                        pn_jid: Some(Jid::new("15550001111", Server::Pn)),
                     },
                     DisallowedListUserEntry {
                         action: DisallowedListAction::Remove,
-                        jid: Jid::new("100000000000002", "lid"),
+                        jid: Jid::new("100000000000002", Server::Lid),
                         pn_jid: None,
                     },
                 ],
@@ -688,7 +689,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.dhash.as_deref(), Some("updated_hash_456"));
     }
 
@@ -705,7 +706,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert!(result.dhash.is_none());
     }
 

@@ -7,8 +7,9 @@ use prost::Message;
 use serde::Serialize;
 use std::fmt;
 use std::sync::{Arc, OnceLock, RwLock};
-use wacore_binary::jid::{Jid, MessageId};
-use wacore_binary::node::Node;
+use wacore_binary::Node;
+use wacore_binary::OwnedNodeRef;
+use wacore_binary::{Jid, MessageId};
 use waproto::whatsapp::{self as wa, HistorySync};
 
 /// Wrapper for large event data that uses Arc for cheap cloning.
@@ -382,7 +383,7 @@ pub struct BusinessStatusUpdate {
 #[derive(Debug, Clone, Serialize)]
 pub struct DisappearingModeChanged {
     /// The contact whose setting changed.
-    pub from: wacore_binary::jid::Jid,
+    pub from: Jid,
     /// New duration in seconds (0 = disabled, 86400 = 24h, etc.).
     pub duration: u32,
     /// Unix timestamp (seconds) when the setting was changed.
@@ -416,7 +417,8 @@ pub enum Event {
     Message(Box<wa::Message>, MessageInfo),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
-    Notification(Node),
+    #[serde(skip)]
+    Notification(Arc<OwnedNodeRef>),
 
     ChatPresence(ChatPresenceUpdate),
     Presence(PresenceUpdate),
@@ -469,7 +471,7 @@ pub enum Event {
     /// Library extension — no WA Web equivalent (WA Web has no raw stanza observer).
     /// Gated by `Client::set_raw_node_forwarding(true)` to avoid overhead when unused.
     #[serde(skip)]
-    RawNode(Arc<Node>),
+    RawNode(Arc<OwnedNodeRef>),
 }
 
 /// A newsletter live update notification, typically containing updated

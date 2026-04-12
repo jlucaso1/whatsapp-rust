@@ -278,18 +278,20 @@ pub type AttrsRef<'a> = Vec<(Cow<'a, str>, ValueRef<'a>)>;
 /// A decoded attribute value that can be either a string or a structured JID.
 /// This avoids string allocation when decoding JID tokens - the JidRef is returned
 /// directly and only converted to a string when actually needed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, yoke::Yokeable)]
 pub enum ValueRef<'a> {
     String(Cow<'a, str>),
     Jid(JidRef<'a>),
 }
 
 impl<'a> ValueRef<'a> {
-    /// Get the value as a string slice, if it's a string variant.
-    pub fn as_str(&self) -> Option<&str> {
+    /// String view of the value. Works for both variants.
+    /// - String variant: Cow::Borrowed — zero copy
+    /// - Jid variant: Cow::Owned — allocates only when needed
+    pub fn as_str(&self) -> Cow<'a, str> {
         match self {
-            ValueRef::String(s) => Some(s.as_ref()),
-            ValueRef::Jid(_) => None,
+            ValueRef::String(s) => s.clone(),
+            ValueRef::Jid(j) => Cow::Owned(j.to_string()),
         }
     }
 
@@ -306,15 +308,6 @@ impl<'a> ValueRef<'a> {
         match self {
             ValueRef::Jid(j) => Some(j.to_owned()),
             ValueRef::String(s) => Jid::from_str(s.as_ref()).ok(),
-        }
-    }
-
-    /// Convert to a string, formatting the JID if necessary.
-    /// Returns a Cow to avoid allocation when the value is already a string.
-    pub fn to_string_cow(&self) -> Cow<'a, str> {
-        match self {
-            ValueRef::String(s) => s.clone(),
-            ValueRef::Jid(j) => Cow::Owned(j.to_string()),
         }
     }
 }
@@ -340,7 +333,7 @@ pub enum NodeContent {
     Nodes(Vec<Node>),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, yoke::Yokeable)]
 pub enum NodeContentRef<'a> {
     Bytes(Cow<'a, [u8]>),
     String(Cow<'a, str>),
@@ -368,7 +361,7 @@ pub struct Node {
     pub content: Option<NodeContent>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, yoke::Yokeable)]
 pub struct NodeRef<'a> {
     pub tag: Cow<'a, str>,
     pub attrs: AttrsRef<'a>,
@@ -401,7 +394,7 @@ impl Node {
                         NodeValue::String(s) => ValueRef::String(Cow::Borrowed(s.as_str())),
                         NodeValue::Jid(j) => ValueRef::Jid(JidRef {
                             user: Cow::Borrowed(&j.user),
-                            server: Cow::Borrowed(&j.server),
+                            server: j.server,
                             agent: j.agent,
                             device: j.device,
                             integrator: j.integrator,
@@ -478,7 +471,7 @@ impl<'a> NodeRef<'a> {
         }
     }
 
-    pub fn attr_parser(&'a self) -> AttrParserRef<'a> {
+    pub fn attrs(&self) -> AttrParserRef<'_> {
         AttrParserRef::new(self)
     }
 
@@ -528,6 +521,40 @@ impl<'a> NodeRef<'a> {
             .and_then(|nodes| nodes.iter().find(|node| node.tag == tag))
     }
 
+    /// Extract text content, handling both String and Bytes (lossy UTF-8).
+    pub fn content_as_string(&self) -> Option<CompactString> {
+        match self.content.as_deref() {
+            Some(NodeContentRef::String(s)) => Some(CompactString::from(s.as_ref())),
+            Some(NodeContentRef::Bytes(b)) => Some(CompactString::from(
+                String::from_utf8_lossy(b.as_ref()).as_ref(),
+            )),
+            _ => None,
+        }
+    }
+
+    /// Zero-copy byte content, if this node has Bytes content.
+    pub fn content_bytes(&self) -> Option<&[u8]> {
+        match self.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) => Some(b.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Zero-copy string content, if this node has String content.
+    pub fn content_str(&self) -> Option<&str> {
+        match self.content.as_deref() {
+            Some(NodeContentRef::String(s)) => Some(s.as_ref()),
+            _ => None,
+        }
+    }
+
+    /// Child nodes from content, if this node has Nodes content.
+    /// Alias for `children()`.
+    #[inline]
+    pub fn content_nodes(&self) -> Option<&[NodeRef<'a>]> {
+        self.children()
+    }
+
     pub fn to_owned(&self) -> Node {
         Node {
             tag: intern_cow(&self.tag),
@@ -550,5 +577,117 @@ impl<'a> NodeRef<'a> {
                 }
             }),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// OwnedNodeRef — self-referential zero-copy node via yoke
+// ---------------------------------------------------------------------------
+
+use yoke::Yoke;
+
+/// A decoded node that owns its decompressed buffer. The inner `NodeRef`
+/// borrows string/byte payloads directly from the buffer, avoiding copies.
+/// Container allocations (attribute Vec, child Vec) still occur during decode.
+///
+/// Wrap in `Arc<OwnedNodeRef>` for cheap sharing across handlers.
+pub struct OwnedNodeRef {
+    inner: Yoke<NodeRef<'static>, Vec<u8>>,
+}
+
+impl OwnedNodeRef {
+    /// Decode a node from an owned buffer. The buffer should be the raw
+    /// binary-protocol bytes (after decompression, without the leading
+    /// format byte which `unpack` already strips).
+    pub fn new(buffer: Vec<u8>) -> crate::error::Result<Self> {
+        let inner = Yoke::try_attach_to_cart(buffer, |buf| crate::marshal::unmarshal_ref(buf))?;
+        Ok(Self { inner })
+    }
+
+    /// Access the borrowed node.
+    #[inline]
+    pub fn get(&self) -> &NodeRef<'_> {
+        self.inner.get()
+    }
+
+    /// Convert to an owned `Node`, cloning all data out of the buffer.
+    /// Use sparingly — this is the allocation path that yoke is designed to avoid.
+    pub fn to_owned_node(&self) -> Node {
+        self.inner.get().to_owned()
+    }
+
+    /// The tag name of this node.
+    #[inline]
+    pub fn tag(&self) -> &str {
+        &self.get().tag
+    }
+
+    /// Get an attribute parser for this node.
+    #[inline]
+    pub fn attrs(&self) -> AttrParserRef<'_> {
+        self.get().attrs()
+    }
+
+    /// Look up a single attribute by key.
+    #[inline]
+    pub fn get_attr(&self, key: &str) -> Option<&ValueRef<'_>> {
+        self.get().get_attr(key)
+    }
+
+    /// Get child nodes, if content is a node list.
+    #[inline]
+    pub fn children(&self) -> Option<&[NodeRef<'_>]> {
+        self.get().children()
+    }
+
+    /// Find a child node by tag.
+    #[inline]
+    pub fn get_optional_child(&self, tag: &str) -> Option<&NodeRef<'_>> {
+        self.get().get_optional_child(tag)
+    }
+
+    /// Find a child by traversing a path of tags.
+    #[inline]
+    pub fn get_optional_child_by_tag(&self, tags: &[&str]) -> Option<&NodeRef<'_>> {
+        self.get().get_optional_child_by_tag(tags)
+    }
+
+    /// Get children matching a tag.
+    #[inline]
+    pub fn get_children_by_tag<'b>(
+        &'b self,
+        tag: &'b str,
+    ) -> impl Iterator<Item = &'b NodeRef<'b>> {
+        self.get().get_children_by_tag(tag)
+    }
+
+    /// Zero-copy byte content, if this node has Bytes content.
+    #[inline]
+    pub fn content_bytes(&self) -> Option<&[u8]> {
+        self.get().content_bytes()
+    }
+
+    /// Zero-copy string content, if this node has String content.
+    #[inline]
+    pub fn content_str(&self) -> Option<&str> {
+        self.get().content_str()
+    }
+
+    /// Child nodes from content, if this node has Nodes content.
+    #[inline]
+    pub fn content_nodes(&self) -> Option<&[NodeRef<'_>]> {
+        self.get().content_nodes()
+    }
+
+    /// Extract text content, handling both String and Bytes (lossy UTF-8).
+    #[inline]
+    pub fn content_as_string(&self) -> Option<CompactString> {
+        self.get().content_as_string()
+    }
+}
+
+impl std::fmt::Debug for OwnedNodeRef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner.get().fmt(f)
     }
 }

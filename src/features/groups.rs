@@ -10,7 +10,7 @@ use wacore::iq::groups::{
     SetGroupSubjectIq, SetMemberAddModeIq, normalize_participants,
 };
 use wacore::types::message::AddressingMode;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 pub use wacore::iq::groups::{
     GroupCreateOptions, GroupDescription, GroupParticipantOptions, GroupSubject, JoinGroupResult,

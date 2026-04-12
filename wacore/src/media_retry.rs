@@ -17,9 +17,9 @@ use hkdf::Hkdf;
 use prost::Message;
 use rand::Rng;
 use sha2::Sha256;
+use wacore_binary::Jid;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Node, NodeContentRef, NodeRef};
 use waproto::whatsapp as wa;
 
 const MEDIA_RETRY_HKDF_INFO: &str = "WhatsApp Media Retry Notification";
@@ -48,10 +48,10 @@ fn derive_media_retry_key(media_key: &[u8]) -> Result<[u8; 32]> {
     Ok(key)
 }
 
-/// Extract byte content from a Node.
-fn get_bytes_content(node: &Node) -> Option<&[u8]> {
-    match &node.content {
-        Some(NodeContent::Bytes(b)) => Some(b.as_slice()),
+/// Extract byte content from a NodeRef.
+fn get_bytes_content_ref<'a>(node: &'a NodeRef<'_>) -> Option<&'a [u8]> {
+    match node.content.as_deref() {
+        Some(NodeContentRef::Bytes(b)) => Some(b.as_ref()),
         _ => None,
     }
 }
@@ -171,18 +171,21 @@ pub fn build_media_retry_receipt(
 /// - `<encrypt>` with `<enc_p>` and `<enc_iv>` — encrypted success response
 ///
 /// WA Web: `WAWebHandleMediaRetryNotification`
-pub fn parse_media_retry_notification(node: &Node, media_key: &[u8]) -> Result<MediaRetryResult> {
+pub fn parse_media_retry_notification(
+    node: &NodeRef<'_>,
+    media_key: &[u8],
+) -> Result<MediaRetryResult> {
     let msg_id = node
-        .attrs()
-        .optional_string("id")
+        .get_attr("id")
+        .map(|v| v.as_str())
         .ok_or_else(|| anyhow!("notification missing 'id' attribute"))?
-        .to_string();
+        .into_owned();
 
     // Check for error child first
     if let Some(error_node) = node.get_optional_child_by_tag(&["error"]) {
         let code = error_node
-            .attrs()
-            .optional_string("code")
+            .get_attr("code")
+            .map(|v| v.as_str())
             .and_then(|s| s.parse::<i32>().ok())
             .unwrap_or(0);
         return Ok(match code {
@@ -199,12 +202,12 @@ pub fn parse_media_retry_notification(node: &Node, media_key: &[u8]) -> Result<M
 
     let enc_p = encrypt_node
         .get_optional_child_by_tag(&["enc_p"])
-        .and_then(get_bytes_content)
+        .and_then(get_bytes_content_ref)
         .ok_or_else(|| anyhow!("missing enc_p in encrypt node"))?;
 
     let enc_iv = encrypt_node
         .get_optional_child_by_tag(&["enc_iv"])
-        .and_then(get_bytes_content)
+        .and_then(get_bytes_content_ref)
         .ok_or_else(|| anyhow!("missing enc_iv in encrypt node"))?;
 
     let notification = decrypt_media_retry_notification(media_key, &msg_id, enc_iv, enc_p)?;

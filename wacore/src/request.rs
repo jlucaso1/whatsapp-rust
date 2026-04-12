@@ -4,8 +4,8 @@ use sha2::{Digest, Sha256};
 use std::time::Duration;
 use thiserror::Error;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{self, Jid, JidExt};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, JidExt, LEGACY_USER_SERVER};
+use wacore_binary::{Node, NodeContent, NodeRef};
 
 /// IQ request type for WhatsApp protocol queries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
@@ -156,7 +156,7 @@ impl RequestUtils {
         if let Some(jid) = user_jid {
             data.extend_from_slice(jid.user.as_bytes());
             data.extend_from_slice(b"@");
-            data.extend_from_slice(jid::LEGACY_USER_SERVER.as_bytes());
+            data.extend_from_slice(LEGACY_USER_SERVER.as_bytes());
         }
 
         let mut random_bytes = [0u8; 16];
@@ -198,31 +198,31 @@ impl RequestUtils {
         builder.build()
     }
 
-    pub fn parse_iq_response(&self, response_node: &Node) -> Box<Result<(), IqError>> {
+    pub fn parse_iq_response(&self, response_node: &NodeRef<'_>) -> Result<(), IqError> {
         if response_node.tag == "stream:error" || response_node.tag == "xmlstreamend" {
-            return Box::new(Err(IqError::Disconnected(response_node.clone())));
+            return Err(IqError::Disconnected(response_node.to_owned()));
         }
 
-        if let Some(res_type) = response_node.attrs.get("type")
-            && res_type == "error"
+        if let Some(res_type) = response_node.get_attr("type")
+            && res_type.as_str() == "error"
         {
             let error_child = response_node.get_optional_child_by_tag(&["error"]);
             if let Some(error_node) = error_child {
-                let mut parser = wacore_binary::attrs::AttrParser::new(error_node);
+                let mut parser = error_node.attrs();
                 let code = parser.optional_u64("code").unwrap_or(0) as u16;
                 let text = parser
                     .optional_string("text")
                     .as_deref()
                     .unwrap_or("")
                     .to_string();
-                return Box::new(Err(IqError::ServerError { code, text }));
+                return Err(IqError::ServerError { code, text });
             }
-            return Box::new(Err(IqError::ServerError {
+            return Err(IqError::ServerError {
                 code: 0,
                 text: "Malformed error response".to_string(),
-            }));
+            });
         }
 
-        Box::new(Ok(()))
+        Ok(())
     }
 }

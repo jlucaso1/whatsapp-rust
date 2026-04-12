@@ -187,7 +187,11 @@ impl User {
                 .unwrap();
         });
 
-        let jid = Jid::new(user, server);
+        let jid = Jid::new(
+            user,
+            wacore_binary::jid::Server::try_from(server)
+                .expect("invalid server in benchmark fixture"),
+        );
         let address = jid.to_protocol_address();
 
         Self {

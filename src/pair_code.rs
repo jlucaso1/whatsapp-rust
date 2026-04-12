@@ -53,8 +53,8 @@ use log::{error, info, warn};
 use std::sync::Arc;
 use wacore::libsignal::protocol::KeyPair;
 use wacore::pair_code::{PairCodeError, PairCodeState, PairCodeUtils};
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::Jid;
+use wacore_binary::{NodeContent, NodeContentRef, NodeRef};
 
 // Re-export types for user convenience
 pub use wacore::pair_code::{PairCodeOptions, PlatformId};
@@ -176,7 +176,7 @@ impl Client {
         let query = InfoQuery {
             query_type: InfoQueryType::Set,
             namespace: "md",
-            to: Jid::new("", SERVER_JID),
+            to: Jid::new("", wacore_binary::Server::Pn),
             target: None,
             content: Some(NodeContent::Nodes(
                 iq_content
@@ -194,7 +194,7 @@ impl Client {
             .map_err(|e: IqError| PairCodeError::RequestFailed(e.to_string()))?;
 
         // Extract pairing ref from response
-        let pairing_ref = PairCodeUtils::parse_companion_hello_response(&response)
+        let pairing_ref = PairCodeUtils::parse_companion_hello_response(response.get())
             .ok_or(PairCodeError::MissingPairingRef)?;
 
         info!(
@@ -225,7 +225,10 @@ impl Client {
 ///
 /// This is called when the user enters the code on their phone. The notification
 /// contains the primary device's encrypted ephemeral public key and identity public key.
-pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &Node) -> bool {
+pub(crate) async fn handle_pair_code_notification(
+    client: &Arc<Client>,
+    node: &NodeRef<'_>,
+) -> bool {
     // Check if this is a link_code_companion_reg notification
     let Some(reg_node) = node.get_optional_child_by_tag(&["link_code_companion_reg"]) else {
         return false;
@@ -234,10 +237,12 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Extract primary's wrapped ephemeral public key (80 bytes: salt + iv + encrypted key)
     let primary_wrapped_ephemeral = match reg_node
         .get_optional_child_by_tag(&["link_code_pairing_wrapped_primary_ephemeral_pub"])
-        .and_then(|n| n.content.as_ref())
-    {
-        Some(NodeContent::Bytes(b)) if b.len() == 80 => b.clone(),
-        _ => {
+        .and_then(|n| match n.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) if b.len() == 80 => Some(b.to_vec()),
+            _ => None,
+        }) {
+        Some(b) => b,
+        None => {
             warn!(
                 target: "Client/PairCode",
                 "Missing or invalid primary wrapped ephemeral pub in notification"
@@ -249,19 +254,12 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Extract primary's identity public key (32 bytes, unencrypted)
     let primary_identity_pub: [u8; 32] = match reg_node
         .get_optional_child_by_tag(&["primary_identity_pub"])
-        .and_then(|n| n.content.as_ref())
-    {
-        Some(NodeContent::Bytes(b)) if b.len() == 32 => match b.as_slice().try_into() {
-            Ok(arr) => arr,
-            Err(_) => {
-                warn!(
-                    target: "Client/PairCode",
-                    "Failed to convert primary identity pub to array"
-                );
-                return false;
-            }
-        },
-        _ => {
+        .and_then(|n| match n.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) if b.len() == 32 => b.as_ref().try_into().ok(),
+            _ => None,
+        }) {
+        Some(arr) => arr,
+        None => {
             warn!(
                 target: "Client/PairCode",
                 "Missing or invalid primary identity pub in notification"

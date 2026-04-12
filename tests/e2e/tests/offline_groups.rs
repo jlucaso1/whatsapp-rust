@@ -144,7 +144,7 @@ async fn test_mixed_offline_event_ordering() -> anyhow::Result<()> {
         let result = client_c
             .wait_for_event(10, |e| {
                 matches!(e, Event::Message(msg, _) if msg.conversation.is_some())
-                    || matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
+                    || matches!(e, Event::Notification(node) if node.get_attr("type").is_some_and(|v| v.as_str() == "w:gp2"))
             })
             .await;
 
@@ -433,7 +433,7 @@ async fn test_offline_multi_sender_group_messages() -> anyhow::Result<()> {
         let result = client_c
             .wait_for_event(timeout_secs, |e| {
                 matches!(e, Event::Message(msg, _) if msg.conversation.is_some())
-                    || matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
+                    || matches!(e, Event::Notification(node) if node.get_attr("type").is_some_and(|v| v.as_str() == "w:gp2"))
             })
             .await;
 

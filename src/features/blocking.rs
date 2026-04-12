@@ -8,7 +8,7 @@ use crate::request::IqError;
 use log::debug;
 pub use wacore::iq::blocklist::BlocklistEntry;
 use wacore::iq::blocklist::{GetBlocklistSpec, UpdateBlocklistSpec};
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 /// Feature handle for blocklist operations.
 pub struct Blocking<'a> {

@@ -5,6 +5,7 @@ use log::info;
 use std::sync::Arc;
 use wacore::store::traits::TcTokenEntry;
 use wacore::types::events::Event;
+use wacore_binary::OwnedNodeRef;
 use wacore_binary::node::Node;
 use whatsapp_rust::{NodeFilter, SendOptions};
 
@@ -27,7 +28,7 @@ async fn send_first_message_and_expect_463(
     recipient: &mut TestClient,
     recipient_jid: &whatsapp_rust::Jid,
     text: &str,
-) -> anyhow::Result<Arc<Node>> {
+) -> anyhow::Result<Arc<OwnedNodeRef>> {
     let msg_id = format!("E2E463{}", uuid::Uuid::new_v4().simple());
     send_message_and_expect_463_with_id(sender, recipient, recipient_jid, text, msg_id).await
 }
@@ -38,7 +39,7 @@ async fn send_message_and_expect_463_with_id(
     recipient_jid: &whatsapp_rust::Jid,
     text: &str,
     msg_id: String,
-) -> anyhow::Result<Arc<Node>> {
+) -> anyhow::Result<Arc<OwnedNodeRef>> {
     let waiter = sender.client.wait_for_node(
         NodeFilter::tag("ack")
             .attr("id", msg_id.clone())
@@ -65,9 +66,9 @@ async fn send_message_and_expect_463_with_id(
         .await
         .map_err(|_| anyhow::anyhow!("Timed out waiting for 463 nack"))?
         .map_err(|_| anyhow::anyhow!("463 nack waiter was canceled"))?;
-    assert_eq!(ack.tag, "ack");
+    assert_eq!(ack.get().tag.as_ref(), "ack");
     assert_eq!(
-        ack.attrs.get("error").map(|v| v.to_string()),
+        ack.get().get_attr("error").map(|v| v.as_str().into_owned()),
         Some("463".to_string())
     );
 

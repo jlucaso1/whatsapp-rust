@@ -18,9 +18,9 @@ use wacore::libsignal::protocol::{
 use wacore::libsignal::store::sender_key_name::SenderKeyName;
 use wacore::message_processing::EncType;
 use wacore::types::jid::JidExt;
-use wacore_binary::jid::Jid;
-use wacore_binary::jid::JidExt as _;
-use wacore_binary::node::Node;
+use wacore_binary::Jid;
+use wacore_binary::JidExt as _;
+use wacore_binary::{NodeRef, OwnedNodeRef};
 use waproto::whatsapp::{self as wa};
 
 /// Maximum retry attempts per message (matches WhatsApp Web's MAX_RETRY = 5).
@@ -59,7 +59,7 @@ impl Client {
 
     /// Handles a newsletter plaintext message.
     /// Newsletters are not E2E encrypted and use the <plaintext> tag directly.
-    async fn handle_newsletter_message(self: &Arc<Self>, node: &Node, info: &MessageInfo) {
+    async fn handle_newsletter_message(self: &Arc<Self>, node: &NodeRef<'_>, info: &MessageInfo) {
         let Some(plaintext_node) = node.get_optional_child_by_tag(&["plaintext"]) else {
             log::warn!(
                 "[msg:{}] Received newsletter message without <plaintext> child: {}",
@@ -69,8 +69,8 @@ impl Client {
             return;
         };
 
-        if let Some(wacore_binary::node::NodeContent::Bytes(bytes)) = &plaintext_node.content {
-            match wa::Message::decode(bytes.as_slice()) {
+        if let Some(bytes) = plaintext_node.content_bytes() {
+            match wa::Message::decode(bytes) {
                 Ok(msg) => {
                     log::info!(
                         "[msg:{}] Received newsletter plaintext message from {}",
@@ -252,12 +252,13 @@ impl Client {
         })).detach();
     }
 
-    pub(crate) async fn handle_incoming_message(self: Arc<Self>, node: Arc<Node>) {
-        let info = match self.parse_message_info(&node).await {
+    pub(crate) async fn handle_incoming_message(self: Arc<Self>, node: Arc<OwnedNodeRef>) {
+        let nr = node.get();
+        let info = match self.parse_message_info(nr).await {
             Ok(info) => Arc::new(info),
             Err(e) => {
-                let id = node.attrs.get("id").map(|v| v.as_str());
-                let from = node.attrs.get("from").map(|v| v.as_str());
+                let id = nr.get_attr("id").map(|v| v.as_str());
+                let from = nr.get_attr("from").map(|v| v.as_str());
                 log::warn!("Failed to parse message info (id={id:?}, from={from:?}): {e:?}");
                 return;
             }
@@ -265,7 +266,7 @@ impl Client {
 
         // Newsletters use <plaintext> instead of <enc> because they are not E2E encrypted.
         if info.source.chat.is_newsletter() {
-            self.handle_newsletter_message(&node, &info).await;
+            self.handle_newsletter_message(nr, &info).await;
             return;
         }
 
@@ -274,14 +275,14 @@ impl Client {
             .await;
         let sender_encryption_jid = self.resolve_encryption_jid(&info.source.sender).await;
 
-        let unavailable_node = node.get_optional_child("unavailable");
+        let unavailable_node = nr.get_optional_child("unavailable");
 
-        let mut all_enc_nodes = Vec::new();
+        let mut all_enc_nodes: Vec<&NodeRef<'_>> = Vec::new();
 
-        let direct_enc_nodes = node.get_children_by_tag("enc");
+        let direct_enc_nodes = nr.get_children_by_tag("enc");
         all_enc_nodes.extend(direct_enc_nodes);
 
-        let participants = node.get_optional_child_by_tag(&["participants"]);
+        let participants = nr.get_optional_child_by_tag(&["participants"]);
         if let Some(participants_node) = participants {
             let own_jid = self.get_pn().await;
             let to_nodes = participants_node.get_children_by_tag("to");
@@ -301,17 +302,17 @@ impl Client {
             log::warn!(
                 "[msg:{}] Received non-newsletter message without <enc> child: {}",
                 info.id,
-                node.tag
+                nr.tag
             );
             return;
         }
 
         if let Some(unavailable) = unavailable_node {
-            let unavailable_type =
-                match unavailable.attrs.get("type").map(|v| v.as_str()).as_deref() {
-                    Some("view_once") => crate::types::events::UnavailableType::ViewOnce,
-                    _ => crate::types::events::UnavailableType::Unknown,
-                };
+            let unavailable_type = match unavailable.get_attr("type").map(|v| v.as_str()).as_deref()
+            {
+                Some("view_once") => crate::types::events::UnavailableType::ViewOnce,
+                _ => crate::types::events::UnavailableType::Unknown,
+            };
             log::warn!(
                 "[msg:{}] Message has <unavailable> child (type: {:?}), requesting from phone via PDO",
                 info.id,
@@ -335,7 +336,7 @@ impl Client {
         let mut max_sender_retry_count: u8 = 0;
         let mut has_hide_fail = false;
 
-        for &enc_node in &all_enc_nodes {
+        for enc_node in &all_enc_nodes {
             // Parse sender retry count (WA Web: e.maybeAttrInt("count") ?? 0)
             // Clamp to MAX_DECRYPT_RETRIES to prevent u64→u8 truncation on unexpected values.
             let sender_count = enc_node
@@ -347,9 +348,9 @@ impl Client {
 
             // Parse decrypt-fail attribute (WA Web: e.maybeAttrString("decrypt-fail") === "hide")
             if enc_node
-                .attrs
-                .get("decrypt-fail")
-                .is_some_and(|v| v == "hide")
+                .get_attr("decrypt-fail")
+                .map(|v| v.as_str())
+                .is_some_and(|s| s == "hide")
             {
                 has_hide_fail = true;
             }
@@ -372,13 +373,14 @@ impl Client {
                 let handler_clone = handler;
                 let client_clone = self.clone();
                 let info_arc = Arc::clone(&info);
-                let enc_node_clone = Arc::new(enc_node.clone());
+                // Custom enc handlers take &Node (public API); convert from NodeRef here.
+                let enc_node_owned = (*enc_node).to_owned();
                 let enc_type_owned = enc_type.to_string();
 
                 self.runtime
                     .spawn(Box::pin(async move {
                         if let Err(e) = handler_clone
-                            .handle(client_clone, &enc_node_clone, &info_arc)
+                            .handle(client_clone, &enc_node_owned, &info_arc)
                             .await
                         {
                             log::warn!(
@@ -393,8 +395,8 @@ impl Client {
 
             // Fall back to built-in handlers
             match EncType::from_wire(enc_type.as_ref()) {
-                Some(et) if et.is_session() => session_enc_nodes.push(enc_node),
-                Some(EncType::SenderKey) => group_content_enc_nodes.push(enc_node),
+                Some(et) if et.is_session() => session_enc_nodes.push(*enc_node),
+                Some(EncType::SenderKey) => group_content_enc_nodes.push(*enc_node),
                 _ => log::warn!("Unknown enc type: {enc_type}"),
             }
         }
@@ -405,9 +407,9 @@ impl Client {
         if !session_enc_nodes.is_empty()
             && !group_content_enc_nodes.is_empty()
             && all_enc_nodes.first().is_some_and(|n| {
-                n.attrs
-                    .get("type")
-                    .is_some_and(|v| v == EncType::SenderKey.as_wire_str())
+                n.get_attr("type")
+                    .map(|v| v.as_str())
+                    .is_some_and(|s| s == EncType::SenderKey.as_wire_str())
             })
         {
             log::error!(
@@ -598,9 +600,9 @@ impl Client {
             .await;
     }
 
-    async fn process_session_enc_batch(
+    async fn process_session_enc_batch<'n>(
         self: Arc<Self>,
-        enc_nodes: &[&wacore_binary::node::Node],
+        enc_nodes: &[&'n NodeRef<'n>],
         info: &MessageInfo,
         sender_encryption_jid: &Jid,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
@@ -627,9 +629,9 @@ impl Client {
         let mut dispatched_undecryptable = false;
 
         for enc_node in enc_nodes {
-            let ciphertext: &[u8] = match &enc_node.content {
-                Some(wacore_binary::node::NodeContent::Bytes(b)) => b,
-                _ => {
+            let ciphertext: &[u8] = match enc_node.content_bytes() {
+                Some(b) => b,
+                None => {
                     log::warn!("Enc node has no byte content (batch session)");
                     continue;
                 }
@@ -988,9 +990,9 @@ impl Client {
         (any_success, any_duplicate, dispatched_undecryptable)
     }
 
-    async fn process_group_enc_batch(
+    async fn process_group_enc_batch<'n>(
         self: Arc<Self>,
-        enc_nodes: &[&wacore_binary::node::Node],
+        enc_nodes: &[&'n NodeRef<'n>],
         info: &MessageInfo,
         _sender_encryption_jid: &Jid,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
@@ -1003,9 +1005,9 @@ impl Client {
         let mut adapter = self.signal_adapter().await;
 
         for enc_node in enc_nodes {
-            let ciphertext: &[u8] = match &enc_node.content {
-                Some(wacore_binary::node::NodeContent::Bytes(b)) => b,
-                _ => {
+            let ciphertext: &[u8] = match enc_node.content_bytes() {
+                Some(b) => b,
+                None => {
                     log::warn!("Enc node has no byte content (batch group)");
                     continue;
                 }
@@ -1304,12 +1306,9 @@ impl Client {
 
     /// Cache LID-PN mapping from message attributes (before resolve_encryption_jid).
     async fn cache_lid_pn_from_message(&self, sender: &Jid, alt: Option<&Jid>) {
-        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
-        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
-
-        let (lid_user, pn_user, source) = if sender.server == lid_server {
+        let (lid_user, pn_user, source) = if sender.is_lid() {
             if let Some(alt_jid) = alt
-                && alt_jid.server == pn_server
+                && alt_jid.is_pn()
             {
                 (
                     &sender.user,
@@ -1319,9 +1318,9 @@ impl Client {
             } else {
                 return;
             }
-        } else if sender.server == pn_server {
+        } else if sender.is_pn() {
             if let Some(alt_jid) = alt
-                && alt_jid.server == lid_server
+                && alt_jid.is_lid()
             {
                 (
                     &alt_jid.user,
@@ -1345,7 +1344,7 @@ impl Client {
 
     pub(crate) async fn parse_message_info(
         &self,
-        node: &Node,
+        node: &wacore_binary::NodeRef<'_>,
     ) -> Result<MessageInfo, anyhow::Error> {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let default_jid = Jid::default();
@@ -1569,7 +1568,11 @@ mod tests {
     use crate::types::message::EditAttribute;
     use std::sync::Arc;
     use wacore_binary::builder::NodeBuilder;
-    use wacore_binary::jid::{Jid, SERVER_JID};
+
+    fn node_to_arc(node: wacore_binary::Node) -> Arc<OwnedNodeRef> {
+        crate::test_utils::node_to_owned_ref(&node)
+    }
+    use wacore_binary::{Jid, SERVER_JID};
 
     fn mock_transport() -> Arc<dyn crate::transport::TransportFactory> {
         Arc::new(crate::transport::mock::MockTransportFactory::new())
@@ -1612,7 +1615,7 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&node)
+            .parse_message_info(&node.as_node_ref())
             .await
             .expect("parse_message_info should not fail");
 
@@ -1696,7 +1699,8 @@ mod tests {
             .attr("type", "msg")
             .bytes(signal_message.serialized().to_vec())
             .build();
-        let enc_nodes = vec![&enc_node];
+        let enc_node_ref = enc_node.as_node_ref();
+        let enc_nodes = vec![&enc_node_ref];
 
         // With SessionNotFound, should return (false, false, true) - no success, no dupe, dispatched event
         let (success, had_duplicates, dispatched) = client
@@ -1784,7 +1788,8 @@ mod tests {
             .attr("type", "msg")
             .bytes(signal_message.serialized().to_vec())
             .build();
-        let enc_nodes = vec![&enc_node];
+        let enc_node_ref = enc_node.as_node_ref();
+        let enc_nodes = vec![&enc_node_ref];
 
         let (success, had_duplicates, dispatched) = client
             .clone()
@@ -1884,7 +1889,7 @@ mod tests {
             .bytes(vec![4, 5, 6])
             .build();
 
-        let message_node = Arc::new(
+        let message_node = node_to_arc(
             NodeBuilder::new("message")
                 .attr("from", group_jid)
                 .attr("participant", sender_jid)
@@ -2129,7 +2134,7 @@ mod tests {
     /// - LID without device numbers
     #[test]
     fn test_lid_jid_parsing_edge_cases() {
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         // Single dot in user portion
         let lid1: Jid = "100000000000001.1:75@lid"
@@ -2172,7 +2177,7 @@ mod tests {
     #[test]
     fn test_lid_protocol_address_consistency() {
         use wacore::types::jid::JidExt as CoreJidExt;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         // Format: (jid_str, expected_name, expected_device_id, expected_to_string)
         let test_cases = vec![
@@ -2283,7 +2288,7 @@ mod tests {
             .build();
 
         let info1 = client
-            .parse_message_info(&lid_group_node)
+            .parse_message_info(&lid_group_node.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
         assert_eq!(info1.source.sender.user, "987654321000000.2");
@@ -2309,7 +2314,7 @@ mod tests {
             .build();
 
         let info2 = client
-            .parse_message_info(&self_lid_node)
+            .parse_message_info(&self_lid_node.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
         assert!(
@@ -2338,7 +2343,7 @@ mod tests {
         use std::collections::HashMap;
         use wacore::client::context::GroupInfo;
         use wacore::types::message::AddressingMode;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         // Simulate a LID group with phone number mappings
         let mut lid_to_pn_map = HashMap::new();
@@ -2406,7 +2411,7 @@ mod tests {
         use std::collections::HashMap;
         use wacore::client::context::GroupInfo;
         use wacore::types::message::AddressingMode;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         let mut lid_to_pn_map = HashMap::new();
         lid_to_pn_map.insert(
@@ -2457,7 +2462,7 @@ mod tests {
     #[test]
     fn test_own_jid_check_in_lid_mode() {
         use std::collections::HashMap;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         let own_lid: Jid = "100000000000001.1@lid"
             .parse()
@@ -2656,7 +2661,7 @@ mod tests {
             .bytes(skmsg_ciphertext)
             .build();
 
-        let message_node = Arc::new(
+        let message_node = node_to_arc(
             NodeBuilder::new("message")
                 .attr("from", group_jid)
                 .attr("participant", sender_jid)
@@ -2738,7 +2743,8 @@ mod tests {
             .bytes(vec![0xFF; 100]) // Invalid encrypted payload
             .build();
 
-        let enc_nodes = vec![&enc_node];
+        let enc_node_ref = enc_node.as_node_ref();
+        let enc_nodes = vec![&enc_node_ref];
 
         // Call process_session_enc_batch
         // This should handle any errors gracefully without panicking
@@ -2824,7 +2830,8 @@ mod tests {
 
         log::info!("Test: Created batch of 2 messages with invalid data");
 
-        let enc_node_refs: Vec<&wacore_binary::node::Node> = enc_nodes.iter().collect();
+        let enc_node_refs_owned: Vec<_> = enc_nodes.iter().map(|n| n.as_node_ref()).collect();
+        let enc_node_refs: Vec<&NodeRef<'_>> = enc_node_refs_owned.iter().collect();
 
         // Process the batch
         // Should handle all errors gracefully without stopping at first error
@@ -2895,7 +2902,8 @@ mod tests {
             .bytes(vec![0xFF; 100])
             .build();
 
-        let enc_nodes = vec![&enc_node];
+        let enc_node_ref = enc_node.as_node_ref();
+        let enc_nodes = vec![&enc_node_ref];
 
         // Process the message
         // Should handle errors gracefully in group context
@@ -2978,7 +2986,7 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&self_dm_node)
+            .parse_message_info(&self_dm_node.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
 
@@ -3075,7 +3083,7 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&other_dm_node)
+            .parse_message_info(&other_dm_node.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
 
@@ -3171,7 +3179,7 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&self_chat_node)
+            .parse_message_info(&self_chat_node.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
 
@@ -3262,7 +3270,7 @@ mod tests {
         // but it should still populate the cache before attempting decryption
         client
             .clone()
-            .handle_incoming_message(Arc::new(dm_node))
+            .handle_incoming_message(node_to_arc(dm_node))
             .await;
 
         // Verify the cache was populated
@@ -3322,7 +3330,7 @@ mod tests {
         // Call handle_incoming_message
         client
             .clone()
-            .handle_incoming_message(Arc::new(dm_node))
+            .handle_incoming_message(node_to_arc(dm_node))
             .await;
 
         assert!(
@@ -3384,7 +3392,7 @@ mod tests {
         // Call handle_incoming_message
         client
             .clone()
-            .handle_incoming_message(Arc::new(group_node))
+            .handle_incoming_message(node_to_arc(group_node))
             .await;
 
         // Verify the cache WAS populated (bidirectional cache)
@@ -3454,7 +3462,7 @@ mod tests {
 
             client
                 .clone()
-                .handle_incoming_message(Arc::new(dm_node))
+                .handle_incoming_message(node_to_arc(dm_node))
                 .await;
         }
 
@@ -3540,13 +3548,13 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&dm_node_with_sender_lid)
+            .parse_message_info(&dm_node_with_sender_lid.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
 
         // Verify sender is PN but sender_alt is LID
         assert_eq!(info.source.sender.user, phone);
-        assert_eq!(info.source.sender.server, "s.whatsapp.net");
+        assert_eq!(info.source.sender.server, wacore_binary::Server::Pn);
         assert!(info.source.sender_alt.is_some());
         assert_eq!(
             info.source
@@ -3562,27 +3570,24 @@ mod tests {
                 .as_ref()
                 .expect("sender_alt should be present")
                 .server,
-            "lid"
+            wacore_binary::Server::Lid
         );
 
         // Now simulate what handle_incoming_message does: determine encryption JID
         // We can't easily call handle_incoming_message, so we'll test the logic directly
         let sender = &info.source.sender;
         let alt = info.source.sender_alt.as_ref();
-        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
-        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
-
         // Apply the same logic as in handle_incoming_message
-        let sender_encryption_jid = if sender.server == lid_server {
+        let sender_encryption_jid = if sender.is_lid() {
             sender.clone()
-        } else if sender.server == pn_server {
+        } else if sender.is_pn() {
             if let Some(alt_jid) = alt
-                && alt_jid.server == lid_server
+                && alt_jid.is_lid()
             {
                 // Use the LID from the message attribute
                 Jid {
                     user: alt_jid.user.clone(),
-                    server: wacore_binary::jid::cow_server_from_str(lid_server),
+                    server: wacore_binary::Server::Lid,
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3591,7 +3596,7 @@ mod tests {
                 // Use the cached LID
                 Jid {
                     user: lid_user.into(),
-                    server: wacore_binary::jid::cow_server_from_str(lid_server),
+                    server: wacore_binary::Server::Lid,
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3609,7 +3614,8 @@ mod tests {
             "Encryption JID should use LID user"
         );
         assert_eq!(
-            sender_encryption_jid.server, "lid",
+            sender_encryption_jid.server,
+            wacore_binary::Server::Lid,
             "Encryption JID should use LID server"
         );
 
@@ -3673,13 +3679,13 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&dm_node_without_sender_lid)
+            .parse_message_info(&dm_node_without_sender_lid.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
 
         // Verify sender is PN and NO sender_alt (since there's no sender_lid attribute)
         assert_eq!(info.source.sender.user, phone);
-        assert_eq!(info.source.sender.server, "s.whatsapp.net");
+        assert_eq!(info.source.sender.server, wacore_binary::Server::Pn);
         assert!(
             info.source.sender_alt.is_none(),
             "Should have no sender_alt without sender_lid attribute"
@@ -3688,18 +3694,15 @@ mod tests {
         // Apply the encryption JID logic (fallback to cached LID)
         let sender = &info.source.sender;
         let alt = info.source.sender_alt.as_ref();
-        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
-        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
-
-        let sender_encryption_jid = if sender.server == lid_server {
+        let sender_encryption_jid = if sender.is_lid() {
             sender.clone()
-        } else if sender.server == pn_server {
+        } else if sender.is_pn() {
             if let Some(alt_jid) = alt
-                && alt_jid.server == lid_server
+                && alt_jid.is_lid()
             {
                 Jid {
                     user: alt_jid.user.clone(),
-                    server: wacore_binary::jid::cow_server_from_str(lid_server),
+                    server: wacore_binary::Server::Lid,
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3708,7 +3711,7 @@ mod tests {
                 // This is the path we're testing - fallback to cached LID
                 Jid {
                     user: lid_user.into(),
-                    server: wacore_binary::jid::cow_server_from_str(lid_server),
+                    server: wacore_binary::Server::Lid,
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3726,7 +3729,8 @@ mod tests {
             "Encryption JID should use cached LID user"
         );
         assert_eq!(
-            sender_encryption_jid.server, "lid",
+            sender_encryption_jid.server,
+            wacore_binary::Server::Lid,
             "Encryption JID should use LID server"
         );
 
@@ -3780,7 +3784,7 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&dm_node)
+            .parse_message_info(&dm_node.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
 
@@ -3791,18 +3795,16 @@ mod tests {
         // Apply the encryption JID logic
         let sender = &info.source.sender;
         let alt = info.source.sender_alt.as_ref();
-        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
-        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
 
-        let sender_encryption_jid = if sender.server == lid_server {
+        let sender_encryption_jid = if sender.is_lid() {
             sender.clone()
-        } else if sender.server == pn_server {
+        } else if sender.is_pn() {
             if let Some(alt_jid) = alt
-                && alt_jid.server == lid_server
+                && alt_jid.is_lid()
             {
                 Jid {
                     user: alt_jid.user.clone(),
-                    server: wacore_binary::jid::cow_server_from_str(lid_server),
+                    server: wacore_binary::Server::Lid,
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3810,7 +3812,7 @@ mod tests {
             } else if let Some(lid_user) = client.lid_pn_cache.get_current_lid(&sender.user).await {
                 Jid {
                     user: lid_user.into(),
-                    server: wacore_binary::jid::cow_server_from_str(lid_server),
+                    server: wacore_binary::Server::Lid,
                     device: sender.device,
                     agent: sender.agent,
                     integrator: sender.integrator,
@@ -3829,7 +3831,8 @@ mod tests {
             "Encryption JID should use PN user when no LID mapping"
         );
         assert_eq!(
-            sender_encryption_jid.server, "s.whatsapp.net",
+            sender_encryption_jid.server,
+            wacore_binary::Server::Pn,
             "Encryption JID should use PN server when no LID mapping"
         );
 
@@ -4277,7 +4280,7 @@ mod tests {
     /// Test: Verify JID type detection for status broadcasts, broadcast lists, groups, and users.
     #[test]
     fn test_status_broadcast_jid_detection() {
-        use wacore_binary::jid::{Jid, JidExt};
+        use wacore_binary::{Jid, JidExt};
 
         let status_jid: Jid = "status@broadcast".parse().expect("status JID should parse");
         assert!(status_jid.is_status_broadcast());
@@ -4374,7 +4377,7 @@ mod tests {
             .attr("type", "text")
             .build();
 
-        let result = client.parse_message_info(&node).await;
+        let result = client.parse_message_info(&node.as_node_ref()).await;
 
         assert!(
             result.is_err(),
@@ -4396,8 +4399,8 @@ mod tests {
 
         use crate::store::SqliteStore;
         use crate::store::persistence_manager::PersistenceManager;
+        use wacore_binary::NodeContent;
         use wacore_binary::builder::NodeBuilder;
-        use wacore_binary::node::NodeContent;
 
         let backend = Arc::new(
             SqliteStore::new("file:memdb_retry_immediate?mode=memory&cache=shared")
@@ -4441,7 +4444,10 @@ mod tests {
             }])
             .build();
 
-        client.clone().handle_incoming_message(Arc::new(node)).await;
+        client
+            .clone()
+            .handle_incoming_message(node_to_arc(node))
+            .await;
 
         // spawn_retry_receipt runs in a spawned task, wait for it
         let retry_key = client
@@ -4656,7 +4662,7 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&node)
+            .parse_message_info(&node.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
 
@@ -4681,7 +4687,7 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&node)
+            .parse_message_info(&node.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
 
@@ -4705,7 +4711,7 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&node)
+            .parse_message_info(&node.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
 
@@ -4728,7 +4734,7 @@ mod tests {
             .build();
 
         let info = client
-            .parse_message_info(&node)
+            .parse_message_info(&node.as_node_ref())
             .await
             .expect("parse_message_info should succeed");
 

@@ -345,7 +345,7 @@ impl TestClient {
         timeout_secs: u64,
     ) -> anyhow::Result<Event> {
         self.wait_for_event(timeout_secs, |e| {
-            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
+            matches!(e, Event::Notification(node) if node.get().get_attr("type").is_some_and(|v| v.as_str() == "w:gp2"))
         })
         .await
     }

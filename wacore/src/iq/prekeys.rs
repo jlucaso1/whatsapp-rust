@@ -44,25 +44,25 @@ use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{Node, NodeContent, NodeContentRef, NodeRef};
 
 // Re-export PreKeyBundle for convenience
 pub use crate::libsignal::protocol::{PreKeyBundle, PublicKey};
 
-/// Extract binary content from an optional node as `Vec<u8>`.
-fn extract_content_bytes(node: Option<&Node>) -> Vec<u8> {
-    node.and_then(|n| match &n.content {
-        Some(NodeContent::Bytes(b)) => Some(b.clone()),
+/// Extract binary content from an optional `NodeRef` as `Vec<u8>`.
+fn extract_content_bytes(node: Option<&NodeRef<'_>>) -> Vec<u8> {
+    node.and_then(|n| match n.content.as_deref() {
+        Some(NodeContentRef::Bytes(b)) => Some(b.to_vec()),
         _ => None,
     })
     .unwrap_or_default()
 }
 
-/// Extract binary content from an optional node as a big-endian unsigned integer.
-fn extract_content_uint(node: Option<&Node>) -> u32 {
-    node.and_then(|n| match &n.content {
-        Some(NodeContent::Bytes(b)) => {
+/// Extract binary content from an optional `NodeRef` as a big-endian unsigned integer.
+fn extract_content_uint(node: Option<&NodeRef<'_>>) -> u32 {
+    node.and_then(|n| match n.content.as_deref() {
+        Some(NodeContentRef::Bytes(b)) => {
             let mut buf = [0u8; 4];
             let len = b.len().min(4);
             buf[4 - len..].copy_from_slice(&b[..len]);
@@ -97,12 +97,12 @@ impl IqSpec for PreKeyCountSpec {
 
         InfoQuery::get(
             "encrypt",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![count_node])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let count_node = response
             .get_optional_child("count")
             .ok_or_else(|| anyhow!("Missing <count> node in response"))?;
@@ -158,12 +158,12 @@ impl IqSpec for PreKeyFetchSpec {
 
         InfoQuery::get(
             "encrypt",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![content])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         PreKeyUtils::parse_prekeys_response(response)
     }
 }
@@ -238,12 +238,12 @@ impl IqSpec for DigestKeyBundleSpec {
 
         InfoQuery::get(
             "encrypt",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![digest_node])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let digest_node = response
             .get_optional_child("digest")
             .ok_or_else(|| anyhow::anyhow!("missing <digest> child in response"))?;
@@ -253,8 +253,8 @@ impl IqSpec for DigestKeyBundleSpec {
         let reg_id = extract_content_uint(Some(reg_node));
 
         let identity_node = required_child(digest_node, "identity")?;
-        let identity = match &identity_node.content {
-            Some(NodeContent::Bytes(b)) if !b.is_empty() => b.clone(),
+        let identity = match identity_node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) if !b.is_empty() => b.to_vec(),
             _ => return Err(anyhow!("missing or empty bytes in <identity>")),
         };
 
@@ -284,8 +284,8 @@ impl IqSpec for DigestKeyBundleSpec {
             .unwrap_or_default();
 
         let hash_node = required_child(digest_node, "hash")?;
-        let hash = match &hash_node.content {
-            Some(NodeContent::Bytes(b)) if !b.is_empty() => b.clone(),
+        let hash = match hash_node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) if !b.is_empty() => b.to_vec(),
             _ => return Err(anyhow!("missing or empty bytes in <hash>")),
         };
 
@@ -383,12 +383,12 @@ impl IqSpec for PreKeyUploadSpec {
 
         InfoQuery::set(
             "encrypt",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(content)),
         )
     }
 
-    fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, _response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         // Pre-key upload just needs a successful response
         Ok(())
     }
@@ -461,44 +461,32 @@ impl ProtocolNode for SignedPreKeyNode {
             .build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         if node.tag != "skey" {
             return Err(anyhow!("expected <skey>, got <{}>", node.tag));
         }
 
         let id_node = required_child(node, "id")?;
-        let id_bytes = id_node
-            .content
-            .as_ref()
-            .and_then(|c| match c {
-                NodeContent::Bytes(b) => Some(b),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow!("missing bytes in <id>"))?;
+        let id_bytes = match id_node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) => b,
+            _ => return Err(anyhow!("missing bytes in <id>")),
+        };
         let id = expand_from_3bytes(id_bytes)?;
 
         let value_node = required_child(node, "value")?;
-        let public_bytes = value_node
-            .content
-            .as_ref()
-            .and_then(|c| match c {
-                NodeContent::Bytes(b) => Some(b.clone()),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow!("missing bytes in <value>"))?;
+        let public_bytes = match value_node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) => b.to_vec(),
+            _ => return Err(anyhow!("missing bytes in <value>")),
+        };
         if public_bytes.len() != 32 {
             return Err(anyhow!("signed prekey public key must be 32 bytes"));
         }
 
         let sig_node = required_child(node, "signature")?;
-        let signature = sig_node
-            .content
-            .as_ref()
-            .and_then(|c| match c {
-                NodeContent::Bytes(b) => Some(b.clone()),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow!("missing bytes in <signature>"))?;
+        let signature = match sig_node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) => b.to_vec(),
+            _ => return Err(anyhow!("missing bytes in <signature>")),
+        };
         if signature.len() != 64 {
             return Err(anyhow!("signed prekey signature must be 64 bytes"));
         }
@@ -548,31 +536,23 @@ impl ProtocolNode for OneTimePreKeyNode {
             .build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         if node.tag != "key" {
             return Err(anyhow!("expected <key>, got <{}>", node.tag));
         }
 
         let id_node = required_child(node, "id")?;
-        let id_bytes = id_node
-            .content
-            .as_ref()
-            .and_then(|c| match c {
-                NodeContent::Bytes(b) => Some(b),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow!("missing bytes in <id>"))?;
+        let id_bytes = match id_node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) => b,
+            _ => return Err(anyhow!("missing bytes in <id>")),
+        };
         let id = expand_from_3bytes(id_bytes)?;
 
         let value_node = required_child(node, "value")?;
-        let public_bytes = value_node
-            .content
-            .as_ref()
-            .and_then(|c| match c {
-                NodeContent::Bytes(b) => Some(b.clone()),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow!("missing bytes in <value>"))?;
+        let public_bytes = match value_node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) => b.to_vec(),
+            _ => return Err(anyhow!("missing bytes in <value>")),
+        };
         if public_bytes.len() != 32 {
             return Err(anyhow!("one-time prekey public key must be 32 bytes"));
         }
@@ -698,7 +678,7 @@ impl ProtocolNode for PreKeyBundleUserNode {
             .build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         if node.tag != "user" {
             return Err(anyhow!("expected <user>, got <{}>", node.tag));
         }
@@ -710,14 +690,10 @@ impl ProtocolNode for PreKeyBundleUserNode {
 
         // Parse registration ID (4 bytes big-endian)
         let reg_node = required_child(node, "registration")?;
-        let reg_bytes = reg_node
-            .content
-            .as_ref()
-            .and_then(|c| match c {
-                NodeContent::Bytes(b) => Some(b),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow!("missing bytes in <registration>"))?;
+        let reg_bytes = match reg_node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) => b,
+            _ => return Err(anyhow!("missing bytes in <registration>")),
+        };
         if reg_bytes.len() != 4 {
             return Err(anyhow!("registration ID must be 4 bytes"));
         }
@@ -726,32 +702,28 @@ impl ProtocolNode for PreKeyBundleUserNode {
 
         // Parse identity key (32 bytes)
         let identity_node = required_child(node, "identity")?;
-        let identity_key = identity_node
-            .content
-            .as_ref()
-            .and_then(|c| match c {
-                NodeContent::Bytes(b) => Some(b.clone()),
-                _ => None,
-            })
-            .ok_or_else(|| anyhow!("missing bytes in <identity>"))?;
+        let identity_key = match identity_node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) => b.to_vec(),
+            _ => return Err(anyhow!("missing bytes in <identity>")),
+        };
         if identity_key.len() != 32 {
             return Err(anyhow!("identity key must be 32 bytes"));
         }
 
         // Parse signed prekey
         let skey_node = required_child(node, "skey")?;
-        let signed_pre_key = SignedPreKeyNode::try_from_node(skey_node)?;
+        let signed_pre_key = SignedPreKeyNode::try_from_node_ref(skey_node)?;
 
         // Parse optional one-time prekey
         let one_time_pre_key = match node.get_optional_child("key") {
-            Some(n) => Some(OneTimePreKeyNode::try_from_node(n)?),
+            Some(n) => Some(OneTimePreKeyNode::try_from_node_ref(n)?),
             None => None,
         };
 
         // Parse optional device identity
         let device_identity = match node.get_optional_child("device-identity") {
-            Some(n) => match &n.content {
-                Some(NodeContent::Bytes(b)) => Some(b.clone()),
+            Some(n) => match n.content.as_deref() {
+                Some(NodeContentRef::Bytes(b)) => Some(b.to_vec()),
                 _ => return Err(anyhow!("device-identity must be bytes")),
             },
             None => None,
@@ -797,7 +769,7 @@ mod tests {
             .children([NodeBuilder::new("count").attr("value", "42").build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.count, 42);
     }
 
@@ -810,7 +782,7 @@ mod tests {
             .children([NodeBuilder::new("count").build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.count, 0); // Default to 0 if missing
     }
 
@@ -890,7 +862,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.reg_id, 12345);
         assert_eq!(result.identity, vec![0x01; 32]);
         assert_eq!(result.skey_id, 1);
@@ -907,7 +879,7 @@ mod tests {
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
         // Missing <digest> child should error
-        assert!(spec.parse_response(&response).is_err());
+        assert!(spec.parse_response(&response.as_node_ref()).is_err());
     }
 
     #[test]
@@ -957,7 +929,7 @@ mod tests {
 
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
-        let result = spec.parse_response(&response);
+        let result = spec.parse_response(&response.as_node_ref());
         assert!(result.is_ok());
     }
 

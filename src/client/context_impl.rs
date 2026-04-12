@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use wacore::client::context::{GroupInfo, SendContextResolver};
 use wacore::iq::prekeys::PreKeyFetchReason;
 use wacore::libsignal::protocol::PreKeyBundle;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]

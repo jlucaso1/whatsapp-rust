@@ -5,13 +5,13 @@ use log::debug;
 use std::sync::Arc;
 use wacore::types::message::MessageCategory;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, JidExt as _};
+use wacore_binary::{Jid, JidExt as _};
 
-use wacore_binary::node::Node;
+use wacore_binary::OwnedNodeRef;
 
 impl Client {
     fn should_send_delivery_receipt(info: &crate::types::message::MessageInfo) -> bool {
-        use wacore_binary::jid::STATUS_BROADCAST_USER;
+        use wacore_binary::STATUS_BROADCAST_USER;
 
         if info.id.is_empty()
             || info.source.chat.user == STATUS_BROADCAST_USER
@@ -27,8 +27,9 @@ impl Client {
         info.category == MessageCategory::Peer || !info.source.is_from_me
     }
 
-    pub(crate) async fn handle_receipt(self: &Arc<Self>, node: Arc<Node>) {
-        let mut attrs = node.attrs();
+    pub(crate) async fn handle_receipt(self: &Arc<Self>, node: Arc<OwnedNodeRef>) {
+        let nr = node.get();
+        let mut attrs = nr.attrs();
         let from = attrs.jid("from");
         let id = match attrs.optional_string("id") {
             Some(id) => id.to_string(),
@@ -65,7 +66,6 @@ impl Client {
 
         if receipt_type == ReceiptType::Retry {
             let client_clone = Arc::clone(self);
-            // Arc clone is cheap - just reference count increment
             let node_clone = Arc::clone(&node);
             self.runtime
                 .spawn(Box::pin(async move {
@@ -88,21 +88,21 @@ impl Client {
             // Since we don't have a VoIP stack yet, log and dispatch as a
             // Receipt event so consumers can observe it. When VoIP is
             // implemented (#345), this will route to the VoIP re-key handler.
-            if let Some(child) = node.get_optional_child("enc_rekey") {
-                let mut attrs = child.attrs();
+            if let Some(child) = nr.get_optional_child("enc_rekey") {
+                let mut child_attrs = child.attrs();
                 log::debug!(
                     "Received enc_rekey_retry receipt for call-id={} from {} \
                      (call-creator={}, count={}). VoIP not implemented, forwarding as event.",
-                    attrs
+                    child_attrs
                         .optional_string("call-id")
                         .as_deref()
                         .unwrap_or_default(),
                     from,
-                    attrs
+                    child_attrs
                         .optional_string("call-creator")
                         .as_deref()
                         .unwrap_or_default(),
-                    attrs
+                    child_attrs
                         .optional_string("count")
                         .and_then(|s| s.parse::<u8>().ok())
                         .unwrap_or(1),
@@ -183,7 +183,7 @@ impl Client {
 
         // Additional message IDs go into <list><item id="..."/></list>
         if message_ids.len() > 1 {
-            let items: Vec<wacore_binary::node::Node> = message_ids[1..]
+            let items: Vec<wacore_binary::Node> = message_ids[1..]
                 .iter()
                 .map(|id| NodeBuilder::new("item").attr("id", id).build())
                 .collect();
@@ -208,6 +208,10 @@ mod tests {
     use crate::types::message::{MessageInfo, MessageSource};
     use std::sync::Mutex;
     use wacore::types::events::EventHandler;
+
+    fn node_to_arc(node: wacore_binary::Node) -> Arc<OwnedNodeRef> {
+        crate::test_utils::node_to_owned_ref(&node)
+    }
 
     #[derive(Default)]
     struct TestEventCollector {
@@ -506,7 +510,7 @@ mod tests {
         let (client, collector) = setup_client_with_collector().await;
 
         // Build an enc_rekey_retry receipt node matching WA Web structure
-        let node = Arc::new(
+        let node = node_to_arc(
             NodeBuilder::new("receipt")
                 .attr("from", "5511999999999@s.whatsapp.net")
                 .attr("id", "3EB0AABBCCDD")
@@ -555,7 +559,7 @@ mod tests {
         let (client, collector) = setup_client_with_collector().await;
 
         // Malformed: no <enc_rekey> child
-        let node = Arc::new(
+        let node = node_to_arc(
             NodeBuilder::new("receipt")
                 .attr("from", "5511999999999@s.whatsapp.net")
                 .attr("id", "3EB0AABBCCDD")
@@ -611,7 +615,7 @@ mod tests {
     /// ensuring the NodeValue::Jid optimization is not accidentally regressed to to_string.
     #[test]
     fn test_receipt_node_uses_jid_attrs() {
-        use wacore_binary::node::NodeValue;
+        use wacore_binary::NodeValue;
 
         let chat_jid: Jid = "120363021033254949@g.us"
             .parse()

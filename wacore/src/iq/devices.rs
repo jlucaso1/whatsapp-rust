@@ -5,8 +5,8 @@ use std::time::Duration;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{NodeContent, NodeRef};
 
 /// WA Web uses a 3s timeout for the logout IQ (Socket/Model.js).
 const LOGOUT_TIMEOUT: Duration = Duration::from_secs(3);
@@ -33,13 +33,13 @@ impl IqSpec for RemoveCompanionDeviceSpec {
 
         InfoQuery::set(
             "md",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![child])),
         )
         .with_timeout(LOGOUT_TIMEOUT)
     }
 
-    fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, _response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         Ok(())
     }
 }

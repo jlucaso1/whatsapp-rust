@@ -27,8 +27,8 @@ use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{Node, NodeContent, NodeRef};
 
 /// IQ namespace for A/B props.
 pub const PROPS_NAMESPACE: &str = "abt";
@@ -91,7 +91,7 @@ impl crate::protocol::ProtocolNode for AbProp {
         builder.build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         use crate::iq::node::optional_attr;
 
         if node.tag != "prop" {
@@ -138,7 +138,7 @@ impl crate::protocol::ProtocolNode for SamplingProp {
             .build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         use crate::iq::node::optional_attr;
 
         if node.tag != "prop" {
@@ -188,17 +188,17 @@ impl crate::protocol::ProtocolNode for AbPropConfig {
         }
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         if node.tag != "prop" {
             return Err(anyhow::anyhow!("expected <prop>, got <{}>", node.tag));
         }
 
-        let experiment = AbProp::try_from_node(node);
+        let experiment = AbProp::try_from_node_ref(node);
         if let Ok(prop) = experiment {
             return Ok(Self::Experiment(prop));
         }
 
-        let sampling = SamplingProp::try_from_node(node);
+        let sampling = SamplingProp::try_from_node_ref(node);
         if let Ok(prop) = sampling {
             return Ok(Self::Sampling(prop));
         }
@@ -262,7 +262,7 @@ impl crate::protocol::ProtocolNode for PropsResponse {
         builder.build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         use crate::iq::node::optional_attr;
 
         if node.tag != "props" {
@@ -279,7 +279,7 @@ impl crate::protocol::ProtocolNode for PropsResponse {
 
         let mut props = Vec::new();
         for child in node.get_children_by_tag("prop") {
-            props.push(AbPropConfig::try_from_node(child)?);
+            props.push(AbPropConfig::try_from_node_ref(child)?);
         }
 
         Ok(Self {
@@ -341,17 +341,16 @@ impl IqSpec for PropsSpec {
 
         InfoQuery::get(
             PROPS_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![builder.build()])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         use crate::iq::node::required_child;
 
-        // Find the props child node and parse it using ProtocolNode
         let props_node = required_child(response, "props")?;
-        PropsResponse::try_from_node(props_node)
+        PropsResponse::try_from_node_ref(props_node)
     }
 }
 
@@ -433,7 +432,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.ab_key, Some("test_key".to_string()));
         assert_eq!(result.hash, Some("abcdef".to_string()));
         assert_eq!(result.refresh, Some(3600));
@@ -476,7 +475,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert!(result.delta_update);
     }
 

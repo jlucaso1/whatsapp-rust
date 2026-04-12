@@ -72,7 +72,7 @@ impl Client {
                 debug!(target: "Client/Keepalive", "Received keepalive pong (RTT: {rtt_ms}ms)");
                 // WA Web: onClockSkewUpdate — Math.round((startTime + rtt/2) / 1000 - serverTime)
                 self.unified_session.update_server_time_offset_with_rtt(
-                    &response_node,
+                    response_node.get(),
                     start_ms,
                     rtt_ms,
                 );

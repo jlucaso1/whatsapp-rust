@@ -3,7 +3,6 @@ use crate::client::Client;
 use async_trait::async_trait;
 use log::warn;
 use std::sync::Arc;
-use wacore_binary::node::Node;
 
 /// WA Web: `WAWebMessageQueue` uses `promiseTimeout(r(), 2e4)` per queued handler.
 const MAX_MESSAGE_DELAY_MS: u64 = 20_000;
@@ -29,7 +28,12 @@ impl StanzaHandler for MessageHandler {
         "message"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<wacore_binary::OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
         // Extract the chat ID to serialize processing for this chat.
         // This prevents race conditions where a later message is processed before
         // the PreKey message that establishes the session.
@@ -63,7 +67,7 @@ impl StanzaHandler for MessageHandler {
             .get_with_by_ref(&chat_id, async {
                 // Unbounded so the read loop never blocks on a full channel.
                 // WA Web uses unbounded promise chains for the same reason.
-                let (tx, rx) = async_channel::unbounded::<Arc<Node>>();
+                let (tx, rx) = async_channel::unbounded::<Arc<wacore_binary::OwnedNodeRef>>();
 
                 let client_for_worker = client.clone();
                 let spawn_generation = client

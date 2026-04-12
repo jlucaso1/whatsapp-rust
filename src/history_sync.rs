@@ -3,7 +3,7 @@ use bytes::Bytes;
 use std::sync::Arc;
 use wacore::history_sync::process_history_sync;
 use wacore::store::traits::TcTokenEntry;
-use wacore_binary::jid::JidExt;
+use wacore_binary::JidExt;
 use waproto::whatsapp::message::HistorySyncNotification;
 
 use crate::client::Client;
@@ -338,7 +338,7 @@ impl Client {
         };
 
         // Resolve to LID for storage key consistency with notification handler
-        let jid: wacore_binary::jid::Jid = match conv.id.parse() {
+        let jid: wacore_binary::Jid = match conv.id.parse() {
             Ok(j) => j,
             Err(_) => return,
         };

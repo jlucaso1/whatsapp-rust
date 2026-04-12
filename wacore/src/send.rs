@@ -13,9 +13,9 @@ use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng};
 use std::collections::HashSet;
+use wacore_binary::Node;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, JidExt as _};
-use wacore_binary::node::Node;
+use wacore_binary::{Jid, JidExt as _};
 use wacore_libsignal::crypto::aes_256_cbc_encrypt_into;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
@@ -1286,8 +1286,8 @@ pub fn ensure_status_participants(
     mut stanza: Node,
     group_info: &crate::client::context::GroupInfo,
 ) -> Node {
+    use wacore_binary::NodeContent;
     use wacore_binary::builder::NodeBuilder;
-    use wacore_binary::node::NodeContent;
 
     // Build bare <to jid="USER_JID"/> entries for each participant.
     // WhatsApp Web uses USER_JID (not DEVICE_JID) for the participantList.
@@ -1356,7 +1356,7 @@ mod tests {
     use crate::client::context::{GroupInfo, SendContextResolver};
     use crate::libsignal::protocol::{IdentityKeyPair, KeyPair, PreKeyBundle};
     use std::collections::HashMap;
-    use wacore_binary::jid::Jid;
+    use wacore_binary::Jid;
 
     /// Mock implementation of SendContextResolver for testing
     struct MockSendContextResolver {
@@ -2178,7 +2178,7 @@ mod tests {
         };
         use crate::types::message::AddressingMode;
         use std::collections::HashMap;
-        use wacore_binary::node::NodeContent;
+        use wacore_binary::NodeContent;
 
         struct MemSessionStore(HashMap<ProtocolAddress, Vec<u8>>);
         impl MemSessionStore {

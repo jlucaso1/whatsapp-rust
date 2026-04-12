@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use anyhow::{Result, anyhow};
 use wacore::poll;
-use wacore_binary::jid::{Jid, JidExt};
+use wacore_binary::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
 use crate::client::Client;

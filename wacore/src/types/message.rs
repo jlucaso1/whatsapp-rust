@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use wacore_binary::jid::{Jid, JidExt, MessageId, MessageServerId};
+use wacore_binary::{Jid, JidExt, MessageId, MessageServerId};
 use waproto::whatsapp as wa;
 
 use crate::StringEnum;

@@ -5,8 +5,8 @@ use crate::iq::node::optional_attr;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{NodeContent, NodeContentRef, NodeRef};
 
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum DayOfWeek {
@@ -52,10 +52,10 @@ impl serde::Serialize for BusinessHourMode {
     }
 }
 
-fn node_text(node: &Node) -> Option<String> {
-    match &node.content {
-        Some(NodeContent::String(s)) => Some(s.to_string()),
-        Some(NodeContent::Bytes(b)) => String::from_utf8(b.clone()).ok(),
+fn node_text(node: &NodeRef<'_>) -> Option<String> {
+    match node.content.as_deref() {
+        Some(NodeContentRef::String(s)) => Some(s.to_string()),
+        Some(NodeContentRef::Bytes(b)) => std::str::from_utf8(b).ok().map(|s| s.to_string()),
         _ => None,
     }
 }
@@ -114,7 +114,7 @@ impl IqSpec for BusinessProfileSpec {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::get(
             "w:biz",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("business_profile")
                     .attr("v", "244")
@@ -124,7 +124,7 @@ impl IqSpec for BusinessProfileSpec {
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let biz_node = match response.get_optional_child("business_profile") {
             Some(n) => n,
             None => return Ok(None),

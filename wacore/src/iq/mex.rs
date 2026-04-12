@@ -22,8 +22,8 @@ use anyhow::anyhow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{NodeContent, NodeContentRef, NodeRef};
 
 /// MEX GraphQL error extensions.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -134,20 +134,20 @@ impl IqSpec for MexQuerySpec {
 
         InfoQuery::get(
             "w:mex",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![query_node])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let result_node = response
             .get_optional_child("result")
             .ok_or_else(|| anyhow!("Missing <result> node in MEX response"))?;
 
         // Handle both binary and string content from the server
-        let mex_response: MexResponse = match &result_node.content {
-            Some(NodeContent::Bytes(bytes)) => serde_json::from_slice(bytes)?,
-            Some(NodeContent::String(s)) => serde_json::from_str(s)?,
+        let mex_response: MexResponse = match result_node.content.as_deref() {
+            Some(NodeContentRef::Bytes(bytes)) => serde_json::from_slice(bytes)?,
+            Some(NodeContentRef::String(s)) => serde_json::from_str(s)?,
             _ => return Err(anyhow!("MEX result node content is not binary or string")),
         };
 

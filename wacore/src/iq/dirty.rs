@@ -2,8 +2,8 @@ use crate::StringEnum;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{Node, NodeContent, NodeRef};
 
 pub const DIRTY_NAMESPACE: &str = "urn:xmpp:whatsapp:dirty";
 
@@ -110,12 +110,12 @@ impl IqSpec for CleanDirtyBitsSpec {
 
         InfoQuery::set(
             DIRTY_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(children)),
         )
     }
 
-    fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, _response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         // Clean dirty bits just needs a successful response
         Ok(())
     }
@@ -227,7 +227,7 @@ mod tests {
         let spec = CleanDirtyBitsSpec::single(DirtyBit::new(DirtyType::AccountSync));
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
-        let result = spec.parse_response(&response);
+        let result = spec.parse_response(&response.as_node_ref());
         assert!(result.is_ok());
     }
 

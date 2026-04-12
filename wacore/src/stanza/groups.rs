@@ -11,8 +11,8 @@
 //! - Participant lists are nested `<participant jid="..." />` children
 
 use serde::Serialize;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::Jid;
+use wacore_binary::{Node, NodeRef};
 
 /// Parsed group notification containing one or more actions.
 #[derive(Debug, Clone)]
@@ -197,18 +197,20 @@ impl GroupNotificationAction {
 }
 
 impl GroupNotification {
-    /// Parse a `<notification type="w:gp2">` node into a typed GroupNotification.
+    /// Parse from a `NodeRef`.
     ///
-    /// Returns `None` if the `from` attribute is missing (invalid notification).
-    pub fn try_from_node(node: &Node) -> Option<Self> {
-        let group_jid = node.attrs().optional_jid("from")?;
-        let participant = node.attrs().optional_jid("participant");
-        let participant_pn = node.attrs().optional_jid("participant_pn");
-        let timestamp = node.attrs().optional_u64("t").unwrap_or(0);
+    /// Most fields are parsed zero-copy. Only `Create`/`Link`/`Unlink` actions
+    /// call `.to_owned()` on their specific child node (structurally required to store `raw: Node`).
+    pub fn try_from_node_ref(node: &NodeRef<'_>) -> Option<Self> {
+        let mut attrs = node.attrs();
+        let group_jid = attrs.optional_jid("from")?;
+        let participant = attrs.optional_jid("participant");
+        let participant_pn = attrs.optional_jid("participant_pn");
+        let timestamp = attrs.optional_u64("t").unwrap_or(0);
         let is_lid_addressing_mode = node
-            .attrs
-            .get("addressing_mode")
-            .is_some_and(|v| v == "lid");
+            .get_attr("addressing_mode")
+            .map(|v| v.as_str())
+            .is_some_and(|s| s == "lid");
 
         let actions = node
             .children()
@@ -227,9 +229,11 @@ impl GroupNotification {
 }
 
 /// Parse a single child element into a GroupNotificationAction.
-fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
+///
+/// Only `Create`/`Link`/`Unlink` call `.to_owned()` because those variants store `raw: Node`.
+fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
+    use wacore_binary::NodeContentRef;
     let action = match node.tag.as_ref() {
-        // Participant management
         "add" => GroupNotificationAction::Add {
             participants: parse_participants(node),
             reason: node
@@ -253,8 +257,6 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
         "modify" => GroupNotificationAction::Modify {
             participants: parse_participants(node),
         },
-
-        // Metadata
         "subject" => GroupNotificationAction::Subject {
             subject: node
                 .attrs()
@@ -281,8 +283,6 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             };
             GroupNotificationAction::Description { id, description }
         }
-
-        // Settings
         "locked" => GroupNotificationAction::Locked {
             threshold: node
                 .attrs()
@@ -308,17 +308,15 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
             GroupNotificationAction::MembershipApprovalMode { enabled }
         }
         "member_add_mode" => {
-            let mode = match &node.content {
-                Some(NodeContent::String(s)) => s.to_string(),
-                Some(NodeContent::Bytes(b)) => String::from_utf8_lossy(b).into_owned(),
+            let mode = match node.content.as_deref() {
+                Some(NodeContentRef::String(s)) => s.to_string(),
+                Some(NodeContentRef::Bytes(b)) => String::from_utf8_lossy(b.as_ref()).into_owned(),
                 _ => String::new(),
             };
             GroupNotificationAction::MemberAddMode { mode }
         }
         "no_frequently_forwarded" => GroupNotificationAction::NoFrequentlyForwarded,
         "frequently_forwarded_ok" => GroupNotificationAction::FrequentlyForwardedOk,
-
-        // Invites
         "invite" => GroupNotificationAction::Invite {
             code: node
                 .attrs()
@@ -338,17 +336,16 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
                 .to_string(),
         },
         "growth_unlocked" => GroupNotificationAction::GrowthUnlocked,
-
-        // Group lifecycle
-        "create" => GroupNotificationAction::Create { raw: node.clone() },
+        // These three variants store owned Node — only convert what's needed.
+        "create" => GroupNotificationAction::Create {
+            raw: node.to_owned(),
+        },
         "delete" => GroupNotificationAction::Delete {
             reason: node
                 .attrs()
                 .optional_string("reason")
                 .map(|s| s.into_owned()),
         },
-
-        // Community linking
         "link" => GroupNotificationAction::Link {
             link_type: node
                 .attrs()
@@ -356,7 +353,7 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
                 .as_deref()
                 .unwrap_or_default()
                 .to_string(),
-            raw: node.clone(),
+            raw: node.to_owned(),
         },
         "unlink" => GroupNotificationAction::Unlink {
             unlink_type: node
@@ -369,23 +366,17 @@ fn parse_action(node: &Node) -> Option<GroupNotificationAction> {
                 .attrs()
                 .optional_string("unlink_reason")
                 .map(|s| s.into_owned()),
-            raw: node.clone(),
+            raw: node.to_owned(),
         },
-
-        // Skip silently — not actionable
         "missing_participant_identification" => return None,
-
-        // Unknown tag — preserve for forward compatibility
         other => GroupNotificationAction::Unknown {
             tag: other.to_string(),
         },
     };
-
     Some(action)
 }
 
-/// Parse `<participant jid="..." phone_number="..."/>` children from an action node.
-fn parse_participants(node: &Node) -> Vec<GroupParticipantInfo> {
+fn parse_participants(node: &NodeRef<'_>) -> Vec<GroupParticipantInfo> {
     node.children()
         .map(|children| {
             children
@@ -404,8 +395,8 @@ fn parse_participants(node: &Node) -> Vec<GroupParticipantInfo> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wacore_binary::Jid;
     use wacore_binary::builder::NodeBuilder;
-    use wacore_binary::jid::Jid;
 
     fn group_jid() -> Jid {
         "120363012345678901@g.us".parse().unwrap()
@@ -441,7 +432,7 @@ mod tests {
                 .build(),
         ]);
 
-        let notif = GroupNotification::try_from_node(&node).unwrap();
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
         assert_eq!(notif.group_jid, group_jid());
         assert_eq!(notif.participant, Some(admin_jid()));
         assert_eq!(notif.timestamp, 1704067200);
@@ -470,7 +461,7 @@ mod tests {
                 .build(),
         ]);
 
-        let notif = GroupNotification::try_from_node(&node).unwrap();
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
         assert_eq!(notif.actions.len(), 1);
 
         match &notif.actions[0] {
@@ -500,7 +491,7 @@ mod tests {
                 .build(),
         ]);
 
-        let notif = GroupNotification::try_from_node(&node).unwrap();
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
         match &notif.actions[0] {
             GroupNotificationAction::Description { id, description } => {
                 assert_eq!(id, "desc123");
@@ -519,7 +510,7 @@ mod tests {
                 .build(),
         ]);
 
-        let notif = GroupNotification::try_from_node(&node).unwrap();
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
         match &notif.actions[0] {
             GroupNotificationAction::Description { id, description } => {
                 assert_eq!(id, "desc123");
@@ -540,7 +531,7 @@ mod tests {
                 .build(),
         ]);
 
-        let notif = GroupNotification::try_from_node(&node).unwrap();
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
         assert_eq!(notif.actions.len(), 3);
 
         match &notif.actions[0] {
@@ -569,7 +560,7 @@ mod tests {
     fn test_parse_not_ephemeral() {
         let node = make_notification(vec![NodeBuilder::new("not_ephemeral").build()]);
 
-        let notif = GroupNotification::try_from_node(&node).unwrap();
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
         match &notif.actions[0] {
             GroupNotificationAction::Ephemeral {
                 expiration,
@@ -592,7 +583,7 @@ mod tests {
                 .build(),
         ]);
 
-        let notif = GroupNotification::try_from_node(&node).unwrap();
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
         match &notif.actions[0] {
             GroupNotificationAction::MembershipApprovalMode { enabled } => {
                 assert!(*enabled);
@@ -605,7 +596,7 @@ mod tests {
     fn test_parse_unknown_tag() {
         let node = make_notification(vec![NodeBuilder::new("some_future_feature").build()]);
 
-        let notif = GroupNotification::try_from_node(&node).unwrap();
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
         match &notif.actions[0] {
             GroupNotificationAction::Unknown { tag } => {
                 assert_eq!(tag, "some_future_feature");
@@ -621,6 +612,6 @@ mod tests {
             .attr("t", "1704067200")
             .build();
 
-        assert!(GroupNotification::try_from_node(&node).is_none());
+        assert!(GroupNotification::try_from_node_ref(&node.as_node_ref()).is_none());
     }
 }
