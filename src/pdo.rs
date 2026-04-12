@@ -371,7 +371,7 @@ impl Client {
 
         self.core
             .event_bus
-            .dispatch(&wacore::types::events::Event::Message(
+            .dispatch(wacore::types::events::Event::Message(
                 Box::new(message),
                 message_info,
             ));

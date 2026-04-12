@@ -47,11 +47,11 @@ fn main() {
 
         let mut bot = builder
             .on_event(move |event, client| async move {
-                match event {
+                match &*event {
                     Event::Message(msg, info) => {
                         let ctx = MessageContext {
-                            message: msg,
-                            info,
+                            message: msg.clone(),
+                            info: info.clone(),
                             client,
                         };
 

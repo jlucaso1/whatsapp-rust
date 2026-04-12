@@ -457,7 +457,7 @@ async fn test_newsletter_reaction_live_update() -> anyhow::Result<()> {
         })
         .await?;
 
-    if let Event::NewsletterLiveUpdate(update) = event {
+    if let Event::NewsletterLiveUpdate(update) = &*event {
         info!(
             "Received live update for {} with {} message(s)",
             update.newsletter_jid,

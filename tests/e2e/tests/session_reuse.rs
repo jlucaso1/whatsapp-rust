@@ -370,7 +370,7 @@ async fn test_message_info_fields() -> anyhow::Result<()> {
 
     let event = client_b.wait_for_text(text_ab, 30).await?;
 
-    if let Event::Message(msg, info) = event {
+    if let Event::Message(msg, info) = &*event {
         assert_eq!(msg.conversation.as_deref(), Some(text_ab));
         assert!(!info.id.is_empty(), "Message ID must not be empty");
         assert!(
@@ -406,7 +406,7 @@ async fn test_message_info_fields() -> anyhow::Result<()> {
 
     let event = client_a.wait_for_text(text_ba, 30).await?;
 
-    if let Event::Message(_, info) = event {
+    if let Event::Message(_, info) = &*event {
         assert!(!info.source.is_from_me);
         assert!(!info.source.is_group);
         assert_eq!(info.source.sender.user, jid_b.user);

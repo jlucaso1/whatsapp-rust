@@ -85,7 +85,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
                                 client_clone
                                     .core
                                     .event_bus
-                                    .dispatch(&Event::PairingQrCode { code, timeout });
+                                    .dispatch(Event::PairingQrCode { code, timeout });
 
                                 let sleep = client_clone.runtime.sleep(timeout);
                                 let stop = stop_rx.recv();
@@ -117,7 +117,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
                     *client.pairing_cancellation_tx.lock().await = Some(stop_tx);
 
                     // We no longer dispatch the raw Event::Qr
-                    // client.core.event_bus.dispatch(&Event::Qr(Qr { codes }));
+                    // client.core.event_bus.dispatch(Event::Qr(Qr { codes }));
                     true
                 }
                 "pair-success" => {
@@ -221,7 +221,7 @@ async fn handle_pair_success<'a>(
                     error!(
                         "FATAL: Failed to re-decode self-signed identity for event, pairing cannot complete: {e}"
                     );
-                    client.core.event_bus.dispatch(&Event::PairError(PairError {
+                    client.core.event_bus.dispatch(Event::PairError(PairError {
                         id: jid.clone(),
                         lid: lid.clone(),
                         business_name: business_name.clone(),
@@ -324,7 +324,7 @@ async fn handle_pair_success<'a>(
             client
                 .core
                 .event_bus
-                .dispatch(&Event::PairSuccess(success_event));
+                .dispatch(Event::PairSuccess(success_event));
         }
         Err(e) => {
             error!("Pairing crypto failed: {e}");
@@ -343,7 +343,7 @@ async fn handle_pair_success<'a>(
             client
                 .core
                 .event_bus
-                .dispatch(&Event::PairError(pair_error_event));
+                .dispatch(Event::PairError(pair_error_event));
         }
     }
 }

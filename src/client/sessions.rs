@@ -43,7 +43,7 @@ impl Client {
 
             self.core
                 .event_bus
-                .dispatch(&Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
+                .dispatch(Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
         }
     }
 

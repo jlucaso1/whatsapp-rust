@@ -148,7 +148,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &wacore_binary::NodeRef<'_>) 
                 client
                     .core
                     .event_bus
-                    .dispatch(&Event::OfflineSyncPreview(OfflineSyncPreview {
+                    .dispatch(Event::OfflineSyncPreview(OfflineSyncPreview {
                         total,
                         app_data_changes,
                         messages,

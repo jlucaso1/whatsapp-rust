@@ -200,7 +200,7 @@ async fn test_offline_presence_coalescing() -> anyhow::Result<()> {
         .wait_for_event(30, |e| matches!(e, Event::Presence(_)))
         .await?;
 
-    if let Event::Presence(presence) = &presence_event {
+    if let Event::Presence(presence) = &*presence_event {
         info!("B received coalesced presence: {:?}", presence);
     }
 

@@ -149,12 +149,14 @@ async fn test_mixed_offline_event_ordering() -> anyhow::Result<()> {
             .await;
 
         match result {
-            Ok(Event::Message(msg, _)) => {
-                let text = msg.conversation.unwrap_or_default();
-                info!("C received message: {text}");
-                messages_received.push(text);
+            Ok(ref event) if matches!(**event, Event::Message(_, _)) => {
+                if let Event::Message(msg, _) = &**event {
+                    let text = msg.conversation.clone().unwrap_or_default();
+                    info!("C received message: {text}");
+                    messages_received.push(text);
+                }
             }
-            Ok(Event::Notification(_)) => {
+            Ok(ref event) if matches!(**event, Event::Notification(_)) => {
                 info!("C received group notification");
                 notifications_received += 1;
             }
@@ -239,7 +241,7 @@ async fn test_offline_group_message_delivery() -> anyhow::Result<()> {
 
     // C should receive it after reconnecting (from offline queue)
     let event = client_c.wait_for_text(text, 30).await?;
-    if let Event::Message(msg, info) = event {
+    if let Event::Message(msg, info) = &*event {
         assert_eq!(msg.conversation.as_deref(), Some(text));
         assert!(info.source.is_group);
         assert_eq!(info.source.chat, group_jid);
@@ -438,13 +440,15 @@ async fn test_offline_multi_sender_group_messages() -> anyhow::Result<()> {
             .await;
 
         match result {
-            Ok(Event::Message(msg, _)) => {
-                if let Some(text) = msg.conversation {
+            Ok(ref event) if matches!(**event, Event::Message(_, _)) => {
+                if let Event::Message(msg, _) = &**event
+                    && let Some(text) = &msg.conversation
+                {
                     info!("C received: {text}");
-                    received_texts.insert(text);
+                    received_texts.insert(text.clone());
                 }
             }
-            Ok(Event::Notification(_)) => {
+            Ok(ref event) if matches!(**event, Event::Notification(_)) => {
                 // Group notifications are expected, just skip
             }
             Ok(_) => {}

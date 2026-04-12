@@ -169,40 +169,33 @@ impl Serialize for LazyConversation {
 }
 
 pub trait EventHandler: Send + Sync {
-    fn handle_event(&self, event: &Event);
+    fn handle_event(&self, event: Arc<Event>);
 }
 
-/// Event handler that forwards events to an async channel for test assertions.
-///
-/// Uses `async_channel` (runtime-agnostic) so it works with any async executor.
-/// Events are buffered in an unbounded channel, so events fired before the
-/// receiver starts listening are not lost.
+/// Event handler that forwards events to an async channel.
 ///
 /// # Example
 /// ```ignore
-/// let (handler, mut rx) = ChannelEventHandler::new();
+/// let (handler, rx) = ChannelEventHandler::new();
 /// client.register_handler(handler);
-/// // ... start the client ...
-/// // Wait for Connected event
 /// while let Ok(event) = rx.recv().await {
-///     if matches!(event, Event::Connected(_)) { break; }
+///     if matches!(&*event, Event::Connected(_)) { break; }
 /// }
 /// ```
 pub struct ChannelEventHandler {
-    tx: async_channel::Sender<Event>,
+    tx: async_channel::Sender<Arc<Event>>,
 }
 
 impl ChannelEventHandler {
-    /// Create a new handler and its event receiver.
-    pub fn new() -> (Arc<Self>, async_channel::Receiver<Event>) {
+    pub fn new() -> (Arc<Self>, async_channel::Receiver<Arc<Event>>) {
         let (tx, rx) = async_channel::unbounded();
         (Arc::new(Self { tx }), rx)
     }
 }
 
 impl EventHandler for ChannelEventHandler {
-    fn handle_event(&self, event: &Event) {
-        let _ = self.tx.try_send(event.clone());
+    fn handle_event(&self, event: Arc<Event>) {
+        let _ = self.tx.try_send(event);
     }
 }
 
@@ -233,14 +226,14 @@ impl CoreEventBus {
             .is_empty()
     }
 
-    pub fn dispatch(&self, event: &Event) {
-        for handler in self
-            .handlers
-            .read()
-            .expect("RwLock should not be poisoned")
-            .iter()
-        {
-            handler.handle_event(event);
+    pub fn dispatch(&self, event: Event) {
+        let handlers = self.handlers.read().expect("RwLock should not be poisoned");
+        if handlers.is_empty() {
+            return;
+        }
+        let event = Arc::new(event);
+        for handler in handlers.iter() {
+            handler.handle_event(Arc::clone(&event));
         }
     }
 }

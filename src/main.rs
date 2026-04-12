@@ -82,7 +82,7 @@ fn main() {
 
         let mut bot = builder
             .on_event(move |event, client| async move {
-                match event {
+                match &*event {
                     Event::PairingQrCode { code, timeout } => {
                         info!("----------------------------------------");
                         info!(
@@ -105,8 +105,8 @@ fn main() {
                     }
                     Event::Message(msg, info) => {
                         let ctx = MessageContext {
-                            message: msg,
-                            info,
+                            message: msg.clone(),
+                            info: info.clone(),
                             client,
                         };
                         handle_message(&ctx).await;

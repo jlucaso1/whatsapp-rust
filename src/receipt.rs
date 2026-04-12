@@ -108,9 +108,9 @@ impl Client {
                         .unwrap_or(1),
                 );
             }
-            self.core.event_bus.dispatch(&Event::Receipt(receipt));
+            self.core.event_bus.dispatch(Event::Receipt(receipt));
         } else {
-            self.core.event_bus.dispatch(&Event::Receipt(receipt));
+            self.core.event_bus.dispatch(Event::Receipt(receipt));
         }
     }
 
@@ -219,11 +219,11 @@ mod tests {
     }
 
     impl EventHandler for TestEventCollector {
-        fn handle_event(&self, event: &Event) {
+        fn handle_event(&self, event: Arc<Event>) {
             self.events
                 .lock()
                 .expect("collector mutex should not be poisoned")
-                .push(event.clone());
+                .push((*event).clone());
         }
     }
 

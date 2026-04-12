@@ -252,7 +252,7 @@ async fn handle_notification_impl(client: &Arc<Client>, node: Arc<OwnedNodeRef>)
             client
                 .core
                 .event_bus
-                .dispatch(&Event::Notification(Arc::clone(&node)));
+                .dispatch(Event::Notification(Arc::clone(&node)));
         }
     }
 }
@@ -419,7 +419,7 @@ async fn handle_identity_change(client: &Arc<Client>, node: &NodeRef<'_>) {
     client.invalidate_device_cache(&from_jid.user).await;
 
     let session_jid = from_jid.clone();
-    client.core.event_bus.dispatch(&Event::IdentityChange(
+    client.core.event_bus.dispatch(Event::IdentityChange(
         crate::types::events::IdentityChange {
             user: from_jid,
             lid_user: node.attrs().optional_jid("lid"),
@@ -525,7 +525,7 @@ async fn handle_devices_notification(client: &Arc<Client>, node: &NodeRef<'_>) {
         key_index: op.key_index.clone(),
         contact_hash: op.contact_hash.clone(),
     });
-    client.core.event_bus.dispatch(&event);
+    client.core.event_bus.dispatch(event);
 }
 
 /// Parsed device info from account_sync notification
@@ -894,7 +894,7 @@ async fn handle_business_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
         _ => {}
     }
 
-    client.core.event_bus.dispatch(&event);
+    client.core.event_bus.dispatch(event);
 }
 
 /// Handle profile picture change notifications.
@@ -991,7 +991,7 @@ fn handle_picture_notification(client: &Arc<Client>, node: &NodeRef<'_>) {
         removed,
         picture_id,
     });
-    client.core.event_bus.dispatch(&event);
+    client.core.event_bus.dispatch(event);
 }
 
 /// Handle status/about text change notifications.
@@ -1032,7 +1032,7 @@ fn handle_status_notification(client: &Arc<Client>, node: &NodeRef<'_>) {
             status: status_text,
             timestamp,
         });
-        client.core.event_bus.dispatch(&event);
+        client.core.event_bus.dispatch(event);
     } else {
         debug!(
             target: "Client/Status",
@@ -1126,7 +1126,7 @@ async fn handle_contacts_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
             client
                 .core
                 .event_bus
-                .dispatch(&Event::ContactUpdated(ContactUpdated { jid, timestamp }));
+                .dispatch(Event::ContactUpdated(ContactUpdated { jid, timestamp }));
         }
         "modify" => {
             // WA Web: old/new are PN JIDs, old_lid/new_lid are optional LID JIDs.
@@ -1159,7 +1159,7 @@ async fn handle_contacts_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
             client
                 .core
                 .event_bus
-                .dispatch(&Event::ContactNumberChanged(ContactNumberChanged {
+                .dispatch(Event::ContactNumberChanged(ContactNumberChanged {
                     old_jid,
                     new_jid,
                     old_lid,
@@ -1181,7 +1181,7 @@ async fn handle_contacts_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
             client
                 .core
                 .event_bus
-                .dispatch(&Event::ContactSyncRequested(ContactSyncRequested {
+                .dispatch(Event::ContactSyncRequested(ContactSyncRequested {
                     after,
                     timestamp,
                 }));
@@ -1274,7 +1274,7 @@ async fn handle_group_notification(client: &Arc<Client>, node: Arc<OwnedNodeRef>
         client
             .core
             .event_bus
-            .dispatch(&Event::GroupUpdate(GroupUpdate {
+            .dispatch(Event::GroupUpdate(GroupUpdate {
                 group_jid: notification.group_jid.clone(),
                 participant: notification.participant.clone(),
                 participant_pn: notification.participant_pn.clone(),
@@ -1288,7 +1288,7 @@ async fn handle_group_notification(client: &Arc<Client>, node: Arc<OwnedNodeRef>
     client
         .core
         .event_bus
-        .dispatch(&Event::Notification(Arc::clone(&node)));
+        .dispatch(Event::Notification(Arc::clone(&node)));
 }
 
 /// Handle `<notification type="newsletter">` — live updates with reaction counts.
@@ -1349,7 +1349,7 @@ fn handle_newsletter_notification(client: &Arc<Client>, node: Arc<OwnedNodeRef>)
             client
                 .core
                 .event_bus
-                .dispatch(&Event::NewsletterLiveUpdate(NewsletterLiveUpdate {
+                .dispatch(Event::NewsletterLiveUpdate(NewsletterLiveUpdate {
                     newsletter_jid,
                     messages,
                 }));
@@ -1360,7 +1360,7 @@ fn handle_newsletter_notification(client: &Arc<Client>, node: Arc<OwnedNodeRef>)
     client
         .core
         .event_bus
-        .dispatch(&Event::Notification(Arc::clone(&node)));
+        .dispatch(Event::Notification(Arc::clone(&node)));
 }
 
 /// Handle `<notification type="disappearing_mode">` — a contact changed
@@ -1413,7 +1413,7 @@ fn handle_disappearing_mode_notification(client: &Arc<Client>, node: &NodeRef<'_
     client
         .core
         .event_bus
-        .dispatch(&Event::DisappearingModeChanged(
+        .dispatch(Event::DisappearingModeChanged(
             wacore::types::events::DisappearingModeChanged {
                 from,
                 duration,
@@ -1442,11 +1442,11 @@ mod tests {
     }
 
     impl EventHandler for TestEventCollector {
-        fn handle_event(&self, event: &Event) {
+        fn handle_event(&self, event: Arc<Event>) {
             self.events
                 .lock()
                 .expect("collector mutex should not be poisoned")
-                .push(event.clone());
+                .push((*event).clone());
         }
     }
 

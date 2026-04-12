@@ -50,7 +50,7 @@ async fn test_set_profile_picture() -> anyhow::Result<()> {
             |e| matches!(e, Event::PictureUpdate(u) if !u.removed && u.jid == expected_jid),
         )
         .await?;
-    if let Event::PictureUpdate(update) = event {
+    if let Event::PictureUpdate(update) = &*event {
         info!(
             "Received PictureUpdate event: jid={}, author={:?}, removed={}, pic_id={:?}",
             update.jid, update.author, update.removed, update.picture_id
@@ -148,7 +148,7 @@ async fn test_remove_profile_picture() -> anyhow::Result<()> {
             |e| matches!(e, Event::PictureUpdate(u) if u.removed && u.jid == expected_jid),
         )
         .await?;
-    if let Event::PictureUpdate(update) = event {
+    if let Event::PictureUpdate(update) = &*event {
         assert!(
             update.picture_id.is_none(),
             "Delete should have no picture ID"

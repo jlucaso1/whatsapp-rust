@@ -45,17 +45,7 @@ impl MessageContext {
             .await
     }
 
-    /// Build a quote context for this message.
-    ///
-    /// Handles:
-    /// - Correct stanza_id/participant (newsletters + group status)
-    /// - Stripping nested mentions to avoid accidental tags
-    /// - Preserving bot quote chains (matches WhatsApp Web)
-    ///
-    /// Use this when you need manual control but want correct quoting behavior.
     pub fn build_quote_context(&self) -> wa::ContextInfo {
-        // Use the standalone function from wacore with full message info
-        // This handles newsletter/group status participant resolution
         wacore::proto_helpers::build_quote_context_with_info(
             &self.info.id,
             &self.info.source.sender,
@@ -91,7 +81,7 @@ impl MessageContext {
 }
 
 type EventHandlerCallback =
-    Arc<dyn Fn(Event, Arc<Client>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+    Arc<dyn Fn(Arc<Event>, Arc<Client>) -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
 
 struct BotEventHandler {
     client: Arc<Client>,
@@ -99,16 +89,15 @@ struct BotEventHandler {
 }
 
 impl EventHandler for BotEventHandler {
-    fn handle_event(&self, event: &Event) {
+    fn handle_event(&self, event: Arc<Event>) {
         if let Some(handler) = &self.event_handler {
             let handler_clone = handler.clone();
-            let event_clone = event.clone();
             let client_clone = self.client.clone();
 
             self.client
                 .runtime
                 .spawn(Box::pin(async move {
-                    handler_clone(event_clone, client_clone).await;
+                    handler_clone(event, client_clone).await;
                 }))
                 .detach();
         }
@@ -425,7 +414,7 @@ impl<B, T, H> BotBuilder<B, T, H, Missing> {
 impl<B, T, H, R> BotBuilder<B, T, H, R> {
     pub fn on_event<F, Fut>(mut self, handler: F) -> Self
     where
-        F: Fn(Event, Arc<Client>) -> Fut + Send + Sync + 'static,
+        F: Fn(Arc<Event>, Arc<Client>) -> Fut + Send + Sync + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         self.event_handler = Some(Arc::new(move |event, client| {

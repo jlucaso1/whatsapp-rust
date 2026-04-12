@@ -54,7 +54,7 @@ impl Client {
 
         self.core
             .event_bus
-            .dispatch(&Event::Message(Box::new(msg), info));
+            .dispatch(Event::Message(Box::new(msg), info));
     }
 
     /// Handles a newsletter plaintext message.
@@ -100,7 +100,7 @@ impl Client {
         info: &MessageInfo,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) {
-        self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+        self.core.event_bus.dispatch(Event::UndecryptableMessage(
             crate::types::events::UndecryptableMessage {
                 info: info.clone(),
                 is_unavailable: false,
@@ -320,7 +320,7 @@ impl Client {
             );
             // Ack is handled by the framework; PDO asks the primary phone to relay the message
             self.spawn_pdo_request_with_options(&info, true);
-            self.core.event_bus.dispatch(&Event::UndecryptableMessage(
+            self.core.event_bus.dispatch(Event::UndecryptableMessage(
                 crate::types::events::UndecryptableMessage {
                     info: (*info).clone(),
                     is_unavailable: true,
