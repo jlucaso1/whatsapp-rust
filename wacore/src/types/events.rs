@@ -372,7 +372,7 @@ pub enum Event {
     QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
     ClientOutdated(ClientOutdated),
 
-    Message(Box<wa::Message>, MessageInfo),
+    Message(Box<wa::Message>, Arc<MessageInfo>),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
     #[serde(skip)]
@@ -435,7 +435,7 @@ pub enum Event {
 impl Event {
     pub fn as_message(&self) -> Option<(&wa::Message, &MessageInfo)> {
         if let Event::Message(msg, info) = self {
-            Some((msg, info))
+            Some((msg, &**info))
         } else {
             None
         }
@@ -683,7 +683,7 @@ pub enum UnavailableType {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UndecryptableMessage {
-    pub info: MessageInfo,
+    pub info: Arc<MessageInfo>,
     pub is_unavailable: bool,
     pub unavailable_type: UnavailableType,
     pub decrypt_fail_mode: DecryptFailMode,

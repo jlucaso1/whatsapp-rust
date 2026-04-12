@@ -29,7 +29,7 @@ use waproto::whatsapp as wa;
 
 #[derive(Clone, Debug)]
 pub struct PendingPdoRequest {
-    pub message_info: MessageInfo,
+    pub message_info: Arc<MessageInfo>,
     pub requested_at: wacore::time::Instant,
 }
 
@@ -56,7 +56,7 @@ impl Client {
     /// * `Err` if we couldn't send the request (e.g., not logged in)
     pub async fn send_pdo_placeholder_resend_request(
         self: &Arc<Self>,
-        info: &MessageInfo,
+        info: &Arc<MessageInfo>,
     ) -> Result<(), anyhow::Error> {
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
@@ -104,7 +104,7 @@ impl Client {
         }
 
         let pending = PendingPdoRequest {
-            message_info: info.clone(),
+            message_info: Arc::clone(info),
             requested_at: wacore::time::Instant::now(),
         };
         self.pdo_pending_requests
@@ -335,7 +335,7 @@ impl Client {
             pending.message_info
         } else {
             match self.message_info_from_web_message_info(&web_msg_info).await {
-                Ok(info) => info,
+                Ok(info) => Arc::new(info),
                 Err(e) => {
                     warn!(
                         "Failed to reconstruct MessageInfo from PDO response: {:?}",
@@ -346,23 +346,23 @@ impl Client {
             }
         };
 
-        // Extract the actual message content
         let Some(message) = web_msg_info.message else {
             warn!("PDO response WebMessageInfo missing message content");
             return;
         };
 
-        if message_info.ephemeral_expiration.is_none() {
+        {
             use wacore::proto_helpers::MessageExt;
-            message_info.ephemeral_expiration =
-                message.get_base_message().get_ephemeral_expiration();
+            let mi = Arc::make_mut(&mut message_info);
+            if mi.ephemeral_expiration.is_none() {
+                mi.ephemeral_expiration = message.get_base_message().get_ephemeral_expiration();
+            }
+            mi.unavailable_request_id = if request_id.is_empty() {
+                None
+            } else {
+                Some(request_id.to_owned())
+            };
         }
-
-        message_info.unavailable_request_id = if request_id.is_empty() {
-            None
-        } else {
-            Some(request_id.to_owned())
-        };
 
         info!(
             "Dispatching PDO-recovered message {} from {} via phone (request_id={})",
@@ -456,10 +456,9 @@ impl Client {
     /// This is used when we've exhausted retry attempts and need immediate PDO recovery.
     pub(crate) fn spawn_pdo_request_with_options(
         self: &Arc<Self>,
-        info: &MessageInfo,
+        info: &Arc<MessageInfo>,
         immediate: bool,
     ) {
-        // Don't send PDO for our own messages or status broadcasts
         if info.source.is_from_me {
             return;
         }
@@ -468,7 +467,7 @@ impl Client {
         }
 
         let client_clone = Arc::clone(self);
-        let info_clone = info.clone();
+        let info_clone = Arc::clone(info);
 
         self.runtime
             .spawn(Box::pin(async move {
@@ -493,7 +492,7 @@ impl Client {
 
     /// Spawns a PDO request for a message that failed to decrypt.
     /// This is called alongside the retry receipt to increase chances of recovery.
-    pub(crate) fn spawn_pdo_request(self: &Arc<Self>, info: &MessageInfo) {
+    pub(crate) fn spawn_pdo_request(self: &Arc<Self>, info: &Arc<MessageInfo>) {
         self.spawn_pdo_request_with_options(info, false);
     }
 }

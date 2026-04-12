@@ -35,17 +35,19 @@ pub(crate) use wacore::protocol::retry::RetryReason;
 
 impl Client {
     /// Dispatches a successfully parsed message to the event bus and sends a delivery receipt.
-    fn dispatch_parsed_message(self: &Arc<Self>, msg: wa::Message, info: &MessageInfo) {
+    fn dispatch_parsed_message(self: &Arc<Self>, msg: wa::Message, info: &Arc<MessageInfo>) {
         use wacore::proto_helpers::MessageExt;
 
-        let mut info = info.clone();
-        if info.ephemeral_expiration.is_none() {
-            info.ephemeral_expiration = msg.get_base_message().get_ephemeral_expiration();
+        let mut info = Arc::clone(info);
+        if info.ephemeral_expiration.is_none()
+            && msg.get_base_message().get_ephemeral_expiration().is_some()
+        {
+            Arc::make_mut(&mut info).ephemeral_expiration =
+                msg.get_base_message().get_ephemeral_expiration();
         }
 
-        // Send delivery receipt immediately in the background.
         let client_clone = self.clone();
-        let info_for_receipt = info.clone();
+        let info_for_receipt = Arc::clone(&info);
         self.runtime
             .spawn(Box::pin(async move {
                 client_clone.send_delivery_receipt(&info_for_receipt).await;
@@ -59,7 +61,11 @@ impl Client {
 
     /// Handles a newsletter plaintext message.
     /// Newsletters are not E2E encrypted and use the <plaintext> tag directly.
-    async fn handle_newsletter_message(self: &Arc<Self>, node: &NodeRef<'_>, info: &MessageInfo) {
+    async fn handle_newsletter_message(
+        self: &Arc<Self>,
+        node: &NodeRef<'_>,
+        info: &Arc<MessageInfo>,
+    ) {
         let Some(plaintext_node) = node.get_optional_child_by_tag(&["plaintext"]) else {
             log::warn!(
                 "[msg:{}] Received newsletter message without <plaintext> child: {}",
@@ -97,12 +103,12 @@ impl Client {
     /// * `decrypt_fail_mode` - Whether to show or hide the placeholder (matches WhatsApp Web's `hideFail`)
     fn dispatch_undecryptable_event(
         &self,
-        info: &MessageInfo,
+        info: Arc<MessageInfo>,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) {
         self.core.event_bus.dispatch(Event::UndecryptableMessage(
             crate::types::events::UndecryptableMessage {
-                info: info.clone(),
+                info,
                 is_unavailable: false,
                 unavailable_type: crate::types::events::UnavailableType::Unknown,
                 decrypt_fail_mode,
@@ -119,11 +125,11 @@ impl Client {
     /// Returns `true` to be assigned to `dispatched_undecryptable` flag.
     fn handle_decrypt_failure(
         self: &Arc<Self>,
-        info: &MessageInfo,
+        info: &Arc<MessageInfo>,
         reason: RetryReason,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> bool {
-        self.dispatch_undecryptable_event(info, decrypt_fail_mode);
+        self.dispatch_undecryptable_event(Arc::clone(info), decrypt_fail_mode);
         self.spawn_retry_receipt(info, reason);
         true
     }
@@ -190,9 +196,9 @@ impl Client {
     /// # Arguments
     /// * `info` - The message info for the failed message
     /// * `reason` - The retry reason code (matches WhatsApp Web's RetryReason enum)
-    fn spawn_retry_receipt(self: &Arc<Self>, info: &MessageInfo, reason: RetryReason) {
+    fn spawn_retry_receipt(self: &Arc<Self>, info: &Arc<MessageInfo>, reason: RetryReason) {
         let client = Arc::clone(self);
-        let info = info.clone();
+        let info = Arc::clone(info);
 
         self.runtime.spawn(Box::pin(async move {
             let cache_key = client
@@ -322,7 +328,7 @@ impl Client {
             self.spawn_pdo_request_with_options(&info, true);
             self.core.event_bus.dispatch(Event::UndecryptableMessage(
                 crate::types::events::UndecryptableMessage {
-                    info: (*info).clone(),
+                    info: Arc::clone(&info),
                     is_unavailable: true,
                     unavailable_type,
                     decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
@@ -566,7 +572,7 @@ impl Client {
                             info.id, info.source.sender
                         );
                         if !session_dispatched_undecryptable {
-                            self.dispatch_undecryptable_event(&info, decrypt_fail_mode);
+                            self.dispatch_undecryptable_event(Arc::clone(&info), decrypt_fail_mode);
                         }
                     }
 
@@ -591,7 +597,7 @@ impl Client {
             // Dispatch UndecryptableMessage event for messages that failed to decrypt
             // (This should not cause double-dispatching since process_session_enc_batch
             // already returned dispatched_undecryptable=false for this case)
-            self.dispatch_undecryptable_event(&info, decrypt_fail_mode);
+            self.dispatch_undecryptable_event(Arc::clone(&info), decrypt_fail_mode);
             // Do NOT send delivery receipt - transport ack is sufficient
         }
 
@@ -603,7 +609,7 @@ impl Client {
     async fn process_session_enc_batch<'n>(
         self: Arc<Self>,
         enc_nodes: &[&'n NodeRef<'n>],
-        info: &MessageInfo,
+        info: &Arc<MessageInfo>,
         sender_encryption_jid: &Jid,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> (bool, bool, bool) {
@@ -993,7 +999,7 @@ impl Client {
     async fn process_group_enc_batch<'n>(
         self: Arc<Self>,
         enc_nodes: &[&'n NodeRef<'n>],
-        info: &MessageInfo,
+        info: &Arc<MessageInfo>,
         _sender_encryption_jid: &Jid,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> Result<(), DecryptionError> {
@@ -1094,7 +1100,7 @@ impl Client {
                         self.handle_unknown_device_sync(info).await;
                     }
 
-                    self.dispatch_undecryptable_event(info, decrypt_fail_mode);
+                    self.dispatch_undecryptable_event(Arc::clone(info), decrypt_fail_mode);
                     self.spawn_retry_receipt(info, retry_reason);
                 }
                 Err(e) => {
@@ -1151,7 +1157,7 @@ impl Client {
         enc_type: &str,
         padded_plaintext: &[u8],
         padding_version: u8,
-        info: &MessageInfo,
+        info: &Arc<MessageInfo>,
     ) -> Result<(), anyhow::Error> {
         let original_msg = wacore::messages::decode_plaintext(padded_plaintext, padding_version)?;
         log::debug!(
@@ -1240,7 +1246,7 @@ impl Client {
         rng: &mut rand::rngs::StdRng,
         enc_type: &str,
         padding_version: u8,
-        info: &MessageInfo,
+        info: &Arc<MessageInfo>,
     ) -> bool {
         use wacore::libsignal::protocol::{UsePQRatchet, message_decrypt};
 
@@ -1666,14 +1672,14 @@ mod tests {
         let sender_jid: Jid = "1234567890@s.whatsapp.net"
             .parse()
             .expect("test JID should be valid");
-        let info = MessageInfo {
+        let info = Arc::new(MessageInfo {
             source: crate::types::message::MessageSource {
                 sender: sender_jid.clone(),
                 chat: sender_jid.clone(),
                 ..Default::default()
             },
             ..Default::default()
-        };
+        });
 
         // Create a valid but undecryptable SignalMessage
         let dummy_key = [0u8; 32];
@@ -1747,14 +1753,14 @@ mod tests {
         let sender_jid: Jid = "0000000000000@s.whatsapp.net"
             .parse()
             .expect("test JID should be valid");
-        let info = MessageInfo {
+        let info = Arc::new(MessageInfo {
             source: crate::types::message::MessageSource {
                 sender: sender_jid.clone(),
                 chat: sender_jid.clone(),
                 ..Default::default()
             },
             ..Default::default()
-        };
+        });
 
         // Pre-store an empty (degenerate) session record in the signal cache.
         // This simulates the bug scenario: record exists but has no usable ratchet state.
@@ -2721,14 +2727,14 @@ mod tests {
             .parse()
             .expect("test JID should be valid");
 
-        let info = MessageInfo {
+        let info = Arc::new(MessageInfo {
             source: crate::types::message::MessageSource {
                 sender: sender_jid.clone(),
                 chat: sender_jid.clone(),
                 ..Default::default()
             },
             ..Default::default()
-        };
+        });
 
         log::info!("Test: UntrustedIdentity scenario for {}", sender_jid);
 
@@ -2798,14 +2804,14 @@ mod tests {
             .parse()
             .expect("test JID should be valid");
 
-        let info = MessageInfo {
+        let info = Arc::new(MessageInfo {
             source: crate::types::message::MessageSource {
                 sender: sender_jid.clone(),
                 chat: sender_jid.clone(),
                 ..Default::default()
             },
             ..Default::default()
-        };
+        });
 
         log::info!("Test: Batch processing with multiple error messages");
 
@@ -2883,7 +2889,7 @@ mod tests {
             .parse()
             .expect("test JID should be valid");
 
-        let info = MessageInfo {
+        let info = Arc::new(MessageInfo {
             source: crate::types::message::MessageSource {
                 sender: sender_phone.clone(),
                 chat: group_jid.clone(),
@@ -2891,7 +2897,7 @@ mod tests {
                 ..Default::default()
             },
             ..Default::default()
-        };
+        });
 
         log::info!("Test: Group context - error handling for {}", sender_phone);
 
@@ -4171,6 +4177,7 @@ mod tests {
         );
 
         // Call spawn_retry_receipt (this spawns a task, so we need to wait)
+        let info = Arc::new(info);
         client.spawn_retry_receipt(&info, RetryReason::UnknownError);
 
         // Give the spawned task time to execute
@@ -4205,6 +4212,7 @@ mod tests {
         );
 
         // Call spawn_retry_receipt - should NOT increment (already at max)
+        let info = Arc::new(info);
         client.spawn_retry_receipt(&info, RetryReason::UnknownError);
 
         // Give the spawned task time to execute
@@ -4758,6 +4766,7 @@ mod tests {
 
         // WA Web retries revoked messages the same as any other — the revoke
         // protocol message contains the target ID needed to process the deletion
+        let info = Arc::new(info);
         client.spawn_retry_receipt(&info, RetryReason::NoSession);
 
         // Wait for the spawned task to execute
