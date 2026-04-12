@@ -139,6 +139,15 @@ use wacore::runtime::Runtime;
 /// Type alias for chatstate event handler functions.
 type ChatStateHandler = Arc<dyn Fn(ChatStateEvent) + Send + Sync>;
 
+/// Per-chat lane for sequential message processing. Combines the enqueue lock
+/// and queue sender into a single cached entry (one lookup instead of two).
+/// Keyed by `Jid` to avoid per-message `to_string()` allocation.
+#[derive(Clone)]
+pub(crate) struct ChatLane {
+    pub enqueue_lock: Arc<async_lock::Mutex<()>>,
+    pub queue_tx: async_channel::Sender<Arc<wacore_binary::OwnedNodeRef>>,
+}
+
 const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
 
 /// WA Web: MQTT `MqttProtocolClient.connect()` uses `CONNECT_TIMEOUT = 20s`,
@@ -166,8 +175,7 @@ pub struct MemoryDiagnostics {
     pub pdo_pending_requests: u64,
     // -- Moka caches (capacity-only, no TTL) --
     pub session_locks: u64,
-    pub message_queues: u64,
-    pub message_enqueue_locks: u64,
+    pub chat_lanes: u64,
     // -- Unbounded collections --
     pub response_waiters: usize,
     pub node_waiters: usize,
@@ -211,12 +219,7 @@ impl std::fmt::Display for MemoryDiagnostics {
         writeln!(f, "  pdo_pending_requests:   {}", self.pdo_pending_requests)?;
         writeln!(f, "--- Moka caches (capacity-only) ---")?;
         writeln!(f, "  session_locks:          {}", self.session_locks)?;
-        writeln!(f, "  message_queues:         {}", self.message_queues)?;
-        writeln!(
-            f,
-            "  message_enqueue_locks:  {}",
-            self.message_enqueue_locks
-        )?;
+        writeln!(f, "  chat_lanes:             {}", self.chat_lanes)?;
         writeln!(f, "--- Unbounded collections ---")?;
         writeln!(f, "  response_waiters:       {}", self.response_waiters)?;
         writeln!(f, "  node_waiters:           {}", self.node_waiters)?;
@@ -346,11 +349,9 @@ pub struct Client {
     /// to match the SignalProtocolStoreAdapter's internal locking.
     pub(crate) session_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
-    /// Per-chat message queues for sequential message processing.
-    /// Prevents race conditions where a later message is processed before
-    /// the PreKey message that establishes the Signal session.
-    pub(crate) message_queues:
-        Cache<String, async_channel::Sender<Arc<wacore_binary::OwnedNodeRef>>>,
+    /// Per-chat lane combining enqueue lock + message queue into a single cached entry.
+    /// One cache lookup instead of two per incoming message.
+    pub(crate) chat_lanes: Cache<Jid, ChatLane>,
 
     /// Cache for LID to Phone Number mappings (bidirectional).
     /// When we receive a message with sender_lid/sender_pn attributes, we store the mapping here.
@@ -358,11 +359,6 @@ pub struct Client {
     /// The cache is backed by persistent storage and warmed up on client initialization.
     pub(crate) lid_pn_cache: Arc<LidPnCache>,
     pub(crate) ab_props: Arc<wacore::store::ab_props::AbPropsCache>,
-
-    /// Per-chat mutex for serializing message enqueue operations.
-    /// This ensures messages are enqueued in the order they arrive,
-    /// preventing race conditions during queue initialization.
-    pub(crate) message_enqueue_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
     pub group_cache: async_lock::Mutex<Option<Arc<TypedCache<Jid, GroupInfo>>>>,
 
@@ -661,17 +657,14 @@ impl Client {
             session_locks: Cache::builder()
                 .max_capacity(cache_config.session_locks_capacity.max(1))
                 .build(),
-            message_queues: Cache::builder()
-                .max_capacity(cache_config.message_queues_capacity.max(1))
+            chat_lanes: Cache::builder()
+                .max_capacity(cache_config.chat_lanes_capacity.max(1))
                 .build(),
             lid_pn_cache: Arc::new(LidPnCache::with_config(
                 &cache_config.lid_pn_cache,
                 cache_config.cache_stores.lid_pn_cache.clone(),
             )),
             ab_props: Arc::new(wacore::store::ab_props::AbPropsCache::new()),
-            message_enqueue_locks: Cache::builder()
-                .max_capacity(cache_config.message_enqueue_locks_capacity.max(1))
-                .build(),
             group_cache: async_lock::Mutex::new(None),
             retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
 
@@ -1236,10 +1229,8 @@ impl Client {
         // checks the socket, but this ordering avoids a confusing state window.
         self.is_connected.store(false, Ordering::Release);
         self.retried_group_messages.invalidate_all();
-        // Drop per-chat message queue senders so workers exit via channel close.
-        // Without this, stale workers from the old connection survive reconnects
-        // holding outdated signal/crypto state.
-        self.message_queues.invalidate_all();
+        // Drop per-chat lanes so workers exit via channel close.
+        self.chat_lanes.invalidate_all();
         // Clear pending retries so stale keys from detached scopeguard
         // cleanup don't suppress the first retry after reconnect.
         self.pending_retries
@@ -1335,8 +1326,7 @@ impl Client {
             message_retry_counts: self.message_retry_counts.entry_count(),
             pdo_pending_requests: self.pdo_pending_requests.entry_count(),
             session_locks: self.session_locks.entry_count(),
-            message_queues: self.message_queues.entry_count(),
-            message_enqueue_locks: self.message_enqueue_locks.entry_count(),
+            chat_lanes: self.chat_lanes.entry_count(),
             response_waiters: self.response_waiters.lock().await.len(),
             node_waiters: self.node_waiter_count.load(Ordering::Relaxed),
             pending_retries: pending_retries_count,
