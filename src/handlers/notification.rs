@@ -849,7 +849,7 @@ async fn handle_business_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
     let event = Event::BusinessStatusUpdate(BusinessStatusUpdate {
         jid: notification.from.clone(),
         update_type,
-        timestamp: notification.timestamp,
+        timestamp: chrono::DateTime::from_timestamp(notification.timestamp, 0).unwrap_or_default(),
         target_jid: notification.jid.clone(),
         hash: notification.hash.clone(),
         verified_name,
@@ -1396,7 +1396,8 @@ fn handle_disappearing_mode_notification(client: &Arc<Client>, node: &NodeRef<'_
     // WA Web: `t.attrTime("t")` — required, no default.
     let Some(setting_timestamp) = dm_attrs
         .optional_string("t")
-        .and_then(|s| s.parse::<u64>().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
     else {
         warn!(
             "disappearing_mode notification missing or invalid 't' attribute: {}",

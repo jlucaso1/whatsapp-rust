@@ -318,7 +318,7 @@ impl From<crate::stanza::business::BusinessNotificationType> for BusinessUpdateT
 pub struct BusinessStatusUpdate {
     pub jid: Jid,
     pub update_type: BusinessUpdateType,
-    pub timestamp: i64,
+    pub timestamp: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_jid: Option<Jid>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -344,9 +344,9 @@ pub struct DisappearingModeChanged {
     pub from: Jid,
     /// New duration in seconds (0 = disabled, 86400 = 24h, etc.).
     pub duration: u32,
-    /// Unix timestamp (seconds) when the setting was changed.
-    /// Consumers should only apply this if it's newer than their stored timestamp.
-    pub setting_timestamp: u64,
+    /// When the setting was changed.
+    /// Consumers should only apply this if it's newer than their stored value.
+    pub setting_timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -813,9 +813,10 @@ pub struct ContactUpdate {
 #[derive(Debug, Clone, Serialize)]
 pub struct PushNameUpdate {
     pub jid: Jid,
-    pub message: Box<MessageInfo>,
+    pub message: Arc<MessageInfo>,
     pub old_push_name: String,
     pub new_push_name: String,
+    pub from_full_sync: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
