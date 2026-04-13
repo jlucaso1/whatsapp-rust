@@ -667,7 +667,7 @@ impl Client {
                         "Phash mismatch for {jid}: ours={our_phash}, server={server}. Invalidating caches."
                     );
                     // Device cache is user-scoped; only valid for 1:1 DMs
-                    if !jid.is_group() {
+                    if !jid.is_group() && !jid.is_status_broadcast() {
                         client.invalidate_device_cache(&jid.user).await;
                     }
                     client
