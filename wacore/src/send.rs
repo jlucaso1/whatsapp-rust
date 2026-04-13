@@ -705,11 +705,14 @@ pub async fn prepare_dm_stanza<
 
     let recipient_plaintext = MessageUtils::encode_and_pad(&message_for_encryption);
 
+    // Compute phash before DSM so own companions learn the device set
+    let phash = MessageUtils::participant_list_hash(&all_devices).ok();
+
     let dsm = wa::Message {
         device_sent_message: Some(Box::new(DeviceSentMessage {
             destination_jid: Some(to_jid.to_string()),
             message: Some(Box::new(message_for_encryption)),
-            phash: Some(String::new()),
+            phash: Some(phash.clone().unwrap_or_default()),
         })),
         ..Default::default()
     };
@@ -729,6 +732,12 @@ pub async fn prepare_dm_stanza<
         || should_hide_decrypt_fail(message);
 
     let mediatype = media_type_from_message(message);
+
+    // NOTE: WA Web has a bare-<enc> fast path for single primary device
+    // (WAWebSendMsgCreateFanoutStanza). Not implemented here because
+    // encrypt_for_devices always wraps in <to jid=...> nodes;
+    // a bare-enc mode would require refactoring the encryption layer.
+    // The <participants> form is accepted by the server regardless.
 
     if !recipient_devices.is_empty() {
         let result = encrypt_for_devices(
@@ -787,6 +796,10 @@ pub async fn prepare_dm_stanza<
         .attr("to", to_jid)
         .attr("id", request_id)
         .attr("type", stanza_type);
+
+    if let Some(ph) = phash {
+        stanza_builder = stanza_builder.attr("phash", ph);
+    }
 
     if let Some(edit_attr) = edit
         && edit_attr != crate::types::message::EditAttribute::Empty

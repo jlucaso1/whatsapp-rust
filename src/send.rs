@@ -666,6 +666,8 @@ impl Client {
                     log::warn!(
                         "Phash mismatch for {jid}: ours={our_phash}, server={server}. Invalidating caches."
                     );
+                    // Device list is stale — next send will re-fetch
+                    client.invalidate_device_cache(&jid.user).await;
                     client
                         .sender_key_device_cache
                         .invalidate(&jid.to_string())
@@ -1056,31 +1058,40 @@ impl Client {
                 }
             }
 
-            // DM fanout: encrypt for ALL recipient devices + own companion devices.
-            //
-            // The original WA Web approach (MsgCreateFanoutStanza.js) encrypts
-            // only for the bare recipient JID (device 0) and relies on server-side
-            // fanout to deliver to companion devices. However, companion devices
-            // often receive <unavailable> instead of the encrypted payload, causing
-            // "Waiting for this message" on WhatsApp Web/Desktop clients.
-            //
-            // Fix: fetch all recipient devices and encrypt for each one
-            // individually, same as mobile clients do. This ensures companion
-            // devices get a directly-encrypted payload they can decrypt without
-            // needing a retry receipt + PDO relay from the primary phone.
+            // DM fanout: all known recipient devices + own companions.
+            // WAWebSendUserMsgJob reads local device table only on the send
+            // path; WAWebDBDeviceListFanout excludes hosted devices.
             let recipient_bare = self.resolve_encryption_jid(&to).await.to_non_ad();
 
-            let recipient_devices = self.get_user_devices(std::slice::from_ref(&to)).await?;
-            let own_devices = self.get_user_devices(std::slice::from_ref(own_jid)).await?;
-
-            let mut all_dm_jids = Vec::with_capacity(recipient_devices.len().max(1) + own_devices.len());
-            if recipient_devices.is_empty() {
-                // Fallback: no known devices, use bare JID (server fanout)
-                all_dm_jids.push(recipient_bare);
-            } else {
-                all_dm_jids.extend(recipient_devices);
+            // Local registry first; network warm only on miss to avoid
+            // unnecessary LID-migration side effects from get_user_devices
+            let mut recipient_cached = self.get_devices_from_registry(&recipient_bare).await;
+            if recipient_cached.is_none() {
+                let _ = self.get_user_devices(std::slice::from_ref(&to)).await;
+                recipient_cached = self.get_devices_from_registry(&recipient_bare).await;
             }
-            all_dm_jids.extend(own_devices);
+
+            let mut own_cached = self.get_devices_from_registry(own_jid).await;
+            if own_cached.is_none() {
+                let _ = self.get_user_devices(std::slice::from_ref(own_jid)).await;
+                own_cached = self.get_devices_from_registry(own_jid).await;
+            }
+
+            // Build device list, filter hosted in-place, reuse Vecs
+            let mut all_dm_jids = match recipient_cached {
+                Some(mut devices) => {
+                    devices.retain(|j| !j.is_hosted());
+                    devices
+                }
+                // No record at all — bare JID, server handles fanout
+                None => vec![recipient_bare],
+            };
+
+            if let Some(mut own_devices) = own_cached {
+                own_devices.retain(|j| !j.is_hosted());
+                all_dm_jids.reserve(own_devices.len());
+                all_dm_jids.append(&mut own_devices);
+            }
 
             self.ensure_e2e_sessions(&all_dm_jids).await?;
 
