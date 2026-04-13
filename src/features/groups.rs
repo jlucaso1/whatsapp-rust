@@ -1,22 +1,40 @@
 use crate::client::Client;
+use crate::features::mex::{MexError, MexRequest};
 use std::collections::HashMap;
 use wacore::client::context::GroupInfo;
 use wacore::iq::groups::{
-    AcceptGroupInviteIq, AcceptGroupInviteV4Iq, AddParticipantsIq, DemoteParticipantsIq,
-    GetGroupInviteInfoIq, GetGroupInviteLinkIq, GetMembershipRequestsIq, GroupCreateIq,
+    AcceptGroupInviteIq, AcceptGroupInviteV4Iq, AcknowledgeGroupIq, AddParticipantsIq,
+    BatchGetGroupInfoIq, CancelMembershipRequestsIq, DemoteParticipantsIq, GetGroupInviteInfoIq,
+    GetGroupInviteLinkIq, GetGroupProfilePicturesIq, GetMembershipRequestsIq, GroupCreateIq,
     GroupInfoResponse, GroupParticipantResponse, GroupParticipatingIq, GroupQueryIq, LeaveGroupIq,
-    MembershipRequestActionIq, PromoteParticipantsIq, RemoveParticipantsIq, SetGroupAnnouncementIq,
-    SetGroupDescriptionIq, SetGroupEphemeralIq, SetGroupLockedIq, SetGroupMembershipApprovalIq,
-    SetGroupSubjectIq, SetMemberAddModeIq, normalize_participants,
+    MembershipRequestActionIq, PromoteParticipantsIq, RemoveParticipantsIq, RevokeRequestCodeIq,
+    SetAllowAdminReportsIq, SetGroupAnnouncementIq, SetGroupDescriptionIq, SetGroupEphemeralIq,
+    SetGroupHistoryIq, SetGroupLockedIq, SetGroupMembershipApprovalIq, SetGroupSubjectIq,
+    SetMemberAddModeIq, SetNoFrequentlyForwardedIq, normalize_participants,
 };
 use wacore::types::message::AddressingMode;
 use wacore_binary::Jid;
 
+use wacore::iq::groups::BatchGroupInfoResult as RawBatchResult;
 pub use wacore::iq::groups::{
-    GroupCreateOptions, GroupDescription, GroupParticipantOptions, GroupSubject, JoinGroupResult,
-    MemberAddMode, MemberLinkMode, MembershipApprovalMode, MembershipRequest,
-    ParticipantChangeResponse,
+    GroupCreateOptions, GroupDescription, GroupJoinError, GroupParticipantOptions,
+    GroupProfilePicture, GroupSubject, GrowthLockInfo, InviteInfoError, JoinGroupResult,
+    MemberAddMode, MemberLinkMode, MemberShareHistoryMode, MembershipApprovalMode,
+    MembershipRequest, ParticipantChangeResponse, ParticipantType, PictureType,
 };
+
+/// Result for a single group in a batch query.
+#[derive(Debug, Clone)]
+pub enum BatchGroupResult {
+    Full(Box<GroupMetadata>),
+    /// Server returned truncated info (only id and size).
+    Truncated {
+        id: Jid,
+        size: Option<u32>,
+    },
+    Forbidden(Jid),
+    NotFound(Jid),
+}
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct GroupMetadata {
@@ -66,13 +84,41 @@ pub struct GroupMetadata {
     pub is_general_chat: bool,
     /// Whether non-admin community members can create subgroups.
     pub allow_non_admin_sub_group_creation: bool,
+    /// Whether frequently-forwarded messages are restricted.
+    pub no_frequently_forwarded: bool,
+    /// Who can share message history with new members.
+    pub member_share_history_mode: Option<MemberShareHistoryMode>,
+    /// Growth lock status (invite links temporarily disabled).
+    pub growth_locked: Option<GrowthLockInfo>,
+    /// Whether the group is suspended.
+    pub is_suspended: bool,
+    /// Whether admin reports are allowed.
+    pub allow_admin_reports: bool,
+    /// Whether the group is hidden.
+    pub is_hidden_group: bool,
+    /// Whether incognito mode is enabled.
+    pub is_incognito: bool,
+    /// Whether group history is enabled.
+    pub has_group_history: bool,
+    /// Whether limit sharing is enabled.
+    pub is_limit_sharing_enabled: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroupParticipant {
     pub jid: Jid,
     pub phone_number: Option<Jid>,
-    pub is_admin: bool,
+    pub participant_type: ParticipantType,
+}
+
+impl GroupParticipant {
+    pub fn is_admin(&self) -> bool {
+        self.participant_type.is_admin()
+    }
+
+    pub fn is_super_admin(&self) -> bool {
+        self.participant_type == ParticipantType::SuperAdmin
+    }
 }
 
 impl From<GroupParticipantResponse> for GroupParticipant {
@@ -80,7 +126,7 @@ impl From<GroupParticipantResponse> for GroupParticipant {
         Self {
             jid: p.jid,
             phone_number: p.phone_number,
-            is_admin: p.participant_type.is_admin(),
+            participant_type: p.participant_type,
         }
     }
 }
@@ -113,6 +159,15 @@ impl From<GroupInfoResponse> for GroupMetadata {
             is_default_sub_group: group.is_default_sub_group,
             is_general_chat: group.is_general_chat,
             allow_non_admin_sub_group_creation: group.allow_non_admin_sub_group_creation,
+            no_frequently_forwarded: group.no_frequently_forwarded,
+            member_share_history_mode: group.member_share_history_mode,
+            growth_locked: group.growth_locked,
+            is_suspended: group.is_suspended,
+            allow_admin_reports: group.allow_admin_reports,
+            is_hidden_group: group.is_hidden_group,
+            is_incognito: group.is_incognito,
+            has_group_history: group.has_group_history,
+            is_limit_sharing_enabled: group.is_limit_sharing_enabled,
         }
     }
 }
@@ -399,7 +454,7 @@ impl<'a> Groups<'a> {
         &self,
         code: &str,
     ) -> Result<JoinGroupResult, anyhow::Error> {
-        let code = strip_invite_url(code);
+        let code = extract_invite_code(code);
         Ok(self.client.execute(AcceptGroupInviteIq::new(code)).await?)
     }
 
@@ -430,7 +485,7 @@ impl<'a> Groups<'a> {
 
     /// Get group metadata from an invite code without joining.
     pub async fn get_invite_info(&self, code: &str) -> Result<GroupMetadata, anyhow::Error> {
-        let code = strip_invite_url(code);
+        let code = extract_invite_code(code);
         let group = self.client.execute(GetGroupInviteInfoIq::new(code)).await?;
         Ok(GroupMetadata::from(group))
     }
@@ -480,6 +535,175 @@ impl<'a> Groups<'a> {
             .client
             .execute(SetMemberAddModeIq::new(jid, mode))
             .await?)
+    }
+
+    /// Restrict or allow frequently-forwarded messages in the group.
+    pub async fn set_no_frequently_forwarded(
+        &self,
+        jid: &Jid,
+        restrict: bool,
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(SetNoFrequentlyForwardedIq::new(jid, restrict))
+            .await?)
+    }
+
+    /// Enable or disable admin reports in the group.
+    pub async fn set_allow_admin_reports(
+        &self,
+        jid: &Jid,
+        allow: bool,
+    ) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(SetAllowAdminReportsIq::new(jid, allow))
+            .await?)
+    }
+
+    /// Enable or disable group history sharing.
+    pub async fn set_group_history(&self, jid: &Jid, enabled: bool) -> Result<(), anyhow::Error> {
+        Ok(self
+            .client
+            .execute(SetGroupHistoryIq::new(jid, enabled))
+            .await?)
+    }
+
+    /// Set who can share invite links (via MEX).
+    pub async fn set_member_link_mode(
+        &self,
+        jid: &Jid,
+        mode: MemberLinkMode,
+    ) -> Result<(), MexError> {
+        let value = match mode {
+            MemberLinkMode::AdminLink => "ADMIN_LINK",
+            MemberLinkMode::AllMemberLink => "ALL_MEMBER_LINK",
+        };
+        self.mex_update_group_property(jid, serde_json::json!({ "member_link_mode": value }))
+            .await
+    }
+
+    /// Set who can share message history with new members (via MEX).
+    pub async fn set_member_share_history_mode(
+        &self,
+        jid: &Jid,
+        mode: MemberShareHistoryMode,
+    ) -> Result<(), MexError> {
+        let value = match mode {
+            MemberShareHistoryMode::AdminShare => "ADMIN_SHARE",
+            MemberShareHistoryMode::AllMemberShare => "ALL_MEMBER_SHARE",
+        };
+        self.mex_update_group_property(
+            jid,
+            serde_json::json!({ "member_share_group_history_mode": value }),
+        )
+        .await
+    }
+
+    /// Enable or disable limit sharing in the group (via MEX).
+    pub async fn set_limit_sharing(&self, jid: &Jid, enabled: bool) -> Result<(), MexError> {
+        self.mex_update_group_property(
+            jid,
+            serde_json::json!({
+                "limit_sharing": {
+                    "limit_sharing_enabled": enabled,
+                    "limit_sharing_trigger": "CHAT_SETTING"
+                }
+            }),
+        )
+        .await
+    }
+
+    /// Cancel pending membership requests (from the requesting user's side).
+    pub async fn cancel_membership_requests(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(CancelMembershipRequestsIq::new(jid, participants))
+            .await?)
+    }
+
+    /// Revoke invitation codes from specific participants (admin operation).
+    pub async fn revoke_request_code(
+        &self,
+        jid: &Jid,
+        participants: &[Jid],
+    ) -> Result<Vec<ParticipantChangeResponse>, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(RevokeRequestCodeIq::new(jid, participants))
+            .await?)
+    }
+
+    /// Acknowledge a group notification.
+    pub async fn acknowledge(&self, jid: &Jid) -> Result<(), anyhow::Error> {
+        Ok(self.client.execute(AcknowledgeGroupIq::new(jid)).await?)
+    }
+
+    /// Batch query group info for multiple groups at once.
+    pub async fn batch_get_info(
+        &self,
+        jids: Vec<Jid>,
+    ) -> Result<Vec<BatchGroupResult>, anyhow::Error> {
+        let raw = self.client.execute(BatchGetGroupInfoIq::new(jids)).await?;
+        Ok(raw
+            .into_iter()
+            .map(|r| match r {
+                RawBatchResult::Full(info) => {
+                    BatchGroupResult::Full(Box::new(GroupMetadata::from(*info)))
+                }
+                RawBatchResult::Truncated { id, size } => BatchGroupResult::Truncated { id, size },
+                RawBatchResult::Forbidden(id) => BatchGroupResult::Forbidden(id),
+                RawBatchResult::NotFound(id) => BatchGroupResult::NotFound(id),
+            })
+            .collect())
+    }
+
+    /// Batch fetch group profile pictures.
+    pub async fn get_profile_pictures(
+        &self,
+        group_jids: Vec<Jid>,
+    ) -> Result<Vec<GroupProfilePicture>, anyhow::Error> {
+        Ok(self
+            .client
+            .execute(GetGroupProfilePicturesIq::new(group_jids))
+            .await?)
+    }
+
+    async fn mex_update_group_property(
+        &self,
+        jid: &Jid,
+        update: serde_json::Value,
+    ) -> Result<(), MexError> {
+        let resp = self
+            .client
+            .mex()
+            .mutate(MexRequest {
+                doc_id: wacore::iq::groups::mex_docs::UPDATE_GROUP_PROPERTY,
+                variables: serde_json::json!({
+                    "group_id": jid.to_string(),
+                    "update": update,
+                }),
+            })
+            .await?;
+
+        let state = resp
+            .data
+            .as_ref()
+            .and_then(|d| d.get("xwa2_group_update_property"))
+            .and_then(|r| r.get("state"))
+            .and_then(|s| s.as_str());
+
+        if state != Some("ACTIVE") {
+            return Err(MexError::PayloadParsing(format!(
+                "group property update failed, state: {state:?}"
+            )));
+        }
+
+        Ok(())
     }
 
     async fn resolve_participant_tokens(&self, jids: &[Jid]) -> Vec<GroupParticipantOptions> {
@@ -587,11 +811,47 @@ impl Client {
     }
 }
 
-fn strip_invite_url(code: &str) -> &str {
-    let code = code.trim().trim_end_matches('/');
-    code.strip_prefix("https://chat.whatsapp.com/")
-        .or_else(|| code.strip_prefix("http://chat.whatsapp.com/"))
-        .unwrap_or(code)
+/// Extract the invite code from any supported invite URL format.
+///
+/// Handles all WA Web patterns:
+/// - `https://chat.whatsapp.com/CODE?query`
+/// - `https://chat.whatsapp.com/invite/CODE?query`
+/// - `https://web.whatsapp.com/.../accept/?code=CODE&...`
+/// - `whatsapp://chat/?code=CODE`
+/// - bare code string
+fn extract_invite_code(input: &str) -> &str {
+    let input = input.trim();
+
+    // whatsapp://chat/?code=CODE or web.whatsapp.com/.../accept/?code=CODE
+    if let Some(code) = extract_code_param(input) {
+        return code;
+    }
+
+    // https://chat.whatsapp.com/invite/CODE or https://chat.whatsapp.com/CODE
+    let stripped = input
+        .strip_prefix("https://chat.whatsapp.com/")
+        .or_else(|| input.strip_prefix("http://chat.whatsapp.com/"));
+
+    if let Some(path) = stripped {
+        let path = path.strip_prefix("invite/").unwrap_or(path);
+        // strip trailing slash and query params
+        return path.split('?').next().unwrap_or(path).trim_end_matches('/');
+    }
+
+    input
+}
+
+fn extract_code_param(input: &str) -> Option<&str> {
+    let query = input.split('?').nth(1)?;
+    for pair in query.split('&') {
+        if let Some(val) = pair.strip_prefix("code=") {
+            let val = val.trim_end_matches('/');
+            if !val.is_empty() {
+                return Some(val);
+            }
+        }
+    }
+    None
 }
 
 #[cfg(test)]
@@ -613,14 +873,76 @@ mod tests {
             participants: vec![GroupParticipant {
                 jid: participant_jid,
                 phone_number: None,
-                is_admin: true,
+                participant_type: ParticipantType::Admin,
             }],
             ..Default::default()
         };
 
         assert_eq!(metadata.subject, "Test Group");
         assert_eq!(metadata.participants.len(), 1);
-        assert!(metadata.participants[0].is_admin);
+        assert!(metadata.participants[0].is_admin());
+        assert!(!metadata.participants[0].is_super_admin());
+    }
+
+    #[test]
+    fn test_extract_invite_code() {
+        // Pattern 3: most common
+        assert_eq!(
+            extract_invite_code("https://chat.whatsapp.com/AbCdEfGh"),
+            "AbCdEfGh"
+        );
+        assert_eq!(
+            extract_invite_code("http://chat.whatsapp.com/AbCdEfGh"),
+            "AbCdEfGh"
+        );
+
+        // With query params
+        assert_eq!(
+            extract_invite_code("https://chat.whatsapp.com/AbCdEfGh?fbclid=123&utm_source=x"),
+            "AbCdEfGh"
+        );
+
+        // Trailing slash
+        assert_eq!(
+            extract_invite_code("https://chat.whatsapp.com/AbCdEfGh/"),
+            "AbCdEfGh"
+        );
+
+        // Pattern 2: /invite/ prefix
+        assert_eq!(
+            extract_invite_code("https://chat.whatsapp.com/invite/AbCdEfGh"),
+            "AbCdEfGh"
+        );
+        assert_eq!(
+            extract_invite_code("https://chat.whatsapp.com/invite/AbCdEfGh?utm=test"),
+            "AbCdEfGh"
+        );
+
+        // Pattern 1: web.whatsapp.com/accept?code=
+        assert_eq!(
+            extract_invite_code("https://web.whatsapp.com/accept?code=AbCdEfGh"),
+            "AbCdEfGh"
+        );
+        assert_eq!(
+            extract_invite_code("https://web.whatsapp.com/accept/?code=AbCdEfGh&other=1"),
+            "AbCdEfGh"
+        );
+
+        // Pattern 4: deep link
+        assert_eq!(
+            extract_invite_code("whatsapp://chat/?code=AbCdEfGh"),
+            "AbCdEfGh"
+        );
+        assert_eq!(
+            extract_invite_code("whatsapp://chat?code=AbCdEfGh&extra=y"),
+            "AbCdEfGh"
+        );
+
+        // Bare code
+        assert_eq!(extract_invite_code("AbCdEfGh"), "AbCdEfGh");
+
+        // Whitespace
+        assert_eq!(extract_invite_code("  AbCdEfGh  "), "AbCdEfGh");
     }
 
     // Protocol-level tests (node building, parsing, validation) are in wacore/src/iq/groups.rs
