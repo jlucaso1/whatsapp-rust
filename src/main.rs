@@ -265,11 +265,11 @@ fn parse_arg(args: &[String], long: &str, short: &str) -> Option<String> {
 
 /// Show QR code on terminal as image.
 pub fn print_qr_to_terminal(txt: &str) {
-	let code = QrCode::new(txt).unwrap();
-
-	// Render QR code as UTF-8 characters for the terminal
-	let qr_string = code.render::<unicode::Dense1x2>().build();
-
-	// Print to terminal
-	println!("{}", qr_string);
+    if let Ok(code) = QrCode::new(txt) {
+        // Render QR code as UTF-8 characters for the terminal
+        let qr_string = code.render::<unicode::Dense1x2>().build();
+    
+        // Print to terminal
+        println!("{}", qr_string);
+    }
 }
