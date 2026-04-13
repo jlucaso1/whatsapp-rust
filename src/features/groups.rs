@@ -454,7 +454,8 @@ impl<'a> Groups<'a> {
         &self,
         code: &str,
     ) -> Result<JoinGroupResult, anyhow::Error> {
-        let code = extract_invite_code(code);
+        let code = extract_invite_code(code)
+            .ok_or_else(|| anyhow::anyhow!("invalid or empty invite code"))?;
         Ok(self.client.execute(AcceptGroupInviteIq::new(code)).await?)
     }
 
@@ -485,7 +486,8 @@ impl<'a> Groups<'a> {
 
     /// Get group metadata from an invite code without joining.
     pub async fn get_invite_info(&self, code: &str) -> Result<GroupMetadata, anyhow::Error> {
-        let code = extract_invite_code(code);
+        let code = extract_invite_code(code)
+            .ok_or_else(|| anyhow::anyhow!("invalid or empty invite code"))?;
         let group = self.client.execute(GetGroupInviteInfoIq::new(code)).await?;
         Ok(GroupMetadata::from(group))
     }
@@ -836,12 +838,12 @@ impl Client {
 /// - `https://web.whatsapp.com/.../accept/?code=CODE&...`
 /// - `whatsapp://chat/?code=CODE`
 /// - bare code string
-fn extract_invite_code(input: &str) -> &str {
+fn extract_invite_code(input: &str) -> Option<&str> {
     let input = input.trim();
 
     // whatsapp://chat/?code=CODE or web.whatsapp.com/.../accept/?code=CODE
     if let Some(code) = extract_code_param(input) {
-        return code;
+        return Some(code);
     }
 
     // https://chat.whatsapp.com/invite/CODE or https://chat.whatsapp.com/CODE
@@ -849,13 +851,17 @@ fn extract_invite_code(input: &str) -> &str {
         .strip_prefix("https://chat.whatsapp.com/")
         .or_else(|| input.strip_prefix("http://chat.whatsapp.com/"));
 
-    if let Some(path) = stripped {
+    let code = if let Some(path) = stripped {
         let path = path.strip_prefix("invite/").unwrap_or(path);
-        // strip trailing slash and query params
-        return path.split('?').next().unwrap_or(path).trim_end_matches('/');
-    }
+        path.split('?').next().unwrap_or(path).trim_end_matches('/')
+    } else if input.contains("://") || input.contains('?') {
+        // Looks like a URL we don't recognize or one with an empty code= param
+        return None;
+    } else {
+        input.trim_end_matches('/')
+    };
 
-    input.trim_end_matches('/')
+    if code.is_empty() { None } else { Some(code) }
 }
 
 fn extract_code_param(input: &str) -> Option<&str> {
@@ -905,62 +911,71 @@ mod tests {
     fn test_extract_invite_code() {
         // Pattern 3: most common
         assert_eq!(
-            extract_invite_code("https://chat.whatsapp.com/AbCdEfGh"),
+            extract_invite_code("https://chat.whatsapp.com/AbCdEfGh").unwrap(),
             "AbCdEfGh"
         );
         assert_eq!(
-            extract_invite_code("http://chat.whatsapp.com/AbCdEfGh"),
+            extract_invite_code("http://chat.whatsapp.com/AbCdEfGh").unwrap(),
             "AbCdEfGh"
         );
 
         // With query params
         assert_eq!(
-            extract_invite_code("https://chat.whatsapp.com/AbCdEfGh?fbclid=123&utm_source=x"),
+            extract_invite_code("https://chat.whatsapp.com/AbCdEfGh?fbclid=123&utm_source=x")
+                .unwrap(),
             "AbCdEfGh"
         );
 
         // Trailing slash
         assert_eq!(
-            extract_invite_code("https://chat.whatsapp.com/AbCdEfGh/"),
+            extract_invite_code("https://chat.whatsapp.com/AbCdEfGh/").unwrap(),
             "AbCdEfGh"
         );
 
         // Pattern 2: /invite/ prefix
         assert_eq!(
-            extract_invite_code("https://chat.whatsapp.com/invite/AbCdEfGh"),
+            extract_invite_code("https://chat.whatsapp.com/invite/AbCdEfGh").unwrap(),
             "AbCdEfGh"
         );
         assert_eq!(
-            extract_invite_code("https://chat.whatsapp.com/invite/AbCdEfGh?utm=test"),
+            extract_invite_code("https://chat.whatsapp.com/invite/AbCdEfGh?utm=test").unwrap(),
             "AbCdEfGh"
         );
 
         // Pattern 1: web.whatsapp.com/accept?code=
         assert_eq!(
-            extract_invite_code("https://web.whatsapp.com/accept?code=AbCdEfGh"),
+            extract_invite_code("https://web.whatsapp.com/accept?code=AbCdEfGh").unwrap(),
             "AbCdEfGh"
         );
         assert_eq!(
-            extract_invite_code("https://web.whatsapp.com/accept/?code=AbCdEfGh&other=1"),
+            extract_invite_code("https://web.whatsapp.com/accept/?code=AbCdEfGh&other=1").unwrap(),
             "AbCdEfGh"
         );
 
         // Pattern 4: deep link
         assert_eq!(
-            extract_invite_code("whatsapp://chat/?code=AbCdEfGh"),
+            extract_invite_code("whatsapp://chat/?code=AbCdEfGh").unwrap(),
             "AbCdEfGh"
         );
         assert_eq!(
-            extract_invite_code("whatsapp://chat?code=AbCdEfGh&extra=y"),
+            extract_invite_code("whatsapp://chat?code=AbCdEfGh&extra=y").unwrap(),
             "AbCdEfGh"
         );
 
         // Bare code
-        assert_eq!(extract_invite_code("AbCdEfGh"), "AbCdEfGh");
-        assert_eq!(extract_invite_code("AbCdEfGh/"), "AbCdEfGh");
+        assert_eq!(extract_invite_code("AbCdEfGh").unwrap(), "AbCdEfGh");
+        assert_eq!(extract_invite_code("AbCdEfGh/").unwrap(), "AbCdEfGh");
 
         // Whitespace
-        assert_eq!(extract_invite_code("  AbCdEfGh  "), "AbCdEfGh");
+        assert_eq!(extract_invite_code("  AbCdEfGh  ").unwrap(), "AbCdEfGh");
+
+        // Empty / malformed inputs return None
+        assert!(extract_invite_code("").is_none());
+        assert!(extract_invite_code("   ").is_none());
+        assert!(extract_invite_code("https://chat.whatsapp.com/").is_none());
+        assert!(extract_invite_code("https://chat.whatsapp.com/invite/").is_none());
+        assert!(extract_invite_code("whatsapp://chat/?code=").is_none());
+        assert!(extract_invite_code("whatsapp://chat/?code=&other=1").is_none());
     }
 
     // Protocol-level tests (node building, parsing, validation) are in wacore/src/iq/groups.rs
