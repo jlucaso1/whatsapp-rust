@@ -951,18 +951,27 @@ impl Client {
                             self.handle_decrypt_failure(info, reason, decrypt_fail_mode);
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidPreKeyId) {
-                        // InvalidPreKeyId means the sender is using a PreKey ID that we don't have.
-                        // This typically happens when:
-                        // 1. We were offline for a long time
-                        // 2. The sender established a session with us using a prekey from the server
-                        // 3. We never received the initial session-establishing message
-                        // 4. Now we're receiving messages with counters 3, 4, 5... referencing that prekey
-                        //
-                        // The sender thinks they have a valid session, but we never had it.
-                        // We need to send a retry receipt with fresh prekeys so the sender can:
-                        // 1. Delete their old session
-                        // 2. Fetch our new prekeys from the retry receipt
-                        // 3. Create a NEW session and resend with counter 0
+                        // InvalidPreKeyId on a PreKeyMessage can also mean the
+                        // session exists under a PN address (legacy migration).
+                        // Migrating lets Signal use the existing ratchet state
+                        // instead of looking up the consumed one-time prekey.
+                        if self
+                            .try_pn_to_lid_migration_decrypt(
+                                sender_encryption_jid,
+                                &signal_address,
+                                &parsed_message,
+                                &mut adapter,
+                                &mut rng,
+                                &enc_type,
+                                padding_version,
+                                info,
+                            )
+                            .await
+                        {
+                            any_success = true;
+                            continue;
+                        }
+
                         log::warn!(
                             "[msg:{}] Decryption failed for {} message from {} due to InvalidPreKeyId. \
                              Sender is using a prekey we don't have (likely session established while offline). \
