@@ -319,6 +319,7 @@ pub struct BusinessStatusUpdate {
     /// The business account whose status changed.
     pub jid: Jid,
     pub update_type: BusinessUpdateType,
+    #[serde(with = "chrono::serde::ts_seconds")]
     pub timestamp: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_jid: Option<Jid>,
@@ -347,6 +348,7 @@ pub struct DisappearingModeChanged {
     pub duration: u32,
     /// When the setting was changed.
     /// Consumers should only apply this if it's newer than their stored value.
+    #[serde(with = "chrono::serde::ts_seconds")]
     pub setting_timestamp: DateTime<Utc>,
 }
 
@@ -450,7 +452,9 @@ impl Event {
     /// Returns the primary JID associated with this event, if any.
     ///
     /// Useful for routing events to the right chat without exhaustively matching every variant.
-    /// Returns `None` for connection-lifecycle and sync events that have no associated chat.
+    /// Returns `None` for connection-lifecycle and sync events that have no associated chat,
+    /// and for `JoinedGroup` (the JID is embedded inside the serialized `LazyConversation`
+    /// bytes and would require proto decoding to extract).
     pub fn chat_jid(&self) -> Option<&Jid> {
         match self {
             Event::Message(_, info) => Some(&info.source.chat),
