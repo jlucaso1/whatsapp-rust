@@ -838,7 +838,7 @@ fn extract_invite_code(input: &str) -> &str {
         return path.split('?').next().unwrap_or(path).trim_end_matches('/');
     }
 
-    input
+    input.trim_end_matches('/')
 }
 
 fn extract_code_param(input: &str) -> Option<&str> {
@@ -940,6 +940,7 @@ mod tests {
 
         // Bare code
         assert_eq!(extract_invite_code("AbCdEfGh"), "AbCdEfGh");
+        assert_eq!(extract_invite_code("AbCdEfGh/"), "AbCdEfGh");
 
         // Whitespace
         assert_eq!(extract_invite_code("  AbCdEfGh  "), "AbCdEfGh");
