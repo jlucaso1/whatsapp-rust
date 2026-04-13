@@ -675,6 +675,16 @@ fn partition_dm_devices(
     (recipient_devices, own_other_devices)
 }
 
+/// Result of `prepare_dm_stanza` — carries the stanza node and the
+/// locally computed phash for server ACK validation.
+pub struct PreparedDmStanza {
+    pub node: Node,
+    /// Locally computed phash from the sent device set. Not sent on the
+    /// wire (WA Web only sends phash for groups). Used by the caller to
+    /// compare against the server's ACK phash for device-list drift detection.
+    pub phash: Option<String>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_dm_stanza<
     'a,
@@ -694,7 +704,7 @@ pub async fn prepare_dm_stanza<
     edit: Option<crate::types::message::EditAttribute>,
     extra_stanza_nodes: &[Node],
     all_devices: Vec<Jid>,
-) -> Result<Node> {
+) -> Result<PreparedDmStanza> {
     let reporting_result = generate_reporting_token(message, &request_id, &to_jid, &to_jid, None);
 
     let message_for_encryption = if let Some(ref result) = reporting_result {
@@ -721,7 +731,7 @@ pub async fn prepare_dm_stanza<
         device_sent_message: Some(Box::new(DeviceSentMessage {
             destination_jid: Some(to_jid.to_string()),
             message: Some(Box::new(message_for_encryption)),
-            phash: Some(phash.clone().unwrap_or_default()),
+            phash: None, // WA Web only sets DSM phash for groups
         })),
         ..Default::default()
     };
@@ -802,10 +812,6 @@ pub async fn prepare_dm_stanza<
         .attr("id", request_id)
         .attr("type", stanza_type);
 
-    if let Some(ph) = phash {
-        stanza_builder = stanza_builder.attr("phash", ph);
-    }
-
     if let Some(edit_attr) = edit
         && edit_attr != crate::types::message::EditAttribute::Empty
     {
@@ -814,7 +820,10 @@ pub async fn prepare_dm_stanza<
 
     let stanza = stanza_builder.children(message_content_nodes).build();
 
-    Ok(stanza)
+    Ok(PreparedDmStanza {
+        node: stanza,
+        phash,
+    })
 }
 
 pub async fn prepare_peer_stanza<S, I>(

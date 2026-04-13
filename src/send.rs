@@ -860,6 +860,7 @@ impl Client {
         let mut used_cached_tc_token_key: Option<String> = None;
         let tc_issue_target = to.clone();
 
+        let mut dm_phash: Option<String> = None;
         let stanza_to_send: wacore_binary::Node = if peer && !to.is_group() {
             // Peer messages are only valid for individual users, not groups
             // Resolve encryption JID and acquire lock ONLY for encryption
@@ -1130,7 +1131,7 @@ impl Client {
 
             let mut stores = store_adapter.as_signal_stores();
 
-            wacore::send::prepare_dm_stanza(
+            let prepared = wacore::send::prepare_dm_stanza(
                 &mut stores,
                 self,
                 own_jid,
@@ -1143,13 +1144,12 @@ impl Client {
                 &extra_stanza_nodes,
                 all_dm_jids,
             )
-            .await?
+            .await?;
+            dm_phash = prepared.phash;
+            prepared.node
         };
 
-        let ack = if let Some(phash) = stanza_to_send
-            .attrs()
-            .optional_string("phash")
-            .map(|s| s.into_owned())
+        let ack = if let Some(phash) = dm_phash
             && let Some(msg_id) = stanza_to_send
                 .attrs()
                 .optional_string("id")
