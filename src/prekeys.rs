@@ -311,42 +311,51 @@ impl Client {
             guard.backend.clone()
         };
 
-        // Load each prekey referenced by the server digest and extract its public key
+        // Batch-load all prekeys referenced by the server digest
+        let loaded = match backend.load_prekeys_batch(&response.prekey_ids).await {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("digestKey: failed to batch-load prekeys: {:?}, skipping", e);
+                return Ok(());
+            }
+        };
+
+        // Build a lookup so we preserve the server-requested order.
+        // Dedupe the expected count since the server may send duplicate IDs.
+        let loaded_map: std::collections::HashMap<u32, Vec<u8>> = loaded.into_iter().collect();
+        let unique_requested: std::collections::HashSet<&u32> =
+            response.prekey_ids.iter().collect();
+
+        if loaded_map.len() < unique_requested.len() {
+            log::warn!(
+                "digestKey: missing {} local prekeys, skipping",
+                unique_requested.len() - loaded_map.len()
+            );
+            return Ok(());
+        }
+
         let mut prekey_pubkeys = Vec::with_capacity(response.prekey_ids.len());
         for prekey_id in &response.prekey_ids {
-            match backend.load_prekey(*prekey_id).await {
-                Ok(Some(record_bytes)) => {
-                    use prost::Message;
-                    match waproto::whatsapp::PreKeyRecordStructure::decode(record_bytes.as_slice())
-                    {
-                        Ok(record) => {
-                            if let Some(pk) = record.public_key {
-                                prekey_pubkeys.push(pk);
-                            } else {
-                                log::warn!(
-                                    "digestKey: prekey {} has no public key, skipping",
-                                    prekey_id
-                                );
-                                return Ok(());
-                            }
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                "digestKey: failed to decode prekey {}: {}, skipping",
-                                prekey_id,
-                                e
-                            );
-                            return Ok(());
-                        }
+            let Some(record_bytes) = loaded_map.get(prekey_id) else {
+                log::warn!("digestKey: missing local prekey {}, skipping", prekey_id);
+                return Ok(());
+            };
+            use prost::Message;
+            match waproto::whatsapp::PreKeyRecordStructure::decode(record_bytes.as_slice()) {
+                Ok(record) => {
+                    if let Some(pk) = record.public_key {
+                        prekey_pubkeys.push(pk);
+                    } else {
+                        log::warn!(
+                            "digestKey: prekey {} has no public key, skipping",
+                            prekey_id
+                        );
+                        return Ok(());
                     }
-                }
-                Ok(None) => {
-                    log::warn!("digestKey: missing local prekey {}, skipping", prekey_id);
-                    return Ok(());
                 }
                 Err(e) => {
                     log::warn!(
-                        "digestKey: failed to load prekey {}: {:?}, skipping",
+                        "digestKey: failed to decode prekey {}: {}, skipping",
                         prekey_id,
                         e
                     );

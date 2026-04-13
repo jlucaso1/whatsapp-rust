@@ -47,17 +47,17 @@ impl PreKeyUtils {
         signed_pre_key_id: u32,
         signed_pre_key_public_bytes: Vec<u8>,
         signed_pre_key_signature: Vec<u8>,
-        pre_keys: &[(u32, Vec<u8>)],
+        pre_keys: impl IntoIterator<Item = (u32, Vec<u8>)>,
     ) -> Vec<Node> {
-        let mut pre_key_nodes = Vec::new();
+        let pre_keys = pre_keys.into_iter();
+        let (lower, upper) = pre_keys.size_hint();
+        let mut pre_key_nodes = Vec::with_capacity(upper.unwrap_or(lower));
         for (pre_key_id, public_bytes) in pre_keys {
             let id_bytes = pre_key_id.to_be_bytes()[1..].to_vec();
             let node = NodeBuilder::new("key")
                 .children([
                     NodeBuilder::new("id").bytes(id_bytes).build(),
-                    NodeBuilder::new("value")
-                        .bytes(public_bytes.clone())
-                        .build(),
+                    NodeBuilder::new("value").bytes(public_bytes).build(),
                 ])
                 .build();
             pre_key_nodes.push(node);
