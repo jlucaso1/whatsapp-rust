@@ -705,8 +705,17 @@ pub async fn prepare_dm_stanza<
 
     let recipient_plaintext = MessageUtils::encode_and_pad(&message_for_encryption);
 
-    // Compute phash before DSM so own companions learn the device set
-    let phash = MessageUtils::participant_list_hash(&all_devices).ok();
+    // Partition first so phash reflects the actual sent set (sender excluded)
+    let total_devices = all_devices.len();
+    let (recipient_devices, own_other_devices) =
+        partition_dm_devices(all_devices, own_jid, own_lid);
+
+    let phash = {
+        let mut sent = Vec::with_capacity(recipient_devices.len() + own_other_devices.len());
+        sent.extend_from_slice(&recipient_devices);
+        sent.extend_from_slice(&own_other_devices);
+        MessageUtils::participant_list_hash(&sent).ok()
+    };
 
     let dsm = wa::Message {
         device_sent_message: Some(Box::new(DeviceSentMessage {
@@ -718,10 +727,6 @@ pub async fn prepare_dm_stanza<
     };
 
     let own_devices_plaintext = MessageUtils::encode_and_pad(&dsm);
-
-    let total_devices = all_devices.len();
-    let (recipient_devices, own_other_devices) =
-        partition_dm_devices(all_devices, own_jid, own_lid);
 
     let mut participant_nodes = Vec::with_capacity(total_devices);
     let mut includes_prekey_message = false;

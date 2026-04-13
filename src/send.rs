@@ -666,8 +666,10 @@ impl Client {
                     log::warn!(
                         "Phash mismatch for {jid}: ours={our_phash}, server={server}. Invalidating caches."
                     );
-                    // Device list is stale — next send will re-fetch
-                    client.invalidate_device_cache(&jid.user).await;
+                    // Device cache is user-scoped; only valid for 1:1 DMs
+                    if !jid.is_group() {
+                        client.invalidate_device_cache(&jid.user).await;
+                    }
                     client
                         .sender_key_device_cache
                         .invalidate(&jid.to_string())
@@ -1089,9 +1091,17 @@ impl Client {
 
             if let Some(mut own_devices) = own_cached {
                 own_devices.retain(|j| !j.is_hosted());
-                all_dm_jids.reserve(own_devices.len());
                 all_dm_jids.append(&mut own_devices);
             }
+
+            // Exclude exact sender device (WA Web: isMeDevice in getFanOutList)
+            // so ensure_e2e_sessions never creates a self-session
+            let own_lid = device_snapshot.lid.as_ref();
+            all_dm_jids.retain(|j| {
+                let is_sender = (j.is_same_user_as(own_jid) && j.device == own_jid.device)
+                    || own_lid.is_some_and(|lid| j.is_same_user_as(lid) && j.device == lid.device);
+                !is_sender
+            });
 
             self.ensure_e2e_sessions(&all_dm_jids).await?;
 
