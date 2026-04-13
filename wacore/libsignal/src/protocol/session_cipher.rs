@@ -116,6 +116,21 @@ async fn message_encrypt_inner(
         )
     })?;
 
+    // Check trust before doing any crypto work
+    if !identity_store
+        .is_trusted_identity(remote_address, &their_identity_key, Direction::Sending)
+        .await?
+    {
+        log::warn!(
+            "Identity key {} is not trusted for remote address {}",
+            hex::encode(their_identity_key.public_key().public_key_bytes()),
+            remote_address,
+        );
+        return Err(SignalProtocolError::UntrustedIdentity(
+            remote_address.clone(),
+        ));
+    }
+
     let ctext = ENCRYPTION_BUFFER.with(|buffer| {
         let mut buf_wrapper = buffer.borrow_mut();
         let buf = buf_wrapper.get_buffer();
@@ -174,26 +189,10 @@ async fn message_encrypt_inner(
         )?)
     };
 
-    if !identity_store
-        .is_trusted_identity(remote_address, &their_identity_key, Direction::Sending)
-        .await?
-    {
-        log::warn!(
-            "Identity key {} is not trusted for remote address {}",
-            hex::encode(their_identity_key.public_key().public_key_bytes()),
-            remote_address,
-        );
-        return Err(SignalProtocolError::UntrustedIdentity(
-            remote_address.clone(),
-        ));
-    }
-
     identity_store
         .save_identity(remote_address, &their_identity_key)
         .await?;
 
-    // Advance chain key only after identity checks pass, so
-    // UntrustedIdentity doesn't burn a counter.
     session_state.set_sender_chain_key(&next_chain_key);
 
     Ok(message)

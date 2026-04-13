@@ -278,28 +278,41 @@ impl SignalStoreCache {
         backend: &dyn SignalStore,
     ) -> Result<Option<SessionRecord>> {
         let key = address.as_str();
-        let mut state = self.sessions.lock().await;
-        if let Some(entry) = state.cache.get_mut(key) {
-            if matches!(entry, SessionEntry::Present(_)) {
-                let SessionEntry::Present(record) =
-                    std::mem::replace(entry, SessionEntry::CheckedOut)
-                else {
-                    unreachable!()
-                };
-                return Ok(Some(*record));
+        {
+            let mut state = self.sessions.lock().await;
+            if let Some(entry) = state.cache.get_mut(key) {
+                if matches!(entry, SessionEntry::Present(_)) {
+                    let SessionEntry::Present(record) =
+                        std::mem::replace(entry, SessionEntry::CheckedOut)
+                    else {
+                        unreachable!()
+                    };
+                    return Ok(Some(*record));
+                }
+                return Ok(None);
             }
-            return Ok(None);
         }
-        match backend.get_session(key).await? {
+        // Backend I/O outside the lock
+        let backend_result = backend.get_session(key).await?;
+        let mut state = self.sessions.lock().await;
+        match backend_result {
             Some(bytes) => {
+                if state.cache.contains_key(key) {
+                    // Another task populated this slot while we were loading;
+                    // defer to whatever they wrote (Present, CheckedOut, etc).
+                    // Deserialize and return without caching to avoid conflict.
+                    return Ok(Some(SessionRecord::deserialize(&bytes)?));
+                }
                 let record = SessionRecord::deserialize(&bytes)?;
                 state.cache.insert(Arc::from(key), SessionEntry::CheckedOut);
                 state.evict_if_needed(self.max_entries);
                 Ok(Some(record))
             }
             None => {
-                state.cache.insert(Arc::from(key), SessionEntry::Absent);
-                state.evict_if_needed(self.max_entries);
+                if !state.cache.contains_key(key) {
+                    state.cache.insert(Arc::from(key), SessionEntry::Absent);
+                    state.evict_if_needed(self.max_entries);
+                }
                 Ok(None)
             }
         }
@@ -313,26 +326,35 @@ impl SignalStoreCache {
         backend: &dyn SignalStore,
     ) -> Result<Option<SessionRecord>> {
         let key = address.as_str();
-        let mut state = self.sessions.lock().await;
-        if let Some(entry) = state.cache.get(key) {
-            return match entry {
-                SessionEntry::Present(record) => Ok(Some((**record).clone())),
-                _ => Ok(None),
-            };
+        {
+            let state = self.sessions.lock().await;
+            if let Some(entry) = state.cache.get(key) {
+                return match entry {
+                    SessionEntry::Present(record) => Ok(Some((**record).clone())),
+                    _ => Ok(None),
+                };
+            }
         }
-        match backend.get_session(key).await? {
+        // Backend I/O outside the lock
+        let backend_result = backend.get_session(key).await?;
+        let mut state = self.sessions.lock().await;
+        match backend_result {
             Some(bytes) => {
                 let record = SessionRecord::deserialize(&bytes)?;
-                let cloned = record.clone();
-                state
-                    .cache
-                    .insert(Arc::from(key), SessionEntry::Present(Box::new(record)));
-                state.evict_if_needed(self.max_entries);
-                Ok(Some(cloned))
+                if !state.cache.contains_key(key) {
+                    state.cache.insert(
+                        Arc::from(key),
+                        SessionEntry::Present(Box::new(record.clone())),
+                    );
+                    state.evict_if_needed(self.max_entries);
+                }
+                Ok(Some(record))
             }
             None => {
-                state.cache.insert(Arc::from(key), SessionEntry::Absent);
-                state.evict_if_needed(self.max_entries);
+                if !state.cache.contains_key(key) {
+                    state.cache.insert(Arc::from(key), SessionEntry::Absent);
+                    state.evict_if_needed(self.max_entries);
+                }
                 Ok(None)
             }
         }

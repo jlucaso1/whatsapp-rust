@@ -13,9 +13,14 @@ fn decompress_zlib(compressed: &[u8]) -> Result<Vec<u8>> {
     let estimated = (compressed.len() * 4).clamp(256, 64 * 1024);
     let mut out = Vec::with_capacity(estimated);
     ZlibDecoder::new(compressed)
-        .take(MAX_DECOMPRESSED_SIZE)
+        .take(MAX_DECOMPRESSED_SIZE + 1)
         .read_to_end(&mut out)
         .map_err(|e| BinaryError::Zlib(e.to_string()))?;
+    if out.len() as u64 > MAX_DECOMPRESSED_SIZE {
+        return Err(BinaryError::Zlib(format!(
+            "decompressed payload exceeds {MAX_DECOMPRESSED_SIZE} bytes"
+        )));
+    }
     Ok(out)
 }
 
