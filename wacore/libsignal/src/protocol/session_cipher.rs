@@ -371,7 +371,7 @@ async fn message_decrypt_signal_inner<R: Rng + CryptoRng>(
     remote_address: &ProtocolAddress,
     session_record: &mut SessionRecord,
     identity_store: &mut dyn IdentityKeyStore,
-    _csprng: &mut R,
+    csprng: &mut R,
 ) -> Result<Vec<u8>> {
     // A record with no current state and no previous states is degenerate — treat
     // it as missing so the caller gets SessionNotFound and sends a proper retry
@@ -391,7 +391,7 @@ async fn message_decrypt_signal_inner<R: Rng + CryptoRng>(
         session_record,
         ciphertext,
         CiphertextMessageType::Whisper,
-        _csprng,
+        csprng,
     )?;
 
     // Get the identity key from the (now current) session state

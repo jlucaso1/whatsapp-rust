@@ -359,14 +359,21 @@ impl SignalStoreCache {
         backend: &dyn SignalStore,
     ) -> Result<bool> {
         let key = address.as_str();
-        let mut state = self.sessions.lock().await;
-        if let Some(entry) = state.cache.get(key) {
-            return Ok(!matches!(entry, SessionEntry::Absent));
+        {
+            let state = self.sessions.lock().await;
+            if let Some(entry) = state.cache.get(key) {
+                return Ok(!matches!(entry, SessionEntry::Absent));
+            }
         }
-        let exists = backend.get_session(key).await?.is_some();
+        // Backend I/O outside the lock
+        let exists = backend.has_session(key).await?;
         if !exists {
-            state.cache.insert(Arc::from(key), SessionEntry::Absent);
-            state.evict_if_needed(self.max_entries);
+            let mut state = self.sessions.lock().await;
+            // Re-check: another task may have populated the cache
+            if !state.cache.contains_key(key) {
+                state.cache.insert(Arc::from(key), SessionEntry::Absent);
+                state.evict_if_needed(self.max_entries);
+            }
         }
         Ok(exists)
     }
