@@ -316,6 +316,7 @@ impl From<crate::stanza::business::BusinessNotificationType> for BusinessUpdateT
 /// Business status update notification.
 #[derive(Debug, Clone, Serialize)]
 pub struct BusinessStatusUpdate {
+    /// The business account whose status changed.
     pub jid: Jid,
     pub update_type: BusinessUpdateType,
     pub timestamp: DateTime<Utc>,
@@ -445,12 +446,67 @@ impl Event {
         let (msg, _) = self.as_message()?;
         msg.conversation.as_deref()
     }
+
+    /// Returns the primary JID associated with this event, if any.
+    ///
+    /// Useful for routing events to the right chat without exhaustively matching every variant.
+    /// Returns `None` for connection-lifecycle and sync events that have no associated chat.
+    pub fn chat_jid(&self) -> Option<&Jid> {
+        match self {
+            Event::Message(_, info) => Some(&info.source.chat),
+            Event::Receipt(r) => Some(&r.source.chat),
+            Event::UndecryptableMessage(u) => Some(&u.info.source.chat),
+            Event::ChatPresence(c) => Some(&c.source.chat),
+            Event::Presence(p) => Some(&p.from),
+            Event::PictureUpdate(p) => Some(&p.jid),
+            Event::UserAboutUpdate(u) => Some(&u.jid),
+            Event::ContactUpdated(c) => Some(&c.jid),
+            Event::ContactNumberChanged(c) => Some(&c.new_jid),
+            Event::GroupUpdate(g) => Some(&g.group_jid),
+            Event::JoinedGroup(_) => None,
+            Event::ContactUpdate(c) => Some(&c.jid),
+            Event::PushNameUpdate(p) => Some(&p.jid),
+            Event::PinUpdate(p) => Some(&p.jid),
+            Event::MuteUpdate(m) => Some(&m.jid),
+            Event::ArchiveUpdate(a) => Some(&a.jid),
+            Event::StarUpdate(s) => Some(&s.chat_jid),
+            Event::MarkChatAsReadUpdate(m) => Some(&m.jid),
+            Event::DeleteChatUpdate(d) => Some(&d.jid),
+            Event::DeleteMessageForMeUpdate(d) => Some(&d.chat_jid),
+            Event::BusinessStatusUpdate(b) => Some(&b.jid),
+            Event::DisappearingModeChanged(d) => Some(&d.from),
+            Event::NewsletterLiveUpdate(n) => Some(&n.newsletter_jid),
+            Event::DeviceListUpdate(d) => Some(&d.user),
+            Event::IdentityChange(i) => Some(&i.user),
+            Event::Connected(_)
+            | Event::Disconnected(_)
+            | Event::PairSuccess(_)
+            | Event::PairError(_)
+            | Event::LoggedOut(_)
+            | Event::PairingQrCode { .. }
+            | Event::PairingCode { .. }
+            | Event::QrScannedWithoutMultidevice(_)
+            | Event::ClientOutdated(_)
+            | Event::SelfPushNameUpdated(_)
+            | Event::HistorySync(_)
+            | Event::OfflineSyncPreview(_)
+            | Event::OfflineSyncCompleted(_)
+            | Event::StreamReplaced(_)
+            | Event::TemporaryBan(_)
+            | Event::ConnectFailure(_)
+            | Event::StreamError(_)
+            | Event::ContactSyncRequested(_)
+            | Event::Notification(_)
+            | Event::RawNode(_) => None,
+        }
+    }
 }
 
 /// A newsletter live update notification, typically containing updated
 /// reaction counts for one or more messages.
 #[derive(Debug, Clone, Serialize)]
 pub struct NewsletterLiveUpdate {
+    /// The newsletter channel this update belongs to.
     pub newsletter_jid: Jid,
     pub messages: Vec<NewsletterLiveUpdateMessage>,
 }
@@ -706,6 +762,7 @@ pub struct ChatPresenceUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PresenceUpdate {
+    /// The contact whose presence changed.
     pub from: Jid,
     pub unavailable: bool,
     pub last_seen: Option<DateTime<Utc>>,
@@ -729,6 +786,7 @@ pub struct PictureUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UserAboutUpdate {
+    /// The contact whose about text changed.
     pub jid: Jid,
     pub status: String,
     pub timestamp: DateTime<Utc>,
@@ -744,6 +802,7 @@ pub struct UserAboutUpdate {
 /// sync mutations (different source, different payload).
 #[derive(Debug, Clone, Serialize)]
 pub struct ContactUpdated {
+    /// The contact whose profile was updated.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
 }
@@ -804,6 +863,7 @@ pub struct GroupUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContactUpdate {
+    /// The chat/contact this sync action applies to.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ContactAction>,
@@ -812,6 +872,7 @@ pub struct ContactUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PushNameUpdate {
+    /// The contact who changed their push name.
     pub jid: Jid,
     pub message: Arc<MessageInfo>,
     pub old_push_name: String,
@@ -821,6 +882,7 @@ pub struct PushNameUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PinUpdate {
+    /// The chat being pinned or unpinned.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::PinAction>,
@@ -829,6 +891,7 @@ pub struct PinUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MuteUpdate {
+    /// The chat being muted or unmuted.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MuteAction>,
@@ -837,6 +900,7 @@ pub struct MuteUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ArchiveUpdate {
+    /// The chat being archived or unarchived.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ArchiveChatAction>,
@@ -845,6 +909,7 @@ pub struct ArchiveUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StarUpdate {
+    /// The chat containing the starred or unstarred message.
     pub chat_jid: Jid,
     /// The participant who sent the message. `Some` for group messages from
     /// others, `None` for self-authored or 1-on-1 messages (wire value `"0"`).
@@ -858,6 +923,7 @@ pub struct StarUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MarkChatAsReadUpdate {
+    /// The chat being marked as read or unread.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
@@ -866,6 +932,7 @@ pub struct MarkChatAsReadUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeleteChatUpdate {
+    /// The chat being deleted.
     pub jid: Jid,
     /// From the index, not the proto — DeleteChatAction only has messageRange.
     pub delete_media: bool,
@@ -876,6 +943,7 @@ pub struct DeleteChatUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeleteMessageForMeUpdate {
+    /// The chat containing the deleted message.
     pub chat_jid: Jid,
     pub participant_jid: Option<Jid>,
     pub message_id: String,
