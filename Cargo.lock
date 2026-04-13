@@ -2522,7 +2522,6 @@ dependencies = [
 name = "wacore-noise"
 version = "0.5.0"
 dependencies = [
- "aead",
  "aes-gcm",
  "anyhow",
  "bytes",
@@ -2662,6 +2661,7 @@ dependencies = [
 name = "whatsapp-rust"
 version = "0.5.0"
 dependencies = [
+ "aead",
  "anyhow",
  "async-channel",
  "async-lock",

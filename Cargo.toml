@@ -109,6 +109,7 @@ sqlite-storage = ["whatsapp-rust-sqlite-storage"]
 tokio-native = ["tokio-runtime", "tokio/rt-multi-thread"]
 
 [dependencies]
+aead = { workspace = true }
 anyhow = { workspace = true }
 async-channel = { workspace = true }
 async-lock = { workspace = true }

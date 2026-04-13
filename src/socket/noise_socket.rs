@@ -240,19 +240,21 @@ mod tests {
         #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
         #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl crate::transport::Transport for RecordingTransport {
-            async fn send(&self, data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
-                // Decrypt the data to extract the index (first byte of plaintext)
+            async fn send(&self, mut data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
                 if data.len() > 16 {
-                    // Skip the noise frame header (3 bytes for length)
-                    let ciphertext = &data[3..];
+                    // Strip the 3-byte frame header, then decrypt in place
+                    data.drain(..3);
                     let counter = self
                         .counter
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-                    if let Ok(plaintext) = self.read_key.decrypt_with_counter(counter, ciphertext)
-                        && !plaintext.is_empty()
+                    if self
+                        .read_key
+                        .decrypt_in_place_with_counter(counter, &mut data)
+                        .is_ok()
+                        && !data.is_empty()
                     {
-                        let index = plaintext[0];
+                        let index = data[0];
                         let mut order = self.recorded_order.lock().await;
                         order.push(index);
                     }

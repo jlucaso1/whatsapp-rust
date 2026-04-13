@@ -57,9 +57,17 @@ pub struct SignalStoreCache {
 
 // === Session object cache (no per-message serialize/deserialize) ===
 
+/// Cache entry tracking whether a session is present, absent, or checked out
+/// by an encrypt/decrypt operation.
+enum SessionEntry {
+    Present(Box<SessionRecord>),
+    Absent,
+    /// Taken by load_session; has_session treats as present, flush/eviction skip.
+    CheckedOut,
+}
+
 struct SessionStoreState {
-    /// Cached entries. `None` value = known-absent (negative cache).
-    cache: HashMap<Arc<str>, Option<SessionRecord>>,
+    cache: HashMap<Arc<str>, SessionEntry>,
     dirty: HashSet<Arc<str>>,
     deleted: HashSet<Arc<str>>,
 }
@@ -84,14 +92,15 @@ impl SessionStoreState {
 
     fn put(&mut self, address: &str, record: SessionRecord) {
         let addr = self.key_for(address);
-        self.cache.insert(addr.clone(), Some(record));
+        self.cache
+            .insert(addr.clone(), SessionEntry::Present(Box::new(record)));
         self.dirty.insert(addr.clone());
         self.deleted.remove(&addr);
     }
 
     fn delete(&mut self, address: &str) {
         let addr = self.key_for(address);
-        self.cache.insert(addr.clone(), None);
+        self.cache.insert(addr.clone(), SessionEntry::Absent);
         self.deleted.insert(addr.clone());
         self.dirty.remove(&addr);
     }
@@ -103,12 +112,25 @@ impl SessionStoreState {
     }
 
     fn evict_if_needed(&mut self, max_entries: usize) {
-        evict_clean_entries(
-            &mut self.cache,
-            &self.dirty,
-            Some(&self.deleted),
-            max_entries,
-        );
+        let overflow = self.cache.len().saturating_sub(max_entries);
+        if overflow == 0 {
+            return;
+        }
+        let mut negative = Vec::with_capacity(overflow);
+        let mut positive = Vec::with_capacity(overflow);
+        for (k, v) in self.cache.iter() {
+            if self.dirty.contains(k.as_ref()) || self.deleted.contains(k.as_ref()) {
+                continue;
+            }
+            match v {
+                SessionEntry::CheckedOut => continue, // never evict checked-out
+                SessionEntry::Absent => negative.push(k.clone()),
+                SessionEntry::Present(_) => positive.push(k.clone()),
+            }
+        }
+        for key in negative.into_iter().chain(positive).take(overflow) {
+            self.cache.remove(&key);
+        }
     }
 }
 
@@ -248,15 +270,8 @@ impl SignalStoreCache {
 
     // === Sessions (object cache — serialize only during flush) ===
 
-    /// Takes exclusive ownership of the cached [`SessionRecord`] when present.
-    ///
-    /// This removes the entry from `state.cache` so hot encrypt/decrypt paths
-    /// can mutate the owned record directly via [`SessionRecord::session_state_mut`]
-    /// without cloning the whole record first. Callers must return the record
-    /// to the cache with [`SignalStoreCache::put_session`] after use.
-    ///
-    /// Backend misses are negative-cached as `None` so repeated missing-session
-    /// checks avoid hitting persistence over and over.
+    /// Takes ownership of the cached session, leaving a `CheckedOut` marker.
+    /// Callers must return the record with [`put_session`] after use.
     pub async fn get_session(
         &self,
         address: &ProtocolAddress,
@@ -264,13 +279,21 @@ impl SignalStoreCache {
     ) -> Result<Option<SessionRecord>> {
         let key = address.as_str();
         let mut state = self.sessions.lock().await;
-        if let Some(record) = state.cache.remove(key) {
-            return Ok(record);
+        if let Some(entry) = state.cache.get_mut(key) {
+            if matches!(entry, SessionEntry::Present(_)) {
+                let SessionEntry::Present(record) =
+                    std::mem::replace(entry, SessionEntry::CheckedOut)
+                else {
+                    unreachable!()
+                };
+                return Ok(Some(*record));
+            }
+            return Ok(None);
         }
         match backend.get_session(key).await? {
             Some(bytes) => Ok(Some(SessionRecord::deserialize(&bytes)?)),
             None => {
-                state.cache.insert(Arc::from(key), None);
+                state.cache.insert(Arc::from(key), SessionEntry::Absent);
                 state.evict_if_needed(self.max_entries);
                 Ok(None)
             }
@@ -289,6 +312,9 @@ impl SignalStoreCache {
         state.evict_if_needed(self.max_entries);
     }
 
+    /// Non-destructive existence check (`CheckedOut` counts as present).
+    /// Backend misses are negative-cached; hits are not cached to skip
+    /// deserialization (the subsequent `get_session` will cache on demand).
     pub async fn has_session(
         &self,
         address: &ProtocolAddress,
@@ -296,16 +322,14 @@ impl SignalStoreCache {
     ) -> Result<bool> {
         let key = address.as_str();
         let mut state = self.sessions.lock().await;
-        if let Some(cached) = state.cache.get(key) {
-            return Ok(cached.is_some());
+        if let Some(entry) = state.cache.get(key) {
+            return Ok(!matches!(entry, SessionEntry::Absent));
         }
-        let record = match backend.get_session(key).await? {
-            Some(bytes) => Some(SessionRecord::deserialize(&bytes)?),
-            None => None,
-        };
-        let exists = record.is_some();
-        state.cache.insert(Arc::from(key), record);
-        state.evict_if_needed(self.max_entries);
+        let exists = backend.get_session(key).await?.is_some();
+        if !exists {
+            state.cache.insert(Arc::from(key), SessionEntry::Absent);
+            state.evict_if_needed(self.max_entries);
+        }
         Ok(exists)
     }
 
@@ -393,11 +417,13 @@ impl SignalStoreCache {
 
             let mut encode_buf = Vec::new();
             for address in &dirty_keys {
-                if let Some(Some(record)) = state.cache.get(address.as_ref()) {
-                    record
-                        .serialize_into(&mut encode_buf)
-                        .map_err(|e| anyhow::anyhow!("session serialize for {address}: {e}"))?;
-                    backend.put_session(address, &encode_buf).await?;
+                match state.cache.get(address.as_ref()) {
+                    Some(SessionEntry::Present(record)) => {
+                        record.serialize_into(&mut encode_buf);
+                        backend.put_session(address, &encode_buf).await?;
+                    }
+                    Some(SessionEntry::CheckedOut) => continue,
+                    _ => {}
                 }
             }
             for address in &deleted_keys {
@@ -405,7 +431,12 @@ impl SignalStoreCache {
             }
 
             for key in &dirty_keys {
-                state.dirty.remove(key);
+                if !matches!(
+                    state.cache.get(key.as_ref()),
+                    Some(SessionEntry::CheckedOut)
+                ) {
+                    state.dirty.remove(key);
+                }
             }
             for key in &deleted_keys {
                 state.deleted.remove(key);

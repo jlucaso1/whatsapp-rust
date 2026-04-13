@@ -168,7 +168,7 @@ impl RequestUtils {
         let hash = Sha256::digest(&data);
         let truncated = &hash[..9];
 
-        // "3EB0" prefix (4) + 9 bytes as hex (18) = 22 chars
+        // WA Web message IDs are "3EB0" + 18 hex chars (9-byte truncated hash)
         let mut id = String::with_capacity(22);
         id.push_str("3EB0");
         for &b in truncated {

@@ -693,6 +693,7 @@ impl<'a> NodeRef<'a> {
 
 use yoke::Yoke;
 
+#[derive(Clone)]
 struct BytesCart(Bytes);
 
 impl std::ops::Deref for BytesCart {

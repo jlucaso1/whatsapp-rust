@@ -130,29 +130,12 @@ pub trait SignedPreKeyStore: ThreadSafe {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait SessionStore: ThreadSafe {
-    /// Look up the session corresponding to `address`.
-    ///
-    /// Although this takes `&self`, implementations are expected to use
-    /// interior mutability to hand out an exclusively owned [`SessionRecord`]
-    /// when possible.
-    ///
-    /// Hot-path caches should treat this as a logical "take": once a session
-    /// is returned, the caller owns the only mutable copy until it is written
-    /// back with [`SessionStore::store_session`]. Callers that mutate or even
-    /// inspect a session and then continue must ensure they restore it on all
-    /// paths, or they risk losing the in-memory owner and forcing a reload from
-    /// persistence on the next access.
-    ///
-    /// Recommended pattern: use a scope guard / `defer`-style helper so
-    /// [`SessionStore::store_session`] runs even when an intermediate step
-    /// returns an error.
+    /// Takes the session for `address`. Implementations with caches should
+    /// treat this as a logical checkout; callers must always call
+    /// [`store_session`] to return the record, even on error paths.
     async fn load_session(&self, address: &ProtocolAddress) -> Result<Option<SessionRecord>>;
 
-    /// Check whether a session exists without taking ownership.
-    ///
-    /// Implementations must make this a non-destructive existence check. It
-    /// must not delegate to [`SessionStore::load_session`] unless they also
-    /// restore the record before returning.
+    /// Non-destructive existence check (must not consume the cached entry).
     async fn has_session(&self, address: &ProtocolAddress) -> Result<bool>;
 
     /// Set the entry for `address` to the value of `record`.

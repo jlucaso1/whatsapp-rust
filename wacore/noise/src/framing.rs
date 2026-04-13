@@ -2,7 +2,8 @@ use bytes::{Buf, BytesMut};
 use log::trace;
 
 pub const FRAME_LENGTH_SIZE: usize = 3;
-pub const FRAME_MAX_SIZE: usize = 2 << 23;
+/// WA Web: `if (t >= 1 << 24)` in WAFrameSocket.$8
+pub const FRAME_MAX_SIZE: usize = 1 << 24;
 
 /// Encodes a payload into a WhatsApp frame, writing directly into `out`.
 /// The `out` buffer is cleared before use, allowing buffer reuse.
@@ -84,7 +85,7 @@ impl FrameDecoder {
         }
 
         if self.buffer.len() >= FRAME_LENGTH_SIZE + frame_len {
-            let _ = self.buffer.split_to(FRAME_LENGTH_SIZE);
+            self.buffer.advance(FRAME_LENGTH_SIZE);
             let frame_data = self.buffer.split_to(frame_len);
             trace!("<-- Decoded frame: {} bytes", frame_data.len());
             Some(frame_data)

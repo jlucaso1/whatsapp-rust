@@ -776,12 +776,12 @@ impl SessionRecord {
 
     pub fn serialize(&self) -> Result<Vec<u8>, SignalProtocolError> {
         let mut buf = Vec::new();
-        self.serialize_into(&mut buf)?;
+        self.serialize_into(&mut buf);
         Ok(buf)
     }
 
     /// Encode into a caller-supplied buffer (allows reuse across flushes).
-    pub fn serialize_into(&self, buf: &mut Vec<u8>) -> Result<(), SignalProtocolError> {
+    pub fn serialize_into(&self, buf: &mut Vec<u8>) {
         use prost::encoding::{encoded_len_varint, message::encode as encode_msg};
 
         let current_len = self
@@ -811,8 +811,6 @@ impl SessionRecord {
         for session in self.previous_sessions.iter() {
             encode_msg(2, session, buf);
         }
-
-        Ok(())
     }
 
     pub fn remote_registration_id(&self) -> Result<u32, SignalProtocolError> {
