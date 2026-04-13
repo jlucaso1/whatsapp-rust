@@ -32,7 +32,6 @@ fn main() {
         eprintln!("Phone number provided: {}", phone);
         if let Some(ref code) = custom_code {
             eprintln!("Custom pair code: {}", code);
-            print_qr_to_terminal(&code);
         }
         eprintln!("Will use pair code authentication (concurrent with QR)");
     }
