@@ -1,5 +1,6 @@
 use chrono::{Local, Utc};
 use log::{error, info};
+use qrcode::{QrCode, render::unicode};
 use std::sync::Arc;
 use wacore::proto_helpers::MessageExt;
 use wacore::types::events::Event;
@@ -31,6 +32,7 @@ fn main() {
         eprintln!("Phone number provided: {}", phone);
         if let Some(ref code) = custom_code {
             eprintln!("Custom pair code: {}", code);
+            print_qr_to_terminal(&code);
         }
         eprintln!("Will use pair code authentication (concurrent with QR)");
     }
@@ -90,6 +92,7 @@ fn main() {
                             timeout.as_secs()
                         );
                         info!("\n{}\n", code);
+                        print_qr_to_terminal(&code);
                         info!("----------------------------------------");
                     }
                     Event::PairingCode { code, timeout } => {
@@ -100,6 +103,7 @@ fn main() {
                         info!("> Link with phone number instead");
                         info!("");
                         info!("    >>> {} <<<", code);
+                        print_qr_to_terminal(&code);
                         info!("");
                         info!("========================================");
                     }
@@ -257,4 +261,15 @@ fn parse_arg(args: &[String], long: &str, short: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Show QR code on terminal as image.
+pub fn print_qr_to_terminal(txt: &str) {
+	let code = QrCode::new(txt).unwrap();
+
+	// Render QR code as UTF-8 characters for the terminal
+	let qr_string = code.render::<unicode::Dense1x2>().build();
+
+	// Print to terminal
+	println!("{}", qr_string);
 }

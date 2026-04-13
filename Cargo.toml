@@ -125,6 +125,7 @@ log = { workspace = true }
 moka = { version = "0.12.12", features = ["future"], optional = true }
 portable-atomic = { workspace = true }
 prost = { workspace = true }
+qrcode = "0.14.1"
 rand = { workspace = true }
 scopeguard = "1.2"
 serde = { workspace = true }
