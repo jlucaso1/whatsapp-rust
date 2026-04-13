@@ -1056,19 +1056,30 @@ impl Client {
                 }
             }
 
-            // DM fanout: bare recipient (device 0) + own companion devices.
-            // WA Web (MsgCreateFanoutStanza.js): for CHAT fanout with a single
-            // primary device, encrypts directly for that device only. Own devices
-            // get per-device enc for multi-device self-sync. The server routes
-            // the bare enc to the correct recipient device.
+            // DM fanout: encrypt for ALL recipient devices + own companion devices.
+            //
+            // The original WA Web approach (MsgCreateFanoutStanza.js) encrypts
+            // only for the bare recipient JID (device 0) and relies on server-side
+            // fanout to deliver to companion devices. However, companion devices
+            // often receive <unavailable> instead of the encrypted payload, causing
+            // "Waiting for this message" on WhatsApp Web/Desktop clients.
+            //
+            // Fix: fetch all recipient devices and encrypt for each one
+            // individually, same as mobile clients do. This ensures companion
+            // devices get a directly-encrypted payload they can decrypt without
+            // needing a retry receipt + PDO relay from the primary phone.
             let recipient_bare = self.resolve_encryption_jid(&to).await.to_non_ad();
 
-            // Populate device registry for retry handling
-            let _ = self.get_user_devices(std::slice::from_ref(&to)).await;
+            let recipient_devices = self.get_user_devices(std::slice::from_ref(&to)).await?;
             let own_devices = self.get_user_devices(std::slice::from_ref(own_jid)).await?;
 
-            let mut all_dm_jids = Vec::with_capacity(1 + own_devices.len());
-            all_dm_jids.push(recipient_bare);
+            let mut all_dm_jids = Vec::with_capacity(recipient_devices.len().max(1) + own_devices.len());
+            if recipient_devices.is_empty() {
+                // Fallback: no known devices, use bare JID (server fanout)
+                all_dm_jids.push(recipient_bare);
+            } else {
+                all_dm_jids.extend(recipient_devices);
+            }
             all_dm_jids.extend(own_devices);
 
             self.ensure_e2e_sessions(&all_dm_jids).await?;
