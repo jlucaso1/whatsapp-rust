@@ -849,7 +849,8 @@ async fn handle_business_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
     let event = Event::BusinessStatusUpdate(BusinessStatusUpdate {
         jid: notification.from.clone(),
         update_type,
-        timestamp: chrono::DateTime::from_timestamp(notification.timestamp, 0).unwrap_or_default(),
+        timestamp: chrono::DateTime::from_timestamp(notification.timestamp, 0)
+            .unwrap_or_else(chrono::Utc::now),
         target_jid: notification.jid.clone(),
         hash: notification.hash.clone(),
         verified_name,
@@ -1699,7 +1700,7 @@ mod tests {
     /// Helper: parse a disappearing_mode notification node the same way
     /// the handler does, returning `(duration, setting_timestamp)` or `None`
     /// on validation failure.
-    fn parse_disappearing_mode(node: &Node) -> Option<(u32, u64)> {
+    fn parse_disappearing_mode(node: &Node) -> Option<(u32, i64)> {
         let dm_node = node.get_optional_child("disappearing_mode")?;
         let mut dm_attrs = dm_node.attrs();
         let duration = dm_attrs
@@ -1708,7 +1709,7 @@ mod tests {
             .unwrap_or(0);
         let setting_timestamp = dm_attrs
             .optional_string("t")
-            .and_then(|s| s.parse::<u64>().ok())?;
+            .and_then(|s| s.parse::<i64>().ok())?;
         Some((duration, setting_timestamp))
     }
 
