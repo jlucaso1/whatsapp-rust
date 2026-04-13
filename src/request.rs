@@ -135,11 +135,12 @@ impl Client {
             return Err(IqError::NotConnected);
         }
 
+        let default_timeout = Duration::from_secs(75);
+        let iq_timeout = query.timeout.unwrap_or(default_timeout);
         let req_id = query
             .id
             .clone()
             .unwrap_or_else(|| self.generate_request_id());
-        let default_timeout = Duration::from_secs(75);
 
         let (tx, rx) = futures::channel::oneshot::channel();
         self.response_waiters
@@ -148,7 +149,7 @@ impl Client {
             .insert(req_id.clone(), tx);
 
         let request_utils = self.get_request_utils();
-        let node = request_utils.build_iq_node(&query, Some(req_id.clone()));
+        let node = request_utils.build_iq_node(query, Some(req_id.clone()));
 
         // Register the shutdown listener BEFORE sending to avoid a window where
         // a shutdown fires between send_node() completing and listen() being called.
@@ -172,7 +173,6 @@ impl Client {
 
         // Race the IQ response against shutdown so we fail fast on disconnect
         // instead of waiting the full timeout.
-        let iq_timeout = query.timeout.unwrap_or(default_timeout);
 
         futures::select! {
             result = rt_timeout(&*self.runtime, iq_timeout, rx).fuse() => {

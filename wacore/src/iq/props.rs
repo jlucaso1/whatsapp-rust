@@ -106,7 +106,7 @@ impl crate::protocol::ProtocolNode for AbProp {
         }
         let config_value = optional_attr(node, "config_value")
             .ok_or_else(|| anyhow::anyhow!("missing config_value in prop"))?
-            .to_string();
+            .into_owned();
         let config_expo_key = optional_attr(node, "config_expo_key").and_then(|s| s.parse().ok());
 
         Ok(Self {
@@ -189,31 +189,31 @@ impl crate::protocol::ProtocolNode for AbPropConfig {
     }
 
     fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
+        use crate::iq::node::optional_attr;
+
         if node.tag != "prop" {
             return Err(anyhow::anyhow!("expected <prop>, got <{}>", node.tag));
         }
 
-        let experiment = AbProp::try_from_node_ref(node);
-        if let Ok(prop) = experiment {
-            return Ok(Self::Experiment(prop));
-        }
+        // Check discriminating attribute to avoid double-parse allocations
+        let has_config = optional_attr(node, "config_code").is_some();
+        let has_event = optional_attr(node, "event_code").is_some();
 
-        let sampling = SamplingProp::try_from_node_ref(node);
-        if let Ok(prop) = sampling {
-            return Ok(Self::Sampling(prop));
+        if has_config && has_event {
+            Err(anyhow::anyhow!(
+                "prop has both config_code and event_code (attrs: {:?})",
+                node.attrs
+            ))
+        } else if has_config {
+            Ok(Self::Experiment(AbProp::try_from_node_ref(node)?))
+        } else if has_event {
+            Ok(Self::Sampling(SamplingProp::try_from_node_ref(node)?))
+        } else {
+            Err(anyhow::anyhow!(
+                "prop has neither config_code nor event_code (attrs: {:?})",
+                node.attrs
+            ))
         }
-
-        let experiment_err = experiment
-            .err()
-            .unwrap_or_else(|| anyhow::anyhow!("unknown error"));
-        let sampling_err = sampling
-            .err()
-            .unwrap_or_else(|| anyhow::anyhow!("unknown error"));
-        Err(anyhow::anyhow!(
-            "prop did not match experiment or sampling config: experiment_err={}; sampling_err={}",
-            experiment_err,
-            sampling_err
-        ))
     }
 }
 

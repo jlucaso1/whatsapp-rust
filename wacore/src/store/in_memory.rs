@@ -155,6 +155,10 @@ impl SignalStore for InMemoryBackend {
         Ok(())
     }
 
+    async fn has_session(&self, address: &str) -> Result<bool> {
+        Ok(self.state.lock().await.sessions.contains_key(address))
+    }
+
     async fn delete_session(&self, address: &str) -> Result<()> {
         self.state.lock().await.sessions.remove(address);
         Ok(())
@@ -170,6 +174,19 @@ impl SignalStore for InMemoryBackend {
         Ok(())
     }
 
+    async fn store_prekeys_batch(&self, keys: &[(u32, Vec<u8>)], _uploaded: bool) -> Result<()> {
+        let mut state = self.state.lock().await;
+        for (id, record) in keys {
+            state.prekeys.insert(
+                *id,
+                PreKeyEntry {
+                    record: record.clone(),
+                },
+            );
+        }
+        Ok(())
+    }
+
     async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
         Ok(self
             .state
@@ -178,6 +195,17 @@ impl SignalStore for InMemoryBackend {
             .prekeys
             .get(&id)
             .map(|e| e.record.clone()))
+    }
+
+    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Vec<u8>)>> {
+        let state = self.state.lock().await;
+        let mut result = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if let Some(entry) = state.prekeys.get(&id) {
+                result.push((id, entry.record.clone()));
+            }
+        }
+        Ok(result)
     }
 
     async fn remove_prekey(&self, id: u32) -> Result<()> {

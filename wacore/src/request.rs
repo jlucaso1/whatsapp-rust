@@ -178,30 +178,22 @@ impl RequestUtils {
         id
     }
 
-    pub fn build_iq_node(&self, query: &InfoQuery<'_>, req_id: Option<String>) -> Node {
+    pub fn build_iq_node(&self, query: InfoQuery<'_>, req_id: Option<String>) -> Node {
         let id = req_id.unwrap_or_else(|| self.generate_request_id());
 
         let mut builder = NodeBuilder::new("iq")
             .attr("id", id)
             .attr("xmlns", query.namespace)
             .attr("type", query.query_type.as_str())
-            .attr("to", &query.to);
+            .attr("to", query.to);
 
-        if let Some(target) = &query.target
+        if let Some(target) = query.target
             && !target.is_empty()
         {
             builder = builder.attr("target", target);
         }
 
-        if let Some(content) = &query.content {
-            match content {
-                NodeContent::Bytes(b) => builder = builder.bytes(b.clone()),
-                NodeContent::String(s) => builder = builder.string_content(s.clone()),
-                NodeContent::Nodes(n) => builder = builder.children(n.clone()),
-            }
-        }
-
-        builder.build()
+        builder.apply_content(query.content).build()
     }
 
     pub fn parse_iq_response(&self, response_node: &NodeRef<'_>) -> Result<(), IqError> {

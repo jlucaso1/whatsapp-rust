@@ -126,6 +126,18 @@ pub trait SignalStore: Send + Sync {
     /// Load a pre-key by ID.
     async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>>;
 
+    /// Load multiple pre-keys by ID in a single batch operation.
+    /// Returns only the keys that exist.
+    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Vec<u8>)>> {
+        let mut result = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if let Some(record) = self.load_prekey(id).await? {
+                result.push((id, record));
+            }
+        }
+        Ok(result)
+    }
+
     /// Remove a pre-key.
     async fn remove_prekey(&self, id: u32) -> Result<()>;
 

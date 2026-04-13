@@ -365,20 +365,15 @@ impl IqSpec for PreKeyUploadSpec {
     type Response = ();
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        // Convert PublicKeys to 32-byte raw values for the wire
-        let pre_keys_bytes: Vec<(u32, Vec<u8>)> = self
-            .pre_keys
-            .iter()
-            .map(|(id, pk)| (*id, pk.public_key_bytes().to_vec()))
-            .collect();
-
         let content = PreKeyUtils::build_upload_prekeys_request(
             self.registration_id,
             self.identity_key.public_key_bytes().to_vec(),
             self.signed_pre_key_id,
             self.signed_pre_key_public.public_key_bytes().to_vec(),
             self.signed_pre_key_signature.clone(),
-            &pre_keys_bytes,
+            self.pre_keys
+                .iter()
+                .map(|(id, pk)| (*id, pk.public_key_bytes().to_vec())),
         );
 
         InfoQuery::set(

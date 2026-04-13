@@ -1188,6 +1188,26 @@ impl SignalStore for SqliteStore {
         self.get_session_for_device(address, self.device_id).await
     }
 
+    async fn has_session(&self, address: &str) -> Result<bool> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let address_owned = address.to_string();
+        self.with_semaphore(move || -> Result<bool> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let exists = diesel::select(diesel::dsl::exists(
+                sessions::table
+                    .filter(sessions::address.eq(&address_owned))
+                    .filter(sessions::device_id.eq(device_id)),
+            ))
+            .get_result(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(exists)
+        })
+        .await
+    }
+
     async fn put_session(&self, address: &str, session: &[u8]) -> Result<()> {
         self.put_session_for_device(address, session, self.device_id)
             .await
@@ -1344,6 +1364,28 @@ impl SignalStore for SqliteStore {
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Vec<u8>)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let ids: Vec<i32> = ids.iter().map(|&id| id as i32).collect();
+        self.with_semaphore(move || -> Result<Vec<(u32, Vec<u8>)>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let rows: Vec<(i32, Vec<u8>)> = prekeys::table
+                .select((prekeys::id, prekeys::key))
+                .filter(prekeys::id.eq_any(&ids))
+                .filter(prekeys::device_id.eq(device_id))
+                .load(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(rows.into_iter().map(|(id, key)| (id as u32, key)).collect())
+        })
+        .await
     }
 
     async fn remove_prekey(&self, id: u32) -> Result<()> {
