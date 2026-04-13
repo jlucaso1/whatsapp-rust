@@ -643,11 +643,17 @@ impl<'a> Groups<'a> {
         Ok(self.client.execute(AcknowledgeGroupIq::new(jid)).await?)
     }
 
-    /// Batch query group info for multiple groups at once.
+    /// Batch query group info for multiple groups at once (max 10,000).
     pub async fn batch_get_info(
         &self,
         jids: Vec<Jid>,
     ) -> Result<Vec<BatchGroupResult>, anyhow::Error> {
+        anyhow::ensure!(
+            jids.len() <= wacore::iq::groups::BATCH_GROUP_INFO_LIMIT,
+            "batch_get_info: {} groups exceeds limit of {}",
+            jids.len(),
+            wacore::iq::groups::BATCH_GROUP_INFO_LIMIT,
+        );
         let raw = self.client.execute(BatchGetGroupInfoIq::new(jids)).await?;
         Ok(raw
             .into_iter()
@@ -662,14 +668,25 @@ impl<'a> Groups<'a> {
             .collect())
     }
 
-    /// Batch fetch group profile pictures.
+    /// Batch fetch group profile pictures (max 1,000).
     pub async fn get_profile_pictures(
         &self,
         group_jids: Vec<Jid>,
+        picture_type: PictureType,
     ) -> Result<Vec<GroupProfilePicture>, anyhow::Error> {
+        anyhow::ensure!(
+            group_jids.len() <= wacore::iq::groups::BATCH_PROFILE_PICTURES_LIMIT,
+            "get_profile_pictures: {} groups exceeds limit of {}",
+            group_jids.len(),
+            wacore::iq::groups::BATCH_PROFILE_PICTURES_LIMIT,
+        );
+        let groups = group_jids
+            .into_iter()
+            .map(|jid| (jid, picture_type))
+            .collect();
         Ok(self
             .client
-            .execute(GetGroupProfilePicturesIq::new(group_jids))
+            .execute(GetGroupProfilePicturesIq::with_type(groups))
             .await?)
     }
 

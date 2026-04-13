@@ -30,6 +30,13 @@ pub const GROUP_DESCRIPTION_MAX_LENGTH: usize = 2048;
 
 /// Maximum number of participants in a group (from `group_size_limit` A/B prop).
 pub const GROUP_SIZE_LIMIT: usize = 257;
+
+/// Maximum number of groups in a batch info query.
+pub const BATCH_GROUP_INFO_LIMIT: usize = 10_000;
+
+/// Maximum number of pictures in a batch profile picture query.
+pub const BATCH_PROFILE_PICTURES_LIMIT: usize = 1_000;
+
 /// Member link mode for group invite links.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum MemberLinkMode {
@@ -2728,7 +2735,7 @@ impl IqSpec for GetGroupProfilePicturesIq {
         for pic_node in pictures_node.get_children_by_tag("picture") {
             let mut attrs = pic_node.attrs();
             if let Some(jid_str) = attrs.optional_string("jid") {
-                let jid: Jid = jid_str.parse().unwrap_or_else(|_| Jid::group(&*jid_str));
+                let jid = parse_group_id(&jid_str)?;
                 results.push(GroupProfilePicture {
                     group_jid: jid,
                     url: attrs.optional_string("url").map(|s| s.to_string()),
