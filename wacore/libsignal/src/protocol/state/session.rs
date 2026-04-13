@@ -577,8 +577,6 @@ impl From<&SessionState> for SessionStructure {
 #[derive(Clone)]
 pub struct SessionRecord {
     current_session: Option<SessionState>,
-    /// Wrapped in Arc so that cloning a SessionRecord is O(1) for this field.
-    /// Only mutated on rare paths (archive, promote, take/restore) via Arc::make_mut.
     previous_sessions: Arc<Vec<SessionStructure>>,
 }
 
@@ -755,9 +753,6 @@ impl SessionRecord {
         self.current_session = Some(new_state);
     }
 
-    // A non-fallible version of archive_current_state.
-    //
-    // Returns `true` if there was a session to archive, `false` if not.
     fn archive_current_state_inner(&mut self) -> bool {
         if let Some(mut current_session) = self.current_session.take() {
             let sessions = Arc::make_mut(&mut self.previous_sessions);
@@ -780,11 +775,42 @@ impl SessionRecord {
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>, SignalProtocolError> {
-        let record = RecordStructure {
-            current_session: self.current_session.as_ref().map(|s| s.into()),
-            previous_sessions: (*self.previous_sessions).clone(),
-        };
-        Ok(record.encode_to_vec())
+        let mut buf = Vec::new();
+        self.serialize_into(&mut buf);
+        Ok(buf)
+    }
+
+    /// Encode into a caller-supplied buffer (allows reuse across flushes).
+    pub fn serialize_into(&self, buf: &mut Vec<u8>) {
+        use prost::encoding::{encoded_len_varint, message::encode as encode_msg};
+
+        let current_len = self
+            .current_session
+            .as_ref()
+            .map(|s| {
+                let msg_len = s.session.encoded_len();
+                1 + encoded_len_varint(msg_len as u64) + msg_len
+            })
+            .unwrap_or(0);
+
+        let previous_len: usize = self
+            .previous_sessions
+            .iter()
+            .map(|s| {
+                let msg_len = s.encoded_len();
+                1 + encoded_len_varint(msg_len as u64) + msg_len
+            })
+            .sum();
+
+        buf.clear();
+        buf.reserve(current_len + previous_len);
+
+        if let Some(state) = &self.current_session {
+            encode_msg(1, &state.session, buf);
+        }
+        for session in self.previous_sessions.iter() {
+            encode_msg(2, session, buf);
+        }
     }
 
     pub fn remote_registration_id(&self) -> Result<u32, SignalProtocolError> {

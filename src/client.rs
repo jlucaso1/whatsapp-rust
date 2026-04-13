@@ -1410,7 +1410,7 @@ impl Client {
 
                                 while let Some(encrypted_frame) = frame_decoder.decode_frame() {
                                     // Decrypt the frame synchronously (required for noise counter ordering)
-                                    if let Some(node) = self.decrypt_frame(&encrypted_frame).await {
+                                    if let Some(node) = self.decrypt_frame(encrypted_frame).await {
                                         // Determine processing mode for this node:
                                         // - Critical nodes (success/failure/stream:error): inline, required for state
                                         // - Message nodes: inline, preserves arrival order for per-chat queues
@@ -1482,7 +1482,7 @@ impl Client {
     /// This must be called sequentially due to noise protocol counter requirements.
     pub(crate) async fn decrypt_frame(
         self: &Arc<Self>,
-        encrypted_frame: &bytes::Bytes,
+        encrypted_frame: bytes::BytesMut,
     ) -> Option<wacore_binary::OwnedNodeRef> {
         let noise_socket = match self.get_noise_socket().await {
             Ok(s) => s,
@@ -1500,7 +1500,7 @@ impl Client {
             }
         };
 
-        let unpacked_data_cow = match wacore_binary::util::unpack(&decrypted_payload) {
+        let buffer = match wacore_binary::util::unpack_bytes(decrypted_payload) {
             Ok(data) => data,
             Err(e) => {
                 log::warn!(target: "Client/Recv", "Failed to decompress frame: {e}");
@@ -1508,8 +1508,6 @@ impl Client {
             }
         };
 
-        // Convert Cow to owned Vec for yoke to own the buffer
-        let buffer = unpacked_data_cow.into_owned();
         match wacore_binary::OwnedNodeRef::new(buffer) {
             Ok(owned) => Some(owned),
             Err(e) => {
@@ -3638,24 +3636,21 @@ fn build_pong(to: String, id: Option<&str>) -> wacore_binary::Node {
 /// explicitly present on the incoming receipt (delivery receipts normally
 /// have no type attribute, meaning the ack also has no type).
 fn build_ack_node(node: &wacore_binary::NodeRef<'_>, own_device_pn: Option<&Jid>) -> Option<Node> {
-    let id = NodeValue::from(node.get_attr("id")?.as_str().as_ref());
-    let from = NodeValue::from(node.get_attr("from")?.as_str().as_ref());
-    let participant = node
-        .get_attr("participant")
-        .map(|v| NodeValue::from(v.as_str().as_ref()));
+    let id = node.get_attr("id")?.to_node_value();
+    let from = node.get_attr("from")?.to_node_value();
+    let participant = node.get_attr("participant").map(|v| v.to_node_value());
 
     let tag = node.tag.as_ref();
 
     // Whatsmeow: echo type for all stanza tags EXCEPT "message".
     // WA Web additionally omits type for notification type="encrypt" with <identity/> child.
     let typ = if tag != "message" && !is_encrypt_identity_notification(node) {
-        node.get_attr("type")
-            .map(|v| NodeValue::from(v.as_str().as_ref()))
+        node.get_attr("type").map(|v| v.to_node_value())
     } else {
         None
     };
 
-    let mut attrs = Attrs::new();
+    let mut attrs = Attrs::with_capacity(6);
     attrs.insert("class", NodeValue::from(tag));
     attrs.insert("id", id);
     attrs.insert("to", from);

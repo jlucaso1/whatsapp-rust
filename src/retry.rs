@@ -240,7 +240,7 @@ impl Client {
                     // Read session through cache to get consistent state
                     let session = self
                         .signal_cache
-                        .get_session(&signal_address, &*device_guard.backend)
+                        .peek_session(&signal_address, &*device_guard.backend)
                         .await
                         .ok()
                         .flatten();
@@ -391,7 +391,7 @@ impl Client {
                 let device_guard = device_store.read().await;
                 let session = self
                     .signal_cache
-                    .get_session(&signal_address, &*device_guard.backend)
+                    .peek_session(&signal_address, &*device_guard.backend)
                     .await
                     .ok()
                     .flatten();
@@ -573,7 +573,7 @@ impl Client {
             let device_guard = device_store.read().await;
             let session = self
                 .signal_cache
-                .get_session(&signal_address, &*device_guard.backend)
+                .peek_session(&signal_address, &*device_guard.backend)
                 .await
                 .ok()
                 .flatten();

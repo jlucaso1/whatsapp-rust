@@ -55,6 +55,7 @@ impl EncryptionBuffer {
 use crate::protocol::consts::MAX_FORWARD_JUMPS;
 use crate::protocol::ratchet::keys::MessageKeyGenerator;
 use crate::protocol::ratchet::{ChainKey, UsePQRatchet};
+use crate::protocol::state::PreKeyId;
 use crate::protocol::state::SessionState;
 use crate::protocol::{
     CiphertextMessage, CiphertextMessageType, Direction, IdentityKeyStore, KeyPair,
@@ -72,6 +73,25 @@ pub async fn message_encrypt(
         .load_session(remote_address)
         .await?
         .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone()))?;
+
+    let result =
+        message_encrypt_inner(ptext, remote_address, &mut session_record, identity_store).await;
+
+    // Always restore — chain key is only advanced inside the inner
+    // function after identity checks pass, so no counters are burned.
+    session_store
+        .store_session(remote_address, session_record)
+        .await?;
+
+    result
+}
+
+async fn message_encrypt_inner(
+    ptext: &[u8],
+    remote_address: &ProtocolAddress,
+    session_record: &mut SessionRecord,
+    identity_store: &mut dyn IdentityKeyStore,
+) -> Result<CiphertextMessage> {
     let session_state = session_record
         .session_state_mut()
         .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone()))?;
@@ -95,6 +115,21 @@ pub async fn message_encrypt(
             format!("no remote identity key for {remote_address}"),
         )
     })?;
+
+    // Check trust before doing any crypto work
+    if !identity_store
+        .is_trusted_identity(remote_address, &their_identity_key, Direction::Sending)
+        .await?
+    {
+        log::warn!(
+            "Identity key {} is not trusted for remote address {}",
+            hex::encode(their_identity_key.public_key().public_key_bytes()),
+            remote_address,
+        );
+        return Err(SignalProtocolError::UntrustedIdentity(
+            remote_address.clone(),
+        ));
+    }
 
     let ctext = ENCRYPTION_BUFFER.with(|buffer| {
         let mut buf_wrapper = buffer.borrow_mut();
@@ -154,31 +189,12 @@ pub async fn message_encrypt(
         )?)
     };
 
-    session_state.set_sender_chain_key(&next_chain_key);
-
-    // XXX why is this check after everything else?!!
-    if !identity_store
-        .is_trusted_identity(remote_address, &their_identity_key, Direction::Sending)
-        .await?
-    {
-        log::warn!(
-            "Identity key {} is not trusted for remote address {}",
-            hex::encode(their_identity_key.public_key().public_key_bytes()),
-            remote_address,
-        );
-        return Err(SignalProtocolError::UntrustedIdentity(
-            remote_address.clone(),
-        ));
-    }
-
-    // XXX this could be combined with the above call to the identity store (in a new API)
     identity_store
         .save_identity(remote_address, &their_identity_key)
         .await?;
 
-    session_store
-        .store_session(remote_address, session_record)
-        .await?;
+    session_state.set_sender_chain_key(&next_chain_key);
+
     Ok(message)
 }
 
@@ -228,16 +244,54 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
     csprng: &mut R,
     use_pq_ratchet: UsePQRatchet,
 ) -> Result<Vec<u8>> {
-    let mut session_record = session_store
-        .load_session(remote_address)
-        .await?
-        .unwrap_or_else(SessionRecord::new_fresh);
+    let existing = session_store.load_session(remote_address).await?;
+    let had_session = existing.is_some();
+    let mut session_record = existing.unwrap_or_else(SessionRecord::new_fresh);
 
-    // Make sure we log the session state if we fail to process the pre-key.
-    let process_prekey_result = session::process_prekey(
+    let result = message_decrypt_prekey_inner(
         ciphertext,
         remote_address,
         &mut session_record,
+        identity_store,
+        pre_key_store,
+        signed_pre_key_store,
+        csprng,
+        use_pq_ratchet,
+    )
+    .await;
+
+    // Persist if we checked out an existing session (must return it) or
+    // if process_prekey populated the record (even if a later step failed).
+    if had_session || session_record.session_state().is_some() {
+        session_store
+            .store_session(remote_address, session_record)
+            .await?;
+    }
+
+    let (plaintext, pre_key_used) = result?;
+
+    if let Some(pre_key_id) = pre_key_used {
+        pre_key_store.remove_pre_key(pre_key_id).await?;
+    }
+
+    Ok(plaintext)
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn message_decrypt_prekey_inner<R: Rng + CryptoRng>(
+    ciphertext: &PreKeySignalMessage,
+    remote_address: &ProtocolAddress,
+    session_record: &mut SessionRecord,
+    identity_store: &mut dyn IdentityKeyStore,
+    pre_key_store: &mut dyn PreKeyStore,
+    signed_pre_key_store: &dyn SignedPreKeyStore,
+    csprng: &mut R,
+    use_pq_ratchet: UsePQRatchet,
+) -> Result<(Vec<u8>, Option<PreKeyId>)> {
+    let process_prekey_result = session::process_prekey(
+        ciphertext,
+        remote_address,
+        session_record,
         identity_store,
         pre_key_store,
         signed_pre_key_store,
@@ -254,7 +308,7 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
                 create_decryption_failure_log(
                     remote_address,
                     &errs,
-                    &session_record,
+                    session_record,
                     ciphertext.message()
                 )?
             );
@@ -265,7 +319,7 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
 
     let decrypt_result = decrypt_message_with_record(
         remote_address,
-        &mut session_record,
+        session_record,
         ciphertext.message(),
         CiphertextMessageType::PreKey,
         csprng,
@@ -278,15 +332,7 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
         )
         .await?;
 
-    session_store
-        .store_session(remote_address, session_record)
-        .await?;
-
-    if let Some(pre_key_id) = pre_key_used.pre_key_id {
-        pre_key_store.remove_pre_key(pre_key_id).await?;
-    }
-
-    Ok(decrypt_result.plaintext)
+    Ok((decrypt_result.plaintext, pre_key_used.pre_key_id))
 }
 
 pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
@@ -301,6 +347,29 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
         .await?
         .ok_or_else(|| SignalProtocolError::SessionNotFound(remote_address.clone()))?;
 
+    let result = message_decrypt_signal_inner(
+        ciphertext,
+        remote_address,
+        &mut session_record,
+        identity_store,
+        csprng,
+    )
+    .await;
+
+    session_store
+        .store_session(remote_address, session_record)
+        .await?;
+
+    result
+}
+
+async fn message_decrypt_signal_inner<R: Rng + CryptoRng>(
+    ciphertext: &SignalMessage,
+    remote_address: &ProtocolAddress,
+    session_record: &mut SessionRecord,
+    identity_store: &mut dyn IdentityKeyStore,
+    csprng: &mut R,
+) -> Result<Vec<u8>> {
     // A record with no current state and no previous states is degenerate — treat
     // it as missing so the caller gets SessionNotFound and sends a proper retry
     // receipt (with error code 1) instead of attempting decryption that will always
@@ -316,7 +385,7 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
 
     let decrypt_result = decrypt_message_with_record(
         remote_address,
-        &mut session_record,
+        session_record,
         ciphertext,
         CiphertextMessageType::Whisper,
         csprng,
@@ -367,10 +436,6 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
             .save_identity(remote_address, &their_identity_key)
             .await?;
     }
-
-    session_store
-        .store_session(remote_address, session_record)
-        .await?;
 
     Ok(decrypt_result.plaintext)
 }
@@ -908,6 +973,9 @@ mod tests {
             address: &ProtocolAddress,
         ) -> error::Result<Option<SessionRecord>> {
             Ok(self.0.get(address.as_str()).cloned())
+        }
+        async fn has_session(&self, address: &ProtocolAddress) -> error::Result<bool> {
+            Ok(self.0.contains_key(address.as_str()))
         }
         async fn store_session(
             &mut self,

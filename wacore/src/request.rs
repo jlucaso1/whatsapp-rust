@@ -163,13 +163,19 @@ impl RequestUtils {
         rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut random_bytes);
         data.extend_from_slice(&random_bytes);
 
-        let hash = Sha256::digest(&data);
-        let truncated_hash = &hash[..9];
+        const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
 
-        format!(
-            "3EB0{hash}",
-            hash = hex::encode(truncated_hash).to_uppercase()
-        )
+        let hash = Sha256::digest(&data);
+        let truncated = &hash[..9];
+
+        // WA Web message IDs are "3EB0" + 18 hex chars (9-byte truncated hash)
+        let mut id = String::with_capacity(22);
+        id.push_str("3EB0");
+        for &b in truncated {
+            id.push(HEX_UPPER[(b >> 4) as usize] as char);
+            id.push(HEX_UPPER[(b & 0x0F) as usize] as char);
+        }
+        id
     }
 
     pub fn build_iq_node(&self, query: &InfoQuery<'_>, req_id: Option<String>) -> Node {

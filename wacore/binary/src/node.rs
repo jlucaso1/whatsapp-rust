@@ -1,7 +1,9 @@
 use crate::attrs::{AttrParser, AttrParserRef};
 use crate::jid::{Jid, JidRef};
 use crate::token;
+use bytes::Bytes;
 use compact_str::CompactString;
+use stable_deref_trait::StableDeref;
 use std::borrow::Cow;
 
 /// Borrowed-or-inline string for decoded nodes. Short owned values (≤24 bytes)
@@ -411,6 +413,14 @@ impl<'a> ValueRef<'a> {
             ValueRef::String(s) => Jid::from_str(s.as_ref()).ok(),
         }
     }
+
+    /// Convert to an owned NodeValue, preserving the variant (JID stays JID).
+    pub fn to_node_value(&self) -> NodeValue {
+        match self {
+            ValueRef::String(s) => NodeValue::String(s.to_compact_string()),
+            ValueRef::Jid(j) => NodeValue::Jid(j.to_owned()),
+        }
+    }
 }
 
 use std::str::FromStr;
@@ -683,21 +693,38 @@ impl<'a> NodeRef<'a> {
 
 use yoke::Yoke;
 
+#[derive(Clone)]
+struct BytesCart(Bytes);
+
+impl std::ops::Deref for BytesCart {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+// Safety: `Bytes` points to immutable backing storage whose deref target
+// remains stable for the lifetime of the value, even when the wrapper moves.
+unsafe impl StableDeref for BytesCart {}
+
 /// A decoded node that owns its decompressed buffer. The inner `NodeRef`
 /// borrows string/byte payloads directly from the buffer, avoiding copies.
 /// Container allocations (attribute Vec, child Vec) still occur during decode.
 ///
 /// Wrap in `Arc<OwnedNodeRef>` for cheap sharing across handlers.
 pub struct OwnedNodeRef {
-    inner: Yoke<NodeRef<'static>, Vec<u8>>,
+    inner: Yoke<NodeRef<'static>, BytesCart>,
 }
 
 impl OwnedNodeRef {
     /// Decode a node from an owned buffer. The buffer should be the raw
     /// binary-protocol bytes (after decompression, without the leading
     /// format byte which `unpack` already strips).
-    pub fn new(buffer: Vec<u8>) -> crate::error::Result<Self> {
-        let inner = Yoke::try_attach_to_cart(buffer, |buf| crate::marshal::unmarshal_ref(buf))?;
+    pub fn new(buffer: impl Into<Bytes>) -> crate::error::Result<Self> {
+        let inner = Yoke::try_attach_to_cart(BytesCart(buffer.into()), |buf| {
+            crate::marshal::unmarshal_ref(buf)
+        })?;
         Ok(Self { inner })
     }
 

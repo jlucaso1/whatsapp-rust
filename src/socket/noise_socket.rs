@@ -1,6 +1,7 @@
 use crate::socket::error::{EncryptSendError, Result, SocketError};
 use crate::transport::Transport;
 use async_channel;
+use bytes::BytesMut;
 use futures::channel::oneshot;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -184,11 +185,12 @@ impl NoiseSocket {
         }
     }
 
-    pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    pub fn decrypt_frame(&self, mut ciphertext: BytesMut) -> Result<BytesMut> {
         let counter = self.read_counter.fetch_add(1, Ordering::SeqCst);
         self.read_key
-            .decrypt_with_counter(counter, ciphertext)
-            .map_err(|e| SocketError::Crypto(e.to_string()))
+            .decrypt_in_place_with_counter(counter, &mut ciphertext)
+            .map_err(|e| SocketError::Crypto(e.to_string()))?;
+        Ok(ciphertext)
     }
 }
 
@@ -238,19 +240,21 @@ mod tests {
         #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
         #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
         impl crate::transport::Transport for RecordingTransport {
-            async fn send(&self, data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
-                // Decrypt the data to extract the index (first byte of plaintext)
+            async fn send(&self, mut data: Vec<u8>) -> std::result::Result<(), anyhow::Error> {
                 if data.len() > 16 {
-                    // Skip the noise frame header (3 bytes for length)
-                    let ciphertext = &data[3..];
+                    // Strip the 3-byte frame header, then decrypt in place
+                    data.drain(..3);
                     let counter = self
                         .counter
                         .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 
-                    if let Ok(plaintext) = self.read_key.decrypt_with_counter(counter, ciphertext)
-                        && !plaintext.is_empty()
+                    if self
+                        .read_key
+                        .decrypt_in_place_with_counter(counter, &mut data)
+                        .is_ok()
+                        && !data.is_empty()
                     {
-                        let index = plaintext[0];
+                        let index = data[0];
                         let mut order = self.recorded_order.lock().await;
                         order.push(index);
                     }

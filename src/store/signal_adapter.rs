@@ -94,6 +94,15 @@ impl SessionStore for SessionAdapter {
             .map_err(signal_err("backend"))
     }
 
+    async fn has_session(&self, address: &ProtocolAddress) -> Result<bool, SignalProtocolError> {
+        let device = self.0.device.read().await;
+        self.0
+            .cache
+            .has_session(address, &*device.backend)
+            .await
+            .map_err(signal_err("backend"))
+    }
+
     async fn store_session(
         &mut self,
         address: &ProtocolAddress,

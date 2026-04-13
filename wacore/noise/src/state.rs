@@ -31,8 +31,8 @@ pub fn generate_iv(counter: u32) -> [u8; 12] {
 /// let ciphertext = cipher.encrypt_with_counter(counter, plaintext)?;
 /// counter = counter.wrapping_add(1);
 ///
-/// // Decrypt with counter
-/// let plaintext = cipher.decrypt_with_counter(counter, ciphertext)?;
+/// // Decrypt in place with counter
+/// cipher.decrypt_in_place_with_counter(counter, &mut ciphertext_buf)?;
 /// ```
 pub struct NoiseCipher {
     inner: Aes256Gcm,
@@ -67,21 +67,15 @@ impl NoiseCipher {
             .map_err(|e| NoiseError::CryptoError(e.to_string()))
     }
 
-    /// Decrypts ciphertext using the specified counter for IV generation.
-    ///
-    /// The ciphertext should include the 16-byte authentication tag.
-    pub fn decrypt_with_counter(&self, counter: u32, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        let iv = generate_iv(counter);
-        self.inner
-            .decrypt(iv.as_ref().into(), ciphertext)
-            .map_err(|e| NoiseError::CryptoError(format!("Decrypt failed: {e}")))
-    }
-
     /// Decrypts ciphertext in-place within the provided buffer.
     ///
     /// The buffer should contain the ciphertext with the 16-byte authentication tag.
     /// After decryption, it will contain the plaintext (tag is removed).
-    pub fn decrypt_in_place_with_counter(&self, counter: u32, buffer: &mut Vec<u8>) -> Result<()> {
+    pub fn decrypt_in_place_with_counter<B: aes_gcm::aead::Buffer>(
+        &self,
+        counter: u32,
+        buffer: &mut B,
+    ) -> Result<()> {
         let iv = generate_iv(counter);
         self.inner
             .decrypt_in_place(iv.as_ref().into(), b"", buffer)

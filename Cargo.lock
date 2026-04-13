@@ -23,6 +23,7 @@ version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
 dependencies = [
+ "bytes",
  "crypto-common 0.1.7",
  "generic-array",
 ]
@@ -2463,6 +2464,7 @@ dependencies = [
 name = "wacore-binary"
 version = "0.5.0"
 dependencies = [
+ "bytes",
  "compact_str",
  "flate2",
  "iai-callgrind",
@@ -2470,6 +2472,7 @@ dependencies = [
  "phf_codegen",
  "serde",
  "serde_json",
+ "stable_deref_trait",
  "yoke 0.7.5",
 ]
 
@@ -2658,6 +2661,7 @@ dependencies = [
 name = "whatsapp-rust"
 version = "0.5.0"
 dependencies = [
+ "aead",
  "anyhow",
  "async-channel",
  "async-lock",

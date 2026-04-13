@@ -130,8 +130,13 @@ pub trait SignedPreKeyStore: ThreadSafe {
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 pub trait SessionStore: ThreadSafe {
-    /// Look up the session corresponding to `address`.
+    /// Takes the session for `address`. Implementations with caches should
+    /// treat this as a logical checkout; callers must always call
+    /// [`store_session`] to return the record, even on error paths.
     async fn load_session(&self, address: &ProtocolAddress) -> Result<Option<SessionRecord>>;
+
+    /// Non-destructive existence check (must not consume the cached entry).
+    async fn has_session(&self, address: &ProtocolAddress) -> Result<bool>;
 
     /// Set the entry for `address` to the value of `record`.
     async fn store_session(
