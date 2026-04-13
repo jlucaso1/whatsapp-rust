@@ -246,10 +246,9 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
     csprng: &mut R,
     use_pq_ratchet: UsePQRatchet,
 ) -> Result<Vec<u8>> {
-    let mut session_record = session_store
-        .load_session(remote_address)
-        .await?
-        .unwrap_or_else(SessionRecord::new_fresh);
+    let existing = session_store.load_session(remote_address).await?;
+    let had_session = existing.is_some();
+    let mut session_record = existing.unwrap_or_else(SessionRecord::new_fresh);
 
     let result = message_decrypt_prekey_inner(
         ciphertext,
@@ -263,9 +262,14 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
     )
     .await;
 
-    session_store
-        .store_session(remote_address, session_record)
-        .await?;
+    // Only persist if we had an existing session (must return a checked-out
+    // record) or the inner call succeeded (session now has real state).
+    // Avoid storing a fresh empty record on failure.
+    if had_session || result.is_ok() {
+        session_store
+            .store_session(remote_address, session_record)
+            .await?;
+    }
 
     let (plaintext, pre_key_used) = result?;
 

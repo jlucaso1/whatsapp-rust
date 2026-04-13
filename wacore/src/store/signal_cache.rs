@@ -291,7 +291,12 @@ impl SignalStoreCache {
             return Ok(None);
         }
         match backend.get_session(key).await? {
-            Some(bytes) => Ok(Some(SessionRecord::deserialize(&bytes)?)),
+            Some(bytes) => {
+                let record = SessionRecord::deserialize(&bytes)?;
+                state.cache.insert(Arc::from(key), SessionEntry::CheckedOut);
+                state.evict_if_needed(self.max_entries);
+                Ok(Some(record))
+            }
             None => {
                 state.cache.insert(Arc::from(key), SessionEntry::Absent);
                 state.evict_if_needed(self.max_entries);
