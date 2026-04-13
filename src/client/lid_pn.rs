@@ -183,24 +183,35 @@ impl Client {
             let pn_proto = pn_jid.to_protocol_address();
             let lid_proto = lid_jid.to_protocol_address();
 
-            // Migrate session: read from cache (authoritative), write to cache
+            // Migrate session: take from cache (authoritative), write to cache
             if let Ok(Some(session)) = self
                 .signal_cache
                 .get_session(&pn_proto, backend.as_ref())
                 .await
             {
-                if self
+                match self
                     .signal_cache
                     .has_session(&lid_proto, backend.as_ref())
                     .await
-                    .unwrap_or(false)
                 {
-                    self.signal_cache.delete_session(&pn_proto).await;
-                    info!("Deleted stale PN session {} (LID exists)", pn_proto);
-                } else {
-                    self.signal_cache.put_session(&lid_proto, session).await;
-                    self.signal_cache.delete_session(&pn_proto).await;
-                    info!("Migrated session {} -> {}", pn_proto, lid_proto);
+                    Ok(true) => {
+                        self.signal_cache.delete_session(&pn_proto).await;
+                        info!("Deleted stale PN session {} (LID exists)", pn_proto);
+                    }
+                    Ok(false) => {
+                        self.signal_cache.put_session(&lid_proto, session).await;
+                        self.signal_cache.delete_session(&pn_proto).await;
+                        info!("Migrated session {} -> {}", pn_proto, lid_proto);
+                    }
+                    Err(e) => {
+                        // Restore the taken PN session to avoid losing it
+                        self.signal_cache.put_session(&pn_proto, session).await;
+                        log::warn!(
+                            "Skipping session migration {} -> {}: {e}",
+                            pn_proto,
+                            lid_proto
+                        );
+                    }
                 }
             }
 
