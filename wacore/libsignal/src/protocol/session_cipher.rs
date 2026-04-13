@@ -77,9 +77,8 @@ pub async fn message_encrypt(
     let result =
         message_encrypt_inner(ptext, remote_address, &mut session_record, identity_store).await;
 
-    // Always restore the session, regardless of success or failure.
-    // On error the ratchet may be partially advanced, but losing the
-    // session entirely is worse (forces a full re-establishment).
+    // Always restore — chain key is only advanced inside the inner
+    // function after identity checks pass, so no counters are burned.
     session_store
         .store_session(remote_address, session_record)
         .await?;
@@ -175,9 +174,6 @@ async fn message_encrypt_inner(
         )?)
     };
 
-    session_state.set_sender_chain_key(&next_chain_key);
-
-    // XXX why is this check after everything else?!!
     if !identity_store
         .is_trusted_identity(remote_address, &their_identity_key, Direction::Sending)
         .await?
@@ -192,10 +188,13 @@ async fn message_encrypt_inner(
         ));
     }
 
-    // XXX this could be combined with the above call to the identity store (in a new API)
     identity_store
         .save_identity(remote_address, &their_identity_key)
         .await?;
+
+    // Advance chain key only after identity checks pass, so
+    // UntrustedIdentity doesn't burn a counter.
+    session_state.set_sender_chain_key(&next_chain_key);
 
     Ok(message)
 }
@@ -262,10 +261,9 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
     )
     .await;
 
-    // Only persist if we had an existing session (must return a checked-out
-    // record) or the inner call succeeded (session now has real state).
-    // Avoid storing a fresh empty record on failure.
-    if had_session || result.is_ok() {
+    // Persist if we checked out an existing session (must return it) or
+    // if process_prekey populated the record (even if a later step failed).
+    if had_session || session_record.session_state().is_some() {
         session_store
             .store_session(remote_address, session_record)
             .await?;
