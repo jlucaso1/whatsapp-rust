@@ -305,6 +305,39 @@ impl SignalStoreCache {
         }
     }
 
+    /// Non-destructive read. Clones the session without removing it from
+    /// cache. Use for inspection-only paths (retry, LID migration checks).
+    pub async fn peek_session(
+        &self,
+        address: &ProtocolAddress,
+        backend: &dyn SignalStore,
+    ) -> Result<Option<SessionRecord>> {
+        let key = address.as_str();
+        let mut state = self.sessions.lock().await;
+        if let Some(entry) = state.cache.get(key) {
+            return match entry {
+                SessionEntry::Present(record) => Ok(Some((**record).clone())),
+                _ => Ok(None),
+            };
+        }
+        match backend.get_session(key).await? {
+            Some(bytes) => {
+                let record = SessionRecord::deserialize(&bytes)?;
+                let cloned = record.clone();
+                state
+                    .cache
+                    .insert(Arc::from(key), SessionEntry::Present(Box::new(record)));
+                state.evict_if_needed(self.max_entries);
+                Ok(Some(cloned))
+            }
+            None => {
+                state.cache.insert(Arc::from(key), SessionEntry::Absent);
+                state.evict_if_needed(self.max_entries);
+                Ok(None)
+            }
+        }
+    }
+
     pub async fn put_session(&self, address: &ProtocolAddress, record: SessionRecord) {
         let mut state = self.sessions.lock().await;
         state.put(address.as_str(), record);

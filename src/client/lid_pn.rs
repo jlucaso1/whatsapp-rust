@@ -191,11 +191,9 @@ impl Client {
             {
                 if self
                     .signal_cache
-                    .get_session(&lid_proto, backend.as_ref())
+                    .has_session(&lid_proto, backend.as_ref())
                     .await
-                    .ok()
-                    .flatten()
-                    .is_some()
+                    .unwrap_or(false)
                 {
                     self.signal_cache.delete_session(&pn_proto).await;
                     info!("Deleted stale PN session {} (LID exists)", pn_proto);
