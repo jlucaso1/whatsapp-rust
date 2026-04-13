@@ -378,13 +378,7 @@ where
             let lid_jid = Jid::lid_device(lid_user, device_jid.device);
             lid_jid.reset_protocol_address(&mut reusable_addr);
 
-            if stores
-                .session_store
-                .load_session(&reusable_addr)
-                .await?
-                .is_some()
-            {
-                // Found existing session under LID address - use it!
+            if stores.session_store.has_session(&reusable_addr).await? {
                 log::debug!(
                     "Using LID session {} for PN {} (LID-first lookup)",
                     lid_jid,
@@ -395,14 +389,8 @@ where
             }
         }
 
-        // Fall back to direct address lookup (for LID JIDs or PN without LID mapping)
         device_jid.reset_protocol_address(&mut reusable_addr);
-        if stores
-            .session_store
-            .load_session(&reusable_addr)
-            .await?
-            .is_some()
-        {
+        if stores.session_store.has_session(&reusable_addr).await? {
             continue;
         }
 
@@ -2196,6 +2184,12 @@ mod tests {
                     .0
                     .get(a)
                     .and_then(|b| crate::libsignal::protocol::SessionRecord::deserialize(b).ok()))
+            }
+            async fn has_session(
+                &self,
+                a: &ProtocolAddress,
+            ) -> crate::libsignal::protocol::error::Result<bool> {
+                Ok(self.0.contains_key(a))
             }
             async fn store_session(
                 &mut self,

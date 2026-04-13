@@ -81,7 +81,11 @@ impl NoiseCipher {
     ///
     /// The buffer should contain the ciphertext with the 16-byte authentication tag.
     /// After decryption, it will contain the plaintext (tag is removed).
-    pub fn decrypt_in_place_with_counter(&self, counter: u32, buffer: &mut Vec<u8>) -> Result<()> {
+    pub fn decrypt_in_place_with_counter<B: aes_gcm::aead::Buffer>(
+        &self,
+        counter: u32,
+        buffer: &mut B,
+    ) -> Result<()> {
         let iv = generate_iv(counter);
         self.inner
             .decrypt_in_place(iv.as_ref().into(), b"", buffer)

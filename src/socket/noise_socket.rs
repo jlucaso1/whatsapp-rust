@@ -1,6 +1,7 @@
 use crate::socket::error::{EncryptSendError, Result, SocketError};
 use crate::transport::Transport;
 use async_channel;
+use bytes::BytesMut;
 use futures::channel::oneshot;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -184,11 +185,12 @@ impl NoiseSocket {
         }
     }
 
-    pub fn decrypt_frame(&self, ciphertext: &[u8]) -> Result<Vec<u8>> {
+    pub fn decrypt_frame(&self, mut ciphertext: BytesMut) -> Result<BytesMut> {
         let counter = self.read_counter.fetch_add(1, Ordering::SeqCst);
         self.read_key
-            .decrypt_with_counter(counter, ciphertext)
-            .map_err(|e| SocketError::Crypto(e.to_string()))
+            .decrypt_in_place_with_counter(counter, &mut ciphertext)
+            .map_err(|e| SocketError::Crypto(e.to_string()))?;
+        Ok(ciphertext)
     }
 }
 

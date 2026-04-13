@@ -176,6 +176,13 @@ impl SessionStore for InMemorySessionStore {
         Ok(self.sessions.get(address).cloned())
     }
 
+    async fn has_session(
+        &self,
+        address: &ProtocolAddress,
+    ) -> wacore_libsignal::protocol::error::Result<bool> {
+        Ok(self.sessions.contains_key(address))
+    }
+
     async fn store_session(
         &mut self,
         address: &ProtocolAddress,

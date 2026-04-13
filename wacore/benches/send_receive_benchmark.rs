@@ -121,6 +121,9 @@ impl SessionStore for MemSessionStore {
     async fn load_session(&self, a: &ProtocolAddress) -> SigResult<Option<SessionRecord>> {
         Ok(self.0.get(a).cloned())
     }
+    async fn has_session(&self, a: &ProtocolAddress) -> SigResult<bool> {
+        Ok(self.0.contains_key(a))
+    }
     async fn store_session(&mut self, a: &ProtocolAddress, r: SessionRecord) -> SigResult<()> {
         self.0.insert(a.clone(), r);
         Ok(())

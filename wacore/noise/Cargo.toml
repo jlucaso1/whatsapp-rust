@@ -11,6 +11,7 @@ description = "Noise Protocol implementation for WhatsApp with AES-256-GCM"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+aead = { workspace = true }
 aes-gcm = { workspace = true }
 anyhow = { workspace = true }
 bytes = { workspace = true }

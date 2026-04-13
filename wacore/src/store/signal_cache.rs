@@ -248,6 +248,15 @@ impl SignalStoreCache {
 
     // === Sessions (object cache — serialize only during flush) ===
 
+    /// Takes exclusive ownership of the cached [`SessionRecord`] when present.
+    ///
+    /// This removes the entry from `state.cache` so hot encrypt/decrypt paths
+    /// can mutate the owned record directly via [`SessionRecord::session_state_mut`]
+    /// without cloning the whole record first. Callers must return the record
+    /// to the cache with [`SignalStoreCache::put_session`] after use.
+    ///
+    /// Backend misses are negative-cached as `None` so repeated missing-session
+    /// checks avoid hitting persistence over and over.
     pub async fn get_session(
         &self,
         address: &ProtocolAddress,
@@ -255,16 +264,17 @@ impl SignalStoreCache {
     ) -> Result<Option<SessionRecord>> {
         let key = address.as_str();
         let mut state = self.sessions.lock().await;
-        if let Some(cached) = state.cache.get(key) {
-            return Ok(cached.clone());
+        if let Some(record) = state.cache.remove(key) {
+            return Ok(record);
         }
-        let record = match backend.get_session(key).await? {
-            Some(bytes) => Some(SessionRecord::deserialize(&bytes)?),
-            None => None,
-        };
-        state.cache.insert(Arc::from(key), record.clone());
-        state.evict_if_needed(self.max_entries);
-        Ok(record)
+        match backend.get_session(key).await? {
+            Some(bytes) => Ok(Some(SessionRecord::deserialize(&bytes)?)),
+            None => {
+                state.cache.insert(Arc::from(key), None);
+                state.evict_if_needed(self.max_entries);
+                Ok(None)
+            }
+        }
     }
 
     pub async fn put_session(&self, address: &ProtocolAddress, record: SessionRecord) {
@@ -381,12 +391,13 @@ impl SignalStoreCache {
             let dirty_keys: Vec<_> = state.dirty.iter().cloned().collect();
             let deleted_keys: Vec<_> = state.deleted.iter().cloned().collect();
 
+            let mut encode_buf = Vec::new();
             for address in &dirty_keys {
                 if let Some(Some(record)) = state.cache.get(address.as_ref()) {
-                    let bytes = record
-                        .serialize()
+                    record
+                        .serialize_into(&mut encode_buf)
                         .map_err(|e| anyhow::anyhow!("session serialize for {address}: {e}"))?;
-                    backend.put_session(address, &bytes).await?;
+                    backend.put_session(address, &encode_buf).await?;
                 }
             }
             for address in &deleted_keys {

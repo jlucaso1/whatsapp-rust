@@ -1,4 +1,4 @@
-use bytes::{Buf, Bytes, BytesMut};
+use bytes::{Buf, BytesMut};
 use log::trace;
 
 pub const FRAME_LENGTH_SIZE: usize = 3;
@@ -65,7 +65,7 @@ impl FrameDecoder {
         self.buffer.extend_from_slice(data);
     }
 
-    pub fn decode_frame(&mut self) -> Option<Bytes> {
+    pub fn decode_frame(&mut self) -> Option<BytesMut> {
         if self.buffer.len() < FRAME_LENGTH_SIZE {
             return None;
         }
@@ -84,8 +84,8 @@ impl FrameDecoder {
         }
 
         if self.buffer.len() >= FRAME_LENGTH_SIZE + frame_len {
-            self.buffer.advance(FRAME_LENGTH_SIZE);
-            let frame_data = self.buffer.split_to(frame_len).freeze();
+            let _ = self.buffer.split_to(FRAME_LENGTH_SIZE);
+            let frame_data = self.buffer.split_to(frame_len);
             trace!("<-- Decoded frame: {} bytes", frame_data.len());
             Some(frame_data)
         } else {

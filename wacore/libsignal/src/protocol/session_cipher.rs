@@ -258,18 +258,30 @@ pub async fn message_decrypt_prekey<R: Rng + CryptoRng>(
                     ciphertext.message()
                 )?
             );
+            // Restore session so load_session's take-ownership doesn't lose it
+            session_store
+                .store_session(remote_address, session_record)
+                .await?;
             let [e] = errs;
             return Err(e);
         }
     };
 
-    let decrypt_result = decrypt_message_with_record(
+    let decrypt_result = match decrypt_message_with_record(
         remote_address,
         &mut session_record,
         ciphertext.message(),
         CiphertextMessageType::PreKey,
         csprng,
-    )?;
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            session_store
+                .store_session(remote_address, session_record)
+                .await?;
+            return Err(e);
+        }
+    };
 
     identity_store
         .save_identity(
@@ -311,16 +323,28 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
              Treating as SessionNotFound.",
             remote_address
         );
+        // Restore session so load_session's take-ownership doesn't lose it
+        session_store
+            .store_session(remote_address, session_record)
+            .await?;
         return Err(SignalProtocolError::SessionNotFound(remote_address.clone()));
     }
 
-    let decrypt_result = decrypt_message_with_record(
+    let decrypt_result = match decrypt_message_with_record(
         remote_address,
         &mut session_record,
         ciphertext,
         CiphertextMessageType::Whisper,
         csprng,
-    )?;
+    ) {
+        Ok(r) => r,
+        Err(e) => {
+            session_store
+                .store_session(remote_address, session_record)
+                .await?;
+            return Err(e);
+        }
+    };
 
     // Get the identity key from the (now current) session state
     let their_identity_key = session_record
@@ -358,6 +382,10 @@ pub async fn message_decrypt_signal<R: Rng + CryptoRng>(
                 hex::encode(their_identity_key.public_key().public_key_bytes()),
                 remote_address,
             );
+            // Restore session before returning the error
+            session_store
+                .store_session(remote_address, session_record)
+                .await?;
             return Err(SignalProtocolError::UntrustedIdentity(
                 remote_address.clone(),
             ));
@@ -908,6 +936,9 @@ mod tests {
             address: &ProtocolAddress,
         ) -> error::Result<Option<SessionRecord>> {
             Ok(self.0.get(address.as_str()).cloned())
+        }
+        async fn has_session(&self, address: &ProtocolAddress) -> error::Result<bool> {
+            Ok(self.0.contains_key(address.as_str()))
         }
         async fn store_session(
             &mut self,

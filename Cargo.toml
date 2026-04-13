@@ -39,6 +39,7 @@ default-members = [
 ]
 
 [workspace.dependencies]
+aead = { version = "0.5.2", default-features = false, features = ["bytes"] }
 # Shared dependencies
 aes = "0.8.3"
 aes-gcm = { version = "0.10.2", default-features = false, features = ["aes", "alloc", "std"] }
