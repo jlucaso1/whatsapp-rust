@@ -377,12 +377,10 @@ fn classify_string_hint(s: &str) -> StringHint {
     let is_likely_jid = s.len() <= 48;
 
     if let Some(kind) = token::index_of_token(s) {
-        match kind {
-            token::TokenKind::Single(token) => return StringHint::SingleToken(token),
-            token::TokenKind::Double(dict, token) => {
-                return StringHint::DoubleToken { dict, token };
-            }
-        }
+        return match kind {
+            token::TokenKind::Single(token) => StringHint::SingleToken(token),
+            token::TokenKind::Double(dict, token) => StringHint::DoubleToken { dict, token },
+        };
     }
 
     if validate_nibble(s) {

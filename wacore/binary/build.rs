@@ -1,5 +1,6 @@
 use phf_codegen::Map;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -25,6 +26,7 @@ fn main() {
     // TokenKind::Single(u8) for single-byte, TokenKind::Double(u8, u8) for double-byte.
     let mut unified_map = Map::new();
     let mut values = Vec::new();
+    let mut seen: HashMap<&str, &str> = HashMap::new();
 
     for (i, token) in tokens.single_byte.iter().enumerate() {
         if !token.is_empty() {
@@ -44,6 +46,13 @@ fn main() {
     }
 
     for (token, value) in &values {
+        if let Some(existing) = seen.get(token.as_str()) {
+            panic!(
+                "duplicate token {:?}: already mapped as {}, conflicting with {}",
+                token, existing, value
+            );
+        }
+        seen.insert(token.as_str(), value.as_str());
         unified_map.entry(token.as_str(), value.as_str());
     }
 
@@ -54,7 +63,7 @@ fn main() {
     )
     .unwrap();
 
-    // Decode arrays (index → string) remain unchanged
+    // Decode arrays: index → string (inverse of TOKEN_MAP)
     writeln!(&mut file, "\nstatic SINGLE_BYTE_TOKENS: &[&str] = &[").unwrap();
     for token in &tokens.single_byte {
         writeln!(&mut file, "    {:?},", token).unwrap();

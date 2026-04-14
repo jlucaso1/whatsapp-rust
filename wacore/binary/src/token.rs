@@ -22,8 +22,8 @@ pub const LIST_16: u8 = 249;
 pub const PACKED_MAX: u8 = 127;
 pub const SINGLE_BYTE_MAX: u16 = 256;
 
-/// Result of a unified token lookup — single SipHash for both token types.
-#[derive(Debug, Clone, Copy)]
+/// Result of a unified token lookup — single hash for both token types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     Single(u8),
     Double(u8, u8),
@@ -32,7 +32,7 @@ pub enum TokenKind {
 // Include the generated maps from the build script
 include!(concat!(env!("OUT_DIR"), "/token_maps.rs"));
 
-/// Look up a string in the unified token map (single SipHash computation).
+/// Look up a string in the unified token map (single PHF lookup).
 pub fn index_of_token(token: &str) -> Option<TokenKind> {
     TOKEN_MAP.get(token).copied()
 }
