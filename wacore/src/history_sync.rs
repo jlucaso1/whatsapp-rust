@@ -1,9 +1,7 @@
 use bytes::Bytes;
 use flate2::read::ZlibDecoder;
-use prost::Message;
 use std::io::Read;
 use thiserror::Error;
-use waproto::whatsapp as wa;
 
 #[derive(Debug, Error)]
 pub enum HistorySyncError {
@@ -15,7 +13,7 @@ pub enum HistorySyncError {
     MalformedProtobuf(String),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct HistorySyncResult {
     pub own_pushname: Option<String>,
     /// NCT salt from HistorySync field 19 (nctSalt).
@@ -23,6 +21,11 @@ pub struct HistorySyncResult {
     /// Source: WAWeb/History/MsgHandlerAction.js:storeNctSaltFromHistorySync
     pub nct_salt: Option<Vec<u8>>,
     pub conversations_processed: usize,
+    /// Tctoken candidates extracted from 1:1 conversations during streaming.
+    pub tc_token_candidates: Vec<TcTokenCandidate>,
+    /// The full decompressed protobuf blob, only retained when event
+    /// listeners exist. Wrapped in `LazyHistorySync` for on-demand decoding.
+    pub decompressed_bytes: Option<Bytes>,
 }
 
 mod wire_type {
@@ -42,36 +45,38 @@ mod wire_type {
 ///
 /// After decompression, the compressed input is dropped immediately, so peak
 /// memory = max(compressed, decompressed) + small overhead, not both.
-pub fn process_history_sync<F>(
+pub fn process_history_sync(
     compressed_data: Vec<u8>,
     own_user: Option<&str>,
-    mut on_conversation_bytes: Option<F>,
+    retain_blob: bool,
     compressed_size_hint: Option<u64>,
-) -> Result<HistorySyncResult, HistorySyncError>
-where
-    F: FnMut(Bytes),
-{
-    // Decompress into a single contiguous buffer.
-    // If the compressed (post-decrypt) size is known from the notification's
-    // file_length, use it with the 4x multiplier for a better estimate than
-    // guessing from the encrypted input (which includes MAC/padding overhead).
+) -> Result<HistorySyncResult, HistorySyncError> {
+    // Hard limit to prevent OOM on malformed blobs.
+    // Typical InitialBootstrap: 5-20 MB decompressed.
+    const MAX_DECOMPRESSED: u64 = 64 * 1024 * 1024;
+
     let estimated = compressed_size_hint
         .and_then(|s| usize::try_from(s).ok())
         .map(|s| s * 4)
         .unwrap_or_else(|| compressed_data.len() * 4)
-        .clamp(256, 8 * 1024 * 1024);
+        .clamp(256, MAX_DECOMPRESSED as usize);
     let mut decompressed = Vec::with_capacity(estimated);
     {
-        let mut decoder = ZlibDecoder::new(compressed_data.as_slice());
-        decoder.read_to_end(&mut decompressed)?;
+        let decoder = ZlibDecoder::new(compressed_data.as_slice());
+        let mut limited = decoder.take(MAX_DECOMPRESSED);
+        limited.read_to_end(&mut decompressed)?;
     }
-    // Drop compressed data immediately — no longer needed.
     drop(compressed_data);
 
-    // Wrap in Bytes so we can hand out zero-copy slices.
     let buf = Bytes::from(decompressed);
     let mut pos = 0;
-    let mut result = HistorySyncResult::default();
+    let mut result = HistorySyncResult {
+        own_pushname: None,
+        nct_salt: None,
+        conversations_processed: 0,
+        tc_token_candidates: Vec::new(),
+        decompressed_bytes: if retain_blob { Some(buf.clone()) } else { None },
+    };
 
     while pos < buf.len() {
         let (tag, bytes_read) = read_varint(&buf[pos..])?;
@@ -87,16 +92,15 @@ where
                 pos += vlen;
                 let end = checked_end(pos, len, buf.len(), "conversation")?;
 
-                if let Some(ref mut callback) = on_conversation_bytes {
-                    // Zero-copy slice — just an Arc refcount increment.
-                    callback(buf.slice(pos..end));
-                    result.conversations_processed += 1;
+                result.conversations_processed += 1;
+                if let Some(candidate) = extract_tc_token_fields(&buf[pos..end]) {
+                    result.tc_token_candidates.push(candidate);
                 }
                 pos = end;
             }
 
             // field 7 = pushnames (repeated, length-delimited)
-            7 if own_user.is_some()
+            7 if let Some(own) = own_user
                 && result.own_pushname.is_none()
                 && wire_type_raw == wire_type::LENGTH_DELIMITED =>
             {
@@ -104,11 +108,7 @@ where
                 pos += vlen;
                 let end = checked_end(pos, len, buf.len(), "pushname")?;
 
-                if let Ok(pn) = wa::Pushname::decode(&buf[pos..end])
-                    && let Some(ref id) = pn.id
-                    && Some(id.as_str()) == own_user
-                    && let Some(name) = pn.pushname
-                {
+                if let Some(name) = extract_own_pushname(&buf[pos..end], own) {
                     result.own_pushname = Some(name);
                 }
                 pos = end;
@@ -207,6 +207,100 @@ fn skip_field(wire_type: u32, buf: &[u8], pos: usize) -> Result<usize, HistorySy
     }
 }
 
+/// Manual pushname parser — Pushname proto has fields: id (tag 1) and pushname (tag 2).
+/// Checks id first and only allocates the pushname string if id matches `own_user`.
+fn extract_own_pushname(data: &[u8], own_user: &str) -> Option<String> {
+    let mut pos = 0;
+    let mut id_match = false;
+    let mut pushname: Option<String> = None;
+
+    while pos < data.len() {
+        let (tag, bytes_read) = read_varint(data.get(pos..)?).ok()?;
+        pos += bytes_read;
+        let field_number = (tag >> 3) as u32;
+        let wt = (tag & 0x7) as u32;
+
+        match field_number {
+            // id (tag 1, string)
+            1 if wt == wire_type::LENGTH_DELIMITED => {
+                let (len, vlen) = read_varint(data.get(pos..)?).ok()?;
+                pos += vlen;
+                let len = usize::try_from(len).ok()?;
+                let end = pos.checked_add(len).filter(|&e| e <= data.len())?;
+                let id = std::str::from_utf8(data.get(pos..end)?).ok()?;
+                id_match = id == own_user;
+                if !id_match {
+                    return None; // wrong user, skip entirely
+                }
+                pos = end;
+            }
+            // pushname (tag 2, string)
+            2 if wt == wire_type::LENGTH_DELIMITED => {
+                let (len, vlen) = read_varint(data.get(pos..)?).ok()?;
+                pos += vlen;
+                let len = usize::try_from(len).ok()?;
+                let end = pos.checked_add(len).filter(|&e| e <= data.len())?;
+                let name = std::str::from_utf8(data.get(pos..end)?).ok()?;
+                pushname = Some(name.to_string());
+                pos = end;
+            }
+            _ => {
+                pos = skip_field(wt, data, pos).ok()?;
+            }
+        }
+    }
+
+    if id_match { pushname } else { None }
+}
+
+/// Prost partial decode — only tctoken fields, skips heavy `messages`.
+#[derive(Clone, PartialEq, prost::Message)]
+pub(crate) struct ConversationTcTokenFields {
+    #[prost(string, required, tag = "1")]
+    pub id: String,
+    #[prost(bytes = "vec", optional, tag = "21")]
+    pub tc_token: Option<Vec<u8>>,
+    #[prost(uint64, optional, tag = "22")]
+    pub tc_token_timestamp: Option<u64>,
+    #[prost(uint64, optional, tag = "28")]
+    pub tc_token_sender_timestamp: Option<u64>,
+}
+
+/// Extract tctoken candidate from a raw Conversation proto.
+/// Uses prost partial decode (only fields 1/21/22/28, skips messages).
+/// Returns `None` for groups, newsletters, bots, or conversations without tctokens.
+pub(crate) fn extract_tc_token_fields(data: &[u8]) -> Option<TcTokenCandidate> {
+    use prost::Message;
+
+    let conv = ConversationTcTokenFields::decode(data).ok()?;
+
+    // Early-out for non-1:1 conversations
+    if let Some(parts) = wacore_binary::jid::parse_jid_fast(&conv.id)
+        && (parts.server == "g.us" || parts.server == "newsletter" || parts.server == "bot")
+    {
+        return None;
+    }
+
+    let tc_token = conv.tc_token.filter(|t| !t.is_empty())?;
+    let tc_token_timestamp = conv.tc_token_timestamp?;
+
+    Some(TcTokenCandidate {
+        id: conv.id,
+        tc_token,
+        tc_token_timestamp,
+        tc_token_sender_timestamp: conv.tc_token_sender_timestamp,
+    })
+}
+
+/// Tctoken data extracted from a conversation during streaming.
+#[derive(Debug)]
+pub struct TcTokenCandidate {
+    pub id: String,
+    pub tc_token: Vec<u8>,
+    pub tc_token_timestamp: u64,
+    pub tc_token_sender_timestamp: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -214,6 +308,7 @@ mod tests {
     use flate2::write::ZlibEncoder;
     use prost::Message;
     use std::io::Write;
+    use waproto::whatsapp as wa;
 
     /// Encode a HistorySync proto and zlib-compress it.
     fn encode_and_compress(hs: &wa::HistorySync) -> Vec<u8> {
@@ -233,7 +328,7 @@ mod tests {
         };
 
         let compressed = encode_and_compress(&hs);
-        let result = process_history_sync::<fn(Bytes)>(compressed, None, None, None).unwrap();
+        let result = process_history_sync(compressed, None, false, None).unwrap();
 
         assert_eq!(result.nct_salt, Some(salt));
     }
@@ -246,7 +341,7 @@ mod tests {
         };
 
         let compressed = encode_and_compress(&hs);
-        let result = process_history_sync::<fn(Bytes)>(compressed, None, None, None).unwrap();
+        let result = process_history_sync(compressed, None, false, None).unwrap();
 
         assert!(result.nct_salt.is_none());
     }
@@ -265,8 +360,7 @@ mod tests {
         };
 
         let compressed = encode_and_compress(&hs);
-        let result =
-            process_history_sync::<fn(Bytes)>(compressed, Some("0000000000"), None, None).unwrap();
+        let result = process_history_sync(compressed, Some("0000000000"), false, None).unwrap();
 
         assert_eq!(result.nct_salt, Some(salt));
         assert_eq!(result.own_pushname.as_deref(), Some("TestUser"));
