@@ -7,7 +7,7 @@ use std::result::Result;
 
 use aes::Aes256;
 use aes::cipher::block_padding::Pkcs7;
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
 pub enum EncryptionError {
@@ -51,7 +51,7 @@ pub fn aes_256_cbc_encrypt_into(
     // Encrypt the data in place with proper padding
     let encrypted_len = {
         let encrypted_slice = encryptor
-            .encrypt_padded_mut::<Pkcs7>(&mut output[start_pos..], ptext.len())
+            .encrypt_padded::<Pkcs7>(&mut output[start_pos..], ptext.len())
             .map_err(|_| EncryptionError::BadPadding)?;
         encrypted_slice.len()
     };
@@ -83,7 +83,7 @@ pub fn aes_256_cbc_decrypt_into(
         .map_err(|_| DecryptionError::BadKeyOrIv)?;
 
     let decrypted = decryptor
-        .decrypt_padded_mut::<Pkcs7>(output)
+        .decrypt_padded::<Pkcs7>(output)
         .map_err(|_| DecryptionError::BadCiphertext("failed to decrypt"))?;
 
     let decrypted_len = decrypted.len();

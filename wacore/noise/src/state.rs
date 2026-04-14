@@ -1,6 +1,6 @@
 use crate::error::{NoiseError, Result};
 use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::{Aead, AeadInPlace, KeyInit, Payload};
+use aes_gcm::aead::{Aead, AeadInOut, KeyInit, Payload};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 
@@ -52,7 +52,7 @@ impl NoiseCipher {
     pub fn encrypt_with_counter(&self, counter: u32, plaintext: &[u8]) -> Result<Vec<u8>> {
         let iv = generate_iv(counter);
         self.inner
-            .encrypt(iv.as_ref().into(), plaintext)
+            .encrypt((&iv).into(), plaintext)
             .map_err(|e| NoiseError::CryptoError(e.to_string()))
     }
 
@@ -63,7 +63,7 @@ impl NoiseCipher {
     pub fn encrypt_in_place_with_counter(&self, counter: u32, buffer: &mut Vec<u8>) -> Result<()> {
         let iv = generate_iv(counter);
         self.inner
-            .encrypt_in_place(iv.as_ref().into(), b"", buffer)
+            .encrypt_in_place((&iv).into(), b"", buffer)
             .map_err(|e| NoiseError::CryptoError(e.to_string()))
     }
 
@@ -78,7 +78,7 @@ impl NoiseCipher {
     ) -> Result<()> {
         let iv = generate_iv(counter);
         self.inner
-            .decrypt_in_place(iv.as_ref().into(), b"", buffer)
+            .decrypt_in_place((&iv).into(), b"", buffer)
             .map_err(|e| NoiseError::CryptoError(format!("Decrypt failed: {e}")))
     }
 }
@@ -207,7 +207,7 @@ impl NoiseState {
         };
         let ciphertext = self
             .cipher
-            .encrypt(iv.as_ref().into(), payload)
+            .encrypt((&iv).into(), payload)
             .map_err(|e| NoiseError::CryptoError(e.to_string()))?;
         self.authenticate(&ciphertext);
         Ok(ciphertext)
@@ -228,7 +228,7 @@ impl NoiseState {
         // Encrypt in-place and get the tag separately
         let tag = self
             .cipher
-            .encrypt_in_place_detached(iv.as_ref().into(), &aad, &mut out[start..])
+            .encrypt_inout_detached((&iv).into(), &aad, (&mut out[start..]).into())
             .map_err(|e| NoiseError::CryptoError(e.to_string()))?;
 
         // Append the authentication tag
@@ -249,7 +249,7 @@ impl NoiseState {
         };
         let plaintext = self
             .cipher
-            .decrypt(iv.as_ref().into(), payload)
+            .decrypt((&iv).into(), payload)
             .map_err(|e| NoiseError::CryptoError(format!("Noise decrypt failed: {e}")))?;
 
         self.authenticate(ciphertext);
@@ -283,7 +283,7 @@ impl NoiseState {
 
         // Decrypt in-place
         self.cipher
-            .decrypt_in_place_detached(iv.as_ref().into(), &aad, &mut out[start..], tag.into())
+            .decrypt_inout_detached((&iv).into(), &aad, (&mut out[start..]).into(), tag.into())
             .map_err(|e| NoiseError::CryptoError(format!("Noise decrypt failed: {e}")))?;
 
         // Authenticate with the original ciphertext (including tag)

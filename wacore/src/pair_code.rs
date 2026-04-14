@@ -471,9 +471,8 @@ impl PairCodeUtils {
         // AES-GCM encrypt the bundle
         let cipher = Aes256Gcm::new_from_slice(&enc_key)
             .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM init failed: {e}")))?;
-        let nonce = aes_gcm::Nonce::from_slice(&iv);
         let encrypted_bundle = cipher
-            .encrypt(nonce, bundle.as_slice())
+            .encrypt((&iv).into(), bundle.as_slice())
             .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM encryption failed: {e}")))?;
 
         // Wrapped bundle = salt (32) + iv (12) + encrypted_bundle (96 + 16 = 112)

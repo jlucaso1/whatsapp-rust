@@ -12,7 +12,7 @@ aes = { workspace = true }
 aes-gcm = { workspace = true }
 arrayref = "0.3.9"
 async-trait = { workspace = true }
-cbc = { version = "0.1.2", features = ["alloc"] }
+cbc = { version = "0.2", features = ["alloc"] }
 chrono = { workspace = true, features = ["now", "serde"] }
 ctr = { workspace = true }
 curve25519-dalek = "4.1.3"
