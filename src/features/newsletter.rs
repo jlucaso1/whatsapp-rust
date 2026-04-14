@@ -374,18 +374,9 @@ impl<'a> Newsletter<'a> {
         server_id: u64,
         reaction: &str,
     ) -> Result<(), anyhow::Error> {
-        let request_id = self.client.generate_message_id().await;
-
-        let stanza = NodeBuilder::new("message")
-            .attr("to", jid)
-            .attr("type", "reaction")
-            .attr("id", &request_id)
-            .attr("server_id", server_id.to_string())
-            .children([NodeBuilder::new("reaction").attr("code", reaction).build()])
-            .build();
-
-        self.client.send_node(stanza).await?;
-        Ok(())
+        self.client
+            .send_server_reaction(jid, server_id, reaction)
+            .await
     }
 
     /// Fetch message history from a newsletter.

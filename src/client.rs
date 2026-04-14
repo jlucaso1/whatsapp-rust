@@ -3445,6 +3445,27 @@ impl Client {
         Ok(original_id)
     }
 
+    /// Send a server-side reaction (used by both newsletter and status reactions).
+    pub(crate) async fn send_server_reaction(
+        &self,
+        to: &Jid,
+        server_id: u64,
+        reaction: &str,
+    ) -> Result<(), anyhow::Error> {
+        let request_id = self.generate_message_id().await;
+
+        let stanza = NodeBuilder::new("message")
+            .attr("to", to)
+            .attr("type", "reaction")
+            .attr("id", &request_id)
+            .attr("server_id", server_id.to_string())
+            .children([NodeBuilder::new("reaction").attr("code", reaction).build()])
+            .build();
+
+        self.send_node(stanza).await?;
+        Ok(())
+    }
+
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
         debug!(target: "Client/Send", "{}", DisplayableNode(&node));
         if self.sent_node_waiter_count.load(Ordering::Acquire) > 0 {
