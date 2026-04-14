@@ -372,6 +372,20 @@ pub struct Jid {
     pub integrator: u16,
 }
 
+#[cfg(feature = "serde")]
+impl serde::Serialize for JidRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("Jid", 5)?;
+        s.serialize_field("user", &*self.user)?;
+        s.serialize_field("server", &self.server)?;
+        s.serialize_field("agent", &self.agent)?;
+        s.serialize_field("device", &self.device)?;
+        s.serialize_field("integrator", &self.integrator)?;
+        s.end()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, yoke::Yokeable)]
 pub struct JidRef<'a> {
     pub user: NodeStr<'a>,
