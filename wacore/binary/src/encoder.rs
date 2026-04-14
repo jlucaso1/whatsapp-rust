@@ -376,11 +376,16 @@ fn classify_string_hint(s: &str) -> StringHint {
 
     let is_likely_jid = s.len() <= 48;
 
-    if let Some(token) = token::index_of_single_token(s) {
-        StringHint::SingleToken(token)
-    } else if let Some((dict, token)) = token::index_of_double_byte_token(s) {
-        StringHint::DoubleToken { dict, token }
-    } else if validate_nibble(s) {
+    if let Some(kind) = token::index_of_token(s) {
+        match kind {
+            token::TokenKind::Single(token) => return StringHint::SingleToken(token),
+            token::TokenKind::Double(dict, token) => {
+                return StringHint::DoubleToken { dict, token };
+            }
+        }
+    }
+
+    if validate_nibble(s) {
         StringHint::PackedNibble
     } else if validate_hex(s) {
         StringHint::PackedHex

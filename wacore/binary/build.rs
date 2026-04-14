@@ -21,45 +21,40 @@ fn main() {
     let tokens_json = fs::read_to_string("src/tokens.json").unwrap();
     let tokens: Tokens = serde_json::from_str(&tokens_json).unwrap();
 
-    let mut single_byte_map = Map::new();
-    let single_byte_values: Vec<String> = (0..tokens.single_byte.len())
-        .map(|i| i.to_string())
-        .collect();
+    // Unified token map: single lookup for both single-byte and double-byte tokens.
+    // TokenKind::Single(u8) for single-byte, TokenKind::Double(u8, u8) for double-byte.
+    let mut unified_map = Map::new();
+    let mut values = Vec::new();
+
     for (i, token) in tokens.single_byte.iter().enumerate() {
         if !token.is_empty() {
-            single_byte_map.entry(token.as_str(), &single_byte_values[i]);
+            values.push((token.clone(), format!("TokenKind::Single({})", i)));
         }
     }
-    writeln!(
-        &mut file,
-        "static SINGLE_BYTE_MAP: phf::Map<&'static str, u8> = \n{};",
-        single_byte_map.build()
-    )
-    .unwrap();
 
-    let mut double_byte_map = Map::new();
-    let mut double_byte_values = Vec::new();
     for (dict_idx, dict) in tokens.double_byte.iter().enumerate() {
-        for (token_idx, _token) in dict.iter().enumerate() {
-            let value = format!("({}, {})", dict_idx, token_idx);
-            double_byte_values.push(value);
+        for (token_idx, token) in dict.iter().enumerate() {
+            if !token.is_empty() {
+                values.push((
+                    token.clone(),
+                    format!("TokenKind::Double({}, {})", dict_idx, token_idx),
+                ));
+            }
         }
     }
 
-    let mut value_idx = 0;
-    for dict in tokens.double_byte.iter() {
-        for token in dict.iter() {
-            double_byte_map.entry(token.as_str(), &double_byte_values[value_idx]);
-            value_idx += 1;
-        }
+    for (token, value) in &values {
+        unified_map.entry(token.as_str(), value.as_str());
     }
+
     writeln!(
         &mut file,
-        "\nstatic DOUBLE_BYTE_MAP: phf::Map<&'static str, (u8, u8)> = \n{};",
-        double_byte_map.build()
+        "static TOKEN_MAP: phf::Map<&'static str, TokenKind> = \n{};",
+        unified_map.build()
     )
     .unwrap();
 
+    // Decode arrays (index → string) remain unchanged
     writeln!(&mut file, "\nstatic SINGLE_BYTE_TOKENS: &[&str] = &[").unwrap();
     for token in &tokens.single_byte {
         writeln!(&mut file, "    {:?},", token).unwrap();

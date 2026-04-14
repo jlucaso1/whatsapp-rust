@@ -119,14 +119,14 @@ impl From<CompactString> for NodeStr<'_> {
 /// vast majority of tag names and attribute keys which are protocol tokens.
 #[inline]
 fn intern_cow(s: &str) -> Cow<'static, str> {
-    if let Some(idx) = token::index_of_single_token(s)
-        && let Some(token) = token::get_single_token(idx)
-    {
-        return Cow::Borrowed(token);
-    } else if let Some((dict, idx)) = token::index_of_double_byte_token(s)
-        && let Some(token) = token::get_double_token(dict, idx)
-    {
-        return Cow::Borrowed(token);
+    if let Some(kind) = token::index_of_token(s) {
+        let interned = match kind {
+            token::TokenKind::Single(idx) => token::get_single_token(idx),
+            token::TokenKind::Double(dict, idx) => token::get_double_token(dict, idx),
+        };
+        if let Some(token) = interned {
+            return Cow::Borrowed(token);
+        }
     }
     Cow::Owned(s.to_string())
 }
