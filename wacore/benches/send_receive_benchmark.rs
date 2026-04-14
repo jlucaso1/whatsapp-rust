@@ -536,8 +536,7 @@ fn setup_group_recv() -> GrpRecvData {
                 .await
                 .unwrap();
 
-        let bob_sk_name = make_sender_key_name(&group_jid, &alice.address);
-        process_sender_key_distribution_message(&bob_sk_name, &skdm, &mut bob.sender_keys)
+        process_sender_key_distribution_message(&sk_name, &skdm, &mut bob.sender_keys)
             .await
             .unwrap();
     });
