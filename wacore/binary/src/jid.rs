@@ -1286,4 +1286,172 @@ mod tests {
         let jid3 = Jid::group(user);
         assert_eq!(jid3.user, "789");
     }
+
+    /// Verify that all JID formatting paths produce identical output:
+    /// `Jid::Display`, `JidRef::Display`, `push_jid_to_string`, `push_jid_to_compact`,
+    /// and `Jid::push_to`. Exercises the agent-elision rules across server variants.
+    #[test]
+    fn test_jid_format_parity() {
+        struct Case {
+            user: &'static str,
+            server: Server,
+            agent: u8,
+            device: u16,
+        }
+
+        let cases = [
+            // Empty user (server-only JID)
+            Case {
+                user: "",
+                server: Server::Pn,
+                agent: 0,
+                device: 0,
+            },
+            // Basic phone, no agent/device
+            Case {
+                user: "5511999887766",
+                server: Server::Pn,
+                agent: 0,
+                device: 0,
+            },
+            // Phone with device
+            Case {
+                user: "5511999887766",
+                server: Server::Pn,
+                agent: 0,
+                device: 2,
+            },
+            // Phone with agent (suppressed for Pn)
+            Case {
+                user: "5511999887766",
+                server: Server::Pn,
+                agent: 3,
+                device: 15,
+            },
+            // LID with agent (suppressed for Lid)
+            Case {
+                user: "12345.6789",
+                server: Server::Lid,
+                agent: 1,
+                device: 25,
+            },
+            // Hosted with agent (suppressed)
+            Case {
+                user: "100000012345678",
+                server: Server::Hosted,
+                agent: 2,
+                device: 99,
+            },
+            // HostedLid with agent (suppressed)
+            Case {
+                user: "100000012345678",
+                server: Server::HostedLid,
+                agent: 1,
+                device: 99,
+            },
+            // Group (no agent, no device)
+            Case {
+                user: "120363012345678901",
+                server: Server::Group,
+                agent: 0,
+                device: 0,
+            },
+            // Bot with agent (shown)
+            Case {
+                user: "user",
+                server: Server::Bot,
+                agent: 5,
+                device: 10,
+            },
+            // Interop with agent (shown)
+            Case {
+                user: "447911123456",
+                server: Server::Interop,
+                agent: 3,
+                device: 0,
+            },
+            // Messenger with device, no agent
+            Case {
+                user: "messenger_user",
+                server: Server::Messenger,
+                agent: 0,
+                device: 50,
+            },
+            // Broadcast
+            Case {
+                user: "status",
+                server: Server::Broadcast,
+                agent: 0,
+                device: 0,
+            },
+            // Newsletter
+            Case {
+                user: "newsletter_id",
+                server: Server::Newsletter,
+                agent: 0,
+                device: 0,
+            },
+            // Max values
+            Case {
+                user: "447911123456789",
+                server: Server::Pn,
+                agent: 255,
+                device: 65535,
+            },
+            // Short user
+            Case {
+                user: "1",
+                server: Server::Legacy,
+                agent: 0,
+                device: 1,
+            },
+        ];
+
+        for (i, c) in cases.iter().enumerate() {
+            let jid = Jid {
+                user: c.user.into(),
+                server: c.server,
+                agent: c.agent,
+                device: c.device,
+                integrator: 0,
+            };
+
+            // Reference: Display impl (via write_jid! fallible)
+            let display = jid.to_string();
+
+            // JidRef Display
+            let jid_ref = JidRef {
+                user: NodeStr::Borrowed(c.user),
+                server: c.server,
+                agent: c.agent,
+                device: c.device,
+                integrator: 0,
+            };
+            let ref_display = jid_ref.to_string();
+
+            // push_jid_to_string
+            let mut string_buf = String::new();
+            push_jid_to_string(c.user, c.server, c.agent, c.device, &mut string_buf);
+
+            // push_jid_to_compact
+            let mut compact_buf = CompactString::default();
+            push_jid_to_compact(c.user, c.server, c.agent, c.device, &mut compact_buf);
+
+            // Jid::push_to
+            let mut push_buf = String::new();
+            jid.push_to(&mut push_buf);
+
+            assert_eq!(display, ref_display, "case {i}: Display vs JidRef::Display");
+            assert_eq!(
+                display, string_buf,
+                "case {i}: Display vs push_jid_to_string"
+            );
+            assert_eq!(
+                display,
+                compact_buf.as_str(),
+                "case {i}: Display vs push_jid_to_compact"
+            );
+            assert_eq!(display, push_buf, "case {i}: Display vs Jid::push_to");
+        }
+    }
 }

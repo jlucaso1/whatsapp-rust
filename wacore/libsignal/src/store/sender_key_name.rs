@@ -53,9 +53,12 @@ impl SenderKeyName {
     }
 
     pub fn to_protocol_address(&self) -> ProtocolAddress {
-        ProtocolAddress::new(
-            format!("{}\n{}", self.group_id(), self.sender_id()),
-            0.into(),
-        )
+        let group = self.group_id();
+        let sender = self.sender_id();
+        let mut name = String::with_capacity(group.len() + 1 + sender.len());
+        name.push_str(group);
+        name.push('\n');
+        name.push_str(sender);
+        ProtocolAddress::new(name, 0.into())
     }
 }
