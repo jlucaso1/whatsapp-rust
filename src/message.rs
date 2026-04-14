@@ -286,7 +286,7 @@ impl Client {
 
         let unavailable_node = nr.get_optional_child("unavailable");
 
-        let mut all_enc_nodes: Vec<&NodeRef<'_>> = Vec::new();
+        let mut all_enc_nodes: Vec<&NodeRef<'_>> = Vec::with_capacity(4);
 
         let direct_enc_nodes = nr.get_children_by_tag("enc");
         all_enc_nodes.extend(direct_enc_nodes);

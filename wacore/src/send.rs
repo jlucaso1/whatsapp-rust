@@ -1080,11 +1080,11 @@ pub async fn prepare_group_stanza<
         //   because they need the SKDM to decrypt messages we send from this device
         // - Exclude hosted/Cloud API devices (device ID 99 or @hosted server) - they don't
         //   participate in group E2EE, only in 1:1 chats
-        let own_user = own_sending_jid.user.clone();
+        let own_user = &own_sending_jid.user;
         let own_device = own_sending_jid.device;
         let before_filter = resolved_list.len();
         resolved_list.retain(|device_jid| {
-            let is_exact_sender = device_jid.user == own_user && device_jid.device == own_device;
+            let is_exact_sender = device_jid.user == *own_user && device_jid.device == own_device;
             let is_hosted = device_jid.is_hosted();
             // Exclude the exact sending device and hosted devices
             !is_exact_sender && !is_hosted
