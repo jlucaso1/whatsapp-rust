@@ -24,13 +24,24 @@ use waproto::whatsapp as wa;
 /// Call [`get()`](Self::get) for full access to conversations, pushnames,
 /// global settings, past participants, call logs, and everything else in
 /// the `wa::HistorySync` proto.
-#[derive(Clone)]
 pub struct LazyHistorySync {
     raw_bytes: Bytes,
     sync_type: i32,
     chunk_order: Option<u32>,
     progress: Option<u32>,
-    parsed: OnceLock<Option<wa::HistorySync>>,
+    parsed: OnceLock<Option<Box<wa::HistorySync>>>,
+}
+
+impl Clone for LazyHistorySync {
+    fn clone(&self) -> Self {
+        Self {
+            raw_bytes: self.raw_bytes.clone(),
+            sync_type: self.sync_type,
+            chunk_order: self.chunk_order,
+            progress: self.progress,
+            parsed: OnceLock::new(), // don't deep-copy the decoded proto
+        }
+    }
 }
 
 impl LazyHistorySync {
@@ -74,13 +85,69 @@ impl LazyHistorySync {
     /// you only need specific fields.
     pub fn get(&self) -> Option<&wa::HistorySync> {
         self.parsed
-            .get_or_init(|| wa::HistorySync::decode(&self.raw_bytes[..]).ok())
-            .as_ref()
+            .get_or_init(|| {
+                wa::HistorySync::decode(&self.raw_bytes[..])
+                    .ok()
+                    .map(Box::new)
+            })
+            .as_deref()
     }
 
     /// Access the raw decompressed protobuf bytes for custom/partial decoding.
     pub fn raw_bytes(&self) -> &[u8] {
         &self.raw_bytes
+    }
+
+    /// Consume self and return the raw decompressed bytes for zero-copy slicing.
+    pub fn into_raw_bytes(self) -> Bytes {
+        self.raw_bytes
+    }
+
+    /// Iterate over raw conversation bytes without full proto decode.
+    ///
+    /// Each yielded `Bytes` is a zero-copy slice of the decompressed buffer
+    /// containing one `Conversation` protobuf. Consumers can decode individual
+    /// conversations on demand via `wa::Conversation::decode(&bytes[..])`.
+    pub fn conversations_raw(&self) -> impl Iterator<Item = Bytes> + '_ {
+        ConversationIterator {
+            buf: &self.raw_bytes,
+            pos: 0,
+        }
+    }
+}
+
+struct ConversationIterator<'a> {
+    buf: &'a Bytes,
+    pos: usize,
+}
+
+impl Iterator for ConversationIterator<'_> {
+    type Item = Bytes;
+
+    fn next(&mut self) -> Option<Bytes> {
+        use crate::history_sync::{read_varint, skip_field, wire_type};
+
+        while self.pos < self.buf.len() {
+            let (tag, bytes_read) = read_varint(self.buf.get(self.pos..)?).ok()?;
+            self.pos += bytes_read;
+            let field_number = (tag >> 3) as u32;
+            let wt = (tag & 0x7) as u32;
+
+            if field_number == 2 && wt == wire_type::LENGTH_DELIMITED {
+                let (len, vlen) = read_varint(self.buf.get(self.pos..)?).ok()?;
+                self.pos += vlen;
+                let end = self
+                    .pos
+                    .checked_add(len as usize)
+                    .filter(|&e| e <= self.buf.len())?;
+                let slice = self.buf.slice(self.pos..end);
+                self.pos = end;
+                return Some(slice);
+            }
+
+            self.pos = skip_field(wt, self.buf, self.pos).ok()?;
+        }
+        None
     }
 }
 
