@@ -166,6 +166,7 @@ impl Client {
     ) -> String {
         let chat = self.resolve_encryption_jid(chat).await;
         let sender = self.resolve_encryption_jid(sender).await;
+        // +40 covers @server suffixes, :device, separators for two JIDs
         let mut key =
             String::with_capacity(chat.user.len() + msg_id.len() + sender.user.len() + 40);
         chat.push_to(&mut key);

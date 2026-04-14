@@ -370,7 +370,7 @@ fn decrypt_group(
     receiver: &mut User,
 ) -> wa::Message {
     futures::executor::block_on(async {
-        let sk_name = SenderKeyName::new(group_jid.to_string(), sender_addr.to_string());
+        let sk_name = make_sender_key_name(group_jid, sender_addr);
         let plaintext = group_decrypt(ciphertext, &mut receiver.sender_keys, &sk_name)
             .await
             .unwrap();
@@ -536,7 +536,7 @@ fn setup_group_recv() -> GrpRecvData {
                 .await
                 .unwrap();
 
-        let bob_sk_name = SenderKeyName::new(group_jid.to_string(), alice.address.to_string());
+        let bob_sk_name = make_sender_key_name(&group_jid, &alice.address);
         process_sender_key_distribution_message(&bob_sk_name, &skdm, &mut bob.sender_keys)
             .await
             .unwrap();
