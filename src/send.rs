@@ -377,7 +377,7 @@ impl Client {
         let force_skdm = {
             use wacore::libsignal::store::sender_key_name::SenderKeyName;
             let sender_address = own_jid.to_protocol_address();
-            let sender_key_name = SenderKeyName::from_jid(&to_str, &sender_address);
+            let sender_key_name = SenderKeyName::from_parts(&to_str, sender_address.as_str());
 
             let device_guard = device_store_arc.read().await;
             let key_exists = self
@@ -929,7 +929,7 @@ impl Client {
             let force_skdm = {
                 use wacore::libsignal::store::sender_key_name::SenderKeyName;
                 let sender_address = own_sending_jid.to_protocol_address();
-                let sender_key_name = SenderKeyName::from_jid(&to_str, &sender_address);
+                let sender_key_name = SenderKeyName::from_parts(&to_str, sender_address.as_str());
 
                 let device_guard = device_store_arc.read().await;
                 let key_exists = self

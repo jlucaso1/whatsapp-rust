@@ -403,7 +403,8 @@ async fn handle_identity_change(client: &Arc<Client>, node: &NodeRef<'_>) {
 
         let status_group = "status@broadcast";
         for own_jid in device_snapshot.pn.iter().chain(device_snapshot.lid.iter()) {
-            let sk_name = SenderKeyName::from_jid(&status_group, &own_jid.to_protocol_address());
+            let sk_name =
+                SenderKeyName::from_parts(status_group, own_jid.to_protocol_address().as_str());
             client
                 .signal_cache
                 .delete_sender_key(sk_name.cache_key())
@@ -2146,7 +2147,8 @@ mod tests {
             .await;
 
         // Pre-populate a sender key for status@broadcast
-        let sk_name = SenderKeyName::from_jid(&"status@broadcast", &own_jid.to_protocol_address());
+        let sk_name =
+            SenderKeyName::from_parts("status@broadcast", own_jid.to_protocol_address().as_str());
         let sk_record = wacore::libsignal::protocol::SenderKeyRecord::new_empty();
         client
             .signal_cache

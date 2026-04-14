@@ -1,4 +1,5 @@
 use crate::libsignal::protocol::{DeviceId, ProtocolAddress};
+use crate::libsignal::store::sender_key_name::SenderKeyName;
 use wacore_binary::{DEFAULT_USER_SERVER, Jid, LEGACY_USER_SERVER};
 
 /// Real WhatsApp logs show max signal address length of 53 chars.
@@ -77,6 +78,14 @@ pub fn sort_dedup_by_device(jids: &mut Vec<Jid>) {
     jids.dedup_by(|a, b| {
         a.user == b.user && a.server == b.server && a.agent == b.agent && a.device == b.device
     });
+}
+
+/// Build a `SenderKeyName` from a `&Jid` + `&ProtocolAddress` without the
+/// intermediate `to_string()` allocation that `SenderKeyName::from_jid` requires.
+pub fn make_sender_key_name(group_jid: &Jid, sender: &ProtocolAddress) -> SenderKeyName {
+    let mut buf = String::with_capacity(64);
+    group_jid.push_to(&mut buf);
+    SenderKeyName::from_parts(&buf, sender.as_str())
 }
 
 pub trait JidExt {

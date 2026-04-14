@@ -341,8 +341,10 @@ impl Client {
 
                     for own_jid in jids_to_delete {
                         use wacore::libsignal::store::sender_key_name::SenderKeyName;
-                        let sk_name =
-                            SenderKeyName::from_jid(&group_jid, &own_jid.to_protocol_address());
+                        let sk_name = SenderKeyName::from_parts(
+                            &group_jid,
+                            own_jid.to_protocol_address().as_str(),
+                        );
                         self.signal_cache
                             .delete_sender_key(sk_name.cache_key())
                             .await;

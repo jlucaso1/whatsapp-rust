@@ -11,7 +11,7 @@ use std::hint::black_box;
 use wacore::client::context::{GroupInfo, SendContextResolver};
 use wacore::messages::MessageUtils;
 use wacore::send::{SignalStores, prepare_group_stanza, prepare_peer_stanza};
-use wacore::types::jid::JidExt;
+use wacore::types::jid::{JidExt, make_sender_key_name};
 use wacore::types::message::AddressingMode;
 use wacore_binary::jid::Jid;
 use wacore_binary::marshal::marshal;
@@ -468,7 +468,7 @@ fn setup_group_send(n: usize) -> GrpSendData {
         devices.push(member.jid);
     }
 
-    let sk_name = SenderKeyName::from_jid(&group_jid, &alice.address);
+    let sk_name = make_sender_key_name(&group_jid, &alice.address);
     futures::executor::block_on(async {
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         create_sender_key_distribution_message(&sk_name, &mut alice.sender_keys, &mut rng)
@@ -528,7 +528,7 @@ fn setup_group_recv() -> GrpRecvData {
     establish_session(&mut alice, &bob);
 
     // Alice creates sender key and distributes SKDM to Bob
-    let sk_name = SenderKeyName::from_jid(&group_jid, &alice.address);
+    let sk_name = make_sender_key_name(&group_jid, &alice.address);
     futures::executor::block_on(async {
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let skdm =

@@ -15,9 +15,8 @@ use wacore::libsignal::protocol::{
 use wacore::libsignal::protocol::{
     PublicKey as SignalPublicKey, SENDERKEY_MESSAGE_CURRENT_VERSION,
 };
-use wacore::libsignal::store::sender_key_name::SenderKeyName;
 use wacore::message_processing::EncType;
-use wacore::types::jid::JidExt;
+use wacore::types::jid::{JidExt, make_sender_key_name};
 use wacore_binary::Jid;
 use wacore_binary::JidExt as _;
 use wacore_binary::{NodeRef, OwnedNodeRef};
@@ -1044,7 +1043,7 @@ impl Client {
             // participant — normalizing to bare ensures consistent lookup.
             let sender_for_sk = info.source.sender.to_non_ad();
             let sender_address = sender_for_sk.to_protocol_address();
-            let sender_key_name = SenderKeyName::from_jid(&info.source.chat, &sender_address);
+            let sender_key_name = make_sender_key_name(&info.source.chat, &sender_address);
 
             log::debug!(
                 "Looking up sender key for group {} with sender address {} (from sender JID: {})",
@@ -1534,7 +1533,7 @@ impl Client {
         let sender_bare = sender_jid.to_non_ad();
         let sender_address = sender_bare.to_protocol_address();
 
-        let sender_key_name = SenderKeyName::from_jid(&group_jid, &sender_address);
+        let sender_key_name = make_sender_key_name(group_jid, &sender_address);
 
         // Route through the signal cache adapter so the sender key is immediately visible
         // in the cache for subsequent group_decrypt calls within the same message batch.
@@ -1947,7 +1946,7 @@ mod tests {
             SenderKeyStore, create_sender_key_distribution_message,
             process_sender_key_distribution_message,
         };
-        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+
         let backend = Arc::new(
             SqliteStore::new("file:memdb_sender_key_test?mode=memory&cache=shared")
                 .await
@@ -1979,7 +1978,7 @@ mod tests {
 
         // Create SKDM using LID address (mimics handle_sender_key_distribution_message)
         let lid_protocol_address = own_lid.to_protocol_address();
-        let lid_sender_key_name = SenderKeyName::from_jid(&group_jid, &lid_protocol_address);
+        let lid_sender_key_name = make_sender_key_name(&group_jid, &lid_protocol_address);
 
         // Pin serialized form so from_jid stays compatible with persisted records
         assert_eq!(lid_sender_key_name.group_id(), group_jid.to_string());
@@ -2013,7 +2012,7 @@ mod tests {
 
         // Try to retrieve using PHONE NUMBER address (THE BUG)
         let phone_protocol_address = own_phone.to_protocol_address();
-        let phone_sender_key_name = SenderKeyName::from_jid(&group_jid, &phone_protocol_address);
+        let phone_sender_key_name = make_sender_key_name(&group_jid, &phone_protocol_address);
 
         let phone_lookup_result = {
             let device_guard = device_arc.read().await;
@@ -2053,7 +2052,6 @@ mod tests {
             SenderKeyStore, create_sender_key_distribution_message,
             process_sender_key_distribution_message,
         };
-        use wacore::libsignal::store::sender_key_name::SenderKeyName;
 
         let backend = Arc::new(
             SqliteStore::new("file:memdb_multi_lid_test?mode=memory&cache=shared")
@@ -2092,7 +2090,7 @@ mod tests {
         for (lid_str, _phone_str) in &participants {
             let lid_jid: Jid = lid_str.parse().expect("test JID should be valid");
             let lid_protocol_address = lid_jid.to_protocol_address();
-            let lid_sender_key_name = SenderKeyName::from_jid(&group_jid, &lid_protocol_address);
+            let lid_sender_key_name = make_sender_key_name(&group_jid, &lid_protocol_address);
 
             let skdm = {
                 let mut device_guard = device_arc.write().await;
@@ -2123,9 +2121,8 @@ mod tests {
             let lid_protocol_address = lid_jid.to_protocol_address();
             let phone_protocol_address = phone_jid.to_protocol_address();
 
-            let lid_sender_key_name = SenderKeyName::from_jid(&group_jid, &lid_protocol_address);
-            let phone_sender_key_name =
-                SenderKeyName::from_jid(&group_jid, &phone_protocol_address);
+            let lid_sender_key_name = make_sender_key_name(&group_jid, &lid_protocol_address);
+            let phone_sender_key_name = make_sender_key_name(&group_jid, &phone_protocol_address);
 
             // Should find with LID address
             let lid_lookup = {
@@ -2522,7 +2519,6 @@ mod tests {
         use crate::store::SqliteStore;
         use std::sync::Arc;
         use wacore::libsignal::protocol::{SenderKeyStore, create_sender_key_distribution_message};
-        use wacore::libsignal::store::sender_key_name::SenderKeyName;
 
         let backend = Arc::new(
             SqliteStore::new("file:memdb_display_jid_test?mode=memory&cache=shared")
@@ -2555,8 +2551,7 @@ mod tests {
 
         // Store sender key using display JID (LID)
         let display_protocol_address = display_jid.to_protocol_address();
-        let display_sender_key_name =
-            SenderKeyName::from_jid(&group_jid, &display_protocol_address);
+        let display_sender_key_name = make_sender_key_name(&group_jid, &display_protocol_address);
 
         let device_arc = pm.get_device_arc().await;
         {
@@ -2585,7 +2580,7 @@ mod tests {
         // Verify it's NOT accessible via encryption JID (phone number)
         let encryption_protocol_address = encryption_jid.to_protocol_address();
         let encryption_sender_key_name =
-            SenderKeyName::from_jid(&group_jid, &encryption_protocol_address);
+            make_sender_key_name(&group_jid, &encryption_protocol_address);
 
         let lookup_with_encryption = {
             let device_guard = device_arc.read().await;
@@ -2616,7 +2611,7 @@ mod tests {
         use wacore::libsignal::protocol::{
             create_sender_key_distribution_message, process_sender_key_distribution_message,
         };
-        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+
         use wacore::types::message::AddressingMode;
         use wacore_binary::builder::NodeBuilder;
 
@@ -2648,7 +2643,7 @@ mod tests {
 
         // Step 1: Create and store a sender key (simulating first message processing)
         let sender_protocol_address = sender_jid.to_protocol_address();
-        let sender_key_name = SenderKeyName::from_jid(&group_jid, &sender_protocol_address);
+        let sender_key_name = make_sender_key_name(&group_jid, &sender_protocol_address);
 
         let device_arc = pm.get_device_arc().await;
         {
