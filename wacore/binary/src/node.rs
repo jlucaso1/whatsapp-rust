@@ -605,13 +605,27 @@ impl Node {
     }
 }
 
+/// Wrapper that serializes `AttrsRef` with the same newtype-struct framing
+/// that serde's derive produces for `Attrs(Vec<...>)`. Without this, binary
+/// formats (bincode, postcard, etc.) would see a bare sequence instead of a
+/// newtype struct wrapper.
+#[cfg(feature = "serde")]
+struct AttrsRefWrapper<'a, 'b>(&'b AttrsRef<'a>);
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for AttrsRefWrapper<'_, '_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_newtype_struct("Attrs", self.0)
+    }
+}
+
 #[cfg(feature = "serde")]
 impl serde::Serialize for NodeRef<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         use serde::ser::SerializeStruct;
         let mut s = serializer.serialize_struct("Node", 3)?;
         s.serialize_field("tag", &*self.tag)?;
-        s.serialize_field("attrs", &self.attrs)?;
+        s.serialize_field("attrs", &AttrsRefWrapper(&self.attrs))?;
         s.serialize_field("content", &self.content)?;
         s.end()
     }
