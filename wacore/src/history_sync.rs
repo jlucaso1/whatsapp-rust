@@ -28,7 +28,7 @@ pub struct HistorySyncResult {
     pub decompressed_bytes: Option<Bytes>,
 }
 
-pub(crate) mod wire_type {
+mod wire_type {
     pub const VARINT: u32 = 0;
     pub const FIXED64: u32 = 1;
     pub const LENGTH_DELIMITED: u32 = 2;
@@ -51,16 +51,20 @@ pub fn process_history_sync(
     retain_blob: bool,
     compressed_size_hint: Option<u64>,
 ) -> Result<HistorySyncResult, HistorySyncError> {
-    // Decompress into a single contiguous buffer.
+    // Hard limit to prevent OOM on malformed blobs.
+    // Typical InitialBootstrap: 5-20 MB decompressed.
+    const MAX_DECOMPRESSED: u64 = 64 * 1024 * 1024;
+
     let estimated = compressed_size_hint
         .and_then(|s| usize::try_from(s).ok())
         .map(|s| s * 4)
         .unwrap_or_else(|| compressed_data.len() * 4)
-        .clamp(256, 64 * 1024 * 1024);
+        .clamp(256, MAX_DECOMPRESSED as usize);
     let mut decompressed = Vec::with_capacity(estimated);
     {
-        let mut decoder = ZlibDecoder::new(compressed_data.as_slice());
-        decoder.read_to_end(&mut decompressed)?;
+        let decoder = ZlibDecoder::new(compressed_data.as_slice());
+        let mut limited = decoder.take(MAX_DECOMPRESSED);
+        limited.read_to_end(&mut decompressed)?;
     }
     drop(compressed_data);
 
@@ -96,7 +100,7 @@ pub fn process_history_sync(
             }
 
             // field 7 = pushnames (repeated, length-delimited)
-            7 if own_user.is_some()
+            7 if let Some(own) = own_user
                 && result.own_pushname.is_none()
                 && wire_type_raw == wire_type::LENGTH_DELIMITED =>
             {
@@ -104,7 +108,7 @@ pub fn process_history_sync(
                 pos += vlen;
                 let end = checked_end(pos, len, buf.len(), "pushname")?;
 
-                if let Some(name) = extract_own_pushname(&buf[pos..end], own_user.unwrap()) {
+                if let Some(name) = extract_own_pushname(&buf[pos..end], own) {
                     result.own_pushname = Some(name);
                 }
                 pos = end;
@@ -136,7 +140,7 @@ pub fn process_history_sync(
 
 /// Compute `pos + len` with overflow and bounds checking.
 #[inline]
-pub(crate) fn checked_end(
+fn checked_end(
     pos: usize,
     len: u64,
     buf_len: usize,
@@ -160,7 +164,7 @@ pub(crate) fn checked_end(
 
 /// Read a protobuf varint from `data`, returning (value, bytes_consumed).
 #[inline]
-pub(crate) fn read_varint(data: &[u8]) -> Result<(u64, usize), HistorySyncError> {
+fn read_varint(data: &[u8]) -> Result<(u64, usize), HistorySyncError> {
     let mut value: u64 = 0;
     let mut shift = 0u32;
     for (i, &byte) in data.iter().enumerate() {
@@ -182,11 +186,7 @@ pub(crate) fn read_varint(data: &[u8]) -> Result<(u64, usize), HistorySyncError>
 
 /// Skip a protobuf field based on wire type, returning the new position.
 #[inline]
-pub(crate) fn skip_field(
-    wire_type: u32,
-    buf: &[u8],
-    pos: usize,
-) -> Result<usize, HistorySyncError> {
+fn skip_field(wire_type: u32, buf: &[u8], pos: usize) -> Result<usize, HistorySyncError> {
     match wire_type {
         wire_type::VARINT => {
             let (_, vlen) = read_varint(&buf[pos..])?;
@@ -225,7 +225,8 @@ fn extract_own_pushname(data: &[u8], own_user: &str) -> Option<String> {
             1 if wt == wire_type::LENGTH_DELIMITED => {
                 let (len, vlen) = read_varint(data.get(pos..)?).ok()?;
                 pos += vlen;
-                let end = pos.checked_add(len as usize).filter(|&e| e <= data.len())?;
+                let len = usize::try_from(len).ok()?;
+                let end = pos.checked_add(len).filter(|&e| e <= data.len())?;
                 let id = std::str::from_utf8(data.get(pos..end)?).ok()?;
                 id_match = id == own_user;
                 if !id_match {
@@ -237,7 +238,8 @@ fn extract_own_pushname(data: &[u8], own_user: &str) -> Option<String> {
             2 if wt == wire_type::LENGTH_DELIMITED => {
                 let (len, vlen) = read_varint(data.get(pos..)?).ok()?;
                 pos += vlen;
-                let end = pos.checked_add(len as usize).filter(|&e| e <= data.len())?;
+                let len = usize::try_from(len).ok()?;
+                let end = pos.checked_add(len).filter(|&e| e <= data.len())?;
                 let name = std::str::from_utf8(data.get(pos..end)?).ok()?;
                 pushname = Some(name.to_string());
                 pos = end;

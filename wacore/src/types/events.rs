@@ -97,58 +97,6 @@ impl LazyHistorySync {
     pub fn raw_bytes(&self) -> &[u8] {
         &self.raw_bytes
     }
-
-    /// Consume self and return the raw decompressed bytes for zero-copy slicing.
-    pub fn into_raw_bytes(self) -> Bytes {
-        self.raw_bytes
-    }
-
-    /// Iterate over raw conversation bytes without full proto decode.
-    ///
-    /// Each yielded `Bytes` is a zero-copy slice of the decompressed buffer
-    /// containing one `Conversation` protobuf. Consumers can decode individual
-    /// conversations on demand via `wa::Conversation::decode(&bytes[..])`.
-    pub fn conversations_raw(&self) -> impl Iterator<Item = Bytes> + '_ {
-        ConversationIterator {
-            buf: &self.raw_bytes,
-            pos: 0,
-        }
-    }
-}
-
-struct ConversationIterator<'a> {
-    buf: &'a Bytes,
-    pos: usize,
-}
-
-impl Iterator for ConversationIterator<'_> {
-    type Item = Bytes;
-
-    fn next(&mut self) -> Option<Bytes> {
-        use crate::history_sync::{read_varint, skip_field, wire_type};
-
-        while self.pos < self.buf.len() {
-            let (tag, bytes_read) = read_varint(self.buf.get(self.pos..)?).ok()?;
-            self.pos += bytes_read;
-            let field_number = (tag >> 3) as u32;
-            let wt = (tag & 0x7) as u32;
-
-            if field_number == 2 && wt == wire_type::LENGTH_DELIMITED {
-                let (len, vlen) = read_varint(self.buf.get(self.pos..)?).ok()?;
-                self.pos += vlen;
-                let end = self
-                    .pos
-                    .checked_add(len as usize)
-                    .filter(|&e| e <= self.buf.len())?;
-                let slice = self.buf.slice(self.pos..end);
-                self.pos = end;
-                return Some(slice);
-            }
-
-            self.pos = skip_field(wt, self.buf, self.pos).ok()?;
-        }
-        None
-    }
 }
 
 impl fmt::Debug for LazyHistorySync {
@@ -172,11 +120,10 @@ impl Serialize for LazyHistorySync {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("LazyHistorySync", 4)?;
+        let mut s = serializer.serialize_struct("LazyHistorySync", 3)?;
         s.serialize_field("sync_type", &self.sync_type)?;
         s.serialize_field("chunk_order", &self.chunk_order)?;
         s.serialize_field("progress", &self.progress)?;
-        s.serialize_field("data", &self.parsed.get().and_then(|o| o.as_ref()))?;
         s.end()
     }
 }

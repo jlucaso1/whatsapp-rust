@@ -210,8 +210,8 @@ impl Client {
                         .await;
                 }
 
-                // Store tctokens extracted during streaming
-                for candidate in &sync_result.tc_token_candidates {
+                // Store tctokens extracted during streaming (move to avoid cloning)
+                for candidate in sync_result.tc_token_candidates {
                     self.store_tc_token_candidate(candidate).await;
                 }
 
@@ -238,7 +238,7 @@ impl Client {
     }
 
     /// Store a tctoken candidate extracted during history sync streaming.
-    async fn store_tc_token_candidate(&self, candidate: &TcTokenCandidate) {
+    async fn store_tc_token_candidate(&self, candidate: TcTokenCandidate) {
         let jid: wacore_binary::Jid = match candidate.id.parse() {
             Ok(j) => j,
             Err(_) => return,
@@ -269,7 +269,7 @@ impl Client {
         };
 
         let entry = TcTokenEntry {
-            token: candidate.tc_token.clone(),
+            token: candidate.tc_token,
             token_timestamp: candidate.tc_token_timestamp as i64,
             sender_timestamp: merged_sender_ts,
         };
