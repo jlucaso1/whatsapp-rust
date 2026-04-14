@@ -4,7 +4,7 @@ use crate::protocol::ProtocolAddress;
 ///
 /// Stores a single `"{group_id}:{sender_id}"` buffer with an offset,
 /// avoiding the 3 separate `String` allocations of the naive layout.
-#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SenderKeyName {
     buf: String,
     group_len: usize,
@@ -49,14 +49,7 @@ impl SenderKeyName {
     /// Construct from a group JID and a protocol address.
     /// Uses `ProtocolAddress::as_str()` to avoid allocating the sender string.
     pub fn from_jid(group_jid: &impl std::fmt::Display, sender: &ProtocolAddress) -> Self {
-        let group_id = group_jid.to_string();
-        let sender_id = sender.as_str();
-        let group_len = group_id.len();
-        let mut buf = group_id;
-        buf.reserve(1 + sender_id.len());
-        buf.push(':');
-        buf.push_str(sender_id);
-        Self { buf, group_len }
+        Self::from_parts(&group_jid.to_string(), sender.as_str())
     }
 
     pub fn to_protocol_address(&self) -> ProtocolAddress {

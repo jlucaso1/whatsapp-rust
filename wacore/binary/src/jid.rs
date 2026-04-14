@@ -700,63 +700,67 @@ impl FromStr for Jid {
     }
 }
 
-/// Shared formatting logic: writes `{user}[.{agent}][:{device}]@{server}` using
-/// direct `write_str` calls instead of `write!()` macro, avoiding
-/// `fmt::Arguments` construction and integer `Display` dispatch overhead.
-#[inline]
-fn fmt_jid(
-    user: &str,
-    server: Server,
-    agent: u8,
-    device: u16,
-    f: &mut fmt::Formatter<'_>,
-) -> fmt::Result {
-    if user.is_empty() {
-        return f.write_str(server.as_str());
-    }
-    f.write_str(user)?;
-    // Agent suffix only for servers that don't encode it in the server type itself
-    if agent > 0
-        && !matches!(
-            server,
-            Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
-        )
-    {
-        f.write_str(".")?;
-        f.write_str(itoa::Buffer::new().format(agent))?;
-    }
-    if device > 0 {
-        f.write_str(":")?;
-        f.write_str(itoa::Buffer::new().format(device))?;
-    }
-    f.write_str("@")?;
-    f.write_str(server.as_str())
+/// Core JID formatting logic used by `fmt::Display`, `push_jid_to_string`, and
+/// `push_jid_to_compact`. Writes `{user}[.{agent}][:{device}]@{server}`.
+///
+/// Two flavors via `$append`:
+/// - **fallible** (`f.write_str(s)?`): for `fmt::Formatter` which returns `fmt::Result`
+/// - **infallible** (`$buf.push_str(s)`): for `String`/`CompactString`
+macro_rules! write_jid {
+    // Infallible variant: push_str/push into a growable buffer
+    (infallible $buf:expr, $user:expr, $server:expr, $agent:expr, $device:expr) => {{
+        let (user, server, agent, device) = ($user, $server, $agent, $device);
+        if user.is_empty() {
+            $buf.push_str(server.as_str());
+            return;
+        }
+        $buf.push_str(user);
+        if agent > 0
+            && !matches!(
+                server,
+                Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+            )
+        {
+            $buf.push('.');
+            $buf.push_str(itoa::Buffer::new().format(agent));
+        }
+        if device > 0 {
+            $buf.push(':');
+            $buf.push_str(itoa::Buffer::new().format(device));
+        }
+        $buf.push('@');
+        $buf.push_str(server.as_str());
+    }};
+    // Fallible variant: write_str into fmt::Formatter
+    (fallible $f:expr, $user:expr, $server:expr, $agent:expr, $device:expr) => {{
+        let (user, server, agent, device) = ($user, $server, $agent, $device);
+        if user.is_empty() {
+            return $f.write_str(server.as_str());
+        }
+        $f.write_str(user)?;
+        if agent > 0
+            && !matches!(
+                server,
+                Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+            )
+        {
+            $f.write_str(".")?;
+            $f.write_str(itoa::Buffer::new().format(agent))?;
+        }
+        if device > 0 {
+            $f.write_str(":")?;
+            $f.write_str(itoa::Buffer::new().format(device))?;
+        }
+        $f.write_str("@")?;
+        $f.write_str(server.as_str())
+    }};
 }
 
-/// Write the JID display representation directly into a `String` using `push_str`,
+/// Write the JID display representation directly into a `String`,
 /// bypassing `fmt::Display` and `dyn Write` dispatch entirely.
 #[inline]
 pub fn push_jid_to_string(user: &str, server: Server, agent: u8, device: u16, buf: &mut String) {
-    if user.is_empty() {
-        buf.push_str(server.as_str());
-        return;
-    }
-    buf.push_str(user);
-    if agent > 0
-        && !matches!(
-            server,
-            Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
-        )
-    {
-        buf.push('.');
-        buf.push_str(itoa::Buffer::new().format(agent));
-    }
-    if device > 0 {
-        buf.push(':');
-        buf.push_str(itoa::Buffer::new().format(device));
-    }
-    buf.push('@');
-    buf.push_str(server.as_str());
+    write_jid!(infallible buf, user, server, agent, device);
 }
 
 /// Write the JID display representation directly into a `CompactString`,
@@ -769,37 +773,18 @@ pub fn push_jid_to_compact(
     device: u16,
     buf: &mut CompactString,
 ) {
-    if user.is_empty() {
-        buf.push_str(server.as_str());
-        return;
-    }
-    buf.push_str(user);
-    if agent > 0
-        && !matches!(
-            server,
-            Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
-        )
-    {
-        buf.push('.');
-        buf.push_str(itoa::Buffer::new().format(agent));
-    }
-    if device > 0 {
-        buf.push(':');
-        buf.push_str(itoa::Buffer::new().format(device));
-    }
-    buf.push('@');
-    buf.push_str(server.as_str());
+    write_jid!(infallible buf, user, server, agent, device);
 }
 
 impl fmt::Display for Jid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt_jid(&self.user, self.server, self.agent, self.device, f)
+        write_jid!(fallible f, &*self.user, self.server, self.agent, self.device)
     }
 }
 
 impl<'a> fmt::Display for JidRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt_jid(&self.user, self.server, self.agent, self.device, f)
+        write_jid!(fallible f, &*self.user, self.server, self.agent, self.device)
     }
 }
 
