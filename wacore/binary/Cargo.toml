@@ -7,9 +7,6 @@ license = "MIT"
 repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Binary data and constants for WhatsApp protocol"
 
-[package.metadata.cargo-shear]
-ignored = ["phf"]
-
 [lib]
 crate-type = ["cdylib", "rlib"]
 
@@ -22,14 +19,13 @@ serde = ["dep:serde", "compact_str/serde"]
 bytes = { workspace = true }
 compact_str = { workspace = true }
 flate2 = { workspace = true }
+hashify = { version = "0.2.9", default-features = false }
 itoa = { workspace = true }
-phf = { version = "0.13.1", default-features = false }
 serde = { workspace = true, optional = true }
 stable_deref_trait = "1.2.0"
 yoke = { workspace = true }
 
 [build-dependencies]
-phf_codegen = "0.13.1"
 serde = { workspace = true, features = ["alloc"] }
 serde_json = { workspace = true, features = ["std"] }
 
