@@ -44,7 +44,7 @@ impl StanzaHandler for PresenceHandler {
             .get_attr("last")
             .map(|v| v.as_str())
             .and_then(|s| s.parse::<i64>().ok())
-            .and_then(|ts| chrono::DateTime::from_timestamp(ts, 0));
+            .and_then(wacore::time::from_secs);
 
         debug!(
             target: "PresenceHandler",

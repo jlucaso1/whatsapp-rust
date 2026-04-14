@@ -49,7 +49,7 @@ pub async fn resolve_and_update_version(
     let needs_fetch = if last_fetched_ms == 0 {
         true
     } else {
-        match chrono::DateTime::from_timestamp_millis(last_fetched_ms) {
+        match wacore::time::from_millis(last_fetched_ms) {
             Some(last_fetched_dt) => {
                 wacore::time::now_utc().signed_duration_since(last_fetched_dt)
                     > chrono::Duration::hours(24)

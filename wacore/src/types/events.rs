@@ -316,9 +316,11 @@ impl From<crate::stanza::business::BusinessNotificationType> for BusinessUpdateT
 /// Business status update notification.
 #[derive(Debug, Clone, Serialize)]
 pub struct BusinessStatusUpdate {
+    /// The business account whose status changed.
     pub jid: Jid,
     pub update_type: BusinessUpdateType,
-    pub timestamp: i64,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub timestamp: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_jid: Option<Jid>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -344,9 +346,10 @@ pub struct DisappearingModeChanged {
     pub from: Jid,
     /// New duration in seconds (0 = disabled, 86400 = 24h, etc.).
     pub duration: u32,
-    /// Unix timestamp (seconds) when the setting was changed.
-    /// Consumers should only apply this if it's newer than their stored timestamp.
-    pub setting_timestamp: u64,
+    /// When the setting was changed.
+    /// Consumers should only apply this if it's newer than their stored value.
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub setting_timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -451,6 +454,7 @@ impl Event {
 /// reaction counts for one or more messages.
 #[derive(Debug, Clone, Serialize)]
 pub struct NewsletterLiveUpdate {
+    /// The newsletter channel this update belongs to.
     pub newsletter_jid: Jid,
     pub messages: Vec<NewsletterLiveUpdateMessage>,
 }
@@ -706,6 +710,7 @@ pub struct ChatPresenceUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PresenceUpdate {
+    /// The contact whose presence changed.
     pub from: Jid,
     pub unavailable: bool,
     pub last_seen: Option<DateTime<Utc>>,
@@ -729,6 +734,7 @@ pub struct PictureUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UserAboutUpdate {
+    /// The contact whose about text changed.
     pub jid: Jid,
     pub status: String,
     pub timestamp: DateTime<Utc>,
@@ -744,6 +750,7 @@ pub struct UserAboutUpdate {
 /// sync mutations (different source, different payload).
 #[derive(Debug, Clone, Serialize)]
 pub struct ContactUpdated {
+    /// The contact whose profile was updated.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
 }
@@ -804,6 +811,7 @@ pub struct GroupUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContactUpdate {
+    /// The chat/contact this sync action applies to.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ContactAction>,
@@ -812,6 +820,7 @@ pub struct ContactUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PushNameUpdate {
+    /// The contact who changed their push name.
     pub jid: Jid,
     pub message: Box<MessageInfo>,
     pub old_push_name: String,
@@ -820,6 +829,7 @@ pub struct PushNameUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PinUpdate {
+    /// The chat being pinned or unpinned.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::PinAction>,
@@ -828,6 +838,7 @@ pub struct PinUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MuteUpdate {
+    /// The chat being muted or unmuted.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MuteAction>,
@@ -836,6 +847,7 @@ pub struct MuteUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ArchiveUpdate {
+    /// The chat being archived or unarchived.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ArchiveChatAction>,
@@ -844,6 +856,7 @@ pub struct ArchiveUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StarUpdate {
+    /// The chat containing the starred or unstarred message.
     pub chat_jid: Jid,
     /// The participant who sent the message. `Some` for group messages from
     /// others, `None` for self-authored or 1-on-1 messages (wire value `"0"`).
@@ -857,6 +870,7 @@ pub struct StarUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MarkChatAsReadUpdate {
+    /// The chat being marked as read or unread.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
@@ -865,6 +879,7 @@ pub struct MarkChatAsReadUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeleteChatUpdate {
+    /// The chat being deleted.
     pub jid: Jid,
     /// From the index, not the proto — DeleteChatAction only has messageRange.
     pub delete_media: bool,
@@ -875,6 +890,7 @@ pub struct DeleteChatUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeleteMessageForMeUpdate {
+    /// The chat containing the deleted message.
     pub chat_jid: Jid,
     pub participant_jid: Option<Jid>,
     pub message_id: String,
