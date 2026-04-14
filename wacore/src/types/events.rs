@@ -99,11 +99,13 @@ impl Serialize for LazyHistorySync {
     where
         S: serde::Serializer,
     {
-        if let Some(Some(hs)) = self.parsed.get() {
-            hs.serialize(serializer)
-        } else {
-            serializer.serialize_none()
-        }
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("LazyHistorySync", 4)?;
+        s.serialize_field("sync_type", &self.sync_type)?;
+        s.serialize_field("chunk_order", &self.chunk_order)?;
+        s.serialize_field("progress", &self.progress)?;
+        s.serialize_field("data", &self.parsed.get().and_then(|o| o.as_ref()))?;
+        s.end()
     }
 }
 
