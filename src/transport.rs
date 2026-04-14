@@ -3,8 +3,7 @@ pub use wacore::net::{Transport, TransportEvent, TransportFactory};
 
 #[cfg(feature = "tokio-transport")]
 pub use whatsapp_rust_tokio_transport::{
-    Connector, MaybeTlsStream, TokioWebSocketTransportFactory, default_tls_connector,
-    from_websocket,
+    Connector, TokioWebSocketTransportFactory, default_tls_connector, from_websocket,
 };
 
 #[cfg(feature = "ureq-client")]
