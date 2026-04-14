@@ -833,27 +833,34 @@ impl Client {
                                     any_duplicate = true;
                                 } else if matches!(retry_err, SignalProtocolError::InvalidPreKeyId)
                                 {
-                                    // InvalidPreKeyId after identity change means the sender is using
-                                    // an old prekey that we no longer have. This typically happens when:
-                                    // 1. The sender reinstalled WhatsApp and cached our old prekey bundle
-                                    // 2. The prekey they're using has been consumed or rotated out
-                                    //
-                                    // Solution: Send a retry receipt with a fresh prekey so the sender
-                                    // can establish a new session and resend the message.
-                                    log::warn!(
-                                        "[msg:{}] Decryption failed for {} due to InvalidPreKeyId after identity change. \
-                                         The sender is using an old prekey we no longer have. \
-                                         Sending retry receipt with fresh keys.",
-                                        info.id,
-                                        address
-                                    );
-
-                                    // Send retry receipt so the sender fetches our new prekey bundle
-                                    dispatched_undecryptable = self.handle_decrypt_failure(
-                                        info,
-                                        RetryReason::InvalidKeyId,
-                                        decrypt_fail_mode,
-                                    );
+                                    // Session may exist under PN address after identity change
+                                    if self
+                                        .try_pn_to_lid_migration_decrypt(
+                                            sender_encryption_jid,
+                                            &signal_address,
+                                            &parsed_message,
+                                            &mut adapter,
+                                            &mut rng,
+                                            &enc_type,
+                                            padding_version,
+                                            info,
+                                        )
+                                        .await
+                                    {
+                                        any_success = true;
+                                    } else {
+                                        log::warn!(
+                                            "[msg:{}] InvalidPreKeyId after identity change for {}. \
+                                             Sending retry receipt with fresh keys.",
+                                            info.id,
+                                            address
+                                        );
+                                        dispatched_undecryptable = self.handle_decrypt_failure(
+                                            info,
+                                            RetryReason::InvalidKeyId,
+                                            decrypt_fail_mode,
+                                        );
+                                    }
                                 } else {
                                     log::error!(
                                         "[msg:{}] Decryption failed even after clearing untrusted identity for {}: {:?}",
@@ -951,18 +958,27 @@ impl Client {
                             self.handle_decrypt_failure(info, reason, decrypt_fail_mode);
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidPreKeyId) {
-                        // InvalidPreKeyId means the sender is using a PreKey ID that we don't have.
-                        // This typically happens when:
-                        // 1. We were offline for a long time
-                        // 2. The sender established a session with us using a prekey from the server
-                        // 3. We never received the initial session-establishing message
-                        // 4. Now we're receiving messages with counters 3, 4, 5... referencing that prekey
-                        //
-                        // The sender thinks they have a valid session, but we never had it.
-                        // We need to send a retry receipt with fresh prekeys so the sender can:
-                        // 1. Delete their old session
-                        // 2. Fetch our new prekeys from the retry receipt
-                        // 3. Create a NEW session and resend with counter 0
+                        // InvalidPreKeyId on a PreKeyMessage can also mean the
+                        // session exists under a PN address (legacy migration).
+                        // Migrating lets Signal use the existing ratchet state
+                        // instead of looking up the consumed one-time prekey.
+                        if self
+                            .try_pn_to_lid_migration_decrypt(
+                                sender_encryption_jid,
+                                &signal_address,
+                                &parsed_message,
+                                &mut adapter,
+                                &mut rng,
+                                &enc_type,
+                                padding_version,
+                                info,
+                            )
+                            .await
+                        {
+                            any_success = true;
+                            continue;
+                        }
+
                         log::warn!(
                             "[msg:{}] Decryption failed for {} message from {} due to InvalidPreKeyId. \
                              Sender is using a prekey we don't have (likely session established while offline). \
