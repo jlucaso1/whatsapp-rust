@@ -454,9 +454,9 @@ impl Event {
 
     /// Returns the primary JID associated with this event, if any.
     ///
-    /// Useful for routing events to the right chat without exhaustively matching every variant.
-    /// Returns `None` for connection-lifecycle and sync events that have no associated chat.
-    pub fn chat_jid(&self) -> Option<&Jid> {
+    /// Useful for routing or filtering events without exhaustively matching every variant.
+    /// Returns `None` for connection-lifecycle and sync events that have no associated JID.
+    pub fn primary_jid(&self) -> Option<&Jid> {
         match self {
             Event::Message(_, info) => Some(&info.source.chat),
             Event::Receipt(r) => Some(&r.source.chat),

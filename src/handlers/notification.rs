@@ -1708,7 +1708,8 @@ mod tests {
             .unwrap_or(0);
         let setting_timestamp = dm_attrs
             .optional_string("t")
-            .and_then(|s| s.parse::<i64>().ok())?;
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|&t| wacore::time::from_secs(t).is_some())?;
         Some((duration, setting_timestamp))
     }
 
