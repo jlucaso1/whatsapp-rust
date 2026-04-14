@@ -22,19 +22,16 @@ pub const LIST_16: u8 = 249;
 pub const PACKED_MAX: u8 = 127;
 pub const SINGLE_BYTE_MAX: u16 = 256;
 
-/// Result of a unified token lookup — single hash for both token types.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     Single(u8),
     Double(u8, u8),
 }
 
-// Include the generated maps from the build script
 include!(concat!(env!("OUT_DIR"), "/token_maps.rs"));
 
-/// Look up a string in the unified token map (single PHF lookup).
 pub fn index_of_token(token: &str) -> Option<TokenKind> {
-    TOKEN_MAP.get(token).copied()
+    hashify_lookup(token.as_bytes()).copied()
 }
 
 pub fn get_single_token(index: u8) -> Option<&'static str> {
@@ -52,7 +49,6 @@ pub fn get_double_token(dict: u8, index: u8) -> Option<&'static str> {
 mod tests {
     use super::*;
 
-    /// Test single byte token lookup round trip via unified map
     #[test]
     fn test_single_byte_token_roundtrip() {
         for i in 1u8..=235 {
@@ -68,7 +64,6 @@ mod tests {
         }
     }
 
-    /// Test double byte token lookup round trip via unified map
     #[test]
     fn test_double_byte_token_roundtrip() {
         for dict in 0..4u8 {
@@ -87,18 +82,20 @@ mod tests {
         }
     }
 
-    /// Test that unknown strings return None for token lookups
     #[test]
     fn test_unknown_string_returns_none() {
         assert!(index_of_token("xyzzy_not_a_token_12345").is_none());
     }
 
-    /// Test boundary token indices
+    #[test]
+    fn test_empty_string_returns_none() {
+        assert!(index_of_token("").is_none());
+    }
+
     #[test]
     fn test_token_boundary_indices() {
         let token_0 = get_single_token(0);
         assert_eq!(token_0, Some(""), "Index 0 should be empty string token");
-
         assert!(get_single_token(LIST_8).is_none());
         assert!(get_single_token(LIST_16).is_none());
         assert!(get_single_token(JID_PAIR).is_none());
@@ -109,22 +106,14 @@ mod tests {
         assert!(get_single_token(NIBBLE_8).is_none());
     }
 
-    /// Test strings that almost match tokens but shouldn't be encoded as such
     #[test]
     fn test_almost_matching_strings() {
-        if let Some(token) = get_single_token(1) {
-            let modified = format!("{}_modified", token);
-            assert!(index_of_token(&modified).is_none());
-
-            let prefixed = format!("prefix_{}", token);
-            assert!(index_of_token(&prefixed).is_none());
-
-            let suffixed = format!("{}!", token);
-            assert!(index_of_token(&suffixed).is_none());
-        }
+        let token = get_single_token(1).expect("single token at index 1 must exist");
+        assert!(index_of_token(&format!("{}_modified", token)).is_none());
+        assert!(index_of_token(&format!("prefix_{}", token)).is_none());
+        assert!(index_of_token(&format!("{}!", token)).is_none());
     }
 
-    /// Test out of bounds dictionary lookup
     #[test]
     fn test_out_of_bounds_dictionary() {
         assert!(get_double_token(4, 0).is_none());
