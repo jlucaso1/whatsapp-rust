@@ -80,12 +80,17 @@ pub fn sort_dedup_by_device(jids: &mut Vec<Jid>) {
     });
 }
 
-/// Build a `SenderKeyName` from a `&Jid` + `&ProtocolAddress` without the
-/// intermediate `to_string()` allocation that `SenderKeyName::from_jid` requires.
+/// Build a `SenderKeyName` from a `&Jid` + `&ProtocolAddress` in a single
+/// allocation. Pushes the group JID and sender address directly into the
+/// final buffer — no intermediate `to_string()` or temp buffers.
 pub fn make_sender_key_name(group_jid: &Jid, sender: &ProtocolAddress) -> SenderKeyName {
-    let mut buf = String::with_capacity(64);
+    let sender_str = sender.as_str();
+    let mut buf = String::with_capacity(group_jid.user.len() + 20 + 1 + sender_str.len());
     group_jid.push_to(&mut buf);
-    SenderKeyName::from_parts(&buf, sender.as_str())
+    let group_len = buf.len();
+    buf.push(':');
+    buf.push_str(sender_str);
+    SenderKeyName::from_buf(buf, group_len)
 }
 
 pub trait JidExt {

@@ -32,6 +32,14 @@ impl SenderKeyName {
         }
     }
 
+    /// Build from a pre-assembled `"group_id:sender_id"` buffer.
+    /// `group_len` is the byte offset where group_id ends (the `:`).
+    pub fn from_buf(buf: String, group_len: usize) -> Self {
+        debug_assert!(buf.len() > group_len);
+        debug_assert_eq!(buf.as_bytes()[group_len], b':');
+        Self { buf, group_len }
+    }
+
     pub fn group_id(&self) -> &str {
         &self.buf[..self.group_len]
     }
