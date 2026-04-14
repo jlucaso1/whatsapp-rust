@@ -261,7 +261,7 @@ pub fn parse_message_info(
             .map(|s| s.to_string())
             .unwrap_or_default(),
         timestamp: chrono::DateTime::from_timestamp(attrs.unix_time("t"), 0)
-            .unwrap_or_else(chrono::Utc::now),
+            .unwrap_or_else(crate::time::now_utc),
         category,
         edit: attrs
             .optional_string("edit")

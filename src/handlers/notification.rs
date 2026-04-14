@@ -850,7 +850,7 @@ async fn handle_business_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
         jid: notification.from.clone(),
         update_type,
         timestamp: chrono::DateTime::from_timestamp(notification.timestamp, 0)
-            .unwrap_or_else(chrono::Utc::now),
+            .unwrap_or_else(wacore::time::now_utc),
         target_jid: notification.jid.clone(),
         hash: notification.hash.clone(),
         verified_name,
@@ -1047,7 +1047,7 @@ fn notification_timestamp(node: &NodeRef<'_>) -> chrono::DateTime<chrono::Utc> {
         .optional_u64("t")
         .and_then(|t| i64::try_from(t).ok())
         .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
-        .unwrap_or_else(chrono::Utc::now)
+        .unwrap_or_else(wacore::time::now_utc)
 }
 
 /// Learn LID-PN mappings from a contacts modify notification.
@@ -1222,7 +1222,7 @@ async fn handle_group_notification(client: &Arc<Client>, node: Arc<OwnedNodeRef>
     let timestamp = i64::try_from(notification.timestamp)
         .ok()
         .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
-        .unwrap_or_else(chrono::Utc::now);
+        .unwrap_or_else(wacore::time::now_utc);
 
     for action in notification.actions {
         // Granularly patch group cache instead of invalidating — matches WA Web's
