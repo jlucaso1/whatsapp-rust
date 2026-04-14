@@ -219,15 +219,10 @@ impl Client {
                 self.store_tc_token_from_conversation_bytes(&raw_bytes)
                     .await;
 
+                // Wrap Bytes in LazyConversation using from_bytes (true zero-copy)
+                // Parsing only happens if the event handler calls .conversation() or .get()
                 let lazy_conv = LazyConversation::from_bytes(raw_bytes);
-                if let Some(conv) = lazy_conv.get()
-                    && let Ok(group_jid) = conv.id.parse()
-                {
-                    self.core.event_bus.dispatch(Event::JoinedGroup {
-                        group_jid,
-                        conversation: lazy_conv,
-                    });
-                }
+                self.core.event_bus.dispatch(Event::JoinedGroup(lazy_conv));
             }
 
             // Drop receiver before awaiting the blocking task. If we broke out

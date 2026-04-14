@@ -389,10 +389,7 @@ pub enum Event {
     ContactNumberChanged(ContactNumberChanged),
     ContactSyncRequested(ContactSyncRequested),
 
-    JoinedGroup {
-        group_jid: Jid,
-        conversation: LazyConversation,
-    },
+    JoinedGroup(LazyConversation),
     /// Group metadata/settings/participant change from w:gp2 notification.
     GroupUpdate(GroupUpdate),
     ContactUpdate(ContactUpdate),
@@ -450,60 +447,6 @@ impl Event {
     pub fn message_text(&self) -> Option<&str> {
         let (msg, _) = self.as_message()?;
         msg.conversation.as_deref()
-    }
-
-    /// Returns the primary JID associated with this event, if any.
-    ///
-    /// Useful for routing or filtering events without exhaustively matching every variant.
-    /// Returns `None` for connection-lifecycle and sync events that have no associated JID.
-    pub fn primary_jid(&self) -> Option<&Jid> {
-        match self {
-            Event::Message(_, info) => Some(&info.source.chat),
-            Event::Receipt(r) => Some(&r.source.chat),
-            Event::UndecryptableMessage(u) => Some(&u.info.source.chat),
-            Event::ChatPresence(c) => Some(&c.source.chat),
-            Event::Presence(p) => Some(&p.from),
-            Event::PictureUpdate(p) => Some(&p.jid),
-            Event::UserAboutUpdate(u) => Some(&u.jid),
-            Event::ContactUpdated(c) => Some(&c.jid),
-            Event::ContactNumberChanged(c) => Some(&c.new_jid),
-            Event::GroupUpdate(g) => Some(&g.group_jid),
-            Event::JoinedGroup { group_jid, .. } => Some(group_jid),
-            Event::ContactUpdate(c) => Some(&c.jid),
-            Event::PushNameUpdate(p) => Some(&p.jid),
-            Event::PinUpdate(p) => Some(&p.jid),
-            Event::MuteUpdate(m) => Some(&m.jid),
-            Event::ArchiveUpdate(a) => Some(&a.jid),
-            Event::StarUpdate(s) => Some(&s.chat_jid),
-            Event::MarkChatAsReadUpdate(m) => Some(&m.jid),
-            Event::DeleteChatUpdate(d) => Some(&d.jid),
-            Event::DeleteMessageForMeUpdate(d) => Some(&d.chat_jid),
-            Event::BusinessStatusUpdate(b) => Some(&b.jid),
-            Event::DisappearingModeChanged(d) => Some(&d.from),
-            Event::NewsletterLiveUpdate(n) => Some(&n.newsletter_jid),
-            Event::DeviceListUpdate(d) => Some(&d.user),
-            Event::IdentityChange(i) => Some(&i.user),
-            Event::Connected(_)
-            | Event::Disconnected(_)
-            | Event::PairSuccess(_)
-            | Event::PairError(_)
-            | Event::LoggedOut(_)
-            | Event::PairingQrCode { .. }
-            | Event::PairingCode { .. }
-            | Event::QrScannedWithoutMultidevice(_)
-            | Event::ClientOutdated(_)
-            | Event::SelfPushNameUpdated(_)
-            | Event::HistorySync(_)
-            | Event::OfflineSyncPreview(_)
-            | Event::OfflineSyncCompleted(_)
-            | Event::StreamReplaced(_)
-            | Event::TemporaryBan(_)
-            | Event::ConnectFailure(_)
-            | Event::StreamError(_)
-            | Event::ContactSyncRequested(_)
-            | Event::Notification(_)
-            | Event::RawNode(_) => None,
-        }
     }
 }
 
@@ -879,10 +822,9 @@ pub struct ContactUpdate {
 pub struct PushNameUpdate {
     /// The contact who changed their push name.
     pub jid: Jid,
-    pub message: Arc<MessageInfo>,
+    pub message: Box<MessageInfo>,
     pub old_push_name: String,
     pub new_push_name: String,
-    pub from_full_sync: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
