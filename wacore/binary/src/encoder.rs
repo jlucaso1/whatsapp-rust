@@ -267,6 +267,9 @@ impl StringHintCache {
 
     #[inline]
     fn hint_or_insert(&mut self, s: &str) -> StringHint {
+        if s.len() > token::PACKED_MAX as usize {
+            return StringHint::RawBytes;
+        }
         let key = StrKey::from_str(s);
         if let Some(existing) = self
             .hints
@@ -701,6 +704,11 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
 
     #[inline(always)]
     fn write_string_uncached(&mut self, s: &str) -> Result<()> {
+        // Strings longer than PACKED_MAX (127) can't be protocol tokens (max 48),
+        // packed nibble/hex, or JIDs — emit as raw bytes without classification.
+        if s.len() > token::PACKED_MAX as usize {
+            return self.write_bytes_with_len(s.as_bytes());
+        }
         self.write_string_with_hint(s, classify_string_hint(s))
     }
 
