@@ -18,6 +18,14 @@ impl UreqHttpClient {
         let agent = build_agent();
         Self { agent }
     }
+
+    /// Create a client with a pre-configured [`ureq::Agent`].
+    ///
+    /// This lets you configure proxy support, custom TLS, timeouts,
+    /// or any other agent-level settings externally.
+    pub fn with_agent(agent: ureq::Agent) -> Self {
+        Self { agent }
+    }
 }
 
 impl Default for UreqHttpClient {

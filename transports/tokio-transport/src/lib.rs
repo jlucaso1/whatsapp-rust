@@ -10,14 +10,23 @@ use log::{debug, error, trace, warn};
 use std::sync::{Arc, Once};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
-use tokio_websockets::{ClientBuilder, Connector, Message, WebSocketStream};
+use tokio_websockets::{ClientBuilder, Message, WebSocketStream};
 use wacore::net::{Transport, TransportEvent, TransportFactory, WHATSAPP_WEB_WS_URL};
+
+pub use tokio_websockets::Connector;
 
 const EVENT_CHANNEL_CAPACITY: usize = 10_000;
 
 static CRYPTO_PROVIDER_INIT: Once = Once::new();
 
-fn create_tls_connector() -> Connector {
+/// Returns the default TLS connector used by [`TokioWebSocketTransportFactory`].
+///
+/// Useful as a starting point when users need to inspect or replicate the
+/// default TLS configuration before customizing it via [`TokioWebSocketTransportFactory::with_connector`].
+///
+/// On first call, installs `ring` as the global rustls crypto provider
+/// (no-op if one is already installed).
+pub fn default_tls_connector() -> Connector {
     CRYPTO_PROVIDER_INIT.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
@@ -219,17 +228,29 @@ where
 /// For custom connection logic, use [`from_websocket`] directly.
 pub struct TokioWebSocketTransportFactory {
     url: String,
+    connector: Option<Connector>,
 }
 
 impl TokioWebSocketTransportFactory {
     pub fn new() -> Self {
         Self {
             url: WHATSAPP_WEB_WS_URL.to_string(),
+            connector: None,
         }
     }
 
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = url.into();
+        self
+    }
+
+    /// Use a custom TLS [`Connector`] instead of the built-in default.
+    ///
+    /// This is the primary extension point for custom TLS configuration
+    /// (e.g. custom CA certificates, client certs). For full proxy support,
+    /// implement [`TransportFactory`] directly and use [`from_websocket`].
+    pub fn with_connector(mut self, connector: Connector) -> Self {
+        self.connector = Some(connector);
         self
     }
 }
@@ -245,15 +266,23 @@ impl TransportFactory for TokioWebSocketTransportFactory {
     async fn create_transport(
         &self,
     ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error> {
-        let connector = create_tls_connector();
         let uri: http::Uri = self
             .url
             .parse()
             .map_err(|e| anyhow::anyhow!("Failed to parse URL: {e}"))?;
 
+        let default_connector;
+        let connector = match &self.connector {
+            Some(c) => c,
+            None => {
+                default_connector = default_tls_connector();
+                &default_connector
+            }
+        };
+
         debug!("Dialing {}", self.url);
         let (ws, _) = ClientBuilder::from_uri(uri)
-            .connector(&connector)
+            .connector(connector)
             .connect()
             .await
             .map_err(|e| anyhow::anyhow!("WebSocket connect failed: {e}"))?;
