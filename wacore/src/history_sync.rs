@@ -15,7 +15,7 @@ pub enum HistorySyncError {
     MalformedProtobuf(String),
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct HistorySyncResult {
     pub own_pushname: Option<String>,
     /// NCT salt from HistorySync field 19 (nctSalt).
@@ -23,6 +23,9 @@ pub struct HistorySyncResult {
     /// Source: WAWeb/History/MsgHandlerAction.js:storeNctSaltFromHistorySync
     pub nct_salt: Option<Vec<u8>>,
     pub conversations_processed: usize,
+    /// The full decompressed protobuf blob. Consumers can wrap this in
+    /// `LazyHistorySync` for on-demand decoding.
+    pub decompressed_bytes: Bytes,
 }
 
 mod wire_type {
@@ -71,7 +74,12 @@ where
     // Wrap in Bytes so we can hand out zero-copy slices.
     let buf = Bytes::from(decompressed);
     let mut pos = 0;
-    let mut result = HistorySyncResult::default();
+    let mut result = HistorySyncResult {
+        own_pushname: None,
+        nct_salt: None,
+        conversations_processed: 0,
+        decompressed_bytes: buf.clone(), // cheap Arc refcount increment
+    };
 
     while pos < buf.len() {
         let (tag, bytes_read) = read_varint(&buf[pos..])?;

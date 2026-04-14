@@ -1,4 +1,4 @@
-use crate::types::events::{Event, LazyConversation};
+use crate::types::events::{Event, LazyHistorySync};
 use bytes::Bytes;
 use std::sync::Arc;
 use wacore::history_sync::process_history_sync;
@@ -71,10 +71,9 @@ impl Client {
         }
     }
 
-    /// Process history sync with streaming and lazy parsing.
-    ///
-    /// Memory efficient: raw bytes are wrapped in LazyConversation and only
-    /// parsed if the event handler actually accesses the conversation data.
+    /// Process history sync: decompress, extract internal data (tctokens,
+    /// pushname, nct_salt), then dispatch a single `Event::HistorySync`
+    /// with the full decompressed blob for on-demand consumer decoding.
     pub(crate) async fn process_history_sync_task(
         self: &Arc<Self>,
         message_id: String,
@@ -161,118 +160,53 @@ impl Client {
             device_snapshot.pn.as_ref().map(|j| j.to_non_ad().user)
         };
 
-        // Check if anyone is listening for events
-        let has_listeners = self.core.event_bus.has_handlers();
+        // Stream conversation bytes for tctoken extraction (always needed,
+        // regardless of whether anyone listens for events).
+        let (tx, rx) = async_channel::bounded::<Bytes>(4);
 
-        let parse_result = if has_listeners {
-            // Use a bounded channel to stream raw conversation bytes as Bytes (zero-copy)
-            let (tx, rx) = async_channel::bounded::<Bytes>(4);
+        let (result_tx, result_rx) = futures::channel::oneshot::channel();
+        let blocking_fut = self.runtime.spawn_blocking(Box::new(move || {
+            let own_user_ref = own_user.as_deref();
+            let result = process_history_sync(
+                compressed_data,
+                own_user_ref,
+                Some(|raw_bytes: Bytes| {
+                    #[cfg(not(target_arch = "wasm32"))]
+                    let _ = tx.send_blocking(raw_bytes);
+                    #[cfg(target_arch = "wasm32")]
+                    let _ = tx.try_send(raw_bytes);
+                }),
+                compressed_size_hint,
+            );
+            // tx dropped here, closing channel
+            let _ = result_tx.send(result);
+        }));
+        self.runtime
+            .spawn(Box::pin(async move {
+                blocking_fut.await;
+            }))
+            .detach();
 
-            // Run streaming parsing in blocking thread
-            // own_user is moved directly, no clone needed
-            let (result_tx, result_rx) = futures::channel::oneshot::channel();
-            // Spawn the blocking work concurrently — it runs while we
-            // process channel items below.
-            let blocking_fut = self.runtime.spawn_blocking(Box::new(move || {
-                let own_user_ref = own_user.as_deref();
-
-                // Streaming: decompresses and extracts raw bytes incrementally
-                // No parsing happens here - just raw byte extraction
-                // Uses Bytes for zero-copy reference counting
-                let result = process_history_sync(
-                    compressed_data,
-                    own_user_ref,
-                    Some(|raw_bytes: Bytes| {
-                        // Send Bytes through channel (zero-copy clone)
-                        #[cfg(not(target_arch = "wasm32"))]
-                        let _ = tx.send_blocking(raw_bytes);
-                        #[cfg(target_arch = "wasm32")]
-                        let _ = tx.try_send(raw_bytes);
-                    }),
-                    compressed_size_hint,
+        let mut conv_count = 0usize;
+        while let Ok(raw_bytes) = rx.recv().await {
+            if self.is_shutting_down() {
+                log::debug!(
+                    "Stopping history sync {} tctoken extraction during shutdown",
+                    message_id
                 );
-                // tx dropped here, closing channel
-                let _ = result_tx.send(result);
-            }));
-            // Drive the blocking future to completion in the background
-            self.runtime
-                .spawn(Box::pin(async move {
-                    blocking_fut.await;
-                }))
-                .detach();
-
-            // Receive and dispatch lazy conversations as they come in
-            let mut conv_count = 0usize;
-            while let Ok(raw_bytes) = rx.recv().await {
-                if self.is_shutting_down() {
-                    log::debug!(
-                        "Stopping history sync {} event dispatch during shutdown",
-                        message_id
-                    );
-                    break;
-                }
-                conv_count += 1;
-                if conv_count.is_multiple_of(25) {
-                    log::info!("History sync progress: {conv_count} conversations processed...");
-                }
-                // Extract tctokens before dispatching to ensure backfill even if handler drops
-                self.store_tc_token_from_conversation_bytes(&raw_bytes)
-                    .await;
-
-                // Wrap Bytes in LazyConversation using from_bytes (true zero-copy)
-                // Parsing only happens if the event handler calls .conversation() or .get()
-                let lazy_conv = LazyConversation::from_bytes(raw_bytes);
-                self.core.event_bus.dispatch(Event::JoinedGroup(lazy_conv));
+                break;
             }
-
-            // Drop receiver before awaiting the blocking task. If we broke out
-            // of the loop during shutdown, the sender may be blocked on
-            // tx.send_blocking() — dropping rx causes it to return Err and
-            // unblock, preventing a deadlock.
-            drop(rx);
-
-            // Wait for parsing result
-            result_rx.await.ok()
-        } else {
-            // No event listeners, but still extract tctokens from conversations
-            // so headless/library clients have cached privacy tokens after pairing.
-            log::debug!("No event handlers registered, extracting tctokens only");
-
-            let (tx, rx) = async_channel::bounded::<Bytes>(4);
-
-            let (result_tx, result_rx) = futures::channel::oneshot::channel();
-            let blocking_fut = self.runtime.spawn_blocking(Box::new(move || {
-                let own_user_ref = own_user.as_deref();
-                let result = process_history_sync(
-                    compressed_data,
-                    own_user_ref,
-                    Some(|raw_bytes: Bytes| {
-                        #[cfg(not(target_arch = "wasm32"))]
-                        let _ = tx.send_blocking(raw_bytes);
-                        #[cfg(target_arch = "wasm32")]
-                        let _ = tx.try_send(raw_bytes);
-                    }),
-                    compressed_size_hint,
-                );
-                let _ = result_tx.send(result);
-            }));
-            self.runtime
-                .spawn(Box::pin(async move {
-                    blocking_fut.await;
-                }))
-                .detach();
-
-            while let Ok(raw_bytes) = rx.recv().await {
-                if self.is_shutting_down() {
-                    break;
-                }
-                self.store_tc_token_from_conversation_bytes(&raw_bytes)
-                    .await;
+            conv_count += 1;
+            if conv_count.is_multiple_of(25) {
+                log::info!("History sync progress: {conv_count} conversations processed...");
             }
-            drop(rx);
+            self.store_tc_token_from_conversation_bytes(&raw_bytes)
+                .await;
+        }
+        // Drop receiver to unblock sender if we broke out during shutdown.
+        drop(rx);
 
-            result_rx.await.ok()
-        };
+        let parse_result = result_rx.await.ok();
 
         if self.is_shutting_down() {
             log::debug!(
@@ -307,6 +241,19 @@ impl Client {
                             wacore::store::commands::DeviceCommand::SetNctSaltFromHistorySync(salt),
                         )
                         .await;
+                }
+
+                // Dispatch a single event with the full decompressed blob
+                if self.core.event_bus.has_handlers() {
+                    let lazy_hs = LazyHistorySync::new(
+                        sync_result.decompressed_bytes,
+                        notification.sync_type().into(),
+                        notification.chunk_order,
+                        notification.progress,
+                    );
+                    self.core
+                        .event_bus
+                        .dispatch(Event::HistorySync(Box::new(lazy_hs)));
                 }
             }
             Some(Err(e)) => {
