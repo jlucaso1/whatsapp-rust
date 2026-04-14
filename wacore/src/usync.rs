@@ -85,9 +85,9 @@ pub fn parse_get_user_devices_response_with_phash(resp_node: &Node) -> Result<Ve
                 _ => None,
             });
 
-        let device_nodes: Vec<_> = device_list_node.get_children_by_tag("device").collect();
-        let mut devices = Vec::with_capacity(device_nodes.len());
-        for device_node in device_nodes {
+        let device_iter = device_list_node.get_children_by_tag("device");
+        let mut devices = Vec::with_capacity(device_iter.size_hint().1.unwrap_or(0));
+        for device_node in device_iter {
             let device_id_str = match device_node.attrs().optional_string("id") {
                 Some(id) => id,
                 None => {
