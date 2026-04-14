@@ -69,7 +69,8 @@ fn build_upload_request(
 ) -> HttpRequest {
     let mut url = format!("https://{hostname}{upload_path}/{token}?auth={auth}&token={token}");
     if let Some(offset) = file_offset {
-        url.push_str(&format!("&file_offset={offset}"));
+        url.push_str("&file_offset=");
+        url.push_str(itoa::Buffer::new().format(offset));
     }
 
     HttpRequest::post(url)

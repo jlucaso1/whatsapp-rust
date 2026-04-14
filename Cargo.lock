@@ -2618,6 +2618,7 @@ dependencies = [
  "event-listener",
  "futures",
  "hex",
+ "itoa",
  "log",
  "moka",
  "portable-atomic",
