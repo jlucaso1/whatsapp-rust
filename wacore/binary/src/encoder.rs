@@ -1423,4 +1423,73 @@ mod tests {
 
         Ok(())
     }
+
+    /// Regression test: strings at the PACKED_MAX boundary must be classified
+    /// normally, while strings above it must be emitted as raw bytes (skipping
+    /// SipHash/PHF classification entirely).
+    #[test]
+    fn test_long_string_skips_classification() -> TestResult {
+        use crate::decoder::Decoder;
+        use crate::marshal::marshal;
+
+        let at_boundary = "0".repeat(token::PACKED_MAX as usize); // 127 nibble chars
+        let over_boundary = "0".repeat(token::PACKED_MAX as usize + 1); // 128 chars
+
+        // 127-char all-digit string is nibble-packable
+        let node_at = Node::new(
+            "test",
+            Attrs::new(),
+            Some(NodeContent::String(at_boundary.as_str().into())),
+        );
+        let encoded_at = marshal(&node_at)?;
+
+        // 128-char string must be emitted as raw bytes (BINARY_8 + length)
+        let node_over = Node::new(
+            "test",
+            Attrs::new(),
+            Some(NodeContent::String(over_boundary.as_str().into())),
+        );
+        let encoded_over = marshal(&node_over)?;
+
+        // The 127-char string should be packed (shorter encoding than raw)
+        assert!(
+            encoded_at.len() < encoded_over.len(),
+            "127-char nibble string should pack smaller than 128-char raw: {} vs {}",
+            encoded_at.len(),
+            encoded_over.len(),
+        );
+
+        // The 128-char content must be encoded as BINARY_8 + 128 (raw bytes).
+        // Find the [BINARY_8, 128] pair — the first BINARY_8 is for the tag "test".
+        let has_raw_128 = encoded_over
+            .windows(2)
+            .any(|w| w[0] == token::BINARY_8 && w[1] == 128);
+        assert!(
+            has_raw_128,
+            "128-char string must contain BINARY_8 + length=128 sequence"
+        );
+
+        // Both must round-trip correctly (skip version byte at [0])
+        let decoded_at = Decoder::new(&encoded_at[1..]).read_node_ref()?.to_owned();
+        let decoded_over = Decoder::new(&encoded_over[1..]).read_node_ref()?.to_owned();
+
+        match &decoded_at.content {
+            Some(NodeContent::String(s)) => assert_eq!(s.as_str(), at_boundary),
+            Some(NodeContent::Bytes(b)) => {
+                assert_eq!(std::str::from_utf8(b).unwrap(), at_boundary)
+            }
+            other => panic!("Expected string/bytes content, got {:?}", other),
+        }
+        match &decoded_over.content {
+            Some(NodeContent::Bytes(b)) => {
+                assert_eq!(std::str::from_utf8(b).unwrap(), over_boundary)
+            }
+            other => panic!(
+                "Expected bytes content for 128-char string, got {:?}",
+                other
+            ),
+        }
+
+        Ok(())
+    }
 }
