@@ -248,6 +248,23 @@ impl Client {
         }
     }
 
+    /// Force-refresh the server's one-time pre-key pool with a fresh batch.
+    ///
+    /// Intended for callers that just restored a device from an external source
+    /// (e.g., migrating a Baileys session into an `InMemoryBackend`). The server
+    /// may still hold pre-key IDs whose private key material the caller cannot
+    /// reconstruct; any `pkmsg` referencing those IDs will fail forever with
+    /// `InvalidPreKeyId`. Uploading a fresh batch gives the server new IDs the
+    /// caller *does* have locally, and old unmatched IDs drain as peers consume
+    /// them.
+    ///
+    /// Acquires `prekey_upload_lock` for the duration so this force-upload
+    /// cannot race on `start_id` with the count-based and digest-repair paths.
+    pub async fn refresh_pre_keys(&self) -> Result<(), anyhow::Error> {
+        let _guard = self.prekey_upload_lock.lock().await;
+        self.upload_pre_keys_with_retry(true).await
+    }
+
     /// Validate server key bundle digest, re-uploading only when the server has no record.
     ///
     /// Matches WA Web's `WAWebDigestKeyJob.digestKey()`:
