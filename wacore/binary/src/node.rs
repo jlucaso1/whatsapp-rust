@@ -63,6 +63,13 @@ impl std::fmt::Display for NodeStr<'_> {
     }
 }
 
+#[cfg(feature = "serde")]
+impl serde::Serialize for NodeStr<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self)
+    }
+}
+
 impl PartialEq for NodeStr<'_> {
     #[inline]
     fn eq(&self, other: &Self) -> bool {
@@ -387,6 +394,18 @@ pub enum ValueRef<'a> {
     Jid(JidRef<'a>),
 }
 
+#[cfg(feature = "serde")]
+impl serde::Serialize for ValueRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            ValueRef::String(s) => {
+                serializer.serialize_newtype_variant("NodeValue", 0, "String", &**s)
+            }
+            ValueRef::Jid(j) => serializer.serialize_newtype_variant("NodeValue", 1, "Jid", j),
+        }
+    }
+}
+
 impl<'a> ValueRef<'a> {
     /// String view of the value. Borrows from `self`.
     /// - String variant: borrows the inner str — zero copy
@@ -449,6 +468,23 @@ pub enum NodeContentRef<'a> {
     Bytes(Cow<'a, [u8]>),
     String(NodeStr<'a>),
     Nodes(Box<NodeVec<'a>>),
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for NodeContentRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        match self {
+            NodeContentRef::Bytes(b) => {
+                serializer.serialize_newtype_variant("NodeContent", 0, "Bytes", b.as_ref())
+            }
+            NodeContentRef::String(s) => {
+                serializer.serialize_newtype_variant("NodeContent", 1, "String", &**s)
+            }
+            NodeContentRef::Nodes(nodes) => {
+                serializer.serialize_newtype_variant("NodeContent", 2, "Nodes", nodes.as_slice())
+            }
+        }
+    }
 }
 
 impl NodeContent {
@@ -566,6 +602,32 @@ impl Node {
             }
             _ => None,
         }
+    }
+}
+
+/// Wrapper that serializes `AttrsRef` with the same newtype-struct framing
+/// that serde's derive produces for `Attrs(Vec<...>)`. Without this, binary
+/// formats (bincode, postcard, etc.) would see a bare sequence instead of a
+/// newtype struct wrapper.
+#[cfg(feature = "serde")]
+struct AttrsRefWrapper<'a, 'b>(&'b AttrsRef<'a>);
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for AttrsRefWrapper<'_, '_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_newtype_struct("Attrs", self.0)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for NodeRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("Node", 3)?;
+        s.serialize_field("tag", &*self.tag)?;
+        s.serialize_field("attrs", &AttrsRefWrapper(&self.attrs))?;
+        s.serialize_field("content", &self.content)?;
+        s.end()
     }
 }
 
@@ -810,8 +872,116 @@ impl OwnedNodeRef {
     }
 }
 
+#[cfg(feature = "serde")]
+impl serde::Serialize for OwnedNodeRef {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.get().serialize(serializer)
+    }
+}
+
 impl std::fmt::Debug for OwnedNodeRef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.inner.get().fmt(f)
+    }
+}
+
+#[cfg(test)]
+#[cfg(feature = "serde")]
+mod serde_tests {
+    use super::*;
+    use crate::jid::{Jid, Server};
+
+    #[test]
+    fn node_ref_serializes_same_as_node() {
+        let node = Node::new(
+            Cow::Borrowed("message"),
+            Attrs(vec![
+                (Cow::Borrowed("type"), NodeValue::String("text".into())),
+                (Cow::Borrowed("from"), NodeValue::Jid(Jid::pn("5550199999"))),
+            ]),
+            Some(NodeContent::String("hello".into())),
+        );
+        let node_ref = node.as_node_ref();
+
+        let owned_json = serde_json::to_value(&node).unwrap();
+        let ref_json = serde_json::to_value(&node_ref).unwrap();
+        assert_eq!(owned_json, ref_json);
+    }
+
+    #[test]
+    fn nested_nodes_serialize_same() {
+        let child = Node::new(Cow::Borrowed("item"), Attrs::new(), None);
+        let parent = Node::new(
+            Cow::Borrowed("list"),
+            Attrs::new(),
+            Some(NodeContent::Nodes(vec![child])),
+        );
+        let parent_ref = parent.as_node_ref();
+
+        assert_eq!(
+            serde_json::to_value(&parent).unwrap(),
+            serde_json::to_value(&parent_ref).unwrap(),
+        );
+    }
+
+    #[test]
+    fn bytes_content_serializes_same() {
+        let node = Node::new(
+            Cow::Borrowed("iq"),
+            Attrs(vec![(Cow::Borrowed("id"), NodeValue::String("1".into()))]),
+            Some(NodeContent::Bytes(vec![0xDE, 0xAD])),
+        );
+        let node_ref = node.as_node_ref();
+
+        let owned_json = serde_json::to_value(&node).unwrap();
+        let ref_json = serde_json::to_value(&node_ref).unwrap();
+        assert_eq!(owned_json, ref_json);
+    }
+
+    #[test]
+    fn value_ref_matches_node_value() {
+        let string_val = NodeValue::String("hello".into());
+        let string_ref = ValueRef::String(NodeStr::Borrowed("hello"));
+        assert_eq!(
+            serde_json::to_value(&string_val).unwrap(),
+            serde_json::to_value(&string_ref).unwrap(),
+        );
+
+        let jid = Jid {
+            user: "5550199999".into(),
+            server: Server::Group,
+            agent: 1,
+            device: 2,
+            integrator: 3,
+        };
+        let jid_val = NodeValue::Jid(jid.clone());
+        let jid_ref_val = ValueRef::Jid(JidRef {
+            user: NodeStr::Borrowed("5550199999"),
+            server: Server::Group,
+            agent: 1,
+            device: 2,
+            integrator: 3,
+        });
+        assert_eq!(
+            serde_json::to_value(&jid_val).unwrap(),
+            serde_json::to_value(&jid_ref_val).unwrap(),
+        );
+    }
+
+    #[test]
+    fn owned_node_ref_serializes_same_as_owned() {
+        let node = Node::new(
+            Cow::Borrowed("iq"),
+            Attrs(vec![(Cow::Borrowed("id"), NodeValue::String("abc".into()))]),
+            Some(NodeContent::String("payload".into())),
+        );
+
+        let bytes = crate::marshal::marshal(&node).unwrap();
+        // marshal writes a leading format byte that unmarshal_ref doesn't expect
+        let owned_ref = OwnedNodeRef::new(Bytes::from(bytes[1..].to_vec())).unwrap();
+
+        let from_ref = serde_json::to_value(&owned_ref).unwrap();
+        let from_owned = serde_json::to_value(owned_ref.to_owned_node()).unwrap();
+        assert_eq!(from_ref, from_owned);
     }
 }
