@@ -675,6 +675,16 @@ fn partition_dm_devices(
     (recipient_devices, own_other_devices)
 }
 
+/// Result of `prepare_dm_stanza` — carries the stanza node and the
+/// locally computed phash for server ACK validation.
+pub struct PreparedDmStanza {
+    pub node: Node,
+    /// Locally computed phash from the sent device set. Not sent on the
+    /// wire (WA Web only sends phash for groups). Used by the caller to
+    /// compare against the server's ACK phash for device-list drift detection.
+    pub phash: Option<String>,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_dm_stanza<
     'a,
@@ -694,7 +704,7 @@ pub async fn prepare_dm_stanza<
     edit: Option<crate::types::message::EditAttribute>,
     extra_stanza_nodes: &[Node],
     all_devices: Vec<Jid>,
-) -> Result<Node> {
+) -> Result<PreparedDmStanza> {
     let reporting_result = generate_reporting_token(message, &request_id, &to_jid, &to_jid, None);
 
     let message_for_encryption = if let Some(ref result) = reporting_result {
@@ -705,20 +715,28 @@ pub async fn prepare_dm_stanza<
 
     let recipient_plaintext = MessageUtils::encode_and_pad(&message_for_encryption);
 
+    // Partition first so phash reflects the actual sent set (sender excluded)
+    let total_devices = all_devices.len();
+    let (recipient_devices, own_other_devices) =
+        partition_dm_devices(all_devices, own_jid, own_lid);
+
+    let phash = {
+        let mut sent = Vec::with_capacity(recipient_devices.len() + own_other_devices.len());
+        sent.extend_from_slice(&recipient_devices);
+        sent.extend_from_slice(&own_other_devices);
+        MessageUtils::participant_list_hash(&sent).ok()
+    };
+
     let dsm = wa::Message {
         device_sent_message: Some(Box::new(DeviceSentMessage {
             destination_jid: Some(to_jid.to_string()),
             message: Some(Box::new(message_for_encryption)),
-            phash: Some(String::new()),
+            phash: None, // WA Web only sets DSM phash for groups
         })),
         ..Default::default()
     };
 
     let own_devices_plaintext = MessageUtils::encode_and_pad(&dsm);
-
-    let total_devices = all_devices.len();
-    let (recipient_devices, own_other_devices) =
-        partition_dm_devices(all_devices, own_jid, own_lid);
 
     let mut participant_nodes = Vec::with_capacity(total_devices);
     let mut includes_prekey_message = false;
@@ -729,6 +747,12 @@ pub async fn prepare_dm_stanza<
         || should_hide_decrypt_fail(message);
 
     let mediatype = media_type_from_message(message);
+
+    // NOTE: WA Web has a bare-<enc> fast path for single primary device
+    // (WAWebSendMsgCreateFanoutStanza). Not implemented here because
+    // encrypt_for_devices always wraps in <to jid=...> nodes;
+    // a bare-enc mode would require refactoring the encryption layer.
+    // The <participants> form is accepted by the server regardless.
 
     if !recipient_devices.is_empty() {
         let result = encrypt_for_devices(
@@ -796,7 +820,10 @@ pub async fn prepare_dm_stanza<
 
     let stanza = stanza_builder.children(message_content_nodes).build();
 
-    Ok(stanza)
+    Ok(PreparedDmStanza {
+        node: stanza,
+        phash,
+    })
 }
 
 pub async fn prepare_peer_stanza<S, I>(

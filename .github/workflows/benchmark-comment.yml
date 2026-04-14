@@ -1,0 +1,90 @@
+name: Benchmark Comment
+
+# Runs after the Benchmark workflow completes. workflow_run always executes
+# in the base repo context with write tokens, so it can post PR comments
+# even when the benchmark was triggered by a fork PR.
+on:
+  workflow_run:
+    workflows: ["Benchmark"]
+    types: [completed]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  comment:
+    if: >
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download benchmark results
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-results
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download PR metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: pr-metadata
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Get PR number
+        id: pr
+        run: echo "number=$(cat pr_number.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch baseline data
+        id: baseline
+        run: |
+          gh api repos/${{ github.repository }}/contents/dev/bench/data.js?ref=gh-pages \
+            --jq '.content' | base64 -d > /tmp/baseline_data.js
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        continue-on-error: true
+
+      - name: Post benchmark comment
+        if: steps.baseline.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { execSync } = require('child_process');
+
+            const comment = execSync(
+              'python3 .github/scripts/bench-comment.py bench_results.json /tmp/baseline_data.js',
+              { encoding: 'utf-8' }
+            ).trim();
+
+            if (!comment) {
+              console.log('No comment generated');
+              return;
+            }
+
+            const marker = '<!-- benchmark-comment -->';
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ steps.pr.outputs.number }},
+            });
+
+            const existing = comments.find(c => c.body.includes(marker));
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: comment,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: ${{ steps.pr.outputs.number }},
+                body: comment,
+              });
+            }

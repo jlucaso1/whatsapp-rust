@@ -10,122 +10,121 @@ use std::sync::{Arc, OnceLock, RwLock};
 use wacore_binary::Node;
 use wacore_binary::OwnedNodeRef;
 use wacore_binary::{Jid, MessageId};
-use waproto::whatsapp::{self as wa, HistorySync};
+use waproto::whatsapp as wa;
 
-/// A lazily-parsed conversation from history sync.
+/// A lazily-parsed history sync blob.
 ///
-/// Raw protobuf bytes are stored and only parsed on first access.
-/// With `Arc<Event>` dispatch, all handlers share the same `LazyConversation`
+/// Wraps the decompressed protobuf bytes and only decodes on first access.
+/// With `Arc<Event>` dispatch, all handlers share the same `LazyHistorySync`
 /// so `OnceLock` gives parse-once semantics for free.
-#[derive(Clone)]
-pub struct LazyConversation {
-    /// Raw protobuf bytes using Bytes for zero-copy cloning.
-    /// Bytes is reference-counted internally, so clones share the same data.
+///
+/// Cheap metadata (`sync_type`, `chunk_order`, `progress`) is available
+/// without decoding — useful for filtering events.
+///
+/// Call [`get()`](Self::get) for full access to conversations, pushnames,
+/// global settings, past participants, call logs, and everything else in
+/// the `wa::HistorySync` proto.
+pub struct LazyHistorySync {
     raw_bytes: Bytes,
-    /// Cached parsed result, initialized on first access.
-    parsed: OnceLock<wa::Conversation>,
+    sync_type: i32,
+    chunk_order: Option<u32>,
+    progress: Option<u32>,
+    parsed: OnceLock<Option<Box<wa::HistorySync>>>,
 }
 
-impl LazyConversation {
-    /// Create a new lazy conversation from raw protobuf bytes.
-    /// The bytes are moved into Bytes for zero-copy sharing.
-    pub fn new(raw_bytes: Vec<u8>) -> Self {
+impl Clone for LazyHistorySync {
+    fn clone(&self) -> Self {
         Self {
-            raw_bytes: Bytes::from(raw_bytes),
-            parsed: OnceLock::new(),
+            raw_bytes: self.raw_bytes.clone(),
+            sync_type: self.sync_type,
+            chunk_order: self.chunk_order,
+            progress: self.progress,
+            parsed: OnceLock::new(), // don't deep-copy the decoded proto
         }
     }
+}
 
-    /// Create from an existing Bytes instance (true zero-copy).
-    pub fn from_bytes(raw_bytes: Bytes) -> Self {
+impl LazyHistorySync {
+    pub fn new(
+        raw_bytes: Bytes,
+        sync_type: i32,
+        chunk_order: Option<u32>,
+        progress: Option<u32>,
+    ) -> Self {
         Self {
             raw_bytes,
+            sync_type,
+            chunk_order,
+            progress,
             parsed: OnceLock::new(),
         }
     }
 
-    /// Access the raw protobuf bytes for full decoding (including messages).
+    /// History sync type (e.g. InitialBootstrap, Recent, PushName).
+    /// Available without decoding the proto.
+    pub fn sync_type(&self) -> i32 {
+        self.sync_type
+    }
+
+    /// Chunk ordering for multi-chunk transfers.
+    pub fn chunk_order(&self) -> Option<u32> {
+        self.chunk_order
+    }
+
+    /// Sync progress (0-100).
+    pub fn progress(&self) -> Option<u32> {
+        self.progress
+    }
+
+    /// Full decode of the history sync proto, cached via OnceLock.
+    /// Returns `None` if decoding fails.
     ///
-    /// Since [`get()`](Self::get) and [`conversation()`](Self::conversation)
-    /// strip messages to save memory, consumers that need message history
-    /// should decode from these bytes directly via
-    /// `wa::Conversation::decode(lazy_conv.raw_bytes())`.
+    /// Note: decoding materializes the full proto in memory alongside the
+    /// raw bytes (~2x decompressed size). For large InitialBootstrap blobs,
+    /// prefer [`raw_bytes()`](Self::raw_bytes) with partial decoding if
+    /// you only need specific fields.
+    pub fn get(&self) -> Option<&wa::HistorySync> {
+        self.parsed
+            .get_or_init(|| {
+                wa::HistorySync::decode(&self.raw_bytes[..])
+                    .ok()
+                    .map(Box::new)
+            })
+            .as_deref()
+    }
+
+    /// Access the raw decompressed protobuf bytes for custom/partial decoding.
     pub fn raw_bytes(&self) -> &[u8] {
         &self.raw_bytes
     }
-
-    /// Decode the full conversation including messages.
-    ///
-    /// Unlike [`get()`](Self::get) which strips messages to save memory,
-    /// this decodes a fresh copy from the raw bytes every time and keeps
-    /// the full `WebMessageInfo` array intact. Returns `None` if decoding
-    /// fails or the conversation id is empty.
-    ///
-    /// The result is not cached — call this only when you actually need
-    /// the messages, and prefer [`get()`](Self::get) for metadata-only access.
-    pub fn get_with_messages(&self) -> Option<wa::Conversation> {
-        let conv = wa::Conversation::decode(&self.raw_bytes[..]).ok()?;
-        if conv.id.is_empty() { None } else { Some(conv) }
-    }
-
-    /// Get the parsed conversation, parsing on first access.
-    /// Returns None if parsing fails (empty id indicates invalid conversation).
-    ///
-    /// Messages are always stripped on first parse to reduce memory —
-    /// history sync conversations embed full `WebMessageInfo` arrays that
-    /// can be very large. Use [`raw_bytes()`](Self::raw_bytes) if you need messages.
-    pub fn get(&self) -> Option<&wa::Conversation> {
-        let conv = self.parsed.get_or_init(|| {
-            let mut conv = wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default();
-            conv.messages.clear();
-            conv.messages.shrink_to_fit();
-            conv
-        });
-        if conv.id.is_empty() { None } else { Some(conv) }
-    }
-
-    /// Get the parsed conversation, parsing on first access.
-    /// Panics if parsing fails (use `get()` for fallible access).
-    ///
-    /// Messages are always stripped on first parse to reduce memory.
-    pub fn conversation(&self) -> &wa::Conversation {
-        self.parsed.get_or_init(|| {
-            let mut conv = wa::Conversation::decode(&self.raw_bytes[..])
-                .expect("Failed to decode conversation");
-            conv.messages.clear();
-            conv.messages.shrink_to_fit();
-            conv
-        })
-    }
 }
 
-impl fmt::Debug for LazyConversation {
+impl fmt::Debug for LazyHistorySync {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(conv) = self.parsed.get() {
-            f.debug_struct("LazyConversation")
-                .field("id", &conv.id)
-                .field("parsed", &true)
-                .finish()
-        } else {
-            f.debug_struct("LazyConversation")
-                .field("raw_size", &self.raw_bytes.len())
-                .field("parsed", &false)
-                .finish()
-        }
+        f.debug_struct("LazyHistorySync")
+            .field("sync_type", &self.sync_type)
+            .field("chunk_order", &self.chunk_order)
+            .field("progress", &self.progress)
+            .field("raw_size", &self.raw_bytes.len())
+            .field(
+                "parsed",
+                &self.parsed.get().and_then(|o| o.as_ref()).is_some(),
+            )
+            .finish()
     }
 }
 
-impl Serialize for LazyConversation {
+impl Serialize for LazyHistorySync {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        // Only serialize if parsed, otherwise serialize as null/empty
-        if let Some(conv) = self.parsed.get() {
-            conv.serialize(serializer)
-        } else {
-            serializer.serialize_none()
-        }
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("LazyHistorySync", 3)?;
+        s.serialize_field("sync_type", &self.sync_type)?;
+        s.serialize_field("chunk_order", &self.chunk_order)?;
+        s.serialize_field("progress", &self.progress)?;
+        s.end()
     }
 }
 
@@ -316,9 +315,11 @@ impl From<crate::stanza::business::BusinessNotificationType> for BusinessUpdateT
 /// Business status update notification.
 #[derive(Debug, Clone, Serialize)]
 pub struct BusinessStatusUpdate {
+    /// The business account whose status changed.
     pub jid: Jid,
     pub update_type: BusinessUpdateType,
-    pub timestamp: i64,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub timestamp: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_jid: Option<Jid>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -344,9 +345,10 @@ pub struct DisappearingModeChanged {
     pub from: Jid,
     /// New duration in seconds (0 = disabled, 86400 = 24h, etc.).
     pub duration: u32,
-    /// Unix timestamp (seconds) when the setting was changed.
-    /// Consumers should only apply this if it's newer than their stored timestamp.
-    pub setting_timestamp: u64,
+    /// When the setting was changed.
+    /// Consumers should only apply this if it's newer than their stored value.
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub setting_timestamp: DateTime<Utc>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -386,7 +388,6 @@ pub enum Event {
     ContactNumberChanged(ContactNumberChanged),
     ContactSyncRequested(ContactSyncRequested),
 
-    JoinedGroup(LazyConversation),
     /// Group metadata/settings/participant change from w:gp2 notification.
     GroupUpdate(GroupUpdate),
     ContactUpdate(ContactUpdate),
@@ -401,7 +402,7 @@ pub enum Event {
     DeleteChatUpdate(DeleteChatUpdate),
     DeleteMessageForMeUpdate(DeleteMessageForMeUpdate),
 
-    HistorySync(HistorySync),
+    HistorySync(Box<LazyHistorySync>),
     OfflineSyncPreview(OfflineSyncPreview),
     OfflineSyncCompleted(OfflineSyncCompleted),
 
@@ -451,6 +452,7 @@ impl Event {
 /// reaction counts for one or more messages.
 #[derive(Debug, Clone, Serialize)]
 pub struct NewsletterLiveUpdate {
+    /// The newsletter channel this update belongs to.
     pub newsletter_jid: Jid,
     pub messages: Vec<NewsletterLiveUpdateMessage>,
 }
@@ -706,6 +708,7 @@ pub struct ChatPresenceUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PresenceUpdate {
+    /// The contact whose presence changed.
     pub from: Jid,
     pub unavailable: bool,
     pub last_seen: Option<DateTime<Utc>>,
@@ -729,6 +732,7 @@ pub struct PictureUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UserAboutUpdate {
+    /// The contact whose about text changed.
     pub jid: Jid,
     pub status: String,
     pub timestamp: DateTime<Utc>,
@@ -744,6 +748,7 @@ pub struct UserAboutUpdate {
 /// sync mutations (different source, different payload).
 #[derive(Debug, Clone, Serialize)]
 pub struct ContactUpdated {
+    /// The contact whose profile was updated.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
 }
@@ -804,6 +809,7 @@ pub struct GroupUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ContactUpdate {
+    /// The chat/contact this sync action applies to.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ContactAction>,
@@ -812,6 +818,7 @@ pub struct ContactUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PushNameUpdate {
+    /// The contact who changed their push name.
     pub jid: Jid,
     pub message: Box<MessageInfo>,
     pub old_push_name: String,
@@ -820,6 +827,7 @@ pub struct PushNameUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PinUpdate {
+    /// The chat being pinned or unpinned.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::PinAction>,
@@ -828,6 +836,7 @@ pub struct PinUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MuteUpdate {
+    /// The chat being muted or unmuted.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MuteAction>,
@@ -836,6 +845,7 @@ pub struct MuteUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ArchiveUpdate {
+    /// The chat being archived or unarchived.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ArchiveChatAction>,
@@ -844,6 +854,7 @@ pub struct ArchiveUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct StarUpdate {
+    /// The chat containing the starred or unstarred message.
     pub chat_jid: Jid,
     /// The participant who sent the message. `Some` for group messages from
     /// others, `None` for self-authored or 1-on-1 messages (wire value `"0"`).
@@ -857,6 +868,7 @@ pub struct StarUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MarkChatAsReadUpdate {
+    /// The chat being marked as read or unread.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
@@ -865,6 +877,7 @@ pub struct MarkChatAsReadUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeleteChatUpdate {
+    /// The chat being deleted.
     pub jid: Jid,
     /// From the index, not the proto — DeleteChatAction only has messageRange.
     pub delete_media: bool,
@@ -875,6 +888,7 @@ pub struct DeleteChatUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct DeleteMessageForMeUpdate {
+    /// The chat containing the deleted message.
     pub chat_jid: Jid,
     pub participant_jid: Option<Jid>,
     pub message_id: String,
@@ -890,129 +904,113 @@ mod tests {
     use prost::Message;
     use waproto::whatsapp as wa;
 
-    /// Build a Conversation proto with an id and N dummy messages, encode it.
-    fn make_conversation_bytes(id: &str, num_messages: usize) -> Vec<u8> {
-        let messages: Vec<wa::HistorySyncMsg> = (0..num_messages)
-            .map(|i| wa::HistorySyncMsg {
-                message: Some(wa::WebMessageInfo {
-                    key: wa::MessageKey {
-                        id: Some(format!("msg-{i}")),
-                        ..Default::default()
-                    },
-                    ..Default::default()
-                }),
-                msg_order_id: Some(i as u64),
-            })
-            .collect();
-
-        let conv = wa::Conversation {
-            id: id.to_string(),
-            messages,
+    /// Build a HistorySync proto with conversations and encode it.
+    fn make_history_sync_bytes(conversations: Vec<wa::Conversation>) -> Vec<u8> {
+        let hs = wa::HistorySync {
+            sync_type: wa::history_sync::HistorySyncType::InitialBootstrap as i32,
+            conversations,
             ..Default::default()
         };
-        conv.encode_to_vec()
+        hs.encode_to_vec()
     }
 
     #[test]
-    fn get_strips_messages() {
-        let bytes = make_conversation_bytes("chat@s.whatsapp.net", 5);
-        let lazy = LazyConversation::new(bytes);
-
-        let conv = lazy.get().expect("should parse");
-        assert_eq!(conv.id, "chat@s.whatsapp.net");
-        assert!(conv.messages.is_empty(), "get() must strip messages");
-    }
-
-    #[test]
-    fn conversation_strips_messages() {
-        let bytes = make_conversation_bytes("chat@s.whatsapp.net", 3);
-        let lazy = LazyConversation::new(bytes);
-
-        let conv = lazy.conversation();
-        assert_eq!(conv.id, "chat@s.whatsapp.net");
-        assert!(
-            conv.messages.is_empty(),
-            "conversation() must strip messages"
-        );
-    }
-
-    #[test]
-    fn raw_bytes_returns_original_proto() {
-        let bytes = make_conversation_bytes("chat@s.whatsapp.net", 4);
-        let lazy = LazyConversation::new(bytes.clone());
-
-        assert_eq!(lazy.raw_bytes(), &bytes[..]);
-
-        // Users can decode the full conversation from raw_bytes
-        let full = wa::Conversation::decode(lazy.raw_bytes()).expect("should decode");
-        assert_eq!(full.id, "chat@s.whatsapp.net");
-        assert_eq!(full.messages.len(), 4);
-    }
-
-    #[test]
-    fn get_with_messages_preserves_messages() {
-        let bytes = make_conversation_bytes("chat@s.whatsapp.net", 7);
-        let lazy = LazyConversation::new(bytes);
-
-        let full = lazy.get_with_messages().expect("should decode");
-        assert_eq!(full.id, "chat@s.whatsapp.net");
-        assert_eq!(full.messages.len(), 7);
-        assert_eq!(
-            full.messages[0].message.as_ref().unwrap().key.id.as_deref(),
-            Some("msg-0")
-        );
-    }
-
-    #[test]
-    fn get_with_messages_independent_of_cached_parse() {
-        let bytes = make_conversation_bytes("chat@s.whatsapp.net", 3);
-        let lazy = LazyConversation::new(bytes);
-
-        // Trigger the cached parse first (strips messages)
-        let stripped = lazy.get().expect("should parse");
-        assert!(stripped.messages.is_empty());
-
-        // get_with_messages should still return full messages
-        let full = lazy.get_with_messages().expect("should decode");
-        assert_eq!(full.messages.len(), 3);
-    }
-
-    #[test]
-    fn get_returns_none_for_empty_id() {
-        let conv = wa::Conversation {
-            id: String::new(),
+    fn lazy_history_sync_get_decodes() {
+        let bytes = make_history_sync_bytes(vec![wa::Conversation {
+            id: "chat@s.whatsapp.net".to_string(),
             ..Default::default()
-        };
-        let lazy = LazyConversation::new(conv.encode_to_vec());
+        }]);
+        let lazy = LazyHistorySync::new(Bytes::from(bytes), 0, None, None);
+
+        let hs = lazy.get().expect("should decode");
+        assert_eq!(hs.conversations.len(), 1);
+        assert_eq!(hs.conversations[0].id, "chat@s.whatsapp.net");
+    }
+
+    #[test]
+    fn lazy_history_sync_caches_decode() {
+        let bytes = make_history_sync_bytes(vec![wa::Conversation {
+            id: "test@g.us".to_string(),
+            ..Default::default()
+        }]);
+        let lazy = LazyHistorySync::new(Bytes::from(bytes), 0, None, None);
+
+        let first = lazy.get().expect("first decode");
+        let second = lazy.get().expect("second decode");
+        // Same reference — OnceLock cached it
+        assert!(std::ptr::eq(first, second));
+    }
+
+    #[test]
+    fn lazy_history_sync_cheap_metadata() {
+        let bytes = make_history_sync_bytes(vec![]);
+        let lazy = LazyHistorySync::new(Bytes::from(bytes), 3, Some(2), Some(50));
+
+        assert_eq!(lazy.sync_type(), 3);
+        assert_eq!(lazy.chunk_order(), Some(2));
+        assert_eq!(lazy.progress(), Some(50));
+    }
+
+    #[test]
+    fn lazy_history_sync_raw_bytes() {
+        let bytes = make_history_sync_bytes(vec![wa::Conversation {
+            id: "raw@s.whatsapp.net".to_string(),
+            ..Default::default()
+        }]);
+        let raw = bytes.clone();
+        let lazy = LazyHistorySync::new(Bytes::from(bytes), 0, None, None);
+
+        assert_eq!(lazy.raw_bytes(), &raw[..]);
+
+        // Consumer can partial-decode from raw_bytes
+        let decoded = wa::HistorySync::decode(lazy.raw_bytes()).expect("should decode");
+        assert_eq!(decoded.conversations[0].id, "raw@s.whatsapp.net");
+    }
+
+    #[test]
+    fn lazy_history_sync_empty_bytes_decodes_default() {
+        // Empty protobuf bytes are valid — decode to default HistorySync
+        let lazy = LazyHistorySync::new(Bytes::new(), 0, None, None);
+        let hs = lazy.get().expect("empty bytes decode to default");
+        assert!(hs.conversations.is_empty());
+    }
+
+    #[test]
+    fn lazy_history_sync_corrupt_bytes_returns_none() {
+        let lazy = LazyHistorySync::new(Bytes::from_static(&[0xFF, 0xFF, 0xFF]), 0, None, None);
         assert!(lazy.get().is_none());
     }
 
     #[test]
-    fn get_with_messages_returns_none_for_empty_id() {
+    fn lazy_history_sync_preserves_messages() {
         let conv = wa::Conversation {
-            id: String::new(),
+            id: "chat@s.whatsapp.net".to_string(),
+            messages: vec![wa::HistorySyncMsg {
+                message: Some(wa::WebMessageInfo {
+                    key: wa::MessageKey {
+                        id: Some("msg-0".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                msg_order_id: Some(0),
+            }],
             ..Default::default()
         };
-        let lazy = LazyConversation::new(conv.encode_to_vec());
-        assert!(lazy.get_with_messages().is_none());
-    }
+        let bytes = make_history_sync_bytes(vec![conv]);
+        let lazy = LazyHistorySync::new(Bytes::from(bytes), 0, None, None);
 
-    #[test]
-    fn get_with_messages_returns_none_for_invalid_bytes() {
-        let lazy = LazyConversation::new(vec![0xFF, 0xFF, 0xFF]);
-        assert!(lazy.get_with_messages().is_none());
-    }
-
-    #[test]
-    fn from_bytes_works_same_as_new() {
-        let bytes = make_conversation_bytes("test@s.whatsapp.net", 2);
-        let lazy = LazyConversation::from_bytes(Bytes::from(bytes));
-
-        let full = lazy.get_with_messages().expect("should decode");
-        assert_eq!(full.id, "test@s.whatsapp.net");
-        assert_eq!(full.messages.len(), 2);
-
-        let stripped = lazy.get().expect("should parse");
-        assert!(stripped.messages.is_empty());
+        let hs = lazy.get().expect("should decode");
+        assert_eq!(hs.conversations[0].messages.len(), 1);
+        assert_eq!(
+            hs.conversations[0].messages[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .key
+                .id
+                .as_deref(),
+            Some("msg-0")
+        );
     }
 }

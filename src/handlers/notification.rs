@@ -849,7 +849,7 @@ async fn handle_business_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
     let event = Event::BusinessStatusUpdate(BusinessStatusUpdate {
         jid: notification.from.clone(),
         update_type,
-        timestamp: notification.timestamp,
+        timestamp: wacore::time::from_secs_or_now(notification.timestamp),
         target_jid: notification.jid.clone(),
         hash: notification.hash.clone(),
         verified_name,
@@ -1045,8 +1045,8 @@ fn notification_timestamp(node: &NodeRef<'_>) -> chrono::DateTime<chrono::Utc> {
     node.attrs()
         .optional_u64("t")
         .and_then(|t| i64::try_from(t).ok())
-        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
-        .unwrap_or_else(chrono::Utc::now)
+        .and_then(wacore::time::from_secs)
+        .unwrap_or_else(wacore::time::now_utc)
 }
 
 /// Learn LID-PN mappings from a contacts modify notification.
@@ -1171,7 +1171,7 @@ async fn handle_contacts_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
             let after = child
                 .attrs()
                 .optional_u64("after")
-                .and_then(|after| chrono::DateTime::from_timestamp(after as i64, 0));
+                .and_then(|after| wacore::time::from_secs(after as i64));
 
             debug!(
                 target: "Client/Contacts",
@@ -1220,8 +1220,8 @@ async fn handle_group_notification(client: &Arc<Client>, node: Arc<OwnedNodeRef>
 
     let timestamp = i64::try_from(notification.timestamp)
         .ok()
-        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
-        .unwrap_or_else(chrono::Utc::now);
+        .and_then(wacore::time::from_secs)
+        .unwrap_or_else(wacore::time::now_utc);
 
     for action in notification.actions {
         // Granularly patch group cache instead of invalidating — matches WA Web's
@@ -1396,7 +1396,8 @@ fn handle_disappearing_mode_notification(client: &Arc<Client>, node: &NodeRef<'_
     // WA Web: `t.attrTime("t")` — required, no default.
     let Some(setting_timestamp) = dm_attrs
         .optional_string("t")
-        .and_then(|s| s.parse::<u64>().ok())
+        .and_then(|s| s.parse::<i64>().ok())
+        .and_then(wacore::time::from_secs)
     else {
         warn!(
             "disappearing_mode notification missing or invalid 't' attribute: {}",
@@ -1698,7 +1699,7 @@ mod tests {
     /// Helper: parse a disappearing_mode notification node the same way
     /// the handler does, returning `(duration, setting_timestamp)` or `None`
     /// on validation failure.
-    fn parse_disappearing_mode(node: &Node) -> Option<(u32, u64)> {
+    fn parse_disappearing_mode(node: &Node) -> Option<(u32, i64)> {
         let dm_node = node.get_optional_child("disappearing_mode")?;
         let mut dm_attrs = dm_node.attrs();
         let duration = dm_attrs
@@ -1707,7 +1708,8 @@ mod tests {
             .unwrap_or(0);
         let setting_timestamp = dm_attrs
             .optional_string("t")
-            .and_then(|s| s.parse::<u64>().ok())?;
+            .and_then(|s| s.parse::<i64>().ok())
+            .filter(|&t| wacore::time::from_secs(t).is_some())?;
         Some((duration, setting_timestamp))
     }
 

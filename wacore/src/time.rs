@@ -52,6 +52,34 @@ pub fn now_utc() -> chrono::DateTime<chrono::Utc> {
         .expect("time provider returned out-of-range millisecond timestamp")
 }
 
+/// Convert a Unix timestamp (seconds) to `DateTime<Utc>`.
+/// Returns `None` for out-of-range values.
+#[inline]
+pub fn from_secs(ts: i64) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::from_timestamp(ts, 0)
+}
+
+/// Convert a Unix timestamp (seconds) to `DateTime<Utc>`,
+/// falling back to `now_utc()` for out-of-range values.
+#[inline]
+pub fn from_secs_or_now(ts: i64) -> chrono::DateTime<chrono::Utc> {
+    from_secs(ts).unwrap_or_else(now_utc)
+}
+
+/// Convert a Unix timestamp (milliseconds) to `DateTime<Utc>`.
+/// Returns `None` for out-of-range values.
+#[inline]
+pub fn from_millis(ts: i64) -> Option<chrono::DateTime<chrono::Utc>> {
+    chrono::DateTime::from_timestamp_millis(ts)
+}
+
+/// Convert a Unix timestamp (milliseconds) to `DateTime<Utc>`,
+/// falling back to `now_utc()` for out-of-range values.
+#[inline]
+pub fn from_millis_or_now(ts: i64) -> chrono::DateTime<chrono::Utc> {
+    from_millis(ts).unwrap_or_else(now_utc)
+}
+
 /// Portable monotonic instant, replacing `std::time::Instant` which is
 /// unavailable on `wasm32-unknown-unknown`.
 ///

@@ -501,7 +501,7 @@ impl Client {
         }
 
         if let Some((rx, phash)) = ack {
-            self.spawn_phash_validation(rx, phash, to.clone(), false, request_id.clone());
+            self.spawn_phash_validation(rx, phash, to.clone(), true, request_id.clone());
         }
 
         self.update_sender_key_devices(&to_str, &prepared.skdm_devices)
@@ -666,6 +666,16 @@ impl Client {
                     log::warn!(
                         "Phash mismatch for {jid}: ours={our_phash}, server={server}. Invalidating caches."
                     );
+                    // DM phash covers both recipient + own devices
+                    // (WA Web: syncDeviceListJob([recipient, me]))
+                    if !jid.is_group() && !jid.is_status_broadcast() {
+                        client.invalidate_device_cache(&jid.user).await;
+                        if let Some(own_pn) =
+                            &client.persistence_manager.get_device_snapshot().await.pn
+                        {
+                            client.invalidate_device_cache(&own_pn.user).await;
+                        }
+                    }
                     client
                         .sender_key_device_cache
                         .invalidate(&jid.to_string())
@@ -856,6 +866,7 @@ impl Client {
         let mut used_cached_tc_token_key: Option<String> = None;
         let tc_issue_target = to.clone();
 
+        let mut dm_phash: Option<String> = None;
         let stanza_to_send: wacore_binary::Node = if peer && !to.is_group() {
             // Peer messages are only valid for individual users, not groups
             // Resolve encryption JID and acquire lock ONLY for encryption
@@ -1056,20 +1067,55 @@ impl Client {
                 }
             }
 
-            // DM fanout: bare recipient (device 0) + own companion devices.
-            // WA Web (MsgCreateFanoutStanza.js): for CHAT fanout with a single
-            // primary device, encrypts directly for that device only. Own devices
-            // get per-device enc for multi-device self-sync. The server routes
-            // the bare enc to the correct recipient device.
+            // DM fanout: all known recipient devices + own companions.
+            // WAWebSendUserMsgJob reads local device table only on the send
+            // path; WAWebDBDeviceListFanout excludes hosted devices.
             let recipient_bare = self.resolve_encryption_jid(&to).await.to_non_ad();
 
-            // Populate device registry for retry handling
-            let _ = self.get_user_devices(std::slice::from_ref(&to)).await;
-            let own_devices = self.get_user_devices(std::slice::from_ref(own_jid)).await?;
+            // Local registry first; network warm only on miss to avoid
+            // unnecessary LID-migration side effects from get_user_devices
+            let mut recipient_cached = self.get_devices_from_registry(&recipient_bare).await;
+            if recipient_cached.is_none() {
+                let _ = self.get_user_devices(std::slice::from_ref(&to)).await;
+                recipient_cached = self.get_devices_from_registry(&recipient_bare).await;
+            }
 
-            let mut all_dm_jids = Vec::with_capacity(1 + own_devices.len());
-            all_dm_jids.push(recipient_bare);
-            all_dm_jids.extend(own_devices);
+            let mut own_cached = self.get_devices_from_registry(own_jid).await;
+            if own_cached.is_none() {
+                let _ = self.get_user_devices(std::slice::from_ref(own_jid)).await;
+                own_cached = self.get_devices_from_registry(own_jid).await;
+            }
+
+            // Build device list, filter hosted in-place, reuse Vecs
+            let mut all_dm_jids = match recipient_cached {
+                Some(mut devices) => {
+                    devices.retain(|j| !j.is_hosted());
+                    devices
+                }
+                // No record at all — bare JID, server handles fanout
+                None => vec![recipient_bare],
+            };
+
+            if let Some(mut own_devices) = own_cached {
+                own_devices.retain(|j| !j.is_hosted());
+                all_dm_jids.append(&mut own_devices);
+            }
+
+            // Exclude exact sender device (WA Web: isMeDevice in getFanOutList)
+            // so ensure_e2e_sessions never creates a self-session
+            let own_lid = device_snapshot.lid.as_ref();
+            all_dm_jids.retain(|j| {
+                let is_sender = (j.is_same_user_as(own_jid) && j.device == own_jid.device)
+                    || own_lid.is_some_and(|lid| j.is_same_user_as(lid) && j.device == lid.device);
+                !is_sender
+            });
+
+            // Dedup for self-DMs: recipient and own device lists overlap
+            // when sending to own account (WA Web uses Map keyed by toString)
+            {
+                let mut seen = std::collections::HashSet::with_capacity(all_dm_jids.len());
+                all_dm_jids.retain(|j| seen.insert(j.clone()));
+            }
 
             self.ensure_e2e_sessions(&all_dm_jids).await?;
 
@@ -1098,7 +1144,7 @@ impl Client {
 
             let mut stores = store_adapter.as_signal_stores();
 
-            wacore::send::prepare_dm_stanza(
+            let prepared = wacore::send::prepare_dm_stanza(
                 &mut stores,
                 self,
                 own_jid,
@@ -1111,13 +1157,12 @@ impl Client {
                 &extra_stanza_nodes,
                 all_dm_jids,
             )
-            .await?
+            .await?;
+            dm_phash = prepared.phash;
+            prepared.node
         };
 
-        let ack = if let Some(phash) = stanza_to_send
-            .attrs()
-            .optional_string("phash")
-            .map(|s| s.into_owned())
+        let ack = if let Some(phash) = dm_phash
             && let Some(msg_id) = stanza_to_send
                 .attrs()
                 .optional_string("id")
@@ -1137,7 +1182,7 @@ impl Client {
         }
 
         if let Some((rx, phash, msg_id)) = ack {
-            self.spawn_phash_validation(rx, phash, tc_issue_target.clone(), true, msg_id);
+            self.spawn_phash_validation(rx, phash, tc_issue_target.clone(), false, msg_id);
         }
 
         if let Some(update) = skdm_update {

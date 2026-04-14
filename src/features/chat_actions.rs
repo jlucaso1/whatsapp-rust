@@ -7,7 +7,6 @@
 use crate::appstate_sync::Mutation;
 use crate::client::Client;
 use anyhow::Result;
-use chrono::DateTime;
 use log::debug;
 use wacore::appstate::patch_decode::WAPatchName;
 use wacore::types::events::{
@@ -89,7 +88,7 @@ pub(crate) fn dispatch_chat_mutation(
         .as_ref()
         .and_then(|v| v.timestamp)
         .unwrap_or(0);
-    let time = DateTime::from_timestamp_millis(ts).unwrap_or_else(wacore::time::now_utc);
+    let time = wacore::time::from_millis_or_now(ts);
     let jid: Jid = if m.index.len() > 1 {
         match m.index[1].parse() {
             Ok(j) => j,
