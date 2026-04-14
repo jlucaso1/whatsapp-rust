@@ -647,7 +647,8 @@ impl Client {
         };
         self.runtime
             .spawn(Box::pin(async move {
-                let ack = match tokio::time::timeout(
+                let ack = match wacore::runtime::timeout(
+                    &*client.runtime,
                     std::time::Duration::from_secs(10),
                     rx,
                 )
