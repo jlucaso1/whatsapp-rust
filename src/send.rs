@@ -501,7 +501,7 @@ impl Client {
         }
 
         if let Some((rx, phash)) = ack {
-            self.spawn_phash_validation(rx, phash, to.clone(), false, request_id.clone());
+            self.spawn_phash_validation(rx, phash, to.clone(), true, request_id.clone());
         }
 
         self.update_sender_key_devices(&to_str, &prepared.skdm_devices)
@@ -666,9 +666,15 @@ impl Client {
                     log::warn!(
                         "Phash mismatch for {jid}: ours={our_phash}, server={server}. Invalidating caches."
                     );
-                    // Device cache is user-scoped; only valid for 1:1 DMs
+                    // DM phash covers both recipient + own devices
+                    // (WA Web: syncDeviceListJob([recipient, me]))
                     if !jid.is_group() && !jid.is_status_broadcast() {
                         client.invalidate_device_cache(&jid.user).await;
+                        if let Some(own_pn) =
+                            &client.persistence_manager.get_device_snapshot().await.pn
+                        {
+                            client.invalidate_device_cache(&own_pn.user).await;
+                        }
                     }
                     client
                         .sender_key_device_cache
@@ -1104,6 +1110,13 @@ impl Client {
                 !is_sender
             });
 
+            // Dedup for self-DMs: recipient and own device lists overlap
+            // when sending to own account (WA Web uses Map keyed by toString)
+            {
+                let mut seen = std::collections::HashSet::with_capacity(all_dm_jids.len());
+                all_dm_jids.retain(|j| seen.insert(j.clone()));
+            }
+
             self.ensure_e2e_sessions(&all_dm_jids).await?;
 
             let mut extra_stanza_nodes = extra_stanza_nodes;
@@ -1169,7 +1182,7 @@ impl Client {
         }
 
         if let Some((rx, phash, msg_id)) = ack {
-            self.spawn_phash_validation(rx, phash, tc_issue_target.clone(), true, msg_id);
+            self.spawn_phash_validation(rx, phash, tc_issue_target.clone(), false, msg_id);
         }
 
         if let Some(update) = skdm_update {
