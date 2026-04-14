@@ -10,8 +10,8 @@
 //! Reference: WAWebCryptoMediaRetry, WAWebSendServerErrorReceiptJob,
 //! WAWebHandleMediaRetryNotification (docs/captured-js/).
 
+use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
-use aes_gcm::{Aes256Gcm, Nonce};
 use anyhow::{Result, anyhow};
 use hkdf::Hkdf;
 use prost::Message;
@@ -77,10 +77,9 @@ pub fn encrypt_media_retry_receipt(
     };
     let plaintext = receipt.encode_to_vec();
 
-    let nonce = Nonce::from_slice(&iv);
     let ciphertext = cipher
         .encrypt(
-            nonce,
+            (&iv).into(),
             Payload {
                 msg: &plaintext,
                 aad: stanza_id.as_bytes(),
@@ -104,10 +103,10 @@ pub fn decrypt_media_retry_notification(
     let cipher =
         Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("AES-GCM key init failed: {e}"))?;
 
-    let nonce = Nonce::from_slice(iv);
+    let nonce: &[u8; 12] = iv.try_into().map_err(|_| anyhow!("Invalid IV length"))?;
     let plaintext = cipher
         .decrypt(
-            nonce,
+            nonce.into(),
             Payload {
                 msg: ciphertext,
                 aad: stanza_id.as_bytes(),

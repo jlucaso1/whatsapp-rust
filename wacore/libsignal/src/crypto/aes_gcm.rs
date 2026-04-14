@@ -4,7 +4,7 @@
 //
 
 use aes::Aes256;
-use aes::cipher::{Block, BlockEncrypt, KeyInit};
+use aes::cipher::{Block, BlockCipherEncrypt, KeyInit};
 use ghash::GHash;
 use ghash::universal_hash::UniversalHash;
 use subtle::ConstantTimeEq;
