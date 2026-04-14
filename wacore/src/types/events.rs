@@ -389,7 +389,10 @@ pub enum Event {
     ContactNumberChanged(ContactNumberChanged),
     ContactSyncRequested(ContactSyncRequested),
 
-    JoinedGroup(LazyConversation),
+    JoinedGroup {
+        group_jid: Jid,
+        conversation: LazyConversation,
+    },
     /// Group metadata/settings/participant change from w:gp2 notification.
     GroupUpdate(GroupUpdate),
     ContactUpdate(ContactUpdate),
@@ -452,9 +455,7 @@ impl Event {
     /// Returns the primary JID associated with this event, if any.
     ///
     /// Useful for routing events to the right chat without exhaustively matching every variant.
-    /// Returns `None` for connection-lifecycle and sync events that have no associated chat,
-    /// and for `JoinedGroup` (the JID is embedded inside the serialized `LazyConversation`
-    /// bytes and would require proto decoding to extract).
+    /// Returns `None` for connection-lifecycle and sync events that have no associated chat.
     pub fn chat_jid(&self) -> Option<&Jid> {
         match self {
             Event::Message(_, info) => Some(&info.source.chat),
@@ -467,7 +468,7 @@ impl Event {
             Event::ContactUpdated(c) => Some(&c.jid),
             Event::ContactNumberChanged(c) => Some(&c.new_jid),
             Event::GroupUpdate(g) => Some(&g.group_jid),
-            Event::JoinedGroup(_) => None,
+            Event::JoinedGroup { group_jid, .. } => Some(group_jid),
             Event::ContactUpdate(c) => Some(&c.jid),
             Event::PushNameUpdate(p) => Some(&p.jid),
             Event::PinUpdate(p) => Some(&p.jid),

@@ -20,7 +20,7 @@ use wacore_binary::Node;
 pub fn notification_timestamp(node: &Node) -> chrono::DateTime<chrono::Utc> {
     node.attrs()
         .optional_u64("t")
-        .and_then(|t| chrono::DateTime::from_timestamp(t as i64, 0))
+        .and_then(|t| crate::time::from_secs(t as i64))
         .unwrap_or_else(crate::time::now_utc)
 }
 

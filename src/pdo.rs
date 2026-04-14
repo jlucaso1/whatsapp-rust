@@ -413,9 +413,7 @@ impl Client {
 
         let timestamp = web_msg
             .message_timestamp
-            .map(|ts| {
-                chrono::DateTime::from_timestamp(ts as i64, 0).unwrap_or_else(wacore::time::now_utc)
-            })
+            .map(|ts| wacore::time::from_secs_or_now(ts as i64))
             .unwrap_or_else(wacore::time::now_utc);
 
         Ok(MessageInfo {

@@ -849,8 +849,7 @@ async fn handle_business_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
     let event = Event::BusinessStatusUpdate(BusinessStatusUpdate {
         jid: notification.from.clone(),
         update_type,
-        timestamp: chrono::DateTime::from_timestamp(notification.timestamp, 0)
-            .unwrap_or_else(wacore::time::now_utc),
+        timestamp: wacore::time::from_secs_or_now(notification.timestamp),
         target_jid: notification.jid.clone(),
         hash: notification.hash.clone(),
         verified_name,
@@ -1046,7 +1045,7 @@ fn notification_timestamp(node: &NodeRef<'_>) -> chrono::DateTime<chrono::Utc> {
     node.attrs()
         .optional_u64("t")
         .and_then(|t| i64::try_from(t).ok())
-        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+        .and_then(wacore::time::from_secs)
         .unwrap_or_else(wacore::time::now_utc)
 }
 
@@ -1172,7 +1171,7 @@ async fn handle_contacts_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
             let after = child
                 .attrs()
                 .optional_u64("after")
-                .and_then(|after| chrono::DateTime::from_timestamp(after as i64, 0));
+                .and_then(|after| wacore::time::from_secs(after as i64));
 
             debug!(
                 target: "Client/Contacts",
@@ -1221,7 +1220,7 @@ async fn handle_group_notification(client: &Arc<Client>, node: Arc<OwnedNodeRef>
 
     let timestamp = i64::try_from(notification.timestamp)
         .ok()
-        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+        .and_then(wacore::time::from_secs)
         .unwrap_or_else(wacore::time::now_utc);
 
     for action in notification.actions {
@@ -1398,7 +1397,7 @@ fn handle_disappearing_mode_notification(client: &Arc<Client>, node: &NodeRef<'_
     let Some(setting_timestamp) = dm_attrs
         .optional_string("t")
         .and_then(|s| s.parse::<i64>().ok())
-        .and_then(|t| chrono::DateTime::from_timestamp(t, 0))
+        .and_then(wacore::time::from_secs)
     else {
         warn!(
             "disappearing_mode notification missing or invalid 't' attribute: {}",
