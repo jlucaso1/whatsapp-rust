@@ -34,13 +34,12 @@ pub fn make_reusable_protocol_address() -> ProtocolAddress {
 /// Write the signal address name (`{user}[:device]@{server}`) into `buf`,
 /// clearing it first. All other address helpers delegate to this.
 pub fn write_signal_address_to(jid: &Jid, buf: &mut String) {
-    use std::fmt::Write;
     buf.clear();
     let server = mapped_server(jid.server.as_str());
     buf.push_str(&jid.user);
     if jid.device != 0 {
         buf.push(':');
-        let _ = write!(buf, "{}", jid.device);
+        buf.push_str(itoa::Buffer::new().format(jid.device));
     }
     buf.push('@');
     buf.push_str(server);

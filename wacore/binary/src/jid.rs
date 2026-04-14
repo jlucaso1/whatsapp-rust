@@ -536,16 +536,24 @@ impl Jid {
 
     pub fn to_ad_string(&self) -> String {
         if self.user.is_empty() {
-            self.server.as_str().to_string()
-        } else {
-            format!(
-                "{}.{}:{}@{}",
-                self.user,
-                self.agent,
-                self.device,
-                self.server.as_str()
-            )
+            return self.server.as_str().to_string();
         }
+        let mut s = String::with_capacity(self.user.len() + 20);
+        s.push_str(&self.user);
+        s.push('.');
+        s.push_str(itoa::Buffer::new().format(self.agent));
+        s.push(':');
+        s.push_str(itoa::Buffer::new().format(self.device));
+        s.push('@');
+        s.push_str(self.server.as_str());
+        s
+    }
+
+    /// Append the Display representation to `buf` using direct push operations,
+    /// bypassing `fmt::Display` and `dyn Write` dispatch.
+    #[inline]
+    pub fn push_to(&self, buf: &mut String) {
+        push_jid_to_string(&self.user, self.server, self.agent, self.device, buf);
     }
 
     /// Compare device identity (user, server, device) without allocation.
@@ -692,61 +700,106 @@ impl FromStr for Jid {
     }
 }
 
+/// Shared formatting logic: writes `{user}[.{agent}][:{device}]@{server}` using
+/// direct `write_str` calls instead of `write!()` macro, avoiding
+/// `fmt::Arguments` construction and integer `Display` dispatch overhead.
+#[inline]
+fn fmt_jid(
+    user: &str,
+    server: Server,
+    agent: u8,
+    device: u16,
+    f: &mut fmt::Formatter<'_>,
+) -> fmt::Result {
+    if user.is_empty() {
+        return f.write_str(server.as_str());
+    }
+    f.write_str(user)?;
+    // Agent suffix only for servers that don't encode it in the server type itself
+    if agent > 0
+        && !matches!(
+            server,
+            Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+        )
+    {
+        f.write_str(".")?;
+        f.write_str(itoa::Buffer::new().format(agent))?;
+    }
+    if device > 0 {
+        f.write_str(":")?;
+        f.write_str(itoa::Buffer::new().format(device))?;
+    }
+    f.write_str("@")?;
+    f.write_str(server.as_str())
+}
+
+/// Write the JID display representation directly into a `String` using `push_str`,
+/// bypassing `fmt::Display` and `dyn Write` dispatch entirely.
+#[inline]
+pub fn push_jid_to_string(user: &str, server: Server, agent: u8, device: u16, buf: &mut String) {
+    if user.is_empty() {
+        buf.push_str(server.as_str());
+        return;
+    }
+    buf.push_str(user);
+    if agent > 0
+        && !matches!(
+            server,
+            Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+        )
+    {
+        buf.push('.');
+        buf.push_str(itoa::Buffer::new().format(agent));
+    }
+    if device > 0 {
+        buf.push(':');
+        buf.push_str(itoa::Buffer::new().format(device));
+    }
+    buf.push('@');
+    buf.push_str(server.as_str());
+}
+
+/// Write the JID display representation directly into a `CompactString`,
+/// bypassing `fmt::Display` and `dyn Write` dispatch entirely.
+#[inline]
+pub fn push_jid_to_compact(
+    user: &str,
+    server: Server,
+    agent: u8,
+    device: u16,
+    buf: &mut CompactString,
+) {
+    if user.is_empty() {
+        buf.push_str(server.as_str());
+        return;
+    }
+    buf.push_str(user);
+    if agent > 0
+        && !matches!(
+            server,
+            Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+        )
+    {
+        buf.push('.');
+        buf.push_str(itoa::Buffer::new().format(agent));
+    }
+    if device > 0 {
+        buf.push(':');
+        buf.push_str(itoa::Buffer::new().format(device));
+    }
+    buf.push('@');
+    buf.push_str(server.as_str());
+}
+
 impl fmt::Display for Jid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.user.is_empty() {
-            // Server-only JID (e.g., "s.whatsapp.net") - no @ prefix
-            write!(f, "{}", self.server)
-        } else {
-            write!(f, "{}", self.user)?;
-
-            // The agent is encoded in the server type for AD JIDs.
-            // We should NOT append it to the user string for standard servers.
-            // Only non-standard servers might use an agent suffix.
-            // The old JS logic appears to never append the agent for s.whatsapp.net or lid.
-            if self.agent > 0 {
-                // This is a guess based on the failure. The old JS logic is complex.
-                // We will only append the agent if the server is NOT s.whatsapp.net or lid.
-                // AND the server is not one that is derived *from* the agent (like 'hosted').
-                if !matches!(
-                    self.server,
-                    Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
-                ) {
-                    write!(f, ".{}", self.agent)?;
-                }
-            }
-
-            if self.device > 0 {
-                write!(f, ":{}", self.device)?;
-            }
-
-            write!(f, "@{}", self.server.as_str())
-        }
+        fmt_jid(&self.user, self.server, self.agent, self.device, f)
     }
 }
 
 impl<'a> fmt::Display for JidRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.user.is_empty() {
-            write!(f, "{}", self.server.as_str())
-        } else {
-            write!(f, "{}", self.user)?;
-
-            if self.agent > 0
-                && !matches!(
-                    self.server,
-                    Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
-                )
-            {
-                write!(f, ".{}", self.agent)?;
-            }
-
-            if self.device > 0 {
-                write!(f, ":{}", self.device)?;
-            }
-
-            write!(f, "@{}", self.server)
-        }
+        fmt_jid(&self.user, self.server, self.agent, self.device, f)
     }
 }
 

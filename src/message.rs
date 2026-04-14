@@ -165,12 +165,15 @@ impl Client {
         msg_id: &str,
         sender: &Jid,
     ) -> String {
-        use std::fmt::Write;
         let chat = self.resolve_encryption_jid(chat).await;
         let sender = self.resolve_encryption_jid(sender).await;
         let mut key =
-            String::with_capacity(chat.user.len() + msg_id.len() + sender.user.len() + 20);
-        let _ = write!(key, "{chat}:{msg_id}:{sender}");
+            String::with_capacity(chat.user.len() + msg_id.len() + sender.user.len() + 40);
+        chat.push_to(&mut key);
+        key.push(':');
+        key.push_str(msg_id);
+        key.push(':');
+        sender.push_to(&mut key);
         key
     }
 
