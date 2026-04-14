@@ -14,6 +14,17 @@ use serde::Serialize;
 use wacore_binary::Jid;
 use wacore_binary::{Node, NodeRef};
 
+/// How a membership request was initiated.
+///
+/// Maps to `WAWebRequestMethodType` in WhatsApp Web JS.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MembershipRequestMethod {
+    InviteLink,
+    LinkedGroupJoin,
+    NonAdminAdd,
+}
+
 /// Parsed group notification containing one or more actions.
 #[derive(Debug, Clone)]
 pub struct GroupNotification {
@@ -113,6 +124,24 @@ pub enum GroupNotificationAction {
     },
     /// `<membership_approval_mode><group_join state="on|off"/></membership_approval_mode>`
     MembershipApprovalMode { enabled: bool },
+    /// `<membership_approval_request request_method="..." parent_group_jid="..."/>`
+    /// A user requested to join. Requester is on parent [`GroupNotification::participant`].
+    MembershipApprovalRequest {
+        request_method: MembershipRequestMethod,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent_group_jid: Option<Jid>,
+    },
+    /// `<created_membership_requests request_method="..." parent_group_jid="...">` —
+    /// admin-side notification: new join requests appeared.
+    CreatedMembershipRequests {
+        request_method: MembershipRequestMethod,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        parent_group_jid: Option<Jid>,
+        /// `<requested_user>` children (not `<participant>`).
+        requests: Vec<GroupParticipantInfo>,
+    },
+    /// `<revoked_membership_requests>` — requests rejected by admin or cancelled by requester.
+    RevokedMembershipRequests { participants: Vec<Jid> },
     /// `<member_add_mode>admin_add|all_member_add</member_add_mode>`
     MemberAddMode { mode: String },
     /// `<no_frequently_forwarded/>` — Forwarding restricted
@@ -180,6 +209,9 @@ impl GroupNotificationAction {
             Self::NotAnnounce => "not_announcement",
             Self::Ephemeral { .. } => "ephemeral",
             Self::MembershipApprovalMode { .. } => "membership_approval_mode",
+            Self::MembershipApprovalRequest { .. } => "membership_approval_request",
+            Self::CreatedMembershipRequests { .. } => "created_membership_requests",
+            Self::RevokedMembershipRequests { .. } => "revoked_membership_requests",
             Self::MemberAddMode { .. } => "member_add_mode",
             Self::NoFrequentlyForwarded => "no_frequently_forwarded",
             Self::FrequentlyForwardedOk => "frequently_forwarded_ok",
@@ -307,6 +339,28 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
                 .is_some_and(|s| s == "on");
             GroupNotificationAction::MembershipApprovalMode { enabled }
         }
+        "membership_approval_request" => {
+            let request_method = parse_request_method(node);
+            let parent_group_jid = node.attrs().optional_jid("parent_group_jid");
+            GroupNotificationAction::MembershipApprovalRequest {
+                request_method,
+                parent_group_jid,
+            }
+        }
+        "created_membership_requests" => {
+            let request_method = parse_request_method(node);
+            let parent_group_jid = node.attrs().optional_jid("parent_group_jid");
+            let requests = parse_requested_users(node);
+            GroupNotificationAction::CreatedMembershipRequests {
+                request_method,
+                parent_group_jid,
+                requests,
+            }
+        }
+        "revoked_membership_requests" => {
+            let participants = parse_participant_jids(node);
+            GroupNotificationAction::RevokedMembershipRequests { participants }
+        }
         "member_add_mode" => {
             let mode = match node.content.as_deref() {
                 Some(NodeContentRef::String(s)) => s.to_string(),
@@ -369,8 +423,8 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
             raw: node.to_owned(),
         },
         "missing_participant_identification" => return None,
-        other => GroupNotificationAction::Unknown {
-            tag: other.to_string(),
+        _ => GroupNotificationAction::Unknown {
+            tag: node.tag.to_string(),
         },
     };
     Some(action)
@@ -390,6 +444,46 @@ fn parse_participants(node: &NodeRef<'_>) -> Vec<GroupParticipantInfo> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Parses `<requested_user>` children from `<created_membership_requests>`.
+fn parse_requested_users(node: &NodeRef<'_>) -> Vec<GroupParticipantInfo> {
+    node.children()
+        .map(|children| {
+            children
+                .iter()
+                .filter(|c| c.tag == "requested_user")
+                .filter_map(|c| {
+                    let jid = c.attrs().optional_jid("jid")?;
+                    let phone_number = c.attrs().optional_jid("phone_number");
+                    Some(GroupParticipantInfo { jid, phone_number })
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Parses `<participant jid="..."/>` children into plain JIDs.
+fn parse_participant_jids(node: &NodeRef<'_>) -> Vec<Jid> {
+    node.children()
+        .map(|children| {
+            children
+                .iter()
+                .filter(|c| c.tag == "participant")
+                .filter_map(|c| c.attrs().optional_jid("jid"))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Maps the `request_method` attribute to [`MembershipRequestMethod`].
+/// Defaults to `InviteLink` when absent or unknown — matches WA Web's fallback.
+fn parse_request_method(node: &NodeRef<'_>) -> MembershipRequestMethod {
+    match node.attrs().optional_string("request_method").as_deref() {
+        Some("linked_group_join") => MembershipRequestMethod::LinkedGroupJoin,
+        Some("non_admin_add") => MembershipRequestMethod::NonAdminAdd,
+        _ => MembershipRequestMethod::InviteLink,
+    }
 }
 
 #[cfg(test)]
@@ -589,6 +683,155 @@ mod tests {
                 assert!(*enabled);
             }
             other => panic!("expected MembershipApprovalMode, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_membership_approval_request() {
+        // User requested to join — flat node with attrs only, actor is the requester.
+        let node = make_notification(vec![
+            NodeBuilder::new("membership_approval_request")
+                .attr("request_method", "invite_link")
+                .build(),
+        ]);
+
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
+        assert_eq!(notif.participant, Some(admin_jid()));
+        match &notif.actions[0] {
+            GroupNotificationAction::MembershipApprovalRequest {
+                request_method,
+                parent_group_jid,
+            } => {
+                assert_eq!(*request_method, MembershipRequestMethod::InviteLink);
+                assert!(parent_group_jid.is_none());
+            }
+            other => panic!("expected MembershipApprovalRequest, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_created_membership_requests() {
+        // Admin-side: new requests appeared — uses <requested_user> children.
+        let node = make_notification(vec![
+            NodeBuilder::new("created_membership_requests")
+                .attr("request_method", "non_admin_add")
+                .children(vec![
+                    NodeBuilder::new("requested_user")
+                        .attr("jid", user_jid())
+                        .build(),
+                ])
+                .build(),
+        ]);
+
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
+        assert_eq!(notif.participant, Some(admin_jid()));
+        match &notif.actions[0] {
+            GroupNotificationAction::CreatedMembershipRequests {
+                request_method,
+                parent_group_jid,
+                requests,
+            } => {
+                assert_eq!(*request_method, MembershipRequestMethod::NonAdminAdd);
+                assert!(parent_group_jid.is_none());
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].jid, user_jid());
+            }
+            other => panic!("expected CreatedMembershipRequests, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_revoked_membership_requests() {
+        // Requests rejected by admin — uses <participant jid="..."/> children.
+        let node = make_notification(vec![
+            NodeBuilder::new("revoked_membership_requests")
+                .children(vec![
+                    NodeBuilder::new("participant")
+                        .attr("jid", user_jid())
+                        .build(),
+                ])
+                .build(),
+        ]);
+
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
+        assert_eq!(notif.participant, Some(admin_jid()));
+        match &notif.actions[0] {
+            GroupNotificationAction::RevokedMembershipRequests { participants } => {
+                assert_eq!(participants.len(), 1);
+                assert_eq!(participants[0], user_jid());
+            }
+            other => panic!("expected RevokedMembershipRequests, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_membership_approval_request_default_method() {
+        // No request_method attr → defaults to InviteLink (matches WA Web fallback).
+        let node = make_notification(vec![
+            NodeBuilder::new("membership_approval_request").build(),
+        ]);
+
+        let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
+        assert_eq!(notif.participant, Some(admin_jid()));
+        match &notif.actions[0] {
+            GroupNotificationAction::MembershipApprovalRequest {
+                request_method,
+                parent_group_jid,
+            } => {
+                assert_eq!(*request_method, MembershipRequestMethod::InviteLink);
+                assert!(parent_group_jid.is_none());
+            }
+            other => panic!("expected MembershipApprovalRequest, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_parse_membership_request_with_parent_group_jid() {
+        // Community-linked join — both variants carry parent_group_jid.
+        let parent_jid: Jid = "999999999999999999@g.us".parse().unwrap();
+
+        let approval_node = make_notification(vec![
+            NodeBuilder::new("membership_approval_request")
+                .attr("request_method", "linked_group_join")
+                .attr("parent_group_jid", parent_jid.clone())
+                .build(),
+        ]);
+        let notif = GroupNotification::try_from_node_ref(&approval_node.as_node_ref()).unwrap();
+        match &notif.actions[0] {
+            GroupNotificationAction::MembershipApprovalRequest {
+                request_method,
+                parent_group_jid,
+            } => {
+                assert_eq!(*request_method, MembershipRequestMethod::LinkedGroupJoin);
+                assert_eq!(*parent_group_jid, Some(parent_jid.clone()));
+            }
+            other => panic!("expected MembershipApprovalRequest, got {:?}", other),
+        }
+
+        let created_node = make_notification(vec![
+            NodeBuilder::new("created_membership_requests")
+                .attr("request_method", "linked_group_join")
+                .attr("parent_group_jid", parent_jid.clone())
+                .children(vec![
+                    NodeBuilder::new("requested_user")
+                        .attr("jid", user_jid())
+                        .build(),
+                ])
+                .build(),
+        ]);
+        let notif2 = GroupNotification::try_from_node_ref(&created_node.as_node_ref()).unwrap();
+        match &notif2.actions[0] {
+            GroupNotificationAction::CreatedMembershipRequests {
+                request_method,
+                parent_group_jid,
+                requests,
+            } => {
+                assert_eq!(*request_method, MembershipRequestMethod::LinkedGroupJoin);
+                assert_eq!(*parent_group_jid, Some(parent_jid));
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].jid, user_jid());
+            }
+            other => panic!("expected CreatedMembershipRequests, got {:?}", other),
         }
     }
 
