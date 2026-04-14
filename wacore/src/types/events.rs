@@ -67,6 +67,11 @@ impl LazyHistorySync {
 
     /// Full decode of the history sync proto, cached via OnceLock.
     /// Returns `None` if decoding fails.
+    ///
+    /// Note: decoding materializes the full proto in memory alongside the
+    /// raw bytes (~2x decompressed size). For large InitialBootstrap blobs,
+    /// prefer [`raw_bytes()`](Self::raw_bytes) with partial decoding if
+    /// you only need specific fields.
     pub fn get(&self) -> Option<&wa::HistorySync> {
         self.parsed
             .get_or_init(|| wa::HistorySync::decode(&self.raw_bytes[..]).ok())
