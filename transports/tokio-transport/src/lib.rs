@@ -10,14 +10,20 @@ use log::{debug, error, trace, warn};
 use std::sync::{Arc, Once};
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
-use tokio_websockets::{ClientBuilder, Connector, Message, WebSocketStream};
+use tokio_websockets::{ClientBuilder, Message, WebSocketStream};
 use wacore::net::{Transport, TransportEvent, TransportFactory, WHATSAPP_WEB_WS_URL};
+
+pub use tokio_websockets::{Connector, MaybeTlsStream};
 
 const EVENT_CHANNEL_CAPACITY: usize = 10_000;
 
 static CRYPTO_PROVIDER_INIT: Once = Once::new();
 
-fn create_tls_connector() -> Connector {
+/// Returns the default TLS connector used by [`TokioWebSocketTransportFactory`].
+///
+/// Useful as a starting point when users need to inspect or replicate the
+/// default TLS configuration before customising it via [`TokioWebSocketTransportFactory::with_connector`].
+pub fn default_tls_connector() -> Connector {
     CRYPTO_PROVIDER_INIT.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
@@ -219,17 +225,34 @@ where
 /// For custom connection logic, use [`from_websocket`] directly.
 pub struct TokioWebSocketTransportFactory {
     url: String,
+    connector_factory: Option<Arc<dyn Fn() -> Connector + Send + Sync>>,
 }
 
 impl TokioWebSocketTransportFactory {
     pub fn new() -> Self {
         Self {
             url: WHATSAPP_WEB_WS_URL.to_string(),
+            connector_factory: None,
         }
     }
 
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = url.into();
+        self
+    }
+
+    /// Use a custom [`Connector`] factory instead of the built-in default.
+    ///
+    /// The closure is called on every connection attempt (including reconnects),
+    /// so it must be cheap to invoke.
+    ///
+    /// This is the primary extension point for proxy support: build a
+    /// `Connector` that tunnels through your proxy and return it here.
+    pub fn with_connector(
+        mut self,
+        factory: impl Fn() -> Connector + Send + Sync + 'static,
+    ) -> Self {
+        self.connector_factory = Some(Arc::new(factory));
         self
     }
 }
@@ -245,7 +268,10 @@ impl TransportFactory for TokioWebSocketTransportFactory {
     async fn create_transport(
         &self,
     ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error> {
-        let connector = create_tls_connector();
+        let connector = match &self.connector_factory {
+            Some(f) => f(),
+            None => default_tls_connector(),
+        };
         let uri: http::Uri = self
             .url
             .parse()
