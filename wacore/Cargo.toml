@@ -34,6 +34,7 @@ getrandom = { workspace = true, optional = true }
 hex = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }
+itoa = { workspace = true }
 log = { workspace = true }
 md5 = "0.8.0"
 once_cell = { version = "1.21", default-features = false, features = ["std"] }

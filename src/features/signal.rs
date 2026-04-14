@@ -7,10 +7,9 @@ use wacore::libsignal::protocol::{
     CiphertextMessage, PreKeySignalMessage, SignalMessage, UsePQRatchet, message_decrypt,
     message_encrypt,
 };
-use wacore::libsignal::store::sender_key_name::SenderKeyName;
 use wacore::message_processing::EncType;
 use wacore::messages::MessageUtils;
-use wacore::types::jid::JidExt;
+use wacore::types::jid::{JidExt, make_sender_key_name};
 use wacore_binary::Jid;
 use wacore_binary::Node;
 
@@ -131,7 +130,7 @@ impl<'a> Signal<'a> {
     ) -> Result<(Option<Vec<u8>>, Vec<u8>)> {
         let own_jid = self.client.get_own_jid_for_group(group_jid).await?;
         let sender_addr = own_jid.to_protocol_address();
-        let sender_key_name = SenderKeyName::from_jid(group_jid, &sender_addr);
+        let sender_key_name = make_sender_key_name(group_jid, &sender_addr);
 
         // Only create SKDM when no sender key exists (matches WA Web behavior)
         let device_store = self.client.persistence_manager.get_device_arc().await;
@@ -187,10 +186,8 @@ impl<'a> Signal<'a> {
         sender_jid: &Jid,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>> {
-        let sender_key_name = SenderKeyName::new(
-            group_jid.to_string(),
-            sender_jid.to_non_ad().to_protocol_address_string(),
-        );
+        let sender_key_name =
+            make_sender_key_name(group_jid, &sender_jid.to_non_ad().to_protocol_address());
 
         let mut adapter = self.client.signal_adapter().await;
 

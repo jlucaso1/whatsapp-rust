@@ -22,6 +22,7 @@ serde = ["dep:serde", "compact_str/serde"]
 bytes = { workspace = true }
 compact_str = { workspace = true }
 flate2 = { workspace = true }
+itoa = { workspace = true }
 phf = { version = "0.13.1", default-features = false }
 serde = { workspace = true, optional = true }
 stable_deref_trait = "1.2.0"

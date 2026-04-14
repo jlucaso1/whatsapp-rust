@@ -1,4 +1,5 @@
 use crate::libsignal::protocol::{DeviceId, ProtocolAddress};
+use crate::libsignal::store::sender_key_name::SenderKeyName;
 use wacore_binary::{DEFAULT_USER_SERVER, Jid, LEGACY_USER_SERVER};
 
 /// Real WhatsApp logs show max signal address length of 53 chars.
@@ -34,13 +35,12 @@ pub fn make_reusable_protocol_address() -> ProtocolAddress {
 /// Write the signal address name (`{user}[:device]@{server}`) into `buf`,
 /// clearing it first. All other address helpers delegate to this.
 pub fn write_signal_address_to(jid: &Jid, buf: &mut String) {
-    use std::fmt::Write;
     buf.clear();
     let server = mapped_server(jid.server.as_str());
     buf.push_str(&jid.user);
     if jid.device != 0 {
         buf.push(':');
-        let _ = write!(buf, "{}", jid.device);
+        buf.push_str(itoa::Buffer::new().format(jid.device));
     }
     buf.push('@');
     buf.push_str(server);
@@ -78,6 +78,19 @@ pub fn sort_dedup_by_device(jids: &mut Vec<Jid>) {
     jids.dedup_by(|a, b| {
         a.user == b.user && a.server == b.server && a.agent == b.agent && a.device == b.device
     });
+}
+
+/// Build a `SenderKeyName` from a `&Jid` + `&ProtocolAddress` in a single
+/// allocation. Pushes the group JID and sender address directly into the
+/// final buffer — no intermediate `to_string()` or temp buffers.
+pub fn make_sender_key_name(group_jid: &Jid, sender: &ProtocolAddress) -> SenderKeyName {
+    let sender_str = sender.as_str();
+    let mut buf = String::with_capacity(group_jid.user.len() + 20 + 1 + sender_str.len());
+    group_jid.push_to(&mut buf);
+    let group_len = buf.len();
+    buf.push(':');
+    buf.push_str(sender_str);
+    SenderKeyName::from_buf(buf, group_len)
 }
 
 pub trait JidExt {

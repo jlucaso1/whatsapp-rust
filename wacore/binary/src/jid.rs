@@ -536,16 +536,24 @@ impl Jid {
 
     pub fn to_ad_string(&self) -> String {
         if self.user.is_empty() {
-            self.server.as_str().to_string()
-        } else {
-            format!(
-                "{}.{}:{}@{}",
-                self.user,
-                self.agent,
-                self.device,
-                self.server.as_str()
-            )
+            return self.server.as_str().to_string();
         }
+        let mut s = String::with_capacity(self.user.len() + 20);
+        s.push_str(&self.user);
+        s.push('.');
+        s.push_str(itoa::Buffer::new().format(self.agent));
+        s.push(':');
+        s.push_str(itoa::Buffer::new().format(self.device));
+        s.push('@');
+        s.push_str(self.server.as_str());
+        s
+    }
+
+    /// Append the Display representation to `buf` using direct push operations,
+    /// bypassing `fmt::Display` and `dyn Write` dispatch.
+    #[inline]
+    pub fn push_to(&self, buf: &mut String) {
+        push_jid_to_string(&self.user, self.server, self.agent, self.device, buf);
     }
 
     /// Compare device identity (user, server, device) without allocation.
@@ -692,61 +700,91 @@ impl FromStr for Jid {
     }
 }
 
+/// Core JID formatting logic used by `fmt::Display`, `push_jid_to_string`, and
+/// `push_jid_to_compact`. Writes `{user}[.{agent}][:{device}]@{server}`.
+///
+/// Two flavors via `$append`:
+/// - **fallible** (`f.write_str(s)?`): for `fmt::Formatter` which returns `fmt::Result`
+/// - **infallible** (`$buf.push_str(s)`): for `String`/`CompactString`
+macro_rules! write_jid {
+    // Infallible variant: push_str/push into a growable buffer
+    (infallible $buf:expr, $user:expr, $server:expr, $agent:expr, $device:expr) => {{
+        let (user, server, agent, device) = ($user, $server, $agent, $device);
+        if user.is_empty() {
+            $buf.push_str(server.as_str());
+            return;
+        }
+        $buf.push_str(user);
+        if agent > 0
+            && !matches!(
+                server,
+                Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+            )
+        {
+            $buf.push('.');
+            $buf.push_str(itoa::Buffer::new().format(agent));
+        }
+        if device > 0 {
+            $buf.push(':');
+            $buf.push_str(itoa::Buffer::new().format(device));
+        }
+        $buf.push('@');
+        $buf.push_str(server.as_str());
+    }};
+    // Fallible variant: write_str into fmt::Formatter
+    (fallible $f:expr, $user:expr, $server:expr, $agent:expr, $device:expr) => {{
+        let (user, server, agent, device) = ($user, $server, $agent, $device);
+        if user.is_empty() {
+            return $f.write_str(server.as_str());
+        }
+        $f.write_str(user)?;
+        if agent > 0
+            && !matches!(
+                server,
+                Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+            )
+        {
+            $f.write_str(".")?;
+            $f.write_str(itoa::Buffer::new().format(agent))?;
+        }
+        if device > 0 {
+            $f.write_str(":")?;
+            $f.write_str(itoa::Buffer::new().format(device))?;
+        }
+        $f.write_str("@")?;
+        $f.write_str(server.as_str())
+    }};
+}
+
+/// Write the JID display representation directly into a `String`,
+/// bypassing `fmt::Display` and `dyn Write` dispatch entirely.
+#[inline]
+pub fn push_jid_to_string(user: &str, server: Server, agent: u8, device: u16, buf: &mut String) {
+    write_jid!(infallible buf, user, server, agent, device);
+}
+
+/// Write the JID display representation directly into a `CompactString`,
+/// bypassing `fmt::Display` and `dyn Write` dispatch entirely.
+#[inline]
+pub fn push_jid_to_compact(
+    user: &str,
+    server: Server,
+    agent: u8,
+    device: u16,
+    buf: &mut CompactString,
+) {
+    write_jid!(infallible buf, user, server, agent, device);
+}
+
 impl fmt::Display for Jid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.user.is_empty() {
-            // Server-only JID (e.g., "s.whatsapp.net") - no @ prefix
-            write!(f, "{}", self.server)
-        } else {
-            write!(f, "{}", self.user)?;
-
-            // The agent is encoded in the server type for AD JIDs.
-            // We should NOT append it to the user string for standard servers.
-            // Only non-standard servers might use an agent suffix.
-            // The old JS logic appears to never append the agent for s.whatsapp.net or lid.
-            if self.agent > 0 {
-                // This is a guess based on the failure. The old JS logic is complex.
-                // We will only append the agent if the server is NOT s.whatsapp.net or lid.
-                // AND the server is not one that is derived *from* the agent (like 'hosted').
-                if !matches!(
-                    self.server,
-                    Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
-                ) {
-                    write!(f, ".{}", self.agent)?;
-                }
-            }
-
-            if self.device > 0 {
-                write!(f, ":{}", self.device)?;
-            }
-
-            write!(f, "@{}", self.server.as_str())
-        }
+        write_jid!(fallible f, &*self.user, self.server, self.agent, self.device)
     }
 }
 
 impl<'a> fmt::Display for JidRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.user.is_empty() {
-            write!(f, "{}", self.server.as_str())
-        } else {
-            write!(f, "{}", self.user)?;
-
-            if self.agent > 0
-                && !matches!(
-                    self.server,
-                    Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
-                )
-            {
-                write!(f, ".{}", self.agent)?;
-            }
-
-            if self.device > 0 {
-                write!(f, ":{}", self.device)?;
-            }
-
-            write!(f, "@{}", self.server)
-        }
+        write_jid!(fallible f, &*self.user, self.server, self.agent, self.device)
     }
 }
 
@@ -1247,5 +1285,173 @@ mod tests {
         let user = "789".to_string();
         let jid3 = Jid::group(user);
         assert_eq!(jid3.user, "789");
+    }
+
+    /// Verify that all JID formatting paths produce identical output:
+    /// `Jid::Display`, `JidRef::Display`, `push_jid_to_string`, `push_jid_to_compact`,
+    /// and `Jid::push_to`. Exercises the agent-elision rules across server variants.
+    #[test]
+    fn test_jid_format_parity() {
+        struct Case {
+            user: &'static str,
+            server: Server,
+            agent: u8,
+            device: u16,
+        }
+
+        let cases = [
+            // Empty user (server-only JID)
+            Case {
+                user: "",
+                server: Server::Pn,
+                agent: 0,
+                device: 0,
+            },
+            // Basic phone, no agent/device
+            Case {
+                user: "5511999887766",
+                server: Server::Pn,
+                agent: 0,
+                device: 0,
+            },
+            // Phone with device
+            Case {
+                user: "5511999887766",
+                server: Server::Pn,
+                agent: 0,
+                device: 2,
+            },
+            // Phone with agent (suppressed for Pn)
+            Case {
+                user: "5511999887766",
+                server: Server::Pn,
+                agent: 3,
+                device: 15,
+            },
+            // LID with agent (suppressed for Lid)
+            Case {
+                user: "12345.6789",
+                server: Server::Lid,
+                agent: 1,
+                device: 25,
+            },
+            // Hosted with agent (suppressed)
+            Case {
+                user: "100000012345678",
+                server: Server::Hosted,
+                agent: 2,
+                device: 99,
+            },
+            // HostedLid with agent (suppressed)
+            Case {
+                user: "100000012345678",
+                server: Server::HostedLid,
+                agent: 1,
+                device: 99,
+            },
+            // Group (no agent, no device)
+            Case {
+                user: "120363012345678901",
+                server: Server::Group,
+                agent: 0,
+                device: 0,
+            },
+            // Bot with agent (shown)
+            Case {
+                user: "user",
+                server: Server::Bot,
+                agent: 5,
+                device: 10,
+            },
+            // Interop with agent (shown)
+            Case {
+                user: "447911123456",
+                server: Server::Interop,
+                agent: 3,
+                device: 0,
+            },
+            // Messenger with device, no agent
+            Case {
+                user: "messenger_user",
+                server: Server::Messenger,
+                agent: 0,
+                device: 50,
+            },
+            // Broadcast
+            Case {
+                user: "status",
+                server: Server::Broadcast,
+                agent: 0,
+                device: 0,
+            },
+            // Newsletter
+            Case {
+                user: "newsletter_id",
+                server: Server::Newsletter,
+                agent: 0,
+                device: 0,
+            },
+            // Max values
+            Case {
+                user: "447911123456789",
+                server: Server::Pn,
+                agent: 255,
+                device: 65535,
+            },
+            // Short user
+            Case {
+                user: "1",
+                server: Server::Legacy,
+                agent: 0,
+                device: 1,
+            },
+        ];
+
+        for (i, c) in cases.iter().enumerate() {
+            let jid = Jid {
+                user: c.user.into(),
+                server: c.server,
+                agent: c.agent,
+                device: c.device,
+                integrator: 0,
+            };
+
+            // Reference: Display impl (via write_jid! fallible)
+            let display = jid.to_string();
+
+            // JidRef Display
+            let jid_ref = JidRef {
+                user: NodeStr::Borrowed(c.user),
+                server: c.server,
+                agent: c.agent,
+                device: c.device,
+                integrator: 0,
+            };
+            let ref_display = jid_ref.to_string();
+
+            // push_jid_to_string
+            let mut string_buf = String::new();
+            push_jid_to_string(c.user, c.server, c.agent, c.device, &mut string_buf);
+
+            // push_jid_to_compact
+            let mut compact_buf = CompactString::default();
+            push_jid_to_compact(c.user, c.server, c.agent, c.device, &mut compact_buf);
+
+            // Jid::push_to
+            let mut push_buf = String::new();
+            jid.push_to(&mut push_buf);
+
+            assert_eq!(display, ref_display, "case {i}: Display vs JidRef::Display");
+            assert_eq!(
+                display, string_buf,
+                "case {i}: Display vs push_jid_to_string"
+            );
+            assert_eq!(
+                display,
+                compact_buf.as_str(),
+                "case {i}: Display vs push_jid_to_compact"
+            );
+            assert_eq!(display, push_buf, "case {i}: Display vs Jid::push_to");
+        }
     }
 }

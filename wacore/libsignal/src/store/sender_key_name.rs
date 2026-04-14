@@ -1,42 +1,72 @@
 use crate::protocol::ProtocolAddress;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+/// Identifies a sender key by group + sender address.
+///
+/// Stores a single `"{group_id}:{sender_id}"` buffer with an offset,
+/// avoiding the 3 separate `String` allocations of the naive layout.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SenderKeyName {
-    group_id: String,
-    sender_id: String,
-    /// Pre-computed `"{group_id}:{sender_id}"` cache key.
-    cache_key: String,
+    buf: String,
+    group_len: usize,
 }
 
 impl SenderKeyName {
     pub fn new(group_id: String, sender_id: String) -> Self {
-        let cache_key = format!("{group_id}:{sender_id}");
+        let group_len = group_id.len();
+        let mut buf = group_id;
+        buf.reserve(1 + sender_id.len());
+        buf.push(':');
+        buf.push_str(&sender_id);
+        Self { buf, group_len }
+    }
+
+    /// Build from pre-formatted string slices (1 allocation).
+    pub fn from_parts(group_id: &str, sender_id: &str) -> Self {
+        let mut buf = String::with_capacity(group_id.len() + 1 + sender_id.len());
+        buf.push_str(group_id);
+        buf.push(':');
+        buf.push_str(sender_id);
         Self {
-            group_id,
-            sender_id,
-            cache_key,
+            group_len: group_id.len(),
+            buf,
         }
     }
 
-    pub fn group_id(&self) -> &str {
-        &self.group_id
+    /// Build from a pre-assembled `"group_id:sender_id"` buffer.
+    /// `group_len` is the byte offset where group_id ends (the `:`).
+    pub fn from_buf(buf: String, group_len: usize) -> Self {
+        debug_assert!(buf.len() > group_len);
+        debug_assert_eq!(buf.as_bytes()[group_len], b':');
+        Self { buf, group_len }
     }
+
+    pub fn group_id(&self) -> &str {
+        &self.buf[..self.group_len]
+    }
+
     pub fn sender_id(&self) -> &str {
-        &self.sender_id
+        &self.buf[self.group_len + 1..]
     }
 
     /// Returns the cached `"group_id:sender_id"` string without allocation.
     #[inline]
     pub fn cache_key(&self) -> &str {
-        &self.cache_key
+        &self.buf
     }
 
-    /// Construct from a group JID and a protocol address, converting to owned strings.
+    /// Construct from a group JID and a protocol address.
+    /// Uses `ProtocolAddress::as_str()` to avoid allocating the sender string.
     pub fn from_jid(group_jid: &impl std::fmt::Display, sender: &ProtocolAddress) -> Self {
-        Self::new(group_jid.to_string(), sender.to_string())
+        Self::from_parts(&group_jid.to_string(), sender.as_str())
     }
 
     pub fn to_protocol_address(&self) -> ProtocolAddress {
-        ProtocolAddress::new(format!("{}\n{}", self.group_id, self.sender_id), 0.into())
+        let group = self.group_id();
+        let sender = self.sender_id();
+        let mut name = String::with_capacity(group.len() + 1 + sender.len());
+        name.push_str(group);
+        name.push('\n');
+        name.push_str(sender);
+        ProtocolAddress::new(name, 0.into())
     }
 }

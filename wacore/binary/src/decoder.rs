@@ -1,17 +1,17 @@
 use crate::error::{BinaryError, Result};
-use crate::jid::JidRef;
+use crate::jid::{JidRef, push_jid_to_compact};
 use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeStr, NodeVec, ValueRef};
 use crate::token;
 use compact_str::CompactString;
 use std::borrow::Cow;
-use std::fmt::Write;
 #[cfg(feature = "simd")]
 use std::simd::{Simd, prelude::*, u8x16};
 
-/// Format a JidRef directly into CompactString, avoiding the intermediate String.
+/// Format a JidRef directly into CompactString using direct push operations,
+/// bypassing `fmt::Display` and `dyn Write` dispatch entirely.
 fn jid_ref_to_compact(j: &JidRef<'_>) -> CompactString {
-    let mut s = CompactString::default();
-    write!(s, "{}", j).expect("JidRef Display cannot fail");
+    let mut s = CompactString::with_capacity(j.user.len() + 20);
+    push_jid_to_compact(&j.user, j.server, j.agent, j.device, &mut s);
     s
 }
 

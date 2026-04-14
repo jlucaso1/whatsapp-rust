@@ -132,10 +132,16 @@ impl Client {
         // For groups/status: key includes participant since each device retries independently.
         // For DMs: key is (chat, msg_id) since there's only one sender.
         // Uses atomic entry API to avoid race conditions between check and insert.
-        let dedupe_key = if is_group_or_status {
-            format!("{}:{}:{}", receipt.source.chat, message_id, participant_jid)
-        } else {
-            format!("{}:{}", receipt.source.chat, message_id)
+        let dedupe_key = {
+            let mut key = String::with_capacity(64);
+            receipt.source.chat.push_to(&mut key);
+            key.push(':');
+            key.push_str(&message_id);
+            if is_group_or_status {
+                key.push(':');
+                participant_jid.push_to(&mut key);
+            }
+            key
         };
 
         if self.retried_group_messages.get(&dedupe_key).await.is_some() {
@@ -335,8 +341,10 @@ impl Client {
 
                     for own_jid in jids_to_delete {
                         use wacore::libsignal::store::sender_key_name::SenderKeyName;
-                        let sk_name =
-                            SenderKeyName::from_jid(&group_jid, &own_jid.to_protocol_address());
+                        let sk_name = SenderKeyName::from_parts(
+                            &group_jid,
+                            own_jid.to_protocol_address().as_str(),
+                        );
                         self.signal_cache
                             .delete_sender_key(sk_name.cache_key())
                             .await;
