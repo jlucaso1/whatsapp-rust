@@ -158,9 +158,12 @@ fn resolve_retry_chat_info(
         };
 
         RetryChatInfo {
-            chat,
+            chat: chat.clone(),
             requester,
-            original_from: from.clone(),
+            // Use bare JID for stanza `to` -- device routing is via <participants><to jid=requester>.
+            // Normalizing here ensures consistent behavior regardless of storage backend or
+            // whether the server includes a device suffix in the receipt.
+            original_from: chat,
             is_bot,
         }
     }
@@ -2543,17 +2546,18 @@ mod tests {
     }
 
     #[test]
-    fn resolve_retry_chat_info_preserves_original_from() {
+    fn resolve_retry_chat_info_normalizes_original_from() {
         use wacore_binary::builder::NodeBuilder;
 
-        // DM with device suffix — original_from should preserve it
+        // DM with device suffix — original_from should be normalized to bare
+        // (device routing is handled by <participants><to jid=requester>)
         let node = NodeBuilder::new("receipt").build();
         let receipt = make_test_receipt("5511999999999:33@s.whatsapp.net");
 
         let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
 
-        // original_from keeps the full JID including device
-        assert_eq!(info.original_from.device(), 33);
+        // original_from is bare (same as chat)
+        assert_eq!(info.original_from.device(), 0);
         assert_eq!(info.original_from.user, "5511999999999");
 
         // chat is bare
