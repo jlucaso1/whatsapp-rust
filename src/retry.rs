@@ -458,102 +458,108 @@ impl Client {
         message_id: &str,
         retry_count: u8,
     ) -> Result<(), anyhow::Error> {
-        let device_jids = self.dm_retry_session_targets(resolved_jid).await;
-        let device_store = self.persistence_manager.get_device_arc().await;
-
-        for device_jid in &device_jids {
-            // Base key collision detection prevents stale-session retry loops.
-            let signal_address = device_jid.to_protocol_address();
-
-            // Check for base key collision before deleting the session.
-            // Read session through cache for consistent state.
-            {
-                let device_guard = device_store.read().await;
-                let session = self
-                    .signal_cache
-                    .peek_session(&signal_address, &*device_guard.backend)
-                    .await
-                    .ok()
-                    .flatten();
-
-                if let Some(session) = session
-                    && let Ok(current_base_key) = session.alice_base_key()
-                {
-                    let addr_str = signal_address.as_str();
-                    if retry_count == MIN_RETRY_FOR_BASE_KEY_CHECK {
-                        // Save retry #2's base key so later retries can prove regeneration happened.
-                        if let Err(e) = device_guard
-                            .backend
-                            .save_base_key(addr_str, message_id, current_base_key)
-                            .await
-                        {
-                            warn!("Failed to save base key for {}: {}", signal_address, e);
-                        } else {
-                            info!(
-                                "Saved base key for {} at retry #{} for collision detection",
-                                signal_address, retry_count
-                            );
-                        }
-                    } else if retry_count > MIN_RETRY_FOR_BASE_KEY_CHECK {
-                        // An unchanged base key means we never rebuilt the session.
-                        match device_guard
-                            .backend
-                            .has_same_base_key(addr_str, message_id, current_base_key)
-                            .await
-                        {
-                            Ok(true) => {
-                                // Collision detected! We haven't regenerated our session.
-                                warn!(
-                                    "Base key collision detected for {} at retry #{}. \
-                                     Session hasn't been regenerated. Forcing fresh session.",
-                                    signal_address, retry_count
-                                );
-                                // Clean up base key entry since we're deleting the session
-                                let _ = device_guard
-                                    .backend
-                                    .delete_base_key(addr_str, message_id)
-                                    .await;
-                            }
-                            Ok(false) => {
-                                // Base key changed, session was regenerated - good!
-                                info!(
-                                    "Base key changed for {} at retry #{} - session regenerated",
-                                    signal_address, retry_count
-                                );
-                                // Clean up old base key entry
-                                let _ = device_guard
-                                    .backend
-                                    .delete_base_key(addr_str, message_id)
-                                    .await;
-                            }
-                            Err(e) => {
-                                warn!("Failed to check base key for {}: {}", signal_address, e);
-                            }
-                        }
-                    }
-                }
+        let requester_bare = resolved_jid.to_non_ad();
+        if let Some(device_jids) = self.get_devices_from_registry(&requester_bare).await {
+            for device_jid in &device_jids {
+                self.delete_dm_retry_session_target(device_jid, message_id, retry_count)
+                    .await;
             }
-
-            // Delete through the cache so resend can't revive a stale in-memory session.
-            self.signal_cache.delete_session(&signal_address).await;
-            info!("Deleted session for {signal_address} due to retry receipt");
+        } else {
+            let fallback_jid = if resolved_jid.device == 0 {
+                requester_bare
+            } else {
+                resolved_jid.clone()
+            };
+            self.delete_dm_retry_session_target(&fallback_jid, message_id, retry_count)
+                .await;
         }
 
         self.flush_signal_cache().await?;
         Ok(())
     }
 
-    async fn dm_retry_session_targets(&self, resolved_jid: &Jid) -> Vec<Jid> {
-        let requester_bare = resolved_jid.to_non_ad();
-        self.get_devices_from_registry(&requester_bare)
-            .await
-            .unwrap_or_else(|| {
-                if resolved_jid.device == 0 {
-                    vec![requester_bare]
-                } else {
-                    vec![resolved_jid.clone()]
+    async fn delete_dm_retry_session_target(
+        &self,
+        device_jid: &Jid,
+        message_id: &str,
+        retry_count: u8,
+    ) {
+        // Base key collision detection prevents stale-session retry loops.
+        let signal_address = device_jid.to_protocol_address();
+        let device_store = self.persistence_manager.get_device_arc().await;
+
+        // Check for base key collision before deleting the session.
+        // Read session through cache for consistent state.
+        {
+            let device_guard = device_store.read().await;
+            let session = self
+                .signal_cache
+                .peek_session(&signal_address, &*device_guard.backend)
+                .await
+                .ok()
+                .flatten();
+
+            if let Some(session) = session
+                && let Ok(current_base_key) = session.alice_base_key()
+            {
+                let addr_str = signal_address.as_str();
+                if retry_count == MIN_RETRY_FOR_BASE_KEY_CHECK {
+                    // Save retry #2's base key so later retries can prove regeneration happened.
+                    if let Err(e) = device_guard
+                        .backend
+                        .save_base_key(addr_str, message_id, current_base_key)
+                        .await
+                    {
+                        warn!("Failed to save base key for {}: {}", signal_address, e);
+                    } else {
+                        info!(
+                            "Saved base key for {} at retry #{} for collision detection",
+                            signal_address, retry_count
+                        );
+                    }
+                } else if retry_count > MIN_RETRY_FOR_BASE_KEY_CHECK {
+                    // An unchanged base key means we never rebuilt the session.
+                    match device_guard
+                        .backend
+                        .has_same_base_key(addr_str, message_id, current_base_key)
+                        .await
+                    {
+                        Ok(true) => {
+                            // Collision detected! We haven't regenerated our session.
+                            warn!(
+                                "Base key collision detected for {} at retry #{}. \
+                                 Session hasn't been regenerated. Forcing fresh session.",
+                                signal_address, retry_count
+                            );
+                            // Clean up base key entry since we're deleting the session
+                            let _ = device_guard
+                                .backend
+                                .delete_base_key(addr_str, message_id)
+                                .await;
+                        }
+                        Ok(false) => {
+                            // Base key changed, session was regenerated - good!
+                            info!(
+                                "Base key changed for {} at retry #{} - session regenerated",
+                                signal_address, retry_count
+                            );
+                            // Clean up old base key entry
+                            let _ = device_guard
+                                .backend
+                                .delete_base_key(addr_str, message_id)
+                                .await;
+                        }
+                        Err(e) => {
+                            warn!("Failed to check base key for {}: {}", signal_address, e);
+                        }
+                    }
                 }
-            })
+            }
+        }
+
+        // Delete through the cache so resend can't revive a stale in-memory session.
+        self.signal_cache.delete_session(&signal_address).await;
+        info!("Deleted session for {signal_address} due to retry receipt");
     }
 
     /// Extracts and processes the key bundle from a retry receipt.
