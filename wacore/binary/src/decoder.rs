@@ -425,7 +425,10 @@ impl<'a> Decoder<'a> {
     }
 
     fn read_attributes(&mut self, size: usize) -> Result<AttrsRef<'a>> {
-        let mut attrs = AttrsRef::with_capacity(size);
+        if size == 0 {
+            return Ok(AttrsRef::Empty);
+        }
+        let mut v = Vec::with_capacity(size);
         for _ in 0..size {
             let key = self
                 .read_value_as_string()?
@@ -433,9 +436,9 @@ impl<'a> Decoder<'a> {
             let value = self
                 .read_value()?
                 .unwrap_or(ValueRef::String(NodeStr::Borrowed("")));
-            attrs.push((key, value));
+            v.push((key, value));
         }
-        Ok(attrs)
+        Ok(AttrsRef::from_vec(v))
     }
 
     fn read_content(&mut self) -> Result<Option<NodeContentRef<'a>>> {

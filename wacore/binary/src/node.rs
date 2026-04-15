@@ -383,37 +383,27 @@ impl FromIterator<(Cow<'static, str>, NodeValue)> for Attrs {
         Self(iter.into_iter().collect())
     }
 }
-/// Covariant inline container for decoded node attributes.
-/// Most WA protocol nodes have 0-1 attributes; storing them inline avoids
-/// a heap allocation for the common case. Covariant in `'a` (unlike SmallVec)
-/// so it works with yoke::Yokeable.
+/// Covariant attribute container for decoded nodes.
+///
+/// Uses `Box<[T]>` (16 bytes: ptr + len) instead of `Vec<T>` (24 bytes: ptr + len + cap)
+/// or inline storage (which inflated NodeRef size). Zero-attr nodes skip allocation
+/// entirely. The boxed slice is allocated once with exact size from the decoder.
+///
+/// Covariant in `'a` (both Box and slices are covariant), compatible with yoke::Yokeable.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AttrsRef<'a> {
     Empty,
-    One((NodeStr<'a>, ValueRef<'a>)),
-    Many(Vec<(NodeStr<'a>, ValueRef<'a>)>),
+    Slice(Box<[(NodeStr<'a>, ValueRef<'a>)]>),
 }
 
 impl<'a> AttrsRef<'a> {
-    pub fn with_capacity(n: usize) -> Self {
-        match n {
-            0 => Self::Empty,
-            // 1 attr: start Empty, push() will create One (no heap alloc)
-            1 => Self::Empty,
-            _ => Self::Many(Vec::with_capacity(n)),
-        }
-    }
-
-    pub fn push(&mut self, item: (NodeStr<'a>, ValueRef<'a>)) {
-        match self {
-            Self::Empty => *self = Self::One(item),
-            Self::One(_) => {
-                let Self::One(prev) = std::mem::replace(self, Self::Empty) else {
-                    unreachable!()
-                };
-                *self = Self::Many(vec![prev, item]);
-            }
-            Self::Many(v) => v.push(item),
+    /// Build from a pre-filled Vec. Preferred path from the decoder which
+    /// knows the exact attr count upfront.
+    pub fn from_vec(v: Vec<(NodeStr<'a>, ValueRef<'a>)>) -> Self {
+        if v.is_empty() {
+            Self::Empty
+        } else {
+            Self::Slice(v.into_boxed_slice())
         }
     }
 
@@ -421,8 +411,7 @@ impl<'a> AttrsRef<'a> {
     pub fn len(&self) -> usize {
         match self {
             Self::Empty => 0,
-            Self::One(_) => 1,
-            Self::Many(v) => v.len(),
+            Self::Slice(s) => s.len(),
         }
     }
 
@@ -435,8 +424,7 @@ impl<'a> AttrsRef<'a> {
     pub fn as_slice(&self) -> &[(NodeStr<'a>, ValueRef<'a>)] {
         match self {
             Self::Empty => &[],
-            Self::One(item) => std::slice::from_ref(item),
-            Self::Many(v) => v.as_slice(),
+            Self::Slice(s) => s,
         }
     }
 
@@ -448,17 +436,7 @@ impl<'a> AttrsRef<'a> {
 
 impl<'a> FromIterator<(NodeStr<'a>, ValueRef<'a>)> for AttrsRef<'a> {
     fn from_iter<I: IntoIterator<Item = (NodeStr<'a>, ValueRef<'a>)>>(iter: I) -> Self {
-        let mut iter = iter.into_iter();
-        let (_, upper) = iter.size_hint();
-        let mut result = match upper {
-            Some(0) => Self::Empty,
-            Some(n) => Self::with_capacity(n),
-            None => Self::Empty,
-        };
-        for item in iter {
-            result.push(item);
-        }
-        result
+        Self::from_vec(iter.into_iter().collect())
     }
 }
 
