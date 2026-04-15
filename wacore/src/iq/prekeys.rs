@@ -44,6 +44,7 @@ use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
+use wacore_binary::encoder::{ByteWriter, EncodeNode, Encoder};
 use wacore_binary::{Jid, Server};
 use wacore_binary::{Node, NodeContent, NodeContentRef, NodeRef};
 
@@ -361,6 +362,102 @@ impl PreKeyUploadSpec {
     }
 }
 
+/// EncodeNode adapter that writes the prekey upload IQ inline, bypassing
+/// the intermediate Node tree. This is the hot path during registration
+/// (812 prekeys * ~35 bytes each = significant allocation savings).
+struct PreKeyUploadIqNode<'a> {
+    request_id: &'a str,
+    spec: &'a PreKeyUploadSpec,
+}
+
+impl EncodeNode for PreKeyUploadIqNode<'_> {
+    fn tag(&self) -> &str {
+        "iq"
+    }
+
+    fn attrs_len(&self) -> usize {
+        4 // type, xmlns, to, id
+    }
+
+    fn has_content(&self) -> bool {
+        true
+    }
+
+    fn encode_attrs<'a, W: ByteWriter>(
+        &self,
+        encoder: &mut Encoder<'a, W>,
+    ) -> wacore_binary::Result<()> {
+        // Attr order matches build_iq_node: id, xmlns, type, to
+        encoder.write_string("id")?;
+        encoder.write_string(self.request_id)?;
+        encoder.write_string("xmlns")?;
+        encoder.write_string("encrypt")?;
+        encoder.write_string("type")?;
+        encoder.write_string("set")?;
+        encoder.write_string("to")?;
+        encoder.write_jid_owned(&Jid::new("", Server::Pn))?;
+        Ok(())
+    }
+
+    fn encode_content<'a, W: ByteWriter>(
+        &self,
+        encoder: &mut Encoder<'a, W>,
+    ) -> wacore_binary::Result<()> {
+        let spec = self.spec;
+
+        // 5 children: registration, type, identity, list, skey
+        encoder.write_list_start(5)?;
+
+        // <registration>[4-byte BE registration_id]</registration>
+        encoder.write_list_start(2)?; // tag + content
+        encoder.write_string("registration")?;
+        encoder.write_bytes_with_len(&spec.registration_id.to_be_bytes())?;
+
+        // <type>[5]</type>
+        encoder.write_list_start(2)?;
+        encoder.write_string("type")?;
+        encoder.write_bytes_with_len(&[5u8])?;
+
+        // <identity>[32-byte identity public key]</identity>
+        encoder.write_list_start(2)?;
+        encoder.write_string("identity")?;
+        encoder.write_bytes_with_len(spec.identity_key.public_key_bytes())?;
+
+        // <list> with N <key> children
+        encoder.write_list_start(2)?; // tag + content
+        encoder.write_string("list")?;
+        encoder.write_list_start(spec.pre_keys.len())?;
+        for &(id, ref pk) in &spec.pre_keys {
+            // <key><id>[3-byte BE]</id><value>[32-byte pub]</value></key>
+            encoder.write_list_start(2)?; // tag + content
+            encoder.write_string("key")?;
+            encoder.write_list_start(2)?; // 2 children: id, value
+            encoder.write_list_start(2)?; // <id> tag + content
+            encoder.write_string("id")?;
+            encoder.write_bytes_with_len(&id.to_be_bytes()[1..])?;
+            encoder.write_list_start(2)?; // <value> tag + content
+            encoder.write_string("value")?;
+            encoder.write_bytes_with_len(pk.public_key_bytes())?;
+        }
+
+        // <skey><id/><value/><signature/></skey>
+        encoder.write_list_start(2)?; // tag + content
+        encoder.write_string("skey")?;
+        encoder.write_list_start(3)?; // 3 children: id, value, signature
+        encoder.write_list_start(2)?;
+        encoder.write_string("id")?;
+        encoder.write_bytes_with_len(&spec.signed_pre_key_id.to_be_bytes()[1..])?;
+        encoder.write_list_start(2)?;
+        encoder.write_string("value")?;
+        encoder.write_bytes_with_len(spec.signed_pre_key_public.public_key_bytes())?;
+        encoder.write_list_start(2)?;
+        encoder.write_string("signature")?;
+        encoder.write_bytes_with_len(&spec.signed_pre_key_signature)?;
+
+        Ok(())
+    }
+}
+
 impl IqSpec for PreKeyUploadSpec {
     type Response = ();
 
@@ -381,6 +478,20 @@ impl IqSpec for PreKeyUploadSpec {
             Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(content)),
         )
+    }
+
+    fn encode_iq_direct(&self, request_id: &str, out: &mut Vec<u8>) -> Result<bool, anyhow::Error> {
+        // Pre-size: each prekey ~40 bytes on the wire, plus ~200 bytes for
+        // the outer IQ, registration, type, identity, and skey nodes.
+        out.reserve(self.pre_keys.len() * 40 + 256);
+
+        let node = PreKeyUploadIqNode {
+            request_id,
+            spec: self,
+        };
+        let mut encoder = Encoder::new_vec(out)?;
+        encoder.write_node(&node)?;
+        Ok(true)
     }
 
     fn parse_response(&self, _response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
@@ -1074,5 +1185,74 @@ mod tests {
         assert_eq!(parsed.registration_id, original.registration_id);
         assert!(parsed.one_time_pre_key.is_none());
         assert!(parsed.device_identity.is_none());
+    }
+
+    /// Helper: assert direct encode produces identical bytes to build_iq + marshal.
+    fn assert_direct_encode_matches_marshal(num_prekeys: u32) {
+        use crate::iq::spec::IqSpec;
+        use crate::libsignal::protocol::KeyPair;
+
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+        let identity = KeyPair::generate(&mut rng);
+        let signed_prekey = KeyPair::generate(&mut rng);
+        let sig = identity
+            .private_key
+            .calculate_signature(&signed_prekey.public_key.serialize(), &mut rng)
+            .unwrap();
+
+        let pre_keys: Vec<(u32, crate::libsignal::protocol::PublicKey)> = (1..=num_prekeys)
+            .map(|id| {
+                let kp = KeyPair::generate(&mut rng);
+                (id, kp.public_key)
+            })
+            .collect();
+
+        let spec = PreKeyUploadSpec::new(
+            12345,
+            identity.public_key,
+            1,
+            signed_prekey.public_key,
+            sig.to_vec(),
+            pre_keys,
+        );
+
+        let request_id = "test-req-id-123";
+
+        let mut direct_buf = Vec::new();
+        let used = spec
+            .encode_iq_direct(request_id, &mut direct_buf)
+            .expect("encode_iq_direct should succeed");
+        assert!(used);
+
+        let iq = spec.build_iq();
+        let iq_node = wacore_binary::builder::NodeBuilder::new("iq")
+            .attr("id", request_id)
+            .attr("xmlns", iq.namespace)
+            .attr("type", iq.query_type.as_str())
+            .attr("to", iq.to)
+            .apply_content(iq.content)
+            .build();
+        let marshal_buf =
+            wacore_binary::marshal_auto(&iq_node).expect("marshal_auto should succeed");
+
+        assert_eq!(
+            direct_buf, marshal_buf,
+            "encode_iq_direct must match build_iq + marshal for {num_prekeys} prekeys"
+        );
+    }
+
+    #[test]
+    fn test_encode_iq_direct_matches_marshal_5_keys() {
+        assert_direct_encode_matches_marshal(5);
+    }
+
+    #[test]
+    fn test_encode_iq_direct_matches_marshal_0_keys() {
+        assert_direct_encode_matches_marshal(0);
+    }
+
+    #[test]
+    fn test_encode_iq_direct_matches_marshal_1_key() {
+        assert_direct_encode_matches_marshal(1);
     }
 }

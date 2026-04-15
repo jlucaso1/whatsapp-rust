@@ -78,9 +78,10 @@ impl NoiseSocket {
         send_job_rx: async_channel::Receiver<SendJob>,
     ) {
         let mut write_counter: u32 = 0;
-        // Reusable buffers -- capacity stays allocated between sends
         let mut enc_buf = Vec::with_capacity(4096);
-        let mut out_buf = Vec::with_capacity(4096);
+        // BytesMut: split().freeze() yields a zero-copy Bytes while retaining
+        // the underlying allocation for the next frame.
+        let mut out_buf = BytesMut::with_capacity(4096);
 
         while let Ok(job) = send_job_rx.recv().await {
             let result = Self::process_send_job(
@@ -106,24 +107,21 @@ impl NoiseSocket {
         write_counter: &mut u32,
         plaintext: &[u8],
         enc_buf: &mut Vec<u8>,
-        out_buf: &mut Vec<u8>,
+        out_buf: &mut BytesMut,
     ) -> SendResult {
         let counter = *write_counter;
 
         if plaintext.len() <= INLINE_ENCRYPT_THRESHOLD {
-            // Copy into reusable enc_buf, encrypt in place
             enc_buf.clear();
             enc_buf.extend_from_slice(plaintext);
             if let Err(e) = write_key.encrypt_in_place_with_counter(counter, enc_buf) {
                 return Err(EncryptSendError::crypto(anyhow::anyhow!(e.to_string())));
             }
 
-            out_buf.clear();
             if let Err(e) = wacore::framing::encode_frame_into(enc_buf, None, out_buf) {
                 return Err(EncryptSendError::framing(e));
             }
         } else {
-            // Large messages: encrypt on blocking thread (reads plaintext, returns new ciphertext)
             let write_key = write_key.clone();
             let plaintext_owned = plaintext.to_vec();
 
@@ -139,15 +137,15 @@ impl NoiseSocket {
                 }
             };
 
-            out_buf.clear();
             if let Err(e) = wacore::framing::encode_frame_into(&ciphertext, None, out_buf) {
                 return Err(EncryptSendError::framing(e));
             }
         }
 
-        // copy_from_slice so out_buf retains its capacity for the next send
-        let frame = bytes::Bytes::copy_from_slice(out_buf);
-        out_buf.clear();
+        // Zero-copy: split() moves the written data into a new BytesMut,
+        // freeze() converts it to Bytes. The original out_buf retains its
+        // allocated capacity for the next frame.
+        let frame = out_buf.split().freeze();
         if let Err(e) = transport.send(frame).await {
             return Err(EncryptSendError::transport(e));
         }

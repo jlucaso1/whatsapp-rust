@@ -33,7 +33,8 @@ fn classify_keepalive_error(e: &IqError) -> KeepaliveResult {
         IqError::Socket(_)
         | IqError::Disconnected(_)
         | IqError::NotConnected
-        | IqError::InternalChannelClosed => KeepaliveResult::FatalFailure,
+        | IqError::InternalChannelClosed
+        | IqError::EncodeError(_) => KeepaliveResult::FatalFailure,
         // Exhaustive: forces a compile error when new IqError variants are added
         // so the developer must decide the classification.
         IqError::Timeout | IqError::ServerError { .. } | IqError::ParseError(_) => {
