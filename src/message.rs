@@ -26,6 +26,40 @@ use waproto::whatsapp::{self as wa};
 /// After this many retries, we stop sending retry receipts and rely solely on PDO.
 const MAX_DECRYPT_RETRIES: u8 = 5;
 
+/// Pre-extracted enc node payload. Holds owned copies of the fields needed for
+/// decryption so the async decrypt phase doesn't borrow the original NodeRef tree.
+/// This shrinks the async state machine for handle_incoming_message significantly.
+pub(crate) struct EncPayload {
+    pub ciphertext: bytes::Bytes,
+    pub enc_type: String,
+    pub padding_version: u8,
+}
+
+impl EncPayload {
+    /// Extract payload from a NodeRef (used in tests and classify_incoming_message).
+    pub(crate) fn from_node_ref(node: &NodeRef<'_>) -> Option<Self> {
+        let ciphertext = bytes::Bytes::copy_from_slice(node.content_bytes()?);
+        let enc_type = node.attrs().optional_string("type")?.to_string();
+        let padding_version = node.attrs().optional_u64("v").unwrap_or(2) as u8;
+        Some(Self {
+            ciphertext,
+            enc_type,
+            padding_version,
+        })
+    }
+}
+
+/// Parsed and classified message ready for decryption. All data is owned --
+/// the original node tree is no longer borrowed.
+pub(crate) struct ClassifiedMessage {
+    pub info: Arc<MessageInfo>,
+    pub sender_encryption_jid: Jid,
+    pub session_payloads: Vec<EncPayload>,
+    pub group_payloads: Vec<EncPayload>,
+    pub max_sender_retry_count: u8,
+    pub decrypt_fail_mode: crate::types::events::DecryptFailMode,
+}
+
 /// Retry count threshold for logging high retry warnings.
 /// WhatsApp Web logs metrics when retry count exceeds this value.
 const HIGH_RETRY_COUNT_THRESHOLD: u8 = 3;
@@ -262,6 +296,22 @@ impl Client {
     }
 
     pub(crate) async fn handle_incoming_message(self: Arc<Self>, node: Arc<OwnedNodeRef>) {
+        // Phase 1: classify borrows the node tree, extracts owned payloads, returns quickly.
+        // Phase 2: process_classified_message holds no node borrows across heavy .await points,
+        // keeping the async state machine small.
+        let classified = match self.classify_incoming_message(&node).await {
+            Some(c) => c,
+            None => return,
+        };
+        // node is no longer borrowed here -- drop it before the heavy phase
+        drop(node);
+        self.process_classified_message(classified).await;
+    }
+
+    async fn classify_incoming_message(
+        self: &Arc<Self>,
+        node: &OwnedNodeRef,
+    ) -> Option<ClassifiedMessage> {
         let nr = node.get();
         let info = match self.parse_message_info(nr).await {
             Ok(info) => Arc::new(info),
@@ -269,14 +319,14 @@ impl Client {
                 let id = nr.get_attr("id").map(|v| v.as_str());
                 let from = nr.get_attr("from").map(|v| v.as_str());
                 log::warn!("Failed to parse message info (id={id:?}, from={from:?}): {e:?}");
-                return;
+                return None;
             }
         };
 
         // Newsletters use <plaintext> instead of <enc> because they are not E2E encrypted.
         if info.source.chat.is_newsletter() {
             self.handle_newsletter_message(nr, &info).await;
-            return;
+            return None;
         }
 
         // Warm LID-PN cache before resolution so resolve_encryption_jid() finds the mapping
@@ -313,7 +363,7 @@ impl Client {
                 info.id,
                 nr.tag
             );
-            return;
+            return None;
         }
 
         if let Some(unavailable) = unavailable_node {
@@ -337,11 +387,11 @@ impl Client {
                     decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
                 },
             ));
-            return;
+            return None;
         }
 
-        let mut session_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
-        let mut group_content_enc_nodes = Vec::with_capacity(all_enc_nodes.len());
+        let mut session_payloads = Vec::with_capacity(all_enc_nodes.len());
+        let mut group_payloads = Vec::with_capacity(all_enc_nodes.len());
         let mut max_sender_retry_count: u8 = 0;
         let mut has_hide_fail = false;
 
@@ -402,19 +452,31 @@ impl Client {
                 continue;
             }
 
-            // Fall back to built-in handlers
+            // Extract owned payload so the node doesn't need to be borrowed later
+            let ct = match enc_node.content_bytes() {
+                Some(b) => bytes::Bytes::copy_from_slice(b),
+                None => {
+                    log::warn!("Enc node has no byte content");
+                    continue;
+                }
+            };
+            let pv = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
+            let payload = EncPayload {
+                ciphertext: ct,
+                enc_type: enc_type.to_string(),
+                padding_version: pv,
+            };
+
             match EncType::from_wire(enc_type.as_ref()) {
-                Some(et) if et.is_session() => session_enc_nodes.push(*enc_node),
-                Some(EncType::SenderKey) => group_content_enc_nodes.push(*enc_node),
+                Some(et) if et.is_session() => session_payloads.push(payload),
+                Some(EncType::SenderKey) => group_payloads.push(payload),
                 _ => log::warn!("Unknown enc type: {enc_type}"),
             }
         }
 
         // WA Web diagnostic: validate skmsg is not first in multi-enc messages.
-        // If skmsg comes first, the SKDM (carried in pkmsg/msg) hasn't been processed yet,
-        // so the skmsg decryption would fail with NoSenderKey.
-        if !session_enc_nodes.is_empty()
-            && !group_content_enc_nodes.is_empty()
+        if !session_payloads.is_empty()
+            && !group_payloads.is_empty()
             && all_enc_nodes.first().is_some_and(|n| {
                 n.get_attr("type")
                     .map(|v| v.as_str())
@@ -429,16 +491,31 @@ impl Client {
             );
         }
 
-        // Determine decrypt fail mode from enc nodes (WA Web: hideFail)
-        let decrypt_fail_mode = if has_hide_fail {
-            crate::types::events::DecryptFailMode::Hide
-        } else {
-            crate::types::events::DecryptFailMode::Show
-        };
+        Some(ClassifiedMessage {
+            info,
+            sender_encryption_jid,
+            session_payloads,
+            group_payloads,
+            max_sender_retry_count,
+            decrypt_fail_mode: if has_hide_fail {
+                crate::types::events::DecryptFailMode::Hide
+            } else {
+                crate::types::events::DecryptFailMode::Show
+            },
+        })
+    }
 
-        // Pre-seed retry cache with sender's retry count to avoid redundant retries.
-        // Uses max(existing, incoming) so redeliveries with higher counts update the cache,
-        // but lower counts don't reset our local counter.
+    /// Phase 2: acquire permit, decrypt payloads, flush. No node borrows.
+    async fn process_classified_message(self: Arc<Self>, msg: ClassifiedMessage) {
+        let ClassifiedMessage {
+            info,
+            sender_encryption_jid,
+            session_payloads,
+            group_payloads,
+            max_sender_retry_count,
+            decrypt_fail_mode,
+        } = msg;
+
         if max_sender_retry_count > 0 {
             let cache_key = self
                 .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
@@ -449,11 +526,6 @@ impl Client {
                     .insert(cache_key, max_sender_retry_count)
                     .await;
             }
-            log::debug!(
-                "[msg:{}] Sender retry count {} pre-seeded into cache",
-                info.id,
-                max_sender_retry_count
-            );
         }
 
         // Acquire global processing permit (1 during offline sync, N after).
@@ -486,7 +558,7 @@ impl Client {
 
         log::debug!(
             "Starting PASS 1: Processing {} session establishment messages (pkmsg/msg)",
-            session_enc_nodes.len()
+            session_payloads.len()
         );
 
         // Skip session processing for group/broadcast JIDs — they use sender keys, not 1:1 sessions.
@@ -498,20 +570,20 @@ impl Client {
             session_decrypted_successfully,
             session_had_duplicates,
             session_dispatched_undecryptable,
-        ) = if !is_group_sender && !session_enc_nodes.is_empty() {
+        ) = if !is_group_sender && !session_payloads.is_empty() {
             self.clone()
                 .process_session_enc_batch(
-                    &session_enc_nodes,
+                    &session_payloads,
                     &info,
                     &sender_encryption_jid,
                     decrypt_fail_mode,
                 )
                 .await
         } else {
-            if is_group_sender && !session_enc_nodes.is_empty() {
+            if is_group_sender && !session_payloads.is_empty() {
                 log::debug!(
                     "Skipping {} session messages from group sender {}",
-                    session_enc_nodes.len(),
+                    session_payloads.len(),
                     sender_encryption_jid
                 );
             }
@@ -520,7 +592,7 @@ impl Client {
 
         log::debug!(
             "Starting PASS 2: Processing {} group content messages (skmsg)",
-            group_content_enc_nodes.len()
+            group_payloads.len()
         );
 
         // Only process group content if:
@@ -532,8 +604,8 @@ impl Client {
         // the SKDM it carried is lost, so skmsg will always fail with NoSenderKey — skip it
         // to avoid unnecessary retry receipts. The retry for the pkmsg will cause the sender
         // to resend the entire message including SKDM.
-        if !group_content_enc_nodes.is_empty() {
-            let should_process_skmsg = session_enc_nodes.is_empty()
+        if !group_payloads.is_empty() {
+            let should_process_skmsg = session_payloads.is_empty()
                 || session_decrypted_successfully
                 || session_had_duplicates;
 
@@ -541,7 +613,7 @@ impl Client {
                 match self
                     .clone()
                     .process_group_enc_batch(
-                        &group_content_enc_nodes,
+                        &group_payloads,
                         &info,
                         &sender_encryption_jid,
                         decrypt_fail_mode,
@@ -590,7 +662,7 @@ impl Client {
             }
         } else if !session_decrypted_successfully
             && !session_had_duplicates
-            && !session_enc_nodes.is_empty()
+            && !session_payloads.is_empty()
         {
             // Edge case: message with only msg/pkmsg that failed to decrypt, no skmsg
             warn!(
@@ -609,16 +681,15 @@ impl Client {
             .await;
     }
 
-    async fn process_session_enc_batch<'n>(
+    async fn process_session_enc_batch(
         self: Arc<Self>,
-        enc_nodes: &[&'n NodeRef<'n>],
+        payloads: &[EncPayload],
         info: &Arc<MessageInfo>,
         sender_encryption_jid: &Jid,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> (bool, bool, bool) {
-        // Returns (any_success, any_duplicate, dispatched_undecryptable)
         use wacore::libsignal::protocol::CiphertextMessage;
-        if enc_nodes.is_empty() {
+        if payloads.is_empty() {
             return (false, false, false);
         }
 
@@ -637,23 +708,11 @@ impl Client {
         let mut any_duplicate = false;
         let mut dispatched_undecryptable = false;
 
-        for enc_node in enc_nodes {
-            let ciphertext: &[u8] = match enc_node.content_bytes() {
-                Some(b) => b,
-                None => {
-                    log::warn!("Enc node has no byte content (batch session)");
-                    continue;
-                }
-            };
-            let enc_type = match enc_node.attrs().optional_string("type") {
-                Some(t) => t,
-                None => {
-                    log::warn!("Enc node missing 'type' attribute (batch session)");
-                    continue;
-                }
-            };
-            let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
-            let enc_type_enum = EncType::from_wire(enc_type.as_ref());
+        for payload in payloads {
+            let ciphertext = &payload.ciphertext[..];
+            let enc_type = &payload.enc_type;
+            let padding_version = payload.padding_version;
+            let enc_type_enum = EncType::from_wire(enc_type);
 
             let parsed_message = if enc_type_enum == Some(EncType::PreKeyMessage) {
                 match PreKeySignalMessage::try_from(ciphertext) {
@@ -1015,29 +1074,21 @@ impl Client {
         (any_success, any_duplicate, dispatched_undecryptable)
     }
 
-    async fn process_group_enc_batch<'n>(
+    async fn process_group_enc_batch(
         self: Arc<Self>,
-        enc_nodes: &[&'n NodeRef<'n>],
+        payloads: &[EncPayload],
         info: &Arc<MessageInfo>,
         _sender_encryption_jid: &Jid,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> Result<(), DecryptionError> {
-        if enc_nodes.is_empty() {
+        if payloads.is_empty() {
             return Ok(());
         }
-        // Use the signal cache adapter for group decryption so sender keys are read/written
-        // through the cache, keeping it consistent with SKDM processing.
         let mut adapter = self.signal_adapter().await;
 
-        for enc_node in enc_nodes {
-            let ciphertext: &[u8] = match enc_node.content_bytes() {
-                Some(b) => b,
-                None => {
-                    log::warn!("Enc node has no byte content (batch group)");
-                    continue;
-                }
-            };
-            let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
+        for payload in payloads {
+            let ciphertext = &payload.ciphertext[..];
+            let padding_version = payload.padding_version;
 
             // Always use bare sender for sender key operations. Real WA delivers
             // skmsg with bare participant but pkmsg (SKDM) with device-qualified
@@ -1725,12 +1776,12 @@ mod tests {
             .bytes(signal_message.serialized().to_vec())
             .build();
         let enc_node_ref = enc_node.as_node_ref();
-        let enc_nodes = vec![&enc_node_ref];
+        let payloads: Vec<EncPayload> = vec![EncPayload::from_node_ref(&enc_node_ref).unwrap()];
 
         // With SessionNotFound, should return (false, false, true) - no success, no dupe, dispatched event
         let (success, had_duplicates, dispatched) = client
             .process_session_enc_batch(
-                &enc_nodes,
+                &payloads,
                 &info,
                 &sender_jid,
                 crate::types::events::DecryptFailMode::Show,
@@ -1814,12 +1865,12 @@ mod tests {
             .bytes(signal_message.serialized().to_vec())
             .build();
         let enc_node_ref = enc_node.as_node_ref();
-        let enc_nodes = vec![&enc_node_ref];
+        let payloads: Vec<EncPayload> = vec![EncPayload::from_node_ref(&enc_node_ref).unwrap()];
 
         let (success, had_duplicates, dispatched) = client
             .clone()
             .process_session_enc_batch(
-                &enc_nodes,
+                &payloads,
                 &info,
                 &sender_jid,
                 crate::types::events::DecryptFailMode::Show,
@@ -2765,13 +2816,13 @@ mod tests {
             .build();
 
         let enc_node_ref = enc_node.as_node_ref();
-        let enc_nodes = vec![&enc_node_ref];
+        let payloads: Vec<EncPayload> = vec![EncPayload::from_node_ref(&enc_node_ref).unwrap()];
 
         // Call process_session_enc_batch
         // This should handle any errors gracefully without panicking
         let (success, _had_duplicates, _dispatched) = client
             .process_session_enc_batch(
-                &enc_nodes,
+                &payloads,
                 &info,
                 &sender_jid,
                 crate::types::events::DecryptFailMode::Show,
@@ -2851,14 +2902,16 @@ mod tests {
 
         log::info!("Test: Created batch of 2 messages with invalid data");
 
-        let enc_node_refs_owned: Vec<_> = enc_nodes.iter().map(|n| n.as_node_ref()).collect();
-        let enc_node_refs: Vec<&NodeRef<'_>> = enc_node_refs_owned.iter().collect();
+        let payloads: Vec<EncPayload> = enc_nodes
+            .iter()
+            .filter_map(|n| EncPayload::from_node_ref(&n.as_node_ref()))
+            .collect();
 
         // Process the batch
         // Should handle all errors gracefully without stopping at first error
         let (success, _had_duplicates, _dispatched) = client
             .process_session_enc_batch(
-                &enc_node_refs,
+                &payloads,
                 &info,
                 &sender_jid,
                 crate::types::events::DecryptFailMode::Show,
@@ -2924,13 +2977,13 @@ mod tests {
             .build();
 
         let enc_node_ref = enc_node.as_node_ref();
-        let enc_nodes = vec![&enc_node_ref];
+        let payloads: Vec<EncPayload> = vec![EncPayload::from_node_ref(&enc_node_ref).unwrap()];
 
         // Process the message
         // Should handle errors gracefully in group context
         let (success, _had_duplicates, _dispatched) = client
             .process_session_enc_batch(
-                &enc_nodes,
+                &payloads,
                 &info,
                 &sender_phone,
                 crate::types::events::DecryptFailMode::Show,
