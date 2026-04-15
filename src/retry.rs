@@ -440,8 +440,8 @@ impl Client {
             self.ensure_e2e_sessions(std::slice::from_ref(&resolved_jid))
                 .await?;
 
-            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             let mut store_adapter = self.signal_adapter().await;
+            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
             let stanza = wacore::send::prepare_dm_retry_stanza(
                 &mut store_adapter.session_store,

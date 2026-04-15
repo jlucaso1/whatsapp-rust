@@ -6,15 +6,16 @@ use wacore::types::events::Event;
 use wacore_binary::node::Node;
 use whatsapp_rust::{NodeFilter, SendOptions};
 
-fn participant_target_count(node: &Node) -> usize {
-    node.get_optional_child("participants")
+fn participant_target_count(message_node: &Node) -> usize {
+    message_node
+        .get_optional_child("participants")
         .and_then(|participants| participants.children())
         .map(|children| children.iter().filter(|child| child.tag == "to").count())
         .unwrap_or_default()
 }
 
-fn retry_enc_count(node: &Node) -> Option<String> {
-    let participants = node.get_optional_child("participants")?;
+fn retry_enc_count(message_node: &Node) -> Option<String> {
+    let participants = message_node.get_optional_child("participants")?;
     let target = participants.children()?.first()?;
     let enc = target.get_optional_child("enc")?;
     enc.attrs().optional_string("count").map(|s| s.into_owned())
