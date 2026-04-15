@@ -7,8 +7,11 @@ license = "MIT"
 repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Binary data and constants for WhatsApp protocol"
 
+[package.metadata.cargo-shear]
+ignored = ["hashify"]
+
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [features]
 default = ["simd"]
