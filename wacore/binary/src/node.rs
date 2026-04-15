@@ -502,6 +502,17 @@ impl serde::Serialize for ValueRef<'_> {
 }
 
 impl<'a> ValueRef<'a> {
+    /// Encode this value directly to the binary encoder.
+    pub fn encode_value<W: crate::encoder::ByteWriter>(
+        &self,
+        encoder: &mut crate::encoder::Encoder<'_, W>,
+    ) -> crate::error::Result<()> {
+        match self {
+            ValueRef::String(s) => encoder.write_string(s),
+            ValueRef::Jid(jid) => encoder.write_jid_ref(jid),
+        }
+    }
+
     /// String view of the value. Borrows from `self`.
     /// - String variant: borrows the inner str — zero copy
     /// - Jid variant: Cow::Owned — allocates only when needed

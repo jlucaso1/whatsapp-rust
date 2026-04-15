@@ -11,13 +11,16 @@ use crate::lid_pn_cache::LidPnCache;
 use crate::pair;
 use anyhow::{Result, anyhow};
 use futures::FutureExt;
+#[cfg(test)]
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
 use wacore::xml::{DisplayableNode, DisplayableNodeRef};
 use wacore_binary::JidExt;
+use wacore_binary::Node;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::{Attrs, Node, NodeValue};
+#[cfg(test)]
+use wacore_binary::{Attrs, NodeValue};
 
 use crate::appstate_sync::AppStateProcessor;
 use crate::handlers::chatstate::ChatStateEvent;
@@ -1729,11 +1732,11 @@ impl Client {
             return Err(ClientError::NotConnected);
         }
         let own_pn = self.get_pn().await;
-        let ack = match build_ack_node(node, own_pn.as_ref()) {
-            Some(ack) => ack,
+        let buf = match encode_ack_bytes(node, own_pn.as_ref()) {
+            Some(buf) => buf,
             None => return Ok(()),
         };
-        self.send_node(ack).await
+        self.send_raw_bytes(buf).await
     }
 
     pub(crate) async fn handle_unimplemented(&self, tag: &str) {
@@ -3662,26 +3665,117 @@ fn build_pong(to: String, id: Option<&str>) -> wacore_binary::Node {
 /// `ackString = maybeAttrString("type")` — so `type` is only included when
 /// explicitly present on the incoming receipt (delivery receipts normally
 /// have no type attribute, meaning the ack also has no type).
+/// Encode an ack stanza directly to bytes, bypassing Node + marshal_auto.
+/// Acks are the most frequent outbound stanza (~1 per inbound message).
+fn encode_ack_bytes(
+    node: &wacore_binary::NodeRef<'_>,
+    own_device_pn: Option<&Jid>,
+) -> Option<Vec<u8>> {
+    use wacore_binary::encoder::{ByteWriter, EncodeNode, Encoder};
+
+    let id_val = node.get_attr("id")?;
+    let from_val = node.get_attr("from")?;
+    let participant_val = node.get_attr("participant");
+    let tag = node.tag.as_ref();
+
+    let typ_val = if tag != "message" && !is_encrypt_identity_notification(node) {
+        node.get_attr("type")
+    } else {
+        None
+    };
+
+    let include_from = tag == "message" && own_device_pn.is_some();
+
+    // Count attrs: class + id + to + optional(from, participant, type)
+    let attr_count = 3
+        + usize::from(include_from)
+        + usize::from(participant_val.is_some())
+        + usize::from(typ_val.is_some());
+
+    struct AckNode<'a> {
+        id: &'a wacore_binary::node::ValueRef<'a>,
+        from: &'a wacore_binary::node::ValueRef<'a>,
+        participant: Option<&'a wacore_binary::node::ValueRef<'a>>,
+        typ: Option<&'a wacore_binary::node::ValueRef<'a>>,
+        own_pn: Option<&'a Jid>,
+        tag_str: &'a str,
+        attr_count: usize,
+    }
+
+    impl EncodeNode for AckNode<'_> {
+        fn tag(&self) -> &str {
+            "ack"
+        }
+        fn attrs_len(&self) -> usize {
+            self.attr_count
+        }
+        fn has_content(&self) -> bool {
+            false
+        }
+        fn encode_attrs<'a, W: ByteWriter>(
+            &self,
+            enc: &mut Encoder<'a, W>,
+        ) -> wacore_binary::Result<()> {
+            enc.write_string("class")?;
+            enc.write_string(self.tag_str)?;
+            enc.write_string("id")?;
+            self.id.encode_value(enc)?;
+            enc.write_string("to")?;
+            self.from.encode_value(enc)?;
+            if let Some(pn) = self.own_pn {
+                enc.write_string("from")?;
+                enc.write_jid_owned(pn)?;
+            }
+            if let Some(p) = self.participant {
+                enc.write_string("participant")?;
+                p.encode_value(enc)?;
+            }
+            if let Some(t) = self.typ {
+                enc.write_string("type")?;
+                t.encode_value(enc)?;
+            }
+            Ok(())
+        }
+        fn encode_content<'a, W: ByteWriter>(
+            &self,
+            _enc: &mut Encoder<'a, W>,
+        ) -> wacore_binary::Result<()> {
+            Ok(())
+        }
+    }
+
+    let ack = AckNode {
+        id: id_val,
+        from: from_val,
+        participant: participant_val,
+        typ: typ_val,
+        own_pn: if include_from { own_device_pn } else { None },
+        tag_str: tag,
+        attr_count,
+    };
+
+    let mut buf = Vec::with_capacity(64);
+    let mut encoder = Encoder::new_vec(&mut buf).ok()?;
+    encoder.write_node(&ack).ok()?;
+    Some(buf)
+}
+
+/// Build an ack Node (used in tests for structure verification).
+#[cfg(test)]
 fn build_ack_node(node: &wacore_binary::NodeRef<'_>, own_device_pn: Option<&Jid>) -> Option<Node> {
     let id = node.get_attr("id")?.to_node_value();
     let from = node.get_attr("from")?.to_node_value();
     let participant = node.get_attr("participant").map(|v| v.to_node_value());
-
     let tag = node.tag.as_ref();
-
-    // Whatsmeow: echo type for all stanza tags EXCEPT "message".
-    // WA Web additionally omits type for notification type="encrypt" with <identity/> child.
     let typ = if tag != "message" && !is_encrypt_identity_notification(node) {
         node.get_attr("type").map(|v| v.to_node_value())
     } else {
         None
     };
-
     let mut attrs = Attrs::with_capacity(6);
     attrs.insert("class", NodeValue::from(tag));
     attrs.insert("id", id);
     attrs.insert("to", from);
-
     if tag == "message"
         && let Some(own_device_pn) = own_device_pn
     {
@@ -3693,7 +3787,6 @@ fn build_ack_node(node: &wacore_binary::NodeRef<'_>, own_device_pn: Option<&Jid>
     if let Some(t) = typ {
         attrs.insert("type", t);
     }
-
     Some(Node {
         tag: Cow::Borrowed("ack"),
         attrs,

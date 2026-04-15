@@ -758,7 +758,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
 
     /// Write a JidRef directly without converting to string first.
     /// This avoids the allocation that would occur with `jid.to_string()`.
-    fn write_jid_ref(&mut self, jid: &JidRef<'_>) -> Result<()> {
+    pub fn write_jid_ref(&mut self, jid: &JidRef<'_>) -> Result<()> {
         if jid.device > 0 {
             // AD_JID format: domain_type, device, user
             let device = u8::try_from(jid.device).map_err(|_| {
