@@ -1783,17 +1783,19 @@ impl Client {
         if response.delta_update {
             debug!(
                 "Props delta update received ({} changed props)",
-                response.props.len()
+                response.experiment_props.len()
             );
         } else {
             debug!(
                 "Props full update received ({} props, hash={:?})",
-                response.props.len(),
+                response.experiment_props.len(),
                 response.hash
             );
         }
 
-        self.ab_props.apply_response(&response).await;
+        self.ab_props
+            .apply_props(response.delta_update, response.experiment_props.into_iter())
+            .await;
 
         if let Some(new_hash) = response.hash {
             self.persistence_manager

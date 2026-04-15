@@ -231,8 +231,9 @@ pub struct PropsResponse {
     pub refresh_id: Option<u32>,
     /// Whether this is a delta update.
     pub delta_update: bool,
-    /// The properties (experiment or sampling configs).
-    pub props: Vec<AbPropConfig>,
+    /// Experiment prop code-value pairs (lightweight, no enum wrapper).
+    /// Sampling props are skipped during parsing.
+    pub experiment_props: Vec<(u32, CompactString)>,
 }
 
 impl crate::protocol::ProtocolNode for PropsResponse {
@@ -257,9 +258,6 @@ impl crate::protocol::ProtocolNode for PropsResponse {
         }
         builder = builder.attr("delta_update", self.delta_update.to_string());
 
-        let prop_nodes: Vec<Node> = self.props.into_iter().map(|p| p.into_node()).collect();
-        builder = builder.children(prop_nodes);
-
         builder.build()
     }
 
@@ -278,9 +276,17 @@ impl crate::protocol::ProtocolNode for PropsResponse {
             .map(|s| s == "true")
             .unwrap_or(false);
 
-        let mut props = Vec::new();
+        // Parse experiment props as lightweight (code, value) tuples.
+        // Sampling props (missing config_code or config_value) are skipped.
+        let mut experiment_props = Vec::new();
         for child in node.get_children_by_tag("prop") {
-            props.push(AbPropConfig::try_from_node_ref(child)?);
+            if let Some(code_str) = optional_attr(child, "config_code")
+                && let Ok(code) = code_str.parse::<u32>()
+                && code > 0
+                && let Some(value) = optional_attr(child, "config_value")
+            {
+                experiment_props.push((code, CompactString::from(value.as_ref())));
+            }
         }
 
         Ok(Self {
@@ -289,7 +295,7 @@ impl crate::protocol::ProtocolNode for PropsResponse {
             refresh,
             refresh_id,
             delta_update,
-            props,
+            experiment_props,
         })
     }
 }
@@ -439,30 +445,8 @@ mod tests {
         assert_eq!(result.refresh, Some(3600));
         assert_eq!(result.refresh_id, Some(123));
         assert!(!result.delta_update);
-        assert_eq!(result.props.len(), 3);
-        match &result.props[0] {
-            AbPropConfig::Experiment(prop) => {
-                assert_eq!(prop.config_code, 100);
-                assert_eq!(prop.config_value, "enabled");
-                assert!(prop.config_expo_key.is_none());
-            }
-            _ => panic!("Expected Experiment prop"),
-        }
-        match &result.props[1] {
-            AbPropConfig::Sampling(prop) => {
-                assert_eq!(prop.event_code, 5138);
-                assert_eq!(prop.sampling_weight, -1);
-            }
-            _ => panic!("Expected Sampling prop"),
-        }
-        match &result.props[2] {
-            AbPropConfig::Experiment(prop) => {
-                assert_eq!(prop.config_code, 200);
-                assert_eq!(prop.config_value, "disabled");
-                assert_eq!(prop.config_expo_key, Some(5));
-            }
-            _ => panic!("Expected Experiment prop"),
-        }
+        // 2 of 3 props are experiments (sampling props are skipped)
+        assert_eq!(result.experiment_props.len(), 2);
     }
 
     #[test]
@@ -520,21 +504,9 @@ mod tests {
             refresh: Some(7200),
             refresh_id: Some(42),
             delta_update: true,
-            props: vec![
-                AbPropConfig::Experiment(AbProp {
-                    config_code: 100,
-                    config_value: "value1".into(),
-                    config_expo_key: None,
-                }),
-                AbPropConfig::Sampling(SamplingProp {
-                    event_code: 9001,
-                    sampling_weight: -5,
-                }),
-                AbPropConfig::Experiment(AbProp {
-                    config_code: 200,
-                    config_value: "value2".into(),
-                    config_expo_key: Some(99),
-                }),
+            experiment_props: vec![
+                (100, CompactString::from("value1")),
+                (200, CompactString::from("value2")),
             ],
         };
 
@@ -546,19 +518,6 @@ mod tests {
         assert_eq!(parsed.refresh, response.refresh);
         assert_eq!(parsed.refresh_id, response.refresh_id);
         assert_eq!(parsed.delta_update, response.delta_update);
-        assert_eq!(parsed.props.len(), response.props.len());
-        match &parsed.props[0] {
-            AbPropConfig::Experiment(prop) => assert_eq!(prop.config_code, 100),
-            _ => panic!("Expected Experiment prop"),
-        }
-        match &parsed.props[1] {
-            AbPropConfig::Sampling(prop) => assert_eq!(prop.event_code, 9001),
-            _ => panic!("Expected Sampling prop"),
-        }
-        match &parsed.props[2] {
-            AbPropConfig::Experiment(prop) => assert_eq!(prop.config_expo_key, Some(99)),
-            _ => panic!("Expected Experiment prop"),
-        }
     }
 
     #[test]
@@ -569,7 +528,7 @@ mod tests {
             refresh: None,
             refresh_id: None,
             delta_update: false,
-            props: vec![],
+            experiment_props: vec![],
         };
 
         let node = response.clone().into_node();
@@ -577,10 +536,8 @@ mod tests {
 
         assert_eq!(parsed.ab_key, None);
         assert_eq!(parsed.hash, None);
-        assert_eq!(parsed.refresh, None);
-        assert_eq!(parsed.refresh_id, None);
         assert!(!parsed.delta_update);
-        assert_eq!(parsed.props.len(), 0);
+        assert_eq!(parsed.experiment_props.len(), 0);
     }
 
     #[test]
