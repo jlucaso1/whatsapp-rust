@@ -46,214 +46,166 @@ impl StanzaHandler for NotificationHandler {
     }
 }
 
+/// Dispatch notification by type. Each arm calls a separate async fn so the
+/// compiler doesn't size this future for all arms simultaneously.
 async fn handle_notification_impl(client: &Arc<Client>, node: Arc<OwnedNodeRef>) {
     let nr = node.get();
     let notification_type = nr.attrs().optional_string("type");
-    let notification_type = notification_type.as_deref().unwrap_or_default();
 
-    match notification_type {
-        "encrypt" => {
-            // Identity change: <notification type="encrypt" from="user@s.whatsapp.net">
-            //   <identity/>
-            // </notification>
-            // WA Web: WAWebHandleIdentityChange — clears device record, deletes sessions,
-            // marks sender keys for rotation, re-establishes session.
-            if nr.get_optional_child("identity").is_some() {
-                handle_identity_change(client, nr).await;
-            } else if nr
-                .get_attr("from")
-                .is_some_and(|v| v.as_str() == wacore_binary::SERVER_JID)
-            {
-                // Server-originated encrypt notifications:
-                // "count" → handlePreKeyLow, "digest" → handleDigestKey
-                let first_child_tag = nr
-                    .children()
-                    .and_then(|c| c.first().map(|n| n.tag.as_ref()));
-
-                match first_child_tag {
-                    Some("count") => {
-                        handle_prekey_low(client).await;
-                    }
-                    Some("digest") => {
-                        handle_digest_key(client);
-                    }
-                    other => {
-                        warn!("Unhandled encrypt notification child: {:?}", other);
-                    }
-                }
-            }
-        }
-        "server_sync" => {
-            // Server sync notifications inform us of app state changes from other devices.
-            // Matches WhatsApp Web's handleServerSyncNotification which calls
-            // markCollectionsForSync() with the parsed collection names.
-            use std::str::FromStr;
-            use wacore::appstate::patch_decode::WAPatchName;
-
-            let mut collections = Vec::new();
-            if let Some(children) = nr.children() {
-                for collection_node in children.iter().filter(|c| c.tag == "collection") {
-                    let name_cow = collection_node.attrs().optional_string("name");
-                    let name_str = name_cow.as_deref().unwrap_or("<unknown>");
-                    let server_version =
-                        collection_node.attrs().optional_u64("version").unwrap_or(0);
-                    debug!(
-                        target: "Client/AppState",
-                        "Received server_sync for collection '{}' version {}",
-                        name_str, server_version
-                    );
-                    if let Ok(patch_name) = WAPatchName::from_str(name_str)
-                        && !matches!(patch_name, WAPatchName::Unknown)
-                    {
-                        collections.push((patch_name, server_version));
-                    }
-                }
-            }
-
-            if !collections.is_empty() {
-                let client_clone = client.clone();
-                let generation = client
-                    .connection_generation
-                    .load(std::sync::atomic::Ordering::Acquire);
-                client.runtime.spawn(Box::pin(async move {
-                    // Check if connection was replaced before starting sync
-                    if client_clone
-                        .connection_generation
-                        .load(std::sync::atomic::Ordering::Acquire)
-                        != generation
-                    {
-                        log::debug!(target: "Client/AppState", "server_sync task cancelled: connection generation changed");
-                        return;
-                    }
-
-                    // Filter by version comparison before syncing.
-                    // Matches WA Web's markCollectionsForSync version comparison filter.
-                    let backend = client_clone.persistence_manager.backend();
-                    let mut to_sync = Vec::new();
-                    for (name, server_version) in collections {
-                        if server_version > 0 {
-                            match backend.get_version(name.as_str()).await {
-                                Ok(state) if state.version >= server_version => {
-                                    debug!(
-                                        target: "Client/AppState",
-                                        "Skipping server_sync for {:?}: local version {} >= server version {}",
-                                        name, state.version, server_version
-                                    );
-                                    continue;
-                                }
-                                Ok(_) => {}
-                                Err(e) => {
-                                    warn!(
-                                        target: "Client/AppState",
-                                        "Failed to get local version for {:?}: {e}, syncing anyway", name
-                                    );
-                                }
-                            }
-                        }
-                        to_sync.push(name);
-                    }
-
-                    if !to_sync.is_empty() {
-                        if client_clone.is_shutting_down() {
-                            log::debug!(target: "Client/AppState", "Skipping server_sync: client is shutting down");
-                            return;
-                        }
-                        // Re-check generation after version filtering to avoid syncing
-                        // against a stale connection after the awaited work above.
-                        if client_clone
-                            .connection_generation
-                            .load(std::sync::atomic::Ordering::Acquire)
-                            != generation
-                        {
-                            log::debug!(target: "Client/AppState", "server_sync task cancelled: connection generation changed during version check");
-                            return;
-                        }
-                        if let Err(e) = client_clone.sync_collections_batched(to_sync).await
-                            && !client_clone.is_shutting_down()
-                        {
-                            warn!(
-                                target: "Client/AppState",
-                                "Failed to batch sync app state from server_sync: {e}"
-                            );
-                        }
-                    }
-                })).detach();
-            }
-        }
-        "account_sync" => {
-            // Handle push name updates
-            if let Some(new_push_name) = nr.attrs().optional_string("pushname") {
-                client
-                    .clone()
-                    .update_push_name_and_notify(new_push_name.to_string())
-                    .await;
-            }
-
-            // Handle device list updates (when a new device is paired)
-            // Matches WhatsApp Web's handleAccountSyncNotification for DEVICES type
-            if let Some(devices_node) = nr.get_optional_child_by_tag(&["devices"]) {
-                handle_account_sync_devices(client, nr, devices_node).await;
-            }
-        }
-        "devices" => {
-            // Handle device list change notifications (WhatsApp Web: handleDevicesNotification)
-            // These are sent when a user adds, removes, or updates a device
-            handle_devices_notification(client, nr).await;
-        }
+    match notification_type.as_deref().unwrap_or_default() {
+        "encrypt" => handle_encrypt_notification(client, nr).await,
+        "server_sync" => handle_server_sync_notification(client, nr),
+        "account_sync" => handle_account_sync_notification(client, nr).await,
+        "devices" => handle_devices_notification(client, nr).await,
         "link_code_companion_reg" => {
-            // Handle pair code notification (stage 2 of pair code authentication)
-            // This is sent when the user enters the code on their phone
             crate::pair_code::handle_pair_code_notification(client, nr).await;
         }
-        "business" => {
-            // Handle business notification (WhatsApp Web: handleBusinessNotification)
-            // Notifies about business account status changes: verified name, profile, removal
-            handle_business_notification(client, nr).await;
-        }
-        "picture" => {
-            // Handle profile picture change notifications (WhatsApp Web: WAWebHandleProfilePicNotification)
-            handle_picture_notification(client, nr);
-        }
-        "privacy_token" => {
-            // Handle incoming trusted contact privacy token notifications.
-            // Matches WhatsApp Web's WAWebHandlePrivacyTokenNotification.
-            handle_privacy_token_notification(client, nr).await;
-        }
-        "status" => {
-            // Handle status/about text change notifications (WhatsApp Web: WAWebHandleAboutNotification)
-            handle_status_notification(client, nr);
-        }
-        "contacts" => {
-            handle_contacts_notification(client, nr).await;
-        }
-        "w:gp2" => {
-            handle_group_notification(client, Arc::clone(&node)).await;
-        }
-        "disappearing_mode" => {
-            // WA Web: WAWebHandleDisappearingModeNotification →
-            // WAWebUpdateDisappearingModeForContact.
-            // Parses <disappearing_mode duration="..." t="..."/> child,
-            // updates the contact's default ephemeral setting.
-            handle_disappearing_mode_notification(client, nr);
-        }
-        "newsletter" => {
-            handle_newsletter_notification(client, Arc::clone(&node));
-        }
+        "business" => handle_business_notification(client, nr).await,
+        "picture" => handle_picture_notification(client, nr),
+        "privacy_token" => handle_privacy_token_notification(client, nr).await,
+        "status" => handle_status_notification(client, nr),
+        "contacts" => handle_contacts_notification(client, nr).await,
+        "w:gp2" => handle_group_notification(client, Arc::clone(&node)).await,
+        "disappearing_mode" => handle_disappearing_mode_notification(client, nr),
+        "newsletter" => handle_newsletter_notification(client, Arc::clone(&node)),
         "mediaretry" => {
-            // Handled by wait_for_node waiter in MediaReupload::request().
-            // Ack is sent automatically by the stanza dispatch loop.
             debug!(
                 "Received mediaretry notification for msg {}",
                 nr.attrs().optional_string("id").unwrap_or_default()
             );
         }
-        _ => {
-            debug!("Unhandled notification type '{notification_type}', dispatching raw event");
+        other => {
+            debug!("Unhandled notification type '{other}', dispatching raw event");
             client
                 .core
                 .event_bus
                 .dispatch(Event::Notification(Arc::clone(&node)));
         }
+    }
+}
+
+async fn handle_encrypt_notification(client: &Arc<Client>, nr: &wacore_binary::NodeRef<'_>) {
+    if nr.get_optional_child("identity").is_some() {
+        handle_identity_change(client, nr).await;
+    } else if nr
+        .get_attr("from")
+        .is_some_and(|v| v.as_str() == wacore_binary::SERVER_JID)
+    {
+        let first_child_tag = nr
+            .children()
+            .and_then(|c| c.first().map(|n| n.tag.as_ref()));
+        match first_child_tag {
+            Some("count") => handle_prekey_low(client).await,
+            Some("digest") => handle_digest_key(client),
+            other => warn!("Unhandled encrypt notification child: {:?}", other),
+        }
+    }
+}
+
+/// Sync is fire-and-forget (spawned), so this is not async -- it parses
+/// collection nodes synchronously and spawns the async sync task.
+fn handle_server_sync_notification(client: &Arc<Client>, nr: &wacore_binary::NodeRef<'_>) {
+    use std::str::FromStr;
+    use wacore::appstate::patch_decode::WAPatchName;
+
+    let mut collections = Vec::new();
+    if let Some(children) = nr.children() {
+        for collection_node in children.iter().filter(|c| c.tag == "collection") {
+            let name_cow = collection_node.attrs().optional_string("name");
+            let name_str = name_cow.as_deref().unwrap_or("<unknown>");
+            let server_version = collection_node.attrs().optional_u64("version").unwrap_or(0);
+            debug!(
+                target: "Client/AppState",
+                "Received server_sync for collection '{}' version {}",
+                name_str, server_version
+            );
+            if let Ok(patch_name) = WAPatchName::from_str(name_str)
+                && !matches!(patch_name, WAPatchName::Unknown)
+            {
+                collections.push((patch_name, server_version));
+            }
+        }
+    }
+
+    if !collections.is_empty() {
+        let client_clone = client.clone();
+        let generation = client
+            .connection_generation
+            .load(std::sync::atomic::Ordering::Acquire);
+        client
+            .runtime
+            .spawn(Box::pin(async move {
+                if client_clone
+                    .connection_generation
+                    .load(std::sync::atomic::Ordering::Acquire)
+                    != generation
+                {
+                    log::debug!(target: "Client/AppState", "server_sync task cancelled: connection generation changed");
+                    return;
+                }
+
+                let backend = client_clone.persistence_manager.backend();
+                let mut to_sync = Vec::new();
+                for (name, server_version) in collections {
+                    if server_version > 0 {
+                        match backend.get_version(name.as_str()).await {
+                            Ok(state) if state.version >= server_version => {
+                                debug!(
+                                    target: "Client/AppState",
+                                    "Skipping server_sync for {:?}: local version {} >= server version {}",
+                                    name, state.version, server_version
+                                );
+                                continue;
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                warn!(
+                                    target: "Client/AppState",
+                                    "Failed to get local version for {:?}: {e}, syncing anyway",
+                                    name
+                                );
+                            }
+                        }
+                    }
+                    to_sync.push(name);
+                }
+
+                if !to_sync.is_empty() {
+                    if client_clone.is_shutting_down() {
+                        log::debug!(target: "Client/AppState", "Skipping server_sync: client is shutting down");
+                        return;
+                    }
+                    if client_clone
+                        .connection_generation
+                        .load(std::sync::atomic::Ordering::Acquire)
+                        != generation
+                    {
+                        log::debug!(target: "Client/AppState", "server_sync task cancelled: connection generation changed during version check");
+                        return;
+                    }
+                    if let Err(e) = client_clone.sync_collections_batched(to_sync).await
+                        && !client_clone.is_shutting_down()
+                    {
+                        warn!(
+                            target: "Client/AppState",
+                            "Failed to batch sync app state from server_sync: {e}"
+                        );
+                    }
+                }
+            }))
+            .detach();
+    }
+}
+
+async fn handle_account_sync_notification(client: &Arc<Client>, nr: &wacore_binary::NodeRef<'_>) {
+    if let Some(new_push_name) = nr.attrs().optional_string("pushname") {
+        client
+            .clone()
+            .update_push_name_and_notify(new_push_name.to_string())
+            .await;
+    }
+    if let Some(devices_node) = nr.get_optional_child_by_tag(&["devices"]) {
+        handle_account_sync_devices(client, nr, devices_node).await;
     }
 }
 
