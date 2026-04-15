@@ -620,6 +620,7 @@ impl<W: Write> Encoder<'static, IoByteWriter<W>> {
 
 impl<'v> Encoder<'static, VecByteWriter<'v>> {
     pub fn new_vec(buffer: &'v mut Vec<u8>) -> Result<Self> {
+        buffer.clear();
         let mut enc = Self {
             writer: VecByteWriter::new(buffer),
             string_hints: None,
@@ -915,9 +916,11 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
         } else if len < 256 {
             self.write_u8(248)?;
             self.write_u8(len as u8)?;
-        } else {
+        } else if len <= u16::MAX as usize {
             self.write_u8(249)?;
             self.write_u16_be(len as u16)?;
+        } else {
+            return Err(BinaryError::InvalidNode);
         }
         Ok(())
     }

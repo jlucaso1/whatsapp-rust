@@ -1182,4 +1182,61 @@ mod tests {
         assert!(parsed.one_time_pre_key.is_none());
         assert!(parsed.device_identity.is_none());
     }
+
+    /// Verify that encode_iq_direct produces identical bytes to build_iq + marshal.
+    #[test]
+    fn test_encode_iq_direct_matches_build_iq_marshal() {
+        use crate::iq::spec::IqSpec;
+        use crate::libsignal::protocol::KeyPair;
+
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+        let identity = KeyPair::generate(&mut rng);
+        let signed_prekey = KeyPair::generate(&mut rng);
+        let sig = identity
+            .private_key
+            .calculate_signature(&signed_prekey.public_key.serialize(), &mut rng)
+            .unwrap();
+
+        let pre_keys: Vec<(u32, crate::libsignal::protocol::PublicKey)> = (1..=5u32)
+            .map(|id| {
+                let kp = KeyPair::generate(&mut rng);
+                (id, kp.public_key)
+            })
+            .collect();
+
+        let spec = PreKeyUploadSpec::new(
+            12345,
+            identity.public_key,
+            1,
+            signed_prekey.public_key,
+            sig.to_vec(),
+            pre_keys,
+        );
+
+        let request_id = "test-req-id-123";
+
+        // Fast path: direct encoding
+        let mut direct_buf = Vec::new();
+        let used = spec
+            .encode_iq_direct(request_id, &mut direct_buf)
+            .expect("encode_iq_direct should succeed");
+        assert!(used, "PreKeyUploadSpec should use the fast path");
+
+        // Slow path: build_iq + marshal (replicate what send_iq does)
+        let iq = spec.build_iq();
+        let iq_node = wacore_binary::builder::NodeBuilder::new("iq")
+            .attr("id", request_id)
+            .attr("xmlns", iq.namespace)
+            .attr("type", iq.query_type.as_str())
+            .attr("to", iq.to)
+            .apply_content(iq.content)
+            .build();
+        let marshal_buf =
+            wacore_binary::marshal_auto(&iq_node).expect("marshal_auto should succeed");
+
+        assert_eq!(
+            direct_buf, marshal_buf,
+            "encode_iq_direct must produce identical bytes to build_iq + marshal"
+        );
+    }
 }

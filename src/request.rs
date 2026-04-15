@@ -212,14 +212,17 @@ impl Client {
     where
         S: wacore::iq::spec::IqSpec,
     {
-        // Try the direct-encode fast path to avoid intermediate Node allocations
-        let mut buf = Vec::new();
+        // Try the direct-encode fast path to avoid intermediate Node allocations.
+        // Only allocate the buffer if the spec actually uses it.
         let req_id = self.generate_request_id();
-        if let Ok(true) = spec.encode_iq_direct(&req_id, &mut buf) {
-            let response = self.send_iq_raw(req_id, buf).await?;
-            return spec
-                .parse_response(response.get())
-                .map_err(IqError::ParseError);
+        {
+            let mut buf = Vec::new();
+            if let Ok(true) = spec.encode_iq_direct(&req_id, &mut buf) {
+                let response = self.send_iq_raw(req_id, buf).await?;
+                return spec
+                    .parse_response(response.get())
+                    .map_err(IqError::ParseError);
+            }
         }
 
         let iq = spec.build_iq();

@@ -398,6 +398,8 @@ impl<'a> AttrsRef<'a> {
     pub fn with_capacity(n: usize) -> Self {
         match n {
             0 => Self::Empty,
+            // 1 attr: start Empty, push() will create One (no heap alloc)
+            1 => Self::Empty,
             _ => Self::Many(Vec::with_capacity(n)),
         }
     }
