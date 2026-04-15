@@ -17,6 +17,9 @@ pub trait IqSpec {
     ///
     /// The buffer must contain the full binary-encoded `<iq>` stanza including
     /// the leading format byte. `request_id` is the IQ request ID.
+    ///
+    /// Note: this path uses the default 75s timeout. Specs that need custom
+    /// timeouts (via `InfoQuery::with_timeout`) should not use the fast path.
     fn encode_iq_direct(
         &self,
         _request_id: &str,
