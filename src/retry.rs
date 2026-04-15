@@ -109,11 +109,11 @@ fn resolve_retry_chat_info(receipt: &Receipt, node: &NodeRef<'_>) -> RetryChatIn
         // DMs: `from` may carry a device suffix (e.g. :33).
         // Strip it for message lookup; preserve it for session ops.
         let from = &receipt.source.chat;
-        let requester = from.clone();
-        let chat = if from.device() == 0 && from.agent == 0 {
-            requester.clone()
+        let chat = from.to_non_ad();
+        let requester = if from.device() == 0 && from.agent == 0 {
+            chat.clone()
         } else {
-            from.to_non_ad()
+            from.clone()
         };
         RetryChatInfo { chat, requester }
     }
@@ -172,7 +172,7 @@ impl Client {
             log::debug!(
                 "Ignoring duplicate retry for message {} from {}: already handled.",
                 message_id,
-                receipt.source.sender
+                info.requester
             );
             return Ok(());
         }
@@ -1846,7 +1846,7 @@ mod tests {
         // The optimization gives the sender one fewer round-trip to respond.
     }
 
-    /// Helper to build a Receipt + Node pair for testing resolve_retry_chat_info.
+    /// Helper to build a DM Receipt for testing resolve_retry_chat_info.
     fn make_test_receipt(from: &str) -> Receipt {
         Receipt {
             source: crate::types::message::MessageSource {
@@ -1864,12 +1864,8 @@ mod tests {
     fn resolve_retry_chat_info_dm_with_device() {
         use wacore_binary::builder::NodeBuilder;
 
-        // DM retry receipt where `from` carries device suffix
-        let node = NodeBuilder::new("receipt")
-            .attr("from", "5511999999999:33@s.whatsapp.net")
-            .attr("id", "MSG001")
-            .attr("type", "retry")
-            .build();
+        // Node attrs are unused in the DM branch (no participant lookup)
+        let node = NodeBuilder::new("receipt").build();
         let receipt = make_test_receipt("5511999999999:33@s.whatsapp.net");
         let info = resolve_retry_chat_info(&receipt, &node.as_node_ref());
 
@@ -1884,15 +1880,29 @@ mod tests {
     }
 
     #[test]
+    fn resolve_retry_chat_info_lid_dm_with_device() {
+        use wacore_binary::builder::NodeBuilder;
+
+        let node = NodeBuilder::new("receipt").build();
+        let receipt = make_test_receipt("236395184570386:5@lid");
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref());
+
+        // chat should be bare LID (device stripped)
+        assert_eq!(info.chat.device(), 0);
+        assert_eq!(info.chat.user, "236395184570386");
+        assert!(info.chat.is_lid());
+
+        // requester should preserve device 5
+        assert_eq!(info.requester.device(), 5);
+        assert_eq!(info.requester.user, "236395184570386");
+        assert!(info.requester.is_lid());
+    }
+
+    #[test]
     fn resolve_retry_chat_info_dm_bare() {
         use wacore_binary::builder::NodeBuilder;
 
-        // DM retry receipt where `from` has no device suffix
-        let node = NodeBuilder::new("receipt")
-            .attr("from", "5511999999999@s.whatsapp.net")
-            .attr("id", "MSG001")
-            .attr("type", "retry")
-            .build();
+        let node = NodeBuilder::new("receipt").build();
         let receipt = make_test_receipt("5511999999999@s.whatsapp.net");
         let info = resolve_retry_chat_info(&receipt, &node.as_node_ref());
 

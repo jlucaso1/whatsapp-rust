@@ -1,6 +1,7 @@
 //! Sender key tracking and message cache methods for Client.
 
 use anyhow::Result;
+use wacore::types::message::ChatMessageId;
 use wacore_binary::Jid;
 use waproto::whatsapp as wa;
 
@@ -89,10 +90,7 @@ impl Client {
     }
 
     /// Look up and consume a message by exact `ChatMessageId` (L1 cache then DB).
-    async fn try_take_by_key(
-        &self,
-        key: &wacore::types::message::ChatMessageId,
-    ) -> Option<wa::Message> {
+    async fn try_take_by_key(&self, key: &ChatMessageId) -> Option<wa::Message> {
         use prost::Message;
         let chat_str = key.chat.to_string();
         let has_l1_cache = self.cache_config.recent_messages.capacity > 0;
@@ -154,12 +152,7 @@ impl Client {
     /// Compute the alternate PN<->LID message key for retry fallback.
     /// Mirrors WAWebLidMigrationUtils `getAlternateMsgKey` for 1x1 chats:
     /// swaps the chat JID between PN and LID namespaces.
-    async fn alternate_message_key(
-        &self,
-        key: &wacore::types::message::ChatMessageId,
-    ) -> Option<wacore::types::message::ChatMessageId> {
-        use wacore::types::message::ChatMessageId;
-
+    async fn alternate_message_key(&self, key: &ChatMessageId) -> Option<ChatMessageId> {
         // Only applies to user chats (not groups/newsletters)
         if !key.chat.is_pn() && !key.chat.is_lid() {
             return None;
