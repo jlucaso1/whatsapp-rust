@@ -82,6 +82,16 @@ const MAX_RETRY_COUNT: u8 = 5;
 /// WhatsApp Web saves base key on retry 2, checks on retry > 2.
 const MIN_RETRY_FOR_BASE_KEY_CHECK: u8 = 2;
 
+fn build_retry_dedupe_key(chat: &Jid, message_id: &str, participant_jid: &Jid) -> String {
+    let mut key = String::with_capacity(message_id.len() + 64);
+    chat.push_to(&mut key);
+    key.push(':');
+    key.push_str(message_id);
+    key.push(':');
+    participant_jid.push_to(&mut key);
+    key
+}
+
 impl Client {
     pub(crate) async fn handle_retry_receipt(
         self: &Arc<Self>,
@@ -128,21 +138,10 @@ impl Client {
             receipt.source.sender.clone()
         };
 
-        // Deduplicate retry receipts to prevent processing the same retry multiple times.
-        // For groups/status: key includes participant since each device retries independently.
-        // For DMs: key is (chat, msg_id) since there's only one sender.
-        // Uses atomic entry API to avoid race conditions between check and insert.
-        let dedupe_key = {
-            let mut key = String::with_capacity(64);
-            receipt.source.chat.push_to(&mut key);
-            key.push(':');
-            key.push_str(&message_id);
-            if is_group_or_status {
-                key.push(':');
-                participant_jid.push_to(&mut key);
-            }
-            key
-        };
+        // Deduplicate retry receipts per requesting device.
+        // DMs can also receive retries from multiple companion devices.
+        let dedupe_key =
+            build_retry_dedupe_key(&receipt.source.chat, &message_id, &participant_jid);
 
         if self.retried_group_messages.get(&dedupe_key).await.is_some() {
             log::debug!(
@@ -188,13 +187,10 @@ impl Client {
             }
         };
 
-        // Re-add for groups/status so other participants can also retry.
-        // take_recent_message consumed it; without this a second participant's
-        // retry would silently fail with "not found in cache".
-        if is_group_or_status {
-            self.add_recent_message(&receipt.source.chat, &message_id, &original_msg)
-                .await;
-        }
+        // take_recent_message consumes the cached message; re-add it so other
+        // devices for the same chat can still request a retry.
+        self.add_recent_message(&receipt.source.chat, &message_id, &original_msg)
+            .await;
 
         // Resolved JID for session operations; keep original for stanza addressing
         let resolved_jid = self.resolve_encryption_jid(&participant_jid).await;
@@ -417,6 +413,9 @@ impl Client {
                 .map(|g| g.addressing_mode)
                 .unwrap_or_default();
 
+            let signal_address = resolved_jid.to_protocol_address();
+            let session_mutex = self.session_lock_for(signal_address.as_str()).await;
+            let _session_guard = session_mutex.lock().await;
             let mut store_adapter = self.signal_adapter().await;
 
             let stanza = wacore::send::prepare_group_retry_stanza(
@@ -440,8 +439,11 @@ impl Client {
             self.ensure_e2e_sessions(std::slice::from_ref(&resolved_jid))
                 .await?;
 
-            let mut store_adapter = self.signal_adapter().await;
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+            let signal_address = resolved_jid.to_protocol_address();
+            let session_mutex = self.session_lock_for(signal_address.as_str()).await;
+            let _session_guard = session_mutex.lock().await;
+            let mut store_adapter = self.signal_adapter().await;
 
             let stanza = wacore::send::prepare_dm_retry_stanza(
                 &mut store_adapter.session_store,
@@ -543,6 +545,8 @@ impl Client {
         }
 
         // Delete through the cache so resend can't revive a stale in-memory session.
+        // The retry path flushes once after the resend so the session transition
+        // stays visible through the cache for the whole targeted rebuild.
         self.signal_cache.delete_session(&signal_address).await;
         info!("Deleted session for {signal_address} due to retry receipt");
         Ok(())
@@ -1876,32 +1880,46 @@ mod tests {
         assert!(participant_jid.is_status_broadcast());
     }
 
-    /// Test that dedupe keys are correctly differentiated per-participant
-    /// for status broadcast retries.
+    /// Test that retry dedupe keys are differentiated per requesting device,
+    /// including DMs where multiple companion devices can retry the same message.
     #[test]
-    fn status_broadcast_dedupe_key_per_participant() {
-        let chat = "status@broadcast";
+    fn retry_dedupe_key_per_participant() {
         let msg_id = "3EB06D00CAB92340790621";
 
-        let key_a = format!("{}:{}:{}", chat, msg_id, "236395184570386@lid");
-        let key_b = format!("{}:{}:{}", chat, msg_id, "559985213786@s.whatsapp.net");
-
+        let status_chat = Jid::status_broadcast();
+        let status_participant_a: Jid = "236395184570386@lid".parse().unwrap();
+        let status_participant_b: Jid = "559985213786@s.whatsapp.net".parse().unwrap();
+        let status_key_a = build_retry_dedupe_key(&status_chat, msg_id, &status_participant_a);
+        let status_key_b = build_retry_dedupe_key(&status_chat, msg_id, &status_participant_b);
         assert_ne!(
-            key_a, key_b,
-            "Different participants should have different dedupe keys"
+            status_key_a, status_key_b,
+            "Different status participants should have different dedupe keys"
+        );
+        assert_eq!(
+            status_key_a,
+            build_retry_dedupe_key(&status_chat, msg_id, &status_participant_a),
+            "Same status participant should have the same dedupe key"
         );
 
-        let key_a2 = format!("{}:{}:{}", chat, msg_id, "236395184570386@lid");
+        let dm_chat = Jid::pn("559911112222");
+        let dm_device_a = Jid::pn_device("559922223333", 1);
+        let dm_device_b = Jid::pn_device("559922223333", 2);
+        let dm_key_a = build_retry_dedupe_key(&dm_chat, msg_id, &dm_device_a);
+        let dm_key_b = build_retry_dedupe_key(&dm_chat, msg_id, &dm_device_b);
+        assert_ne!(
+            dm_key_a, dm_key_b,
+            "Different DM requester devices should have different dedupe keys"
+        );
         assert_eq!(
-            key_a, key_a2,
-            "Same participant should have same dedupe key"
+            dm_key_a,
+            build_retry_dedupe_key(&dm_chat, msg_id, &dm_device_a),
+            "Same DM requester device should have the same dedupe key"
         );
     }
 
     /// Test that the recent message cache supports re-addition after take.
-    /// This is critical for status broadcasts where we take the message,
-    /// mark the participant for fresh SKDM, then re-add so other devices
-    /// can also retry.
+    /// This is critical for multi-device retries where another device can
+    /// ask for the same message after the first retry already consumed it.
     #[tokio::test]
     async fn recent_message_cache_readd_after_take() {
         let _ = env_logger::builder().is_test(true).try_init();
@@ -1925,8 +1943,6 @@ mod tests {
         )
         .await;
 
-        let chat = Jid::status_broadcast();
-        let msg_id = "STATUS_MSG_001".to_string();
         let msg = wa::Message {
             extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
                 text: Some("status text".to_string()),
@@ -1935,32 +1951,33 @@ mod tests {
             ..Default::default()
         };
 
-        // Add message to cache
-        client.add_recent_message(&chat, &msg_id, &msg).await;
+        for (chat, msg_id) in [
+            (Jid::status_broadcast(), "STATUS_MSG_001".to_string()),
+            (Jid::pn("559911112222"), "DM_MSG_001".to_string()),
+        ] {
+            client.add_recent_message(&chat, &msg_id, &msg).await;
 
-        // First device takes the message
-        let taken = client.take_recent_message(&chat, &msg_id).await;
-        assert!(taken.is_some(), "First take should succeed");
+            let taken = client.take_recent_message(&chat, &msg_id).await;
+            assert!(taken.is_some(), "First take should succeed for {chat}");
 
-        // Re-add for subsequent retries (simulating the status broadcast fix)
-        let taken_msg = taken.unwrap();
-        client.add_recent_message(&chat, &msg_id, &taken_msg).await;
+            let taken_msg = taken.unwrap();
+            client.add_recent_message(&chat, &msg_id, &taken_msg).await;
 
-        // Second device should also be able to take the message
-        let taken2 = client.take_recent_message(&chat, &msg_id).await;
-        assert!(
-            taken2.is_some(),
-            "Second take should succeed after re-add (status broadcast multi-device retry)"
-        );
-        assert_eq!(
-            taken2
-                .unwrap()
-                .extended_text_message
-                .as_ref()
-                .unwrap()
-                .text
-                .as_deref(),
-            Some("status text")
-        );
+            let taken2 = client.take_recent_message(&chat, &msg_id).await;
+            assert!(
+                taken2.is_some(),
+                "Second take should succeed after re-add for {chat}"
+            );
+            assert_eq!(
+                taken2
+                    .unwrap()
+                    .extended_text_message
+                    .as_ref()
+                    .unwrap()
+                    .text
+                    .as_deref(),
+                Some("status text")
+            );
+        }
     }
 }
