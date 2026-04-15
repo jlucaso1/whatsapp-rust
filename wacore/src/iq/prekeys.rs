@@ -44,6 +44,7 @@ use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
+use wacore_binary::encoder::{ByteWriter, EncodeNode, Encoder};
 use wacore_binary::{Jid, Server};
 use wacore_binary::{Node, NodeContent, NodeContentRef, NodeRef};
 
@@ -361,6 +362,102 @@ impl PreKeyUploadSpec {
     }
 }
 
+/// EncodeNode adapter that writes the prekey upload IQ inline, bypassing
+/// the intermediate Node tree. This is the hot path during registration
+/// (812 prekeys * ~35 bytes each = significant allocation savings).
+struct PreKeyUploadIqNode<'a> {
+    request_id: &'a str,
+    spec: &'a PreKeyUploadSpec,
+}
+
+impl EncodeNode for PreKeyUploadIqNode<'_> {
+    fn tag(&self) -> &str {
+        "iq"
+    }
+
+    fn attrs_len(&self) -> usize {
+        4 // type, xmlns, to, id
+    }
+
+    fn has_content(&self) -> bool {
+        true
+    }
+
+    fn encode_attrs<'a, W: ByteWriter>(
+        &self,
+        encoder: &mut Encoder<'a, W>,
+    ) -> wacore_binary::Result<()> {
+        // Attr order matches build_iq_node: id, xmlns, type, to
+        encoder.write_string("id")?;
+        encoder.write_string(self.request_id)?;
+        encoder.write_string("xmlns")?;
+        encoder.write_string("encrypt")?;
+        encoder.write_string("type")?;
+        encoder.write_string("set")?;
+        encoder.write_string("to")?;
+        encoder.write_jid_owned(&Jid::new("", Server::Pn))?;
+        Ok(())
+    }
+
+    fn encode_content<'a, W: ByteWriter>(
+        &self,
+        encoder: &mut Encoder<'a, W>,
+    ) -> wacore_binary::Result<()> {
+        let spec = self.spec;
+
+        // 5 children: registration, type, identity, list, skey
+        encoder.write_list_start(5)?;
+
+        // <registration>[4-byte BE registration_id]</registration>
+        encoder.write_list_start(2)?; // tag + content
+        encoder.write_string("registration")?;
+        encoder.write_bytes_with_len(&spec.registration_id.to_be_bytes())?;
+
+        // <type>[5]</type>
+        encoder.write_list_start(2)?;
+        encoder.write_string("type")?;
+        encoder.write_bytes_with_len(&[5u8])?;
+
+        // <identity>[32-byte identity public key]</identity>
+        encoder.write_list_start(2)?;
+        encoder.write_string("identity")?;
+        encoder.write_bytes_with_len(spec.identity_key.public_key_bytes())?;
+
+        // <list> with N <key> children
+        encoder.write_list_start(2)?; // tag + content
+        encoder.write_string("list")?;
+        encoder.write_list_start(spec.pre_keys.len())?;
+        for &(id, ref pk) in &spec.pre_keys {
+            // <key><id>[3-byte BE]</id><value>[32-byte pub]</value></key>
+            encoder.write_list_start(2)?; // tag + content
+            encoder.write_string("key")?;
+            encoder.write_list_start(2)?; // 2 children: id, value
+            encoder.write_list_start(2)?; // <id> tag + content
+            encoder.write_string("id")?;
+            encoder.write_bytes_with_len(&id.to_be_bytes()[1..])?;
+            encoder.write_list_start(2)?; // <value> tag + content
+            encoder.write_string("value")?;
+            encoder.write_bytes_with_len(pk.public_key_bytes())?;
+        }
+
+        // <skey><id/><value/><signature/></skey>
+        encoder.write_list_start(2)?; // tag + content
+        encoder.write_string("skey")?;
+        encoder.write_list_start(3)?; // 3 children: id, value, signature
+        encoder.write_list_start(2)?;
+        encoder.write_string("id")?;
+        encoder.write_bytes_with_len(&spec.signed_pre_key_id.to_be_bytes()[1..])?;
+        encoder.write_list_start(2)?;
+        encoder.write_string("value")?;
+        encoder.write_bytes_with_len(spec.signed_pre_key_public.public_key_bytes())?;
+        encoder.write_list_start(2)?;
+        encoder.write_string("signature")?;
+        encoder.write_bytes_with_len(&spec.signed_pre_key_signature)?;
+
+        Ok(())
+    }
+}
+
 impl IqSpec for PreKeyUploadSpec {
     type Response = ();
 
@@ -381,6 +478,16 @@ impl IqSpec for PreKeyUploadSpec {
             Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(content)),
         )
+    }
+
+    fn encode_iq_direct(&self, request_id: &str, out: &mut Vec<u8>) -> Result<bool, anyhow::Error> {
+        let node = PreKeyUploadIqNode {
+            request_id,
+            spec: self,
+        };
+        let mut encoder = Encoder::new_vec(out)?;
+        encoder.write_node(&node)?;
+        Ok(true)
     }
 
     fn parse_response(&self, _response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {

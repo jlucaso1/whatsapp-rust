@@ -212,9 +212,75 @@ impl Client {
     where
         S: wacore::iq::spec::IqSpec,
     {
+        // Try the direct-encode fast path to avoid intermediate Node allocations
+        let mut buf = Vec::new();
+        let req_id = self.generate_request_id();
+        if let Ok(true) = spec.encode_iq_direct(&req_id, &mut buf) {
+            let response = self.send_iq_raw(req_id, buf).await?;
+            return spec
+                .parse_response(response.get())
+                .map_err(IqError::ParseError);
+        }
+
         let iq = spec.build_iq();
         let response = self.send_iq(iq).await?;
         spec.parse_response(response.get())
             .map_err(IqError::ParseError)
+    }
+
+    /// Send pre-encoded IQ bytes and wait for the response.
+    async fn send_iq_raw(
+        &self,
+        req_id: String,
+        buf: Vec<u8>,
+    ) -> Result<Arc<wacore_binary::OwnedNodeRef>, IqError> {
+        if !self.is_running.load(Ordering::Relaxed) {
+            return Err(IqError::NotConnected);
+        }
+
+        let default_timeout = Duration::from_secs(75);
+
+        let (tx, rx) = futures::channel::oneshot::channel();
+        self.response_waiters
+            .lock()
+            .await
+            .insert(req_id.clone(), tx);
+
+        let shutdown = self.shutdown_notifier.listen();
+
+        if !self.is_running.load(Ordering::Acquire) {
+            self.response_waiters.lock().await.remove(&req_id);
+            return Err(IqError::NotConnected);
+        }
+
+        if let Err(e) = self.send_raw_bytes(buf).await {
+            self.response_waiters.lock().await.remove(&req_id);
+            return match e {
+                crate::client::ClientError::Socket(s_err) => Err(IqError::Socket(s_err)),
+                crate::client::ClientError::NotConnected => Err(IqError::NotConnected),
+                _ => Err(IqError::Socket(SocketError::Crypto(e.to_string()))),
+            };
+        }
+
+        let request_utils = self.get_request_utils();
+        futures::select! {
+            result = rt_timeout(&*self.runtime, default_timeout, rx).fuse() => {
+                match result {
+                    Ok(Ok(response_node)) => match request_utils.parse_iq_response(response_node.get()) {
+                        Ok(()) => Ok(response_node),
+                        Err(e) => Err(e.into()),
+                    },
+                    Ok(Err(_)) => Err(IqError::InternalChannelClosed),
+                    Err(_) => {
+                        self.response_waiters.lock().await.remove(&req_id);
+                        Err(IqError::Timeout)
+                    }
+                }
+            }
+            _ = shutdown.fuse() => {
+                self.response_waiters.lock().await.remove(&req_id);
+                Err(IqError::NotConnected)
+            }
+        }
     }
 }

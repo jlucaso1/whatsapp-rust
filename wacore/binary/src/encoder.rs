@@ -12,7 +12,7 @@ use crate::jid::{self, Jid, JidRef};
 use crate::node::{Node, NodeContent, NodeContentRef, NodeRef, NodeValue, ValueRef};
 use crate::token;
 
-pub(crate) trait ByteWriter {
+pub trait ByteWriter {
     fn write_u8(&mut self, value: u8) -> Result<()>;
     fn write_bytes(&mut self, bytes: &[u8]) -> Result<()>;
 }
@@ -41,7 +41,7 @@ impl<W: Write> ByteWriter for IoByteWriter<W> {
     }
 }
 
-pub(crate) struct VecByteWriter<'a> {
+pub struct VecByteWriter<'a> {
     buffer: &'a mut Vec<u8>,
 }
 
@@ -110,7 +110,7 @@ impl ByteWriter for SliceByteWriter<'_> {
 /// Trait for encoding node structures (both owned Node and borrowed NodeRef).
 /// All encoding logic lives in the trait implementation, keeping
 /// the Encoder simple and focused on low-level byte writing.
-pub(crate) trait EncodeNode {
+pub trait EncodeNode {
     fn tag(&self) -> &str;
     fn attrs_len(&self) -> usize;
     fn has_content(&self) -> bool;
@@ -602,13 +602,13 @@ fn validate_hex(value: &str) -> bool {
         .all(|&b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b))
 }
 
-pub(crate) struct Encoder<'a, W: ByteWriter> {
+pub struct Encoder<'a, W: ByteWriter> {
     writer: W,
     string_hints: Option<&'a StringHintCache>,
 }
 
 impl<W: Write> Encoder<'static, IoByteWriter<W>> {
-    pub(crate) fn new(writer: W) -> Result<Self> {
+    pub fn new(writer: W) -> Result<Self> {
         let mut enc = Self {
             writer: IoByteWriter::new(writer),
             string_hints: None,
@@ -619,7 +619,7 @@ impl<W: Write> Encoder<'static, IoByteWriter<W>> {
 }
 
 impl<'v> Encoder<'static, VecByteWriter<'v>> {
-    pub(crate) fn new_vec(buffer: &'v mut Vec<u8>) -> Result<Self> {
+    pub fn new_vec(buffer: &'v mut Vec<u8>) -> Result<Self> {
         let mut enc = Self {
             writer: VecByteWriter::new(buffer),
             string_hints: None,
@@ -680,7 +680,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
     }
 
     #[inline(always)]
-    fn write_bytes_with_len(&mut self, bytes: &[u8]) -> Result<()> {
+    pub fn write_bytes_with_len(&mut self, bytes: &[u8]) -> Result<()> {
         let len = bytes.len();
         if len < 256 {
             self.write_u8(token::BINARY_8)?;
@@ -696,7 +696,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
     }
 
     #[inline(always)]
-    fn write_string(&mut self, s: &str) -> Result<()> {
+    pub fn write_string(&mut self, s: &str) -> Result<()> {
         if let Some(string_hints) = self.string_hints
             && let Some(hint) = string_hints.hint_for(s)
         {
@@ -782,7 +782,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
 
     /// Write an owned Jid directly without converting to string first.
     /// This avoids the allocation that would occur with `jid.to_string()`.
-    fn write_jid_owned(&mut self, jid: &Jid) -> Result<()> {
+    pub fn write_jid_owned(&mut self, jid: &Jid) -> Result<()> {
         if jid.device > 0 {
             // AD_JID format: domain_type, device, user
             let device = u8::try_from(jid.device).map_err(|_| {
@@ -909,7 +909,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
         Ok(())
     }
 
-    fn write_list_start(&mut self, len: usize) -> Result<()> {
+    pub fn write_list_start(&mut self, len: usize) -> Result<()> {
         if len == 0 {
             self.write_u8(token::LIST_EMPTY)?;
         } else if len < 256 {
@@ -923,7 +923,7 @@ impl<'a, W: ByteWriter> Encoder<'a, W> {
     }
 
     /// Write any node type (owned or borrowed) using the EncodeNode trait.
-    pub(crate) fn write_node<N: EncodeNode>(&mut self, node: &N) -> Result<()> {
+    pub fn write_node<N: EncodeNode>(&mut self, node: &N) -> Result<()> {
         let content_len = if node.has_content() { 1 } else { 0 };
         let list_len = 1 + (node.attrs_len() * 2) + content_len;
 
