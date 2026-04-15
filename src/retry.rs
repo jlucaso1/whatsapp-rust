@@ -214,7 +214,8 @@ impl Client {
         self.add_recent_message(&info.chat, &message_id, &original_msg)
             .await;
 
-        // Resolved JID for session operations; keep original for stanza addressing
+        // Resolve the requester's JID for session/encryption operations;
+        // info.chat is used for stanza addressing and message lookup.
         let resolved_jid = self.resolve_encryption_jid(&info.requester).await;
 
         let sender_device_id = info.requester.device() as u32;
