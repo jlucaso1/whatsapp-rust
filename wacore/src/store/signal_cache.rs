@@ -52,6 +52,8 @@ pub struct SignalStoreCache {
     sessions: Mutex<SessionStoreState>,
     identities: Mutex<ByteStoreState>,
     sender_keys: Mutex<SenderKeyStoreState>,
+    /// Avoids per-flush Vec allocation on the hot path (called after every message).
+    flush_encode_buf: Mutex<Vec<u8>>,
     max_entries: usize,
 }
 
@@ -264,6 +266,7 @@ impl SignalStoreCache {
             sessions: Mutex::new(SessionStoreState::new()),
             identities: Mutex::new(ByteStoreState::new()),
             sender_keys: Mutex::new(SenderKeyStoreState::new()),
+            flush_encode_buf: Mutex::new(Vec::with_capacity(4096)),
             max_entries,
         }
     }
@@ -482,7 +485,7 @@ impl SignalStoreCache {
             let dirty_keys: Vec<_> = state.dirty.iter().cloned().collect();
             let deleted_keys: Vec<_> = state.deleted.iter().cloned().collect();
 
-            let mut encode_buf = Vec::new();
+            let mut encode_buf = self.flush_encode_buf.lock().await;
             for address in &dirty_keys {
                 match state.cache.get(address.as_ref()) {
                     Some(SessionEntry::Present(record)) => {

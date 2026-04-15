@@ -137,17 +137,10 @@ impl IdentityKeyStore for IdentityAdapter {
     ) -> Result<IdentityChange, SignalProtocolError> {
         let existing_identity = self.get_identity(address).await?;
 
-        // Update the Device's in-memory identity store first (for is_trusted_identity checks).
-        // Cache is only marked dirty after Device accepts the identity.
-        let mut device = self.0.device.write().await;
-        IdentityKeyStore::save_identity(&mut *device, address, identity)
-            .await
-            .map_err(signal_err("save_identity"))?;
-        drop(device);
-
-        // Device accepted — now write to cache (deferred flush to DB)
-        // Store raw 32-byte public key (not 33-byte serialized form with 0x05 prefix),
-        // matching what SignalStore::put_identity expects.
+        // Cache-first: write to cache only. The cache flushes to the backend
+        // during flush_signal_cache(). This avoids a synchronous backend write
+        // on every encrypt/decrypt. is_trusted_identity always returns true
+        // (matching WA Web), so the Device-level save is redundant.
         self.0
             .cache
             .put_identity(address, identity.public_key().public_key_bytes())
