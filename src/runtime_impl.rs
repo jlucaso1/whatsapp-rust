@@ -31,9 +31,7 @@ mod tokio_impl {
         }
 
         fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>> {
-            // Multi-threaded runtime: other tasks run on separate threads,
-            // no cooperative yielding needed.
-            None
+            Some(Box::pin(tokio::task::yield_now()))
         }
     }
 }
