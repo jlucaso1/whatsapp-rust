@@ -85,16 +85,29 @@ const MIN_RETRY_FOR_BASE_KEY_CHECK: u8 = 2;
 /// Separated chat and requester JIDs for retry receipt handling.
 /// Mirrors WAWebHandleRetryRequest `getActualChatInfo` + `getTargetChat`.
 struct RetryChatInfo {
-    /// Bare chat JID (no device suffix) for message lookup and stanza addressing.
+    /// Bare chat JID (no device suffix) for message lookup.
     chat: Jid,
     /// Device-specific JID of the requesting device, for session management.
     requester: Jid,
+    /// Raw `from` JID from the receipt, for stanza `to` attribute.
+    /// WA Web preserves the original `from` (variable `m`) for the retry stanza.
+    original_from: Jid,
+    /// True if the requester is a bot JID (skip namespace normalization).
+    is_bot: bool,
 }
 
 /// Resolve the chat and requester JIDs from a retry receipt, separating
 /// message-lookup concerns from session-management concerns.
-fn resolve_retry_chat_info(receipt: &Receipt, node: &NodeRef<'_>) -> RetryChatInfo {
-    if receipt.source.chat.is_group() || receipt.source.chat.is_status_broadcast() {
+/// Mirrors WAWebHandleRetryRequest `getActualChatInfo` + `getTargetChat`.
+fn resolve_retry_chat_info(
+    receipt: &Receipt,
+    node: &NodeRef<'_>,
+    own_pn: Option<&Jid>,
+    own_lid: Option<&Jid>,
+) -> RetryChatInfo {
+    let from = &receipt.source.chat;
+
+    if from.is_group() || from.is_status_broadcast() {
         // Groups/status: chat is already the group/broadcast JID.
         // Requester is the participant attr (the actual retrying device).
         let requester = node
@@ -102,20 +115,54 @@ fn resolve_retry_chat_info(receipt: &Receipt, node: &NodeRef<'_>) -> RetryChatIn
             .optional_jid("participant")
             .unwrap_or_else(|| receipt.source.sender.clone());
         RetryChatInfo {
-            chat: receipt.source.chat.clone(),
+            chat: from.clone(),
             requester,
+            original_from: from.clone(),
+            is_bot: false,
         }
     } else {
-        // DMs: `from` may carry a device suffix (e.g. :33).
-        // Strip it for message lookup; preserve it for session ops.
-        let from = &receipt.source.chat;
-        let chat = from.to_non_ad();
+        // DM: resolve chat target via getTargetChat logic.
+        let recipient = node.attrs().optional_jid("recipient");
+        let is_bot = from.is_bot();
+
+        // WA Web getTargetChat (RetryRequest.js:339-371):
+        // 1. Bot + recipient → chat = recipient
+        // 2. Peer device + recipient → chat = recipient
+        // 3. Peer device without recipient → abort (return null)
+        // 4. Normal user → chat = asUserWidOrThrow(from) = from.to_non_ad()
+        let is_peer = own_pn.is_some_and(|pn| from.is_same_user_as(pn))
+            || own_lid.is_some_and(|lid| from.is_same_user_as(lid));
+
+        let chat = if is_bot && recipient.is_some() {
+            recipient.clone().unwrap().to_non_ad()
+        } else if is_peer {
+            match &recipient {
+                Some(r) => r.to_non_ad(),
+                // No recipient on peer retry — chat will be our own JID,
+                // message lookup will likely fail. WA Web returns null here.
+                None => {
+                    log::warn!(
+                        "Peer device retry without recipient attr — message lookup may fail"
+                    );
+                    from.to_non_ad()
+                }
+            }
+        } else {
+            from.to_non_ad()
+        };
+
         let requester = if from.device() == 0 && from.agent == 0 {
             chat.clone()
         } else {
             from.clone()
         };
-        RetryChatInfo { chat, requester }
+
+        RetryChatInfo {
+            chat,
+            requester,
+            original_from: from.clone(),
+            is_bot,
+        }
     }
 }
 
@@ -161,7 +208,13 @@ impl Client {
             return Ok(());
         }
 
-        let mut info = resolve_retry_chat_info(receipt, nr);
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let mut info = resolve_retry_chat_info(
+            receipt,
+            nr,
+            device_snapshot.pn.as_ref(),
+            device_snapshot.lid.as_ref(),
+        );
         let is_group_or_status = info.chat.is_group() || info.chat.is_status_broadcast();
 
         // Deduplicate retry receipts per requesting device.
@@ -219,10 +272,11 @@ impl Client {
         // lives in the stored message's namespace (not the receipt's). Build the
         // encryption JID from that namespace + requester's device, skipping
         // resolve_encryption_jid (which would map back to the primary namespace).
-        // Mirrors WA Web: `d.isLid() ? toLid(e.from) : toPn(e.from)` +
-        // `createDeviceWidFromUserAndDevice` in getActualChatInfo.
+        // WA Web: `e.from.isBot() ? (p = e.from) : (p = d.isLid() ? toLid(e.from) : toPn(e.from))`
+        // Bots skip namespace normalization (WAWebHandleRetryRequest:311-312).
         let resolved_jid = if let Some(alt_chat) = alt_chat
             && !is_group_or_status
+            && !info.is_bot
         {
             let requester = &info.requester;
             info.requester = Jid {
@@ -248,7 +302,6 @@ impl Client {
         }
 
         // Check if this is a retry from our own device (peer).
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let is_peer = device_snapshot
             .pn
             .as_ref()
@@ -476,7 +529,10 @@ impl Client {
             self.flush_signal_cache().await?;
         } else {
             // DM retry: pairwise resend to the requesting device only.
-            self.ensure_e2e_sessions(std::slice::from_ref(&resolved_jid))
+            // Use _resolved variant: resolved_jid is already in the correct
+            // namespace (including alternate PN/LID normalization).
+            // WA Web's ensureE2ESessions also uses already-normalized JIDs.
+            self.ensure_e2e_sessions_resolved(std::slice::from_ref(&resolved_jid))
                 .await?;
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -488,7 +544,7 @@ impl Client {
             let stanza = wacore::send::prepare_dm_retry_stanza(
                 &mut store_adapter.session_store,
                 &mut store_adapter.identity_store,
-                info.chat,
+                info.original_from,
                 info.requester,
                 resolved_jid.clone(),
                 &original_msg,
@@ -1884,7 +1940,7 @@ mod tests {
         // Node attrs are unused in the DM branch (no participant lookup)
         let node = NodeBuilder::new("receipt").build();
         let receipt = make_test_receipt("5511999999999:33@s.whatsapp.net");
-        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref());
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
 
         // chat should be bare (device stripped)
         assert_eq!(info.chat.device(), 0);
@@ -1902,7 +1958,7 @@ mod tests {
 
         let node = NodeBuilder::new("receipt").build();
         let receipt = make_test_receipt("236395184570386:5@lid");
-        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref());
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
 
         // chat should be bare LID (device stripped)
         assert_eq!(info.chat.device(), 0);
@@ -1921,7 +1977,7 @@ mod tests {
 
         let node = NodeBuilder::new("receipt").build();
         let receipt = make_test_receipt("5511999999999@s.whatsapp.net");
-        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref());
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
 
         assert_eq!(info.chat.device(), 0);
         assert_eq!(info.requester.device(), 0);
@@ -1948,7 +2004,7 @@ mod tests {
             timestamp: wacore::time::now_utc(),
             r#type: crate::types::presence::ReceiptType::Retry,
         };
-        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref());
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
 
         assert!(info.chat.is_group());
         assert_eq!(info.chat.user, "120363021033254949");
@@ -1967,7 +2023,7 @@ mod tests {
             .attr("type", "retry")
             .build();
         let receipt = make_test_receipt("status@broadcast");
-        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref());
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
 
         assert!(info.chat.is_status_broadcast());
         // requester should be the participant, not status@broadcast
@@ -1986,7 +2042,7 @@ mod tests {
             .attr("type", "retry")
             .build();
         let receipt = make_test_receipt("status@broadcast");
-        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref());
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
 
         assert!(info.chat.is_status_broadcast());
         assert!(info.requester.is_status_broadcast());
@@ -2410,5 +2466,118 @@ mod tests {
         // Lookup via PN: primary (LID) misses, alternate (PN) also misses
         let taken = client.take_recent_message(&pn_jid, "MISSING").await;
         assert!(taken.is_none(), "both primary and alternate miss → None");
+    }
+
+    // --- Peer device / bot / original_from tests ---
+
+    #[test]
+    fn resolve_retry_chat_info_peer_device_with_recipient() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Peer retry: from=our own JID, recipient=the actual chat partner
+        let our_pn: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let recipient: Jid = "5522888888888@s.whatsapp.net".parse().unwrap();
+
+        let node = NodeBuilder::new("receipt")
+            .attr("recipient", "5522888888888@s.whatsapp.net")
+            .build();
+        let receipt = make_test_receipt("5511999999999:2@s.whatsapp.net");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), Some(&our_pn), None);
+
+        // Chat should be the recipient (the actual conversation partner)
+        assert_eq!(info.chat.user, recipient.user);
+        assert_eq!(info.chat.device(), 0, "chat should be bare");
+        // Requester is still our device
+        assert_eq!(info.requester.user, our_pn.user);
+        assert_eq!(info.requester.device(), 2);
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_peer_device_without_recipient() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Peer retry without recipient attr — should fall back to from
+        let our_pn: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let node = NodeBuilder::new("receipt").build();
+        let receipt = make_test_receipt("5511999999999:2@s.whatsapp.net");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), Some(&our_pn), None);
+
+        // Falls back to from.to_non_ad() (our own bare JID)
+        assert_eq!(info.chat.user, our_pn.user);
+        assert_eq!(info.chat.device(), 0);
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_bot_with_recipient() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Bot retry: from=bot JID, recipient=actual chat
+        let node = NodeBuilder::new("receipt")
+            .attr("recipient", "5522888888888@s.whatsapp.net")
+            .build();
+        let receipt = make_test_receipt("131355500001@s.whatsapp.net");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
+
+        assert!(info.is_bot, "bot JID should be detected");
+        // Chat should be the recipient
+        assert_eq!(info.chat.user, "5522888888888");
+        assert_eq!(info.chat.device(), 0);
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_bot_without_recipient() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Bot retry without recipient — falls through to normal DM path
+        let node = NodeBuilder::new("receipt").build();
+        let receipt = make_test_receipt("131355500001@s.whatsapp.net");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
+
+        assert!(info.is_bot);
+        // Without recipient, falls to from.to_non_ad()
+        assert_eq!(info.chat.user, "131355500001");
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_preserves_original_from() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // DM with device suffix — original_from should preserve it
+        let node = NodeBuilder::new("receipt").build();
+        let receipt = make_test_receipt("5511999999999:33@s.whatsapp.net");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
+
+        // original_from keeps the full JID including device
+        assert_eq!(info.original_from.device(), 33);
+        assert_eq!(info.original_from.user, "5511999999999");
+
+        // chat is bare
+        assert_eq!(info.chat.device(), 0);
+        assert_eq!(info.chat.user, "5511999999999");
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_peer_via_lid() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Peer retry detected via LID (not PN)
+        let our_lid: Jid = "236395184570386@lid".parse().unwrap();
+        let recipient: Jid = "5522888888888@s.whatsapp.net".parse().unwrap();
+
+        let node = NodeBuilder::new("receipt")
+            .attr("recipient", "5522888888888@s.whatsapp.net")
+            .build();
+        let receipt = make_test_receipt("236395184570386:5@lid");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, Some(&our_lid));
+
+        assert_eq!(info.chat.user, recipient.user);
+        assert_eq!(info.chat.device(), 0);
+        assert_eq!(info.requester.device(), 5);
     }
 }
