@@ -145,6 +145,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
+name = "bench-integration"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "dhat",
+ "e2e-tests",
+ "env_logger",
+ "log",
+ "serde",
+ "serde_json",
+ "tokio",
+ "wacore",
+ "whatsapp-rust",
+]
+
+[[package]]
 name = "bincode"
 version = "1.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -608,7 +624,6 @@ dependencies = [
  "wacore",
  "wacore-binary",
  "whatsapp-rust",
- "whatsapp-rust-sqlite-storage",
  "whatsapp-rust-tokio-transport",
  "whatsapp-rust-ureq-http-client",
 ]
@@ -2405,6 +2420,7 @@ version = "0.5.0"
 dependencies = [
  "async-trait",
  "bincode 2.0.1",
+ "bytes",
  "diesel",
  "diesel_migrations",
  "libsqlite3-sys",

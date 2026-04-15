@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use wacore::store::InMemoryBackend;
 use wacore::store::traits::TcTokenEntry;
 use wacore::types::events::{ChannelEventHandler, Event};
 use wacore_binary::node::Node;
@@ -7,19 +8,8 @@ use whatsapp_rust::Jid;
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::traits::Backend;
 use whatsapp_rust::waproto::whatsapp as wa;
-use whatsapp_rust_sqlite_storage::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
-
-/// Creates a SqliteStore with a unique in-memory database for test isolation.
-pub async fn create_test_store(prefix: &str) -> anyhow::Result<SqliteStore> {
-    let db = format!(
-        "file:{}_{}?mode=memory&cache=shared",
-        prefix,
-        uuid::Uuid::new_v4()
-    );
-    Ok(SqliteStore::new(&db).await?)
-}
 
 /// Returns the mock server WebSocket URL from env, or the default.
 pub fn mock_server_url() -> String {
@@ -64,9 +54,8 @@ impl TestClient {
         Self::connect_inner(prefix, Some(push_name.to_string())).await
     }
 
-    async fn connect_inner(prefix: &str, push_name: Option<String>) -> anyhow::Result<Self> {
-        let store = create_test_store(prefix).await?;
-        let backend = Arc::new(store) as Arc<dyn Backend>;
+    async fn connect_inner(_prefix: &str, push_name: Option<String>) -> anyhow::Result<Self> {
+        let backend = Arc::new(InMemoryBackend::new()) as Arc<dyn Backend>;
         let transport_factory = TokioWebSocketTransportFactory::new().with_url(mock_server_url());
         let (event_handler, event_rx) = ChannelEventHandler::new();
 

@@ -1,5 +1,6 @@
 use crate::schema::*;
 use async_trait::async_trait;
+use bytes::Bytes;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
 use diesel::result::{DatabaseErrorKind, Error as DieselError};
@@ -1279,7 +1280,7 @@ impl SignalStore for SqliteStore {
         ))
     }
 
-    async fn store_prekeys_batch(&self, keys: &[(u32, Vec<u8>)], uploaded: bool) -> Result<()> {
+    async fn store_prekeys_batch(&self, keys: &[(u32, Bytes)], uploaded: bool) -> Result<()> {
         if keys.is_empty() {
             return Ok(());
         }
@@ -1287,7 +1288,7 @@ impl SignalStore for SqliteStore {
         let pool = self.pool.clone();
         let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
-        let keys = keys.to_vec();
+        let keys: Vec<(u32, Bytes)> = keys.to_vec();
 
         const MAX_RETRIES: u32 = 5;
 
@@ -1311,13 +1312,16 @@ impl SignalStore for SqliteStore {
                             diesel::insert_into(prekeys::table)
                                 .values((
                                     prekeys::id.eq(*id as i32),
-                                    prekeys::key.eq(record),
+                                    prekeys::key.eq(record.as_ref()),
                                     prekeys::uploaded.eq(uploaded),
                                     prekeys::device_id.eq(device_id),
                                 ))
                                 .on_conflict((prekeys::id, prekeys::device_id))
                                 .do_update()
-                                .set((prekeys::key.eq(record), prekeys::uploaded.eq(uploaded)))
+                                .set((
+                                    prekeys::key.eq(record.as_ref()),
+                                    prekeys::uploaded.eq(uploaded),
+                                ))
                                 .execute(conn)?;
                         }
                         Ok::<(), diesel::result::Error>(())
@@ -1346,10 +1350,10 @@ impl SignalStore for SqliteStore {
         ))
     }
 
-    async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
+    async fn load_prekey(&self, id: u32) -> Result<Option<Bytes>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
-        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+        tokio::task::spawn_blocking(move || -> Result<Option<Bytes>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -1360,20 +1364,20 @@ impl SignalStore for SqliteStore {
                 .first(&mut conn)
                 .optional()
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(res)
+            Ok(res.map(Bytes::from))
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
-    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Vec<u8>)>> {
+    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Bytes)>> {
         if ids.is_empty() {
             return Ok(Vec::new());
         }
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let ids: Vec<i32> = ids.iter().map(|&id| id as i32).collect();
-        self.with_semaphore(move || -> Result<Vec<(u32, Vec<u8>)>> {
+        self.with_semaphore(move || -> Result<Vec<(u32, Bytes)>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -1383,7 +1387,10 @@ impl SignalStore for SqliteStore {
                 .filter(prekeys::device_id.eq(device_id))
                 .load(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(rows.into_iter().map(|(id, key)| (id as u32, key)).collect())
+            Ok(rows
+                .into_iter()
+                .map(|(id, key)| (id as u32, Bytes::from(key)))
+                .collect())
         })
         .await
     }

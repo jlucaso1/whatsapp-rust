@@ -883,7 +883,7 @@ impl Client {
                 &mut store_adapter.session_store,
                 &mut store_adapter.identity_store,
                 to,
-                encryption_jid,
+                &signal_addr,
                 message,
                 request_id,
             )

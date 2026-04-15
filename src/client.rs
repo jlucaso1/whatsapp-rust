@@ -893,9 +893,8 @@ impl Client {
     /// [`send_node`](Client::send_node) for normal stanza sending.
     pub async fn send_raw_bytes(&self, plaintext: Vec<u8>) -> Result<(), ClientError> {
         let noise_socket = self.get_noise_socket().await?;
-        let encrypted_buf = Vec::with_capacity(plaintext.len() + 32);
         noise_socket
-            .encrypt_and_send(plaintext, encrypted_buf)
+            .encrypt_and_send(bytes::Bytes::from(plaintext))
             .await?;
         self.last_data_sent_ms
             .store(wacore::time::now_millis().max(0) as u64, Ordering::Relaxed);

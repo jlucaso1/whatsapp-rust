@@ -59,7 +59,7 @@ mod tests {
         async fn store_prekey(&self, _: u32, _: &[u8], _: bool) -> StoreResult<()> {
             Ok(())
         }
-        async fn load_prekey(&self, _: u32) -> StoreResult<Option<Vec<u8>>> {
+        async fn load_prekey(&self, _: u32) -> StoreResult<Option<bytes::Bytes>> {
             Ok(None)
         }
         async fn remove_prekey(&self, _: u32) -> StoreResult<()> {

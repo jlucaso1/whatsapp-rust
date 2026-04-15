@@ -151,7 +151,7 @@ impl<'a> Signal<'a> {
                 wacore::send::create_sender_key_distribution_message_for_group(
                     &mut adapter.sender_key_store,
                     group_jid,
-                    &own_jid,
+                    &sender_addr,
                 )
                 .await?,
             )
@@ -162,7 +162,7 @@ impl<'a> Signal<'a> {
         let ciphertext = wacore::send::encrypt_group_message(
             &mut adapter.sender_key_store,
             group_jid,
-            &own_jid,
+            &sender_addr,
             plaintext,
             &mut rng,
         )

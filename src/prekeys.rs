@@ -143,12 +143,25 @@ impl Client {
             key_pairs_to_upload.push((pre_key_id, key_pair));
         }
 
-        // Encode once — reused for both pre-upload store and post-upload mark.
-        let encoded_batch: Vec<(u32, Vec<u8>)> = {
+        // Encode all prekey records into a single contiguous buffer, then slice
+        // into Bytes sub-views. This replaces 812 individual encode_to_vec() allocs
+        // with one large allocation + zero-copy slicing.
+        let encoded_batch: Vec<(u32, bytes::Bytes)> = {
             use prost::Message;
-            keys_to_upload
-                .iter()
-                .map(|(id, record)| (*id, record.encode_to_vec()))
+            let total_len: usize = keys_to_upload.iter().map(|(_, r)| r.encoded_len()).sum();
+            let mut buf = Vec::with_capacity(total_len);
+            let mut offsets = Vec::with_capacity(keys_to_upload.len());
+            for (id, record) in &keys_to_upload {
+                let start = buf.len();
+                record
+                    .encode(&mut buf)
+                    .expect("prost encode into pre-sized Vec");
+                offsets.push((*id, start..buf.len()));
+            }
+            let shared = bytes::Bytes::from(buf);
+            offsets
+                .into_iter()
+                .map(|(id, range)| (id, shared.slice(range)))
                 .collect()
         };
 
@@ -339,7 +352,7 @@ impl Client {
 
         // Build a lookup so we preserve the server-requested order.
         // Dedupe the expected count since the server may send duplicate IDs.
-        let loaded_map: std::collections::HashMap<u32, Vec<u8>> = loaded.into_iter().collect();
+        let loaded_map: std::collections::HashMap<u32, bytes::Bytes> = loaded.into_iter().collect();
         let unique_requested: std::collections::HashSet<&u32> =
             response.prekey_ids.iter().collect();
 
@@ -351,37 +364,25 @@ impl Client {
             return Ok(());
         }
 
+        // Extract public keys directly from stored protobuf bytes without full decode
         let mut prekey_pubkeys = Vec::with_capacity(response.prekey_ids.len());
         for prekey_id in &response.prekey_ids {
             let Some(record_bytes) = loaded_map.get(prekey_id) else {
                 log::warn!("digestKey: missing local prekey {}, skipping", prekey_id);
                 return Ok(());
             };
-            use prost::Message;
-            match waproto::whatsapp::PreKeyRecordStructure::decode(record_bytes.as_slice()) {
-                Ok(record) => {
-                    if let Some(pk) = record.public_key {
-                        prekey_pubkeys.push(pk);
-                    } else {
-                        log::warn!(
-                            "digestKey: prekey {} has no public key, skipping",
-                            prekey_id
-                        );
-                        return Ok(());
-                    }
-                }
-                Err(e) => {
+            match wacore::prekeys::extract_prekey_public_key(record_bytes) {
+                Some(pk) => prekey_pubkeys.push(pk),
+                None => {
                     log::warn!(
-                        "digestKey: failed to decode prekey {}: {}, skipping",
-                        prekey_id,
-                        e
+                        "digestKey: prekey {} has no public key, skipping",
+                        prekey_id
                     );
                     return Ok(());
                 }
             }
         }
 
-        // Compute local SHA-1 digest matching WA Web's validateLocalKeyBundle
         let local_hash = wacore::prekeys::compute_key_bundle_digest(
             identity_bytes,
             skey_pub_bytes,

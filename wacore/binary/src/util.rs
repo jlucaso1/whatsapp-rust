@@ -1,27 +1,14 @@
 use crate::error::{BinaryError, Result};
+use crate::zlib_pool::decompress_zlib_pooled;
 use bytes::{Buf, Bytes, BytesMut};
-use flate2::read::ZlibDecoder;
 use std::borrow::Cow;
-use std::io::Read;
 
 /// Protocol frames larger than 16 MiB after decompression are rejected.
-/// WhatsApp messages are typically small; this guards against malicious
-/// or corrupt compressed payloads that would expand into huge allocations.
 const MAX_DECOMPRESSED_SIZE: u64 = 16 * 1024 * 1024;
 
 fn decompress_zlib(compressed: &[u8]) -> Result<Vec<u8>> {
-    let estimated = (compressed.len() * 4).clamp(256, 64 * 1024);
-    let mut out = Vec::with_capacity(estimated);
-    ZlibDecoder::new(compressed)
-        .take(MAX_DECOMPRESSED_SIZE + 1)
-        .read_to_end(&mut out)
-        .map_err(|e| BinaryError::Zlib(e.to_string()))?;
-    if out.len() as u64 > MAX_DECOMPRESSED_SIZE {
-        return Err(BinaryError::Zlib(format!(
-            "decompressed payload exceeds {MAX_DECOMPRESSED_SIZE} bytes"
-        )));
-    }
-    Ok(out)
+    decompress_zlib_pooled(compressed, MAX_DECOMPRESSED_SIZE)
+        .map_err(|e| BinaryError::Zlib(e.to_string()))
 }
 
 pub fn unpack(data: &[u8]) -> Result<Cow<'_, [u8]>> {

@@ -10,12 +10,13 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use async_lock::RwLock;
+use wacore_binary::CompactString;
 
 use crate::iq::props::{AbPropConfig, PropsResponse};
 
 /// In-memory cache of AB experiment properties, populated on connect.
 pub struct AbPropsCache {
-    props: RwLock<HashMap<u32, String>>,
+    props: RwLock<HashMap<u32, CompactString>>,
     /// Guards against applying a delta into an empty cache on cold start.
     seeded: AtomicBool,
 }
@@ -50,7 +51,7 @@ impl AbPropsCache {
         }
     }
 
-    pub async fn get(&self, config_code: u32) -> Option<String> {
+    pub async fn get(&self, config_code: u32) -> Option<CompactString> {
         self.props.read().await.get(&config_code).cloned()
     }
 
@@ -103,7 +104,7 @@ mod tests {
     fn experiment(code: u32, value: &str) -> AbPropConfig {
         AbPropConfig::Experiment(AbProp {
             config_code: code,
-            config_value: value.to_string(),
+            config_value: value.into(),
             config_expo_key: None,
         })
     }

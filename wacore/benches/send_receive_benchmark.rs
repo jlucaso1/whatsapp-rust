@@ -590,11 +590,12 @@ fn setup_group_recv() -> GrpRecvData {
 #[library_benchmark]
 #[bench::text(setup = setup_dm_send)]
 fn bench_dm_send(mut d: DmSendData) {
+    let signal_addr = d.bob_jid.to_protocol_address();
     let node = futures::executor::block_on(prepare_peer_stanza(
         &mut d.alice.sessions,
         &mut d.alice.identity,
-        d.bob_jid.clone(),
         d.bob_jid,
+        &signal_addr,
         &d.msg,
         "b-001".into(),
     ))

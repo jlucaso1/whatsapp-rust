@@ -2546,7 +2546,8 @@ mod tests {
     fn resolve_retry_chat_info_preserves_original_from() {
         use wacore_binary::builder::NodeBuilder;
 
-        // DM with device suffix — original_from should preserve it
+        // DM with device suffix — original_from preserves the raw receipt from
+        // (WA Web: variable m = e.from, used as-is for stanza to)
         let node = NodeBuilder::new("receipt").build();
         let receipt = make_test_receipt("5511999999999:33@s.whatsapp.net");
 
