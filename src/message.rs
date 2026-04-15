@@ -322,7 +322,7 @@ impl Client {
                 Some("view_once") => crate::types::events::UnavailableType::ViewOnce,
                 _ => crate::types::events::UnavailableType::Unknown,
             };
-            log::warn!(
+            log::info!(
                 "[msg:{}] Message has <unavailable> child (type: {:?}), requesting from phone via PDO",
                 info.id,
                 unavailable_type
@@ -852,7 +852,7 @@ impl Client {
                                     {
                                         any_success = true;
                                     } else {
-                                        log::warn!(
+                                        log::debug!(
                                             "[msg:{}] InvalidPreKeyId after identity change for {}. \
                                              Sending retry receipt with fresh keys.",
                                             info.id,
@@ -916,7 +916,7 @@ impl Client {
                             continue;
                         }
 
-                        warn!(
+                        debug!(
                             "[msg:{}] No session found for {} message from {}. Sending retry receipt to request session establishment.",
                             info.id, enc_type, info.source.sender
                         );
@@ -982,7 +982,7 @@ impl Client {
                             continue;
                         }
 
-                        log::warn!(
+                        log::debug!(
                             "[msg:{}] Decryption failed for {} message from {} due to InvalidPreKeyId. \
                              Sender is using a prekey we don't have (likely session established while offline). \
                              Sending retry receipt with fresh prekeys.",
@@ -1110,7 +1110,7 @@ impl Client {
                         RetryReason::NoSession
                     };
 
-                    warn!(
+                    debug!(
                         "No sender key state for group message [msg:{}] from {}: {}. Sending retry receipt.",
                         info.id, info.source.sender, msg
                     );

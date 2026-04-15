@@ -876,7 +876,7 @@ fn get_or_create_chain_key<R: Rng + CryptoRng>(
         return Ok(chain);
     }
 
-    log::info!("{remote_address} creating new chains.");
+    log::debug!("{remote_address} creating new chains.");
 
     let root_key = state.root_key()?;
     let our_ephemeral = state.sender_ratchet_private_key()?;

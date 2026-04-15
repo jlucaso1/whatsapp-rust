@@ -311,7 +311,7 @@ impl SessionState {
         // Using drain() for consistency, though with only 5 elements the difference is negligible.
         let len = self.session.receiver_chains.len();
         if len > consts::MAX_RECEIVER_CHAINS {
-            log::info!(
+            log::debug!(
                 "Trimming excessive receiver_chain for session with base key {}, chain count: {}",
                 self.sender_ratchet_key_for_logging()
                     .unwrap_or_else(|e| format!("<error: {}>", e.0)),

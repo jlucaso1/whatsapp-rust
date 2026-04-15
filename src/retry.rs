@@ -1,7 +1,7 @@
 use crate::client::Client;
 use crate::message::RetryReason;
 use crate::types::events::Receipt;
-use log::{info, warn};
+use log::{debug, info, warn};
 use prost::Message;
 use wacore::types::message::MessageCategory;
 
@@ -712,7 +712,7 @@ impl Client {
             return Ok(());
         }
 
-        warn!(
+        debug!(
             "Sending retry receipt #{} for message {} from {} (reason: {:?})",
             retry_count, info.id, info.source.sender, reason
         );

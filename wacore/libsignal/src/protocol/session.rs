@@ -100,7 +100,7 @@ async fn process_prekey_impl(
         .key_pair()?;
 
     let our_one_time_pre_key_pair = if let Some(pre_key_id) = message.pre_key_id() {
-        log::info!(
+        log::debug!(
             "processing PreKey message from {remote_address} with one-time prekey {pre_key_id}"
         );
         Some(pre_key_store.get_pre_key(pre_key_id).await?.key_pair()?)
@@ -222,7 +222,7 @@ async fn process_prekey_bundle_inner<R: Rng + CryptoRng>(
 
     let mut session = ratchet::initialize_alice_session(&parameters, csprng)?;
 
-    log::info!(
+    log::debug!(
         "set_unacknowledged_pre_key_message for: {} with preKeyId: {}",
         remote_address,
         their_one_time_prekey_id.map_or_else(|| "<none>".to_string(), |id| id.to_string())

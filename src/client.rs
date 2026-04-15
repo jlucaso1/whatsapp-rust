@@ -3186,7 +3186,7 @@ impl Client {
                     .get_attr("xmlns")
                     .is_some_and(|s| s.as_str() == "urn:xmpp:ping"))
         {
-            info!("Received ping, sending pong.");
+            debug!("Received ping, sending pong.");
             let mut parser = node.attrs();
             let from_jid = parser.jid("from");
             let id = parser.optional_string("id").map(|s| s.to_string());
