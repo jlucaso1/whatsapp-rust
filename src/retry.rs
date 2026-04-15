@@ -547,7 +547,13 @@ impl Client {
         let requester_bare = resolved_jid.to_non_ad();
         self.get_devices_from_registry(&requester_bare)
             .await
-            .unwrap_or_else(|| vec![requester_bare])
+            .unwrap_or_else(|| {
+                if resolved_jid.device == 0 {
+                    vec![requester_bare]
+                } else {
+                    vec![resolved_jid.clone()]
+                }
+            })
     }
 
     /// Extracts and processes the key bundle from a retry receipt.
@@ -938,7 +944,7 @@ mod tests {
     use wacore_binary::{Jid, JidExt};
     use waproto::whatsapp as wa;
 
-    async fn setup_device_record(client: &Arc<Client>, user: &str, device_ids: &[u32]) {
+    async fn setup_test_device_record(client: &Arc<Client>, user: &str, device_ids: &[u32]) {
         let record = wacore::store::traits::DeviceListRecord {
             user: user.into(),
             devices: device_ids
@@ -1474,7 +1480,7 @@ mod tests {
         let client =
             crate::test_utils::create_test_client_with_failing_http("retry_dm_devices").await;
         let resolved_jid = Jid::lid("100000000000088");
-        setup_device_record(&client, &resolved_jid.user, &[0, 33]).await;
+        setup_test_device_record(&client, &resolved_jid.user, &[0, 33]).await;
 
         let backend = client.persistence_manager.backend();
         let device_0 = Jid::lid_device(resolved_jid.user.clone(), 0).to_protocol_address();
