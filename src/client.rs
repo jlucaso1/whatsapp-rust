@@ -1733,8 +1733,12 @@ impl Client {
         }
         let own_pn = self.get_pn().await;
         let buf = match encode_ack_bytes(node, own_pn.as_ref()) {
-            Some(buf) => buf,
-            None => return Ok(()),
+            Ok(Some(buf)) => buf,
+            Ok(None) => return Ok(()),
+            Err(e) => {
+                log::warn!("Failed to encode ack: {e}");
+                return Ok(());
+            }
         };
         self.send_raw_bytes(buf).await
     }
@@ -3670,11 +3674,15 @@ fn build_pong(to: String, id: Option<&str>) -> wacore_binary::Node {
 fn encode_ack_bytes(
     node: &wacore_binary::NodeRef<'_>,
     own_device_pn: Option<&Jid>,
-) -> Option<Vec<u8>> {
+) -> Result<Option<Vec<u8>>, wacore_binary::error::BinaryError> {
     use wacore_binary::encoder::{ByteWriter, EncodeNode, Encoder};
 
-    let id_val = node.get_attr("id")?;
-    let from_val = node.get_attr("from")?;
+    let Some(id_val) = node.get_attr("id") else {
+        return Ok(None);
+    };
+    let Some(from_val) = node.get_attr("from") else {
+        return Ok(None);
+    };
     let participant_val = node.get_attr("participant");
     let tag = node.tag.as_ref();
 
@@ -3755,9 +3763,9 @@ fn encode_ack_bytes(
     };
 
     let mut buf = Vec::with_capacity(64);
-    let mut encoder = Encoder::new_vec(&mut buf).ok()?;
-    encoder.write_node(&ack).ok()?;
-    Some(buf)
+    let mut encoder = Encoder::new_vec(&mut buf)?;
+    encoder.write_node(&ack)?;
+    Ok(Some(buf))
 }
 
 /// Build an ack Node (used in tests for structure verification).

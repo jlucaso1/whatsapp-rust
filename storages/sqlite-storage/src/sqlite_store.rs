@@ -1180,7 +1180,16 @@ impl SignalStore for SqliteStore {
         let blob = self
             .load_identity_for_device(address, self.device_id)
             .await?;
-        Ok(blob.and_then(|v| v.try_into().ok()))
+        match blob {
+            None => Ok(None),
+            Some(v) => Ok(Some(v.try_into().map_err(|v: Vec<u8>| {
+                StoreError::Database(format!(
+                    "identity key for '{}' has invalid length {} (expected 32)",
+                    address,
+                    v.len()
+                ))
+            })?)),
+        }
     }
 
     async fn delete_identity(&self, address: &str) -> Result<()> {
