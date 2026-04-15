@@ -24,6 +24,8 @@ pub enum IqError {
     ServerError { code: u16, text: String },
     #[error("Internal channel closed unexpectedly")]
     InternalChannelClosed,
+    #[error("Failed to encode IQ request: {0}")]
+    EncodeError(anyhow::Error),
     #[error("Failed to parse IQ response: {0}")]
     ParseError(#[from] anyhow::Error),
 }
@@ -177,7 +179,7 @@ impl Client {
                         .parse_response(response.get())
                         .map_err(IqError::ParseError);
                 }
-                Err(e) => return Err(IqError::ParseError(e)),
+                Err(e) => return Err(IqError::EncodeError(e)),
                 Ok(false) => {}
             }
         }
