@@ -446,11 +446,11 @@ fn _assert_attrs_ref_covariant<'short, 'long: 'short>(x: AttrsRef<'long>) -> Att
     x
 }
 
-// Safety: AttrsRef is covariant in 'a because:
-// - Empty has no lifetime
-// - One contains (NodeStr<'a>, ValueRef<'a>) which are covariant
-// - Many(Vec<T>) is covariant in T
-// The _assert_attrs_ref_covariant function above ensures this at compile time.
+// Safety: AttrsRef<'a> is covariant in 'a because:
+// - Empty carries no lifetime
+// - Slice(Box<[(NodeStr<'a>, ValueRef<'a>)]>): Box<[T]> is covariant in T,
+//   and (NodeStr<'a>, ValueRef<'a>) is covariant in 'a
+// The _assert_attrs_ref_covariant function above enforces this at compile time.
 unsafe impl<'a> yoke::Yokeable<'a> for AttrsRef<'static> {
     type Output = AttrsRef<'a>;
 
