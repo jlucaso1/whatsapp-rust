@@ -57,10 +57,7 @@ impl AbPropsCache {
 
     /// Register multiple config codes at once.
     pub async fn watch_many(&self, codes: &[u32]) {
-        let mut interest = self.interest.write().await;
-        for &code in codes {
-            interest.insert(code);
-        }
+        self.interest.write().await.extend(codes.iter().copied());
     }
 
     /// True after the first full (non-delta) update.
