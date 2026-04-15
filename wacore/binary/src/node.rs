@@ -390,10 +390,16 @@ impl FromIterator<(Cow<'static, str>, NodeValue)> for Attrs {
 /// entirely. The boxed slice is allocated once with exact size from the decoder.
 ///
 /// Covariant in `'a` (both Box and slices are covariant), compatible with yoke::Yokeable.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub enum AttrsRef<'a> {
     Empty,
     Slice(Box<[(NodeStr<'a>, ValueRef<'a>)]>),
+}
+
+impl PartialEq for AttrsRef<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_slice() == other.as_slice()
+    }
 }
 
 impl<'a> AttrsRef<'a> {
@@ -417,7 +423,7 @@ impl<'a> AttrsRef<'a> {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        matches!(self, Self::Empty)
+        self.as_slice().is_empty()
     }
 
     #[inline]
