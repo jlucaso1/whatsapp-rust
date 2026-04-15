@@ -145,7 +145,9 @@ impl NoiseSocket {
             }
         }
 
-        let frame = bytes::Bytes::from(std::mem::take(out_buf));
+        // copy_from_slice so out_buf retains its capacity for the next send
+        let frame = bytes::Bytes::copy_from_slice(out_buf);
+        out_buf.clear();
         if let Err(e) = transport.send(frame).await {
             return Err(EncryptSendError::transport(e));
         }

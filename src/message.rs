@@ -28,20 +28,15 @@ const MAX_DECRYPT_RETRIES: u8 = 5;
 
 /// Pre-extracted enc node payload. Holds owned copies of the fields needed for
 /// decryption so the async decrypt phase doesn't borrow the original NodeRef tree.
-/// This shrinks the async state machine for handle_incoming_message significantly.
 pub(crate) struct EncPayload {
     pub ciphertext: bytes::Bytes,
-    pub enc_type: String,
+    pub enc_type: EncType,
     pub padding_version: u8,
 }
 
 impl EncPayload {
-    /// Zero-copy extraction from an OwnedNodeRef. The ciphertext Bytes is a
-    /// sub-view into the node's backing buffer (no memcpy).
-    pub(crate) fn from_owned_node(owner: &OwnedNodeRef, enc_node: &NodeRef<'_>) -> Option<Self> {
-        let raw = enc_node.content_bytes()?;
-        let ciphertext = owner.slice_bytes(raw);
-        let enc_type = enc_node.attrs().optional_string("type")?.to_string();
+    fn from_parts(ciphertext: bytes::Bytes, enc_node: &NodeRef<'_>) -> Option<Self> {
+        let enc_type = EncType::from_wire(enc_node.attrs().optional_string("type")?.as_ref())?;
         let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
         Some(Self {
             ciphertext,
@@ -50,17 +45,15 @@ impl EncPayload {
         })
     }
 
+    /// Zero-copy extraction from an OwnedNodeRef.
+    pub(crate) fn from_owned_node(owner: &OwnedNodeRef, enc_node: &NodeRef<'_>) -> Option<Self> {
+        Self::from_parts(owner.slice_bytes(enc_node.content_bytes()?), enc_node)
+    }
+
     /// Copying extraction from a NodeRef (used in tests where there's no OwnedNodeRef).
     #[cfg(test)]
     pub(crate) fn from_node_ref(node: &NodeRef<'_>) -> Option<Self> {
-        let ciphertext = bytes::Bytes::copy_from_slice(node.content_bytes()?);
-        let enc_type = node.attrs().optional_string("type")?.to_string();
-        let padding_version = node.attrs().optional_u64("v").unwrap_or(2) as u8;
-        Some(Self {
-            ciphertext,
-            enc_type,
-            padding_version,
-        })
+        Self::from_parts(bytes::Bytes::copy_from_slice(node.content_bytes()?), node)
     }
 }
 
@@ -468,19 +461,20 @@ impl Client {
             }
 
             // Zero-copy: slice_bytes returns a Bytes sub-view into the
-            // node's backing buffer without memcpy
+            // node's backing buffer without memcpy.
+            // from_owned_node returns None for unknown enc types or missing content.
             let payload = match EncPayload::from_owned_node(node, enc_node) {
                 Some(p) => p,
                 None => {
-                    log::warn!("Enc node has no byte content");
+                    log::warn!("Enc node has no content or unknown type: {enc_type}");
                     continue;
                 }
             };
 
-            match EncType::from_wire(enc_type.as_ref()) {
-                Some(et) if et.is_session() => session_payloads.push(payload),
-                Some(EncType::SenderKey) => group_payloads.push(payload),
-                _ => log::warn!("Unknown enc type: {enc_type}"),
+            if payload.enc_type.is_session() {
+                session_payloads.push(payload);
+            } else {
+                group_payloads.push(payload);
             }
         }
 
@@ -536,6 +530,11 @@ impl Client {
                     .insert(cache_key, max_sender_retry_count)
                     .await;
             }
+            log::debug!(
+                "[msg:{}] Sender retry count {} pre-seeded into cache",
+                info.id,
+                max_sender_retry_count
+            );
         }
 
         // Acquire global processing permit (1 during offline sync, N after).
@@ -720,11 +719,11 @@ impl Client {
 
         for payload in payloads {
             let ciphertext = &payload.ciphertext[..];
-            let enc_type = &payload.enc_type;
+            let enc_type = payload.enc_type;
+            let enc_type_str = enc_type.as_wire_str();
             let padding_version = payload.padding_version;
-            let enc_type_enum = EncType::from_wire(enc_type);
 
-            let parsed_message = if enc_type_enum == Some(EncType::PreKeyMessage) {
+            let parsed_message = if enc_type == EncType::PreKeyMessage {
                 match PreKeySignalMessage::try_from(ciphertext) {
                     Ok(m) => CiphertextMessage::PreKeySignalMessage(m),
                     Err(e) => {
@@ -742,7 +741,7 @@ impl Client {
                 }
             };
 
-            if enc_type_enum == Some(EncType::PreKeyMessage) {
+            if enc_type == EncType::PreKeyMessage {
                 // FLAGGED FOR DEBUGGING: "Bad Mac" Reproducibility
                 #[cfg(feature = "debug-snapshots")]
                 {
@@ -751,7 +750,7 @@ impl Client {
                         "id": info.id,
                         "sender_jid": sender_encryption_jid.to_string(),
                         "timestamp": info.timestamp,
-                        "enc_type": enc_type,
+                        "enc_type": enc_type_str,
                         "payload_base64": BASE64_STANDARD.encode(ciphertext),
                     });
 
@@ -770,6 +769,9 @@ impl Client {
                     // No-op if disabled
                 }
             }
+
+            // Shadow with wire string for all downstream usage (logging, handlers)
+            let enc_type = enc_type_str;
 
             let decrypt_res = message_decrypt(
                 &parsed_message,
