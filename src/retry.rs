@@ -15,8 +15,8 @@ use wacore::libsignal::store::PreKeyStore;
 use wacore::protocol::ProtocolNode;
 use wacore::types::jid::JidExt;
 use wacore_binary::JidExt as _;
-use wacore_binary::OwnedNodeRef;
 use wacore_binary::builder::NodeBuilder;
+use wacore_binary::{Jid, OwnedNodeRef};
 #[cfg(test)]
 use wacore_binary::{Node, NodeContent};
 use wacore_binary::{NodeContentRef, NodeRef};
@@ -387,86 +387,8 @@ impl Client {
                 );
             }
         } else {
-            // For DMs, handle base key tracking for collision detection (matches WhatsApp Web).
-            // This detects when we haven't regenerated our session despite receiving retry receipts,
-            // which can cause infinite retry loops where both sides are stuck with stale keys.
-            let signal_address = resolved_jid.to_protocol_address();
-            let device_store = self.persistence_manager.get_device_arc().await;
-
-            // Check for base key collision before deleting the session.
-            // Read session through cache for consistent state.
-            {
-                let device_guard = device_store.read().await;
-                let session = self
-                    .signal_cache
-                    .peek_session(&signal_address, &*device_guard.backend)
-                    .await
-                    .ok()
-                    .flatten();
-
-                if let Some(session) = session
-                    && let Ok(current_base_key) = session.alice_base_key()
-                {
-                    let addr_str = signal_address.as_str();
-                    if retry_count == MIN_RETRY_FOR_BASE_KEY_CHECK {
-                        // On retry 2: Save the base key for later comparison
-                        if let Err(e) = device_guard
-                            .backend
-                            .save_base_key(addr_str, &message_id, current_base_key)
-                            .await
-                        {
-                            warn!("Failed to save base key for {}: {}", signal_address, e);
-                        } else {
-                            info!(
-                                "Saved base key for {} at retry #{} for collision detection",
-                                signal_address, retry_count
-                            );
-                        }
-                    } else if retry_count > MIN_RETRY_FOR_BASE_KEY_CHECK {
-                        // On retry > 2: Check if base key is the same (collision detection)
-                        match device_guard
-                            .backend
-                            .has_same_base_key(addr_str, &message_id, current_base_key)
-                            .await
-                        {
-                            Ok(true) => {
-                                // Collision detected! We haven't regenerated our session.
-                                warn!(
-                                    "Base key collision detected for {} at retry #{}. \
-                                     Session hasn't been regenerated. Forcing fresh session.",
-                                    signal_address, retry_count
-                                );
-                                // Clean up base key entry since we're deleting the session
-                                let _ = device_guard
-                                    .backend
-                                    .delete_base_key(addr_str, &message_id)
-                                    .await;
-                            }
-                            Ok(false) => {
-                                // Base key changed, session was regenerated - good!
-                                info!(
-                                    "Base key changed for {} at retry #{} - session regenerated",
-                                    signal_address, retry_count
-                                );
-                                // Clean up old base key entry
-                                let _ = device_guard
-                                    .backend
-                                    .delete_base_key(addr_str, &message_id)
-                                    .await;
-                            }
-                            Err(e) => {
-                                warn!("Failed to check base key for {}: {}", signal_address, e);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Delete the old session through the signal cache so encryption uses a fresh session.
-            // IMPORTANT: Must go through cache, not backend, to avoid stale cached sessions.
-            self.signal_cache.delete_session(&signal_address).await;
-            self.flush_signal_cache().await?;
-            info!("Deleted session for {signal_address} due to retry receipt");
+            self.delete_dm_retry_sessions(&resolved_jid, &message_id, retry_count)
+                .await?;
         }
 
         // Status broadcasts can't resend (requires explicit recipient list).
@@ -528,6 +450,107 @@ impl Client {
         }
 
         Ok(())
+    }
+
+    async fn delete_dm_retry_sessions(
+        &self,
+        resolved_jid: &Jid,
+        message_id: &str,
+        retry_count: u8,
+    ) -> Result<(), anyhow::Error> {
+        let device_jids = self.dm_retry_session_targets(resolved_jid).await;
+        let device_store = self.persistence_manager.get_device_arc().await;
+
+        for device_jid in &device_jids {
+            // For DMs, handle base key tracking for collision detection (matches WhatsApp Web).
+            // This detects when we haven't regenerated our session despite receiving retry receipts,
+            // which can cause infinite retry loops where both sides are stuck with stale keys.
+            let signal_address = device_jid.to_protocol_address();
+
+            // Check for base key collision before deleting the session.
+            // Read session through cache for consistent state.
+            {
+                let device_guard = device_store.read().await;
+                let session = self
+                    .signal_cache
+                    .peek_session(&signal_address, &*device_guard.backend)
+                    .await
+                    .ok()
+                    .flatten();
+
+                if let Some(session) = session
+                    && let Ok(current_base_key) = session.alice_base_key()
+                {
+                    let addr_str = signal_address.as_str();
+                    if retry_count == MIN_RETRY_FOR_BASE_KEY_CHECK {
+                        // On retry 2: Save the base key for later comparison
+                        if let Err(e) = device_guard
+                            .backend
+                            .save_base_key(addr_str, message_id, current_base_key)
+                            .await
+                        {
+                            warn!("Failed to save base key for {}: {}", signal_address, e);
+                        } else {
+                            info!(
+                                "Saved base key for {} at retry #{} for collision detection",
+                                signal_address, retry_count
+                            );
+                        }
+                    } else if retry_count > MIN_RETRY_FOR_BASE_KEY_CHECK {
+                        // On retry > 2: Check if base key is the same (collision detection)
+                        match device_guard
+                            .backend
+                            .has_same_base_key(addr_str, message_id, current_base_key)
+                            .await
+                        {
+                            Ok(true) => {
+                                // Collision detected! We haven't regenerated our session.
+                                warn!(
+                                    "Base key collision detected for {} at retry #{}. \
+                                     Session hasn't been regenerated. Forcing fresh session.",
+                                    signal_address, retry_count
+                                );
+                                // Clean up base key entry since we're deleting the session
+                                let _ = device_guard
+                                    .backend
+                                    .delete_base_key(addr_str, message_id)
+                                    .await;
+                            }
+                            Ok(false) => {
+                                // Base key changed, session was regenerated - good!
+                                info!(
+                                    "Base key changed for {} at retry #{} - session regenerated",
+                                    signal_address, retry_count
+                                );
+                                // Clean up old base key entry
+                                let _ = device_guard
+                                    .backend
+                                    .delete_base_key(addr_str, message_id)
+                                    .await;
+                            }
+                            Err(e) => {
+                                warn!("Failed to check base key for {}: {}", signal_address, e);
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Delete the old session through the signal cache so encryption uses a fresh session.
+            // IMPORTANT: Must go through cache, not backend, to avoid stale cached sessions.
+            self.signal_cache.delete_session(&signal_address).await;
+            info!("Deleted session for {signal_address} due to retry receipt");
+        }
+
+        self.flush_signal_cache().await?;
+        Ok(())
+    }
+
+    async fn dm_retry_session_targets(&self, resolved_jid: &Jid) -> Vec<Jid> {
+        let requester_bare = resolved_jid.to_non_ad();
+        self.get_devices_from_registry(&requester_bare)
+            .await
+            .unwrap_or_else(|| vec![resolved_jid.clone()])
     }
 
     /// Extracts and processes the key bundle from a retry receipt.
@@ -913,8 +936,30 @@ mod tests {
     use crate::store::persistence_manager::PersistenceManager;
     use crate::test_utils::MockHttpClient;
     use std::borrow::Cow;
+    use std::sync::Arc;
+    use wacore::types::jid::JidExt as _;
     use wacore_binary::{Jid, JidExt};
     use waproto::whatsapp as wa;
+
+    async fn setup_device_record(client: &Arc<Client>, user: &str, device_ids: &[u32]) {
+        let record = wacore::store::traits::DeviceListRecord {
+            user: user.into(),
+            devices: device_ids
+                .iter()
+                .map(|&id| wacore::store::traits::DeviceInfo {
+                    device_id: id,
+                    key_index: None,
+                })
+                .collect(),
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+            raw_id: None,
+        };
+        client
+            .device_registry_cache
+            .insert(user.into(), record)
+            .await;
+    }
 
     #[tokio::test]
     async fn recent_message_cache_insert_and_take() {
@@ -1424,6 +1469,77 @@ mod tests {
                 .has_same_base_key(address, msg_id_2, &key_2)
                 .await
                 .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn dm_retry_deletes_sessions_for_all_known_devices() {
+        let client =
+            crate::test_utils::create_test_client_with_failing_http("retry_dm_devices").await;
+        let resolved_jid = Jid::lid("100000000000088");
+        setup_device_record(&client, &resolved_jid.user, &[0, 33]).await;
+
+        let backend = client.persistence_manager.backend();
+        let device_0 = Jid::lid_device(resolved_jid.user.clone(), 0).to_protocol_address();
+        let device_33 = Jid::lid_device(resolved_jid.user.clone(), 33).to_protocol_address();
+
+        backend
+            .put_session(device_0.as_str(), b"invalid-session")
+            .await
+            .unwrap();
+        backend
+            .put_session(device_33.as_str(), b"invalid-session")
+            .await
+            .unwrap();
+
+        client
+            .delete_dm_retry_sessions(&resolved_jid, "MSG-ALL-DEVICES", 1)
+            .await
+            .unwrap();
+
+        assert!(
+            backend
+                .get_session(device_0.as_str())
+                .await
+                .unwrap()
+                .is_none(),
+            "device 0 session should be deleted"
+        );
+        assert!(
+            backend
+                .get_session(device_33.as_str())
+                .await
+                .unwrap()
+                .is_none(),
+            "companion device session should be deleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn dm_retry_deletes_resolved_session_without_registry_devices() {
+        let client =
+            crate::test_utils::create_test_client_with_failing_http("retry_dm_fallback").await;
+        let resolved_jid = Jid::lid("100000000000099");
+        let signal_address = resolved_jid.to_protocol_address();
+        let backend = client.persistence_manager.backend();
+
+        backend
+            .put_session(signal_address.as_str(), b"invalid-session")
+            .await
+            .unwrap();
+
+        client
+            .delete_dm_retry_sessions(&resolved_jid, "MSG-FALLBACK", 1)
+            .await
+            .unwrap();
+
+        assert!(
+            backend
+                .get_session(signal_address.as_str())
+                .await
+                .unwrap()
+                .is_none(),
+            "resolved session should be deleted when registry has no device list"
         );
     }
 
