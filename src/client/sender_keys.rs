@@ -69,7 +69,7 @@ impl Client {
     /// `getAlternateMsgKey`).
     /// Returns `(message, alternate_chat)`. When the message was found via the
     /// alternate PN/LID key, `alternate_chat` contains the namespace that
-    /// matched — the caller should use it for session operations instead of
+    /// matched -- the caller should use it for session operations instead of
     /// `resolve_encryption_jid` (which would map back to the primary).
     pub(crate) async fn take_recent_message(
         &self,
@@ -81,14 +81,27 @@ impl Client {
             return Some((msg, None));
         }
 
-        // Primary miss — try alternate PN<->LID key
-        if let Some(alt_key) = self.alternate_message_key(&primary_key).await {
+        // Primary miss -- try alternate PN<->LID key.
+        // If resolve_encryption_jid changed the namespace (PN→LID), the
+        // original `to` is already the alternate -- skip the cache lookup.
+        // Otherwise (LID input), swap via cache to try the PN form.
+        let alt_chat = if primary_key.chat.server != to.server {
+            Some(to.clone())
+        } else {
+            self.swap_pn_lid_namespace(&primary_key.chat).await
+        };
+
+        if let Some(alt_chat) = alt_chat {
             log::debug!(
                 "Primary key miss for {}:{}, trying alternate {}",
                 primary_key.chat,
                 id,
-                alt_key.chat
+                alt_chat
             );
+            let alt_key = ChatMessageId {
+                chat: alt_chat,
+                id: primary_key.id,
+            };
             if let Some(msg) = self.try_take_by_key(&alt_key).await {
                 return Some((msg, Some(alt_key.chat)));
             }
@@ -155,19 +168,6 @@ impl Client {
                 None
             }
         }
-    }
-
-    /// Compute the alternate PN<->LID message key for retry fallback.
-    /// Mirrors WAWebLidMigrationUtils `getAlternateMsgKey` for 1x1 chats:
-    /// swaps the chat JID between PN and LID namespaces.
-    async fn alternate_message_key(&self, key: &ChatMessageId) -> Option<ChatMessageId> {
-        // swap_pn_lid_namespace returns None for non-PN/LID JIDs (groups, newsletters).
-        // key.chat is already bare (from make_chat_message_id), so the result is too.
-        let alt_chat = self.swap_pn_lid_namespace(&key.chat).await?;
-        Some(ChatMessageId {
-            chat: alt_chat,
-            id: key.id.clone(),
-        })
     }
 
     /// Store a sent message for retry handling. Always writes to DB; when L1 cache
