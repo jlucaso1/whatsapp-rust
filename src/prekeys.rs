@@ -144,11 +144,12 @@ impl Client {
         }
 
         // Encode once — reused for both pre-upload store and post-upload mark.
-        let encoded_batch: Vec<(u32, Vec<u8>)> = {
+        // Uses Bytes so store_prekeys_batch clones are O(1) refcount bumps.
+        let encoded_batch: Vec<(u32, bytes::Bytes)> = {
             use prost::Message;
             keys_to_upload
                 .iter()
-                .map(|(id, record)| (*id, record.encode_to_vec()))
+                .map(|(id, record)| (*id, bytes::Bytes::from(record.encode_to_vec())))
                 .collect()
         };
 
@@ -339,7 +340,7 @@ impl Client {
 
         // Build a lookup so we preserve the server-requested order.
         // Dedupe the expected count since the server may send duplicate IDs.
-        let loaded_map: std::collections::HashMap<u32, Vec<u8>> = loaded.into_iter().collect();
+        let loaded_map: std::collections::HashMap<u32, bytes::Bytes> = loaded.into_iter().collect();
         let unique_requested: std::collections::HashSet<&u32> =
             response.prekey_ids.iter().collect();
 
@@ -358,7 +359,7 @@ impl Client {
                 return Ok(());
             };
             use prost::Message;
-            match waproto::whatsapp::PreKeyRecordStructure::decode(record_bytes.as_slice()) {
+            match waproto::whatsapp::PreKeyRecordStructure::decode(record_bytes.as_ref()) {
                 Ok(record) => {
                     if let Some(pk) = record.public_key {
                         prekey_pubkeys.push(pk);

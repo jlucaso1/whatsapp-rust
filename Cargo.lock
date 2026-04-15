@@ -2420,6 +2420,7 @@ version = "0.5.0"
 dependencies = [
  "async-trait",
  "bincode 2.0.1",
+ "bytes",
  "diesel",
  "diesel_migrations",
  "libsqlite3-sys",

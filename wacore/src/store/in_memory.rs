@@ -13,6 +13,7 @@ use crate::store::error::Result;
 use crate::store::traits::*;
 use async_lock::Mutex;
 use async_trait::async_trait;
+use bytes::Bytes;
 use wacore_appstate::processor::AppStateMutationMAC;
 
 /// Key for the sent-message store: `(chat_jid, message_id)`.
@@ -26,7 +27,7 @@ struct SentMessageEntry {
 
 /// Key for pre-keys: `id`.
 struct PreKeyEntry {
-    record: Vec<u8>,
+    record: Bytes,
 }
 
 /// Key for base-key collision detection: `(address, message_id)`.
@@ -168,13 +169,13 @@ impl SignalStore for InMemoryBackend {
         self.state.lock().await.prekeys.insert(
             id,
             PreKeyEntry {
-                record: record.to_vec(),
+                record: Bytes::copy_from_slice(record),
             },
         );
         Ok(())
     }
 
-    async fn store_prekeys_batch(&self, keys: &[(u32, Vec<u8>)], _uploaded: bool) -> Result<()> {
+    async fn store_prekeys_batch(&self, keys: &[(u32, Bytes)], _uploaded: bool) -> Result<()> {
         let mut state = self.state.lock().await;
         for (id, record) in keys {
             state.prekeys.insert(
@@ -187,7 +188,7 @@ impl SignalStore for InMemoryBackend {
         Ok(())
     }
 
-    async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
+    async fn load_prekey(&self, id: u32) -> Result<Option<Bytes>> {
         Ok(self
             .state
             .lock()
@@ -197,7 +198,7 @@ impl SignalStore for InMemoryBackend {
             .map(|e| e.record.clone()))
     }
 
-    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Vec<u8>)>> {
+    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Bytes)>> {
         let state = self.state.lock().await;
         let mut result = Vec::with_capacity(ids.len());
         for &id in ids {
