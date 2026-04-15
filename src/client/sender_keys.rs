@@ -67,10 +67,18 @@ impl Client {
     /// then falls back to DB. On miss, tries an alternate PN/LID key to handle
     /// mapping changes between send time and retry time (WAWebLidMigrationUtils
     /// `getAlternateMsgKey`).
-    pub(crate) async fn take_recent_message(&self, to: &Jid, id: &str) -> Option<wa::Message> {
+    /// Returns `(message, found_via_alternate)`. The bool signals that the
+    /// message was found under the opposite PN/LID namespace, so the caller
+    /// should use that namespace for session operations instead of
+    /// `resolve_encryption_jid` (which would map back to the primary).
+    pub(crate) async fn take_recent_message(
+        &self,
+        to: &Jid,
+        id: &str,
+    ) -> Option<(wa::Message, bool)> {
         let primary_key = self.make_chat_message_id(to, id).await;
         if let Some(msg) = self.try_take_by_key(&primary_key).await {
-            return Some(msg);
+            return Some((msg, false));
         }
 
         // Primary miss — try alternate PN<->LID key
@@ -82,7 +90,7 @@ impl Client {
                 alt_key.chat
             );
             if let Some(msg) = self.try_take_by_key(&alt_key).await {
-                return Some(msg);
+                return Some((msg, true));
             }
         }
 

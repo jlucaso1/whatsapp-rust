@@ -161,7 +161,7 @@ impl Client {
             return Ok(());
         }
 
-        let info = resolve_retry_chat_info(receipt, nr);
+        let mut info = resolve_retry_chat_info(receipt, nr);
         let is_group_or_status = info.chat.is_group() || info.chat.is_status_broadcast();
 
         // Deduplicate retry receipts per requesting device.
@@ -199,8 +199,11 @@ impl Client {
                 .remove(&guard_key);
         });
 
-        let original_msg = match self.take_recent_message(&info.chat, &message_id).await {
-            Some(msg) => msg,
+        let (original_msg, found_via_alternate) = match self
+            .take_recent_message(&info.chat, &message_id)
+            .await
+        {
+            Some(result) => result,
             None => {
                 log::debug!(
                     "Ignoring retry for message {message_id}: already handled or not found in cache."
@@ -214,9 +217,17 @@ impl Client {
         self.add_recent_message(&info.chat, &message_id, &original_msg)
             .await;
 
-        // Resolve the requester's JID for session/encryption operations;
-        // info.chat is used for stanza addressing and message lookup.
-        let resolved_jid = self.resolve_encryption_jid(&info.requester).await;
+        // When message was found via alternate PN<->LID key, the Signal session
+        // lives in the stored message's namespace (not the receipt's). Normalize
+        // the requester to match, then use it directly as the encryption target.
+        // Mirrors WA Web: `d.isLid() ? toLid(e.from) : toPn(e.from)` in
+        // getActualChatInfo (WAWebHandleRetryRequest).
+        let resolved_jid = if found_via_alternate && !is_group_or_status {
+            self.normalize_requester_namespace(&mut info).await;
+            info.requester.clone()
+        } else {
+            self.resolve_encryption_jid(&info.requester).await
+        };
 
         let sender_device_id = info.requester.device() as u32;
         let sender_user = info.requester.user.clone();
@@ -484,6 +495,40 @@ impl Client {
         }
 
         Ok(())
+    }
+
+    /// Swap the requester's PN/LID namespace to match the stored message's
+    /// namespace when the alternate key was used. Preserves device/agent.
+    async fn normalize_requester_namespace(&self, info: &mut RetryChatInfo) {
+        let req = &info.requester;
+        let swapped = if req.is_lid() {
+            self.lid_pn_cache
+                .get_phone_number(&req.user)
+                .await
+                .map(|pn_user| Jid {
+                    user: pn_user.into(),
+                    server: wacore_binary::Server::Pn,
+                    device: req.device,
+                    agent: req.agent,
+                    integrator: req.integrator,
+                })
+        } else if req.is_pn() {
+            self.lid_pn_cache
+                .get_current_lid(&req.user)
+                .await
+                .map(|lid_user| Jid {
+                    user: lid_user.into(),
+                    server: wacore_binary::Server::Lid,
+                    device: req.device,
+                    agent: req.agent,
+                    integrator: req.integrator,
+                })
+        } else {
+            None
+        };
+        if let Some(jid) = swapped {
+            info.requester = jid;
+        }
     }
 
     async fn delete_dm_retry_session_target(
@@ -999,13 +1044,9 @@ mod tests {
         // First take should return and remove it from cache
         let taken = client.take_recent_message(&chat, &msg_id).await;
         assert!(taken.is_some());
-        assert_eq!(
-            taken
-                .expect("taken message should exist")
-                .conversation
-                .as_deref(),
-            Some("hello")
-        );
+        let (msg, alt) = taken.unwrap();
+        assert!(!alt, "primary key should match");
+        assert_eq!(msg.conversation.as_deref(), Some("hello"));
 
         // Second take should return None
         let taken_again = client.take_recent_message(&chat, &msg_id).await;
@@ -2055,7 +2096,7 @@ mod tests {
             let taken = client.take_recent_message(&chat, &msg_id).await;
             assert!(taken.is_some(), "First take should succeed for {chat}");
 
-            let taken_msg = taken.unwrap();
+            let (taken_msg, _) = taken.unwrap();
             client.add_recent_message(&chat, &msg_id, &taken_msg).await;
 
             let taken2 = client.take_recent_message(&chat, &msg_id).await;
@@ -2066,6 +2107,7 @@ mod tests {
             assert_eq!(
                 taken2
                     .unwrap()
+                    .0
                     .extended_text_message
                     .as_ref()
                     .unwrap()
@@ -2113,11 +2155,11 @@ mod tests {
         // Lookup via bare JID should succeed (this is what info.chat provides)
         let taken = client.take_recent_message(&bare_jid, msg_id).await;
         assert!(taken.is_some(), "Lookup via bare JID should succeed");
+        let (msg_out, alt) = taken.unwrap();
+        assert!(!alt, "primary key should match for bare JID");
 
         // Re-add under bare JID
-        client
-            .add_recent_message(&bare_jid, msg_id, &taken.unwrap())
-            .await;
+        client.add_recent_message(&bare_jid, msg_id, &msg_out).await;
 
         // Second take should also work
         let taken2 = client.take_recent_message(&bare_jid, msg_id).await;
@@ -2181,9 +2223,8 @@ mod tests {
             taken.is_some(),
             "Alternate PN key lookup should find message stored under PN"
         );
-        assert_eq!(
-            taken.unwrap().conversation.as_deref(),
-            Some("alternate key test")
-        );
+        let (msg_out, alt) = taken.unwrap();
+        assert!(alt, "should be found via alternate key");
+        assert_eq!(msg_out.conversation.as_deref(), Some("alternate key test"));
     }
 }
