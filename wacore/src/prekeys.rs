@@ -10,12 +10,12 @@ pub struct PreKeyUtils;
 /// Compute SHA-1 digest of a key bundle for validation against server.
 ///
 /// Matches WA Web's `validateLocalKeyBundle` hash computation:
-/// SHA-1(identity_pub_key || signed_prekey_pub || signed_prekey_signature || prekey_pub_1 || prekey_pub_2 || ...)
+/// SHA-1(identity_pub_key || signed_prekey_pub || signed_prekey_signature || prekey_pub_1 || ...)
 pub fn compute_key_bundle_digest(
     identity_pub_key: &[u8],
     signed_prekey_pub: &[u8],
     signed_prekey_signature: &[u8],
-    prekey_pubkeys: &[Vec<u8>],
+    prekey_pubkeys: &[&[u8]],
 ) -> Vec<u8> {
     use sha1::Digest;
     let mut hasher = sha1::Sha1::new();
@@ -26,6 +26,55 @@ pub fn compute_key_bundle_digest(
         hasher.update(pk);
     }
     hasher.finalize().to_vec()
+}
+
+/// Extract the `publicKey` field (tag 2) from a protobuf-encoded PreKeyRecordStructure
+/// without full prost decode. Returns None if the field is missing.
+pub fn extract_prekey_public_key(record: &[u8]) -> Option<&[u8]> {
+    let mut pos = 0;
+    while pos < record.len() {
+        let (tag_byte, consumed) = decode_varint(&record[pos..])?;
+        pos += consumed;
+        let field_number = (tag_byte >> 3) as u32;
+        let wire_type = (tag_byte & 0x7) as u32;
+        match wire_type {
+            // varint
+            0 => {
+                let (_, c) = decode_varint(&record[pos..])?;
+                pos += c;
+            }
+            // length-delimited
+            2 => {
+                let (len, c) = decode_varint(&record[pos..])?;
+                pos += c;
+                let len = len as usize;
+                if pos + len > record.len() {
+                    return None;
+                }
+                if field_number == 2 {
+                    return Some(&record[pos..pos + len]);
+                }
+                pos += len;
+            }
+            // fixed64
+            1 => pos += 8,
+            // fixed32
+            5 => pos += 4,
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn decode_varint(buf: &[u8]) -> Option<(u64, usize)> {
+    let mut result: u64 = 0;
+    for (i, &byte) in buf.iter().enumerate().take(10) {
+        result |= ((byte & 0x7F) as u64) << (i * 7);
+        if byte & 0x80 == 0 {
+            return Some((result, i + 1));
+        }
+    }
+    None
 }
 
 impl PreKeyUtils {

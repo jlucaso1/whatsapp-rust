@@ -364,37 +364,25 @@ impl Client {
             return Ok(());
         }
 
+        // Extract public keys directly from stored protobuf bytes without full decode
         let mut prekey_pubkeys = Vec::with_capacity(response.prekey_ids.len());
         for prekey_id in &response.prekey_ids {
             let Some(record_bytes) = loaded_map.get(prekey_id) else {
                 log::warn!("digestKey: missing local prekey {}, skipping", prekey_id);
                 return Ok(());
             };
-            use prost::Message;
-            match waproto::whatsapp::PreKeyRecordStructure::decode(record_bytes.as_ref()) {
-                Ok(record) => {
-                    if let Some(pk) = record.public_key {
-                        prekey_pubkeys.push(pk);
-                    } else {
-                        log::warn!(
-                            "digestKey: prekey {} has no public key, skipping",
-                            prekey_id
-                        );
-                        return Ok(());
-                    }
-                }
-                Err(e) => {
+            match wacore::prekeys::extract_prekey_public_key(record_bytes) {
+                Some(pk) => prekey_pubkeys.push(pk),
+                None => {
                     log::warn!(
-                        "digestKey: failed to decode prekey {}: {}, skipping",
-                        prekey_id,
-                        e
+                        "digestKey: prekey {} has no public key, skipping",
+                        prekey_id
                     );
                     return Ok(());
                 }
             }
         }
 
-        // Compute local SHA-1 digest matching WA Web's validateLocalKeyBundle
         let local_hash = wacore::prekeys::compute_key_bundle_digest(
             identity_bytes,
             skey_pub_bytes,

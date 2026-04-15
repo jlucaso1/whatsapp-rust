@@ -38,52 +38,57 @@ impl StanzaHandler for MessageHandler {
             }
         };
 
-        // Single cache lookup: get or create the lane (lock + queue + worker).
-        let lane = client
-            .chat_lanes
-            .get_with_by_ref(&chat_jid, async {
-                let (tx, rx) = async_channel::unbounded::<Arc<wacore_binary::OwnedNodeRef>>();
+        // Fast path: cache hit avoids building the init future entirely.
+        // This shrinks the handler's async state machine because the large
+        // worker-spawning closure isn't captured across the .await.
+        let lane = if let Some(existing) = client.chat_lanes.get(&chat_jid).await {
+            existing
+        } else {
+            let (tx, rx) = async_channel::unbounded::<Arc<wacore_binary::OwnedNodeRef>>();
 
-                let client_for_worker = client.clone();
-                let spawn_generation = client
-                    .connection_generation
-                    .load(std::sync::atomic::Ordering::Acquire);
+            let client_for_worker = client.clone();
+            let spawn_generation = client
+                .connection_generation
+                .load(std::sync::atomic::Ordering::Acquire);
 
-                client
-                    .runtime
-                    .spawn(Box::pin(async move {
-                        while let Ok(msg_node) = rx.recv().await {
-                            if client_for_worker
-                                .connection_generation
-                                .load(std::sync::atomic::Ordering::Acquire)
-                                != spawn_generation
-                            {
-                                log::debug!(target: "MessageQueue", "Stale worker exiting; remaining messages will be redelivered by server");
-                                break;
-                            }
-                            let start = wacore::time::now_millis() as u64;
-                            let client = client_for_worker.clone();
-                            Box::pin(client.handle_incoming_message(msg_node)).await;
-                            let elapsed =
-                                (wacore::time::now_millis() as u64).saturating_sub(start);
-                            if elapsed > MAX_MESSAGE_DELAY_MS {
-                                warn!(
-                                    target: "MessageQueue",
-                                    "Message processing took {:.1}s (MAX_MESSAGE_DELAY is {}s)",
-                                    elapsed as f64 / 1000.0,
-                                    MAX_MESSAGE_DELAY_MS / 1000
-                                );
-                            }
+            client
+                .runtime
+                .spawn(Box::pin(async move {
+                    while let Ok(msg_node) = rx.recv().await {
+                        if client_for_worker
+                            .connection_generation
+                            .load(std::sync::atomic::Ordering::Acquire)
+                            != spawn_generation
+                        {
+                            log::debug!(target: "MessageQueue", "Stale worker exiting; remaining messages will be redelivered by server");
+                            break;
                         }
-                    }))
-                    .detach();
+                        let start = wacore::time::now_millis() as u64;
+                        let client = client_for_worker.clone();
+                        Box::pin(client.handle_incoming_message(msg_node)).await;
+                        let elapsed = (wacore::time::now_millis() as u64).saturating_sub(start);
+                        if elapsed > MAX_MESSAGE_DELAY_MS {
+                            warn!(
+                                target: "MessageQueue",
+                                "Message processing took {:.1}s (MAX_MESSAGE_DELAY is {}s)",
+                                elapsed as f64 / 1000.0,
+                                MAX_MESSAGE_DELAY_MS / 1000
+                            );
+                        }
+                    }
+                }))
+                .detach();
 
-                ChatLane {
-                    enqueue_lock: Arc::new(async_lock::Mutex::new(())),
-                    queue_tx: tx,
-                }
-            })
-            .await;
+            let lane = ChatLane {
+                enqueue_lock: Arc::new(async_lock::Mutex::new(())),
+                queue_tx: tx,
+            };
+            client
+                .chat_lanes
+                .insert(chat_jid.clone(), lane.clone())
+                .await;
+            lane
+        };
 
         // Lock serializes enqueue order for this chat
         let _guard = lane.enqueue_lock.lock().await;

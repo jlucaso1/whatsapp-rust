@@ -144,7 +144,15 @@ fn should_auto_reserve_node(node: &Node) -> bool {
     match &node.content {
         Some(NodeContent::Bytes(bytes)) => bytes.len() >= AUTO_RESERVE_SCALAR_THRESHOLD,
         Some(NodeContent::String(text)) => text.len() >= AUTO_RESERVE_SCALAR_THRESHOLD,
-        Some(NodeContent::Nodes(children)) => children.len() >= AUTO_RESERVE_CHILDREN_THRESHOLD,
+        Some(NodeContent::Nodes(children)) => {
+            if children.len() >= AUTO_RESERVE_CHILDREN_THRESHOLD {
+                return true;
+            }
+            // Check one level deeper for large nested lists (e.g., <iq> -> <list> -> 812 keys)
+            children.iter().any(|child| {
+                matches!(&child.content, Some(NodeContent::Nodes(gc)) if gc.len() >= AUTO_RESERVE_CHILDREN_THRESHOLD)
+            })
+        }
         None => false,
     }
 }
