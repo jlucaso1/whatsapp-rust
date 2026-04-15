@@ -52,7 +52,7 @@ pub struct SignalStoreCache {
     sessions: Mutex<SessionStoreState>,
     identities: Mutex<ByteStoreState>,
     sender_keys: Mutex<SenderKeyStoreState>,
-    /// Reusable buffer for session serialization during flush.
+    /// Avoids per-flush Vec allocation on the hot path (called after every message).
     flush_encode_buf: Mutex<Vec<u8>>,
     max_entries: usize,
 }
