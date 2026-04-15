@@ -500,34 +500,8 @@ impl Client {
     /// Swap the requester's PN/LID namespace to match the stored message's
     /// namespace when the alternate key was used. Preserves device/agent.
     async fn normalize_requester_namespace(&self, info: &mut RetryChatInfo) {
-        let req = &info.requester;
-        let swapped = if req.is_lid() {
-            self.lid_pn_cache
-                .get_phone_number(&req.user)
-                .await
-                .map(|pn_user| Jid {
-                    user: pn_user.into(),
-                    server: wacore_binary::Server::Pn,
-                    device: req.device,
-                    agent: req.agent,
-                    integrator: req.integrator,
-                })
-        } else if req.is_pn() {
-            self.lid_pn_cache
-                .get_current_lid(&req.user)
-                .await
-                .map(|lid_user| Jid {
-                    user: lid_user.into(),
-                    server: wacore_binary::Server::Lid,
-                    device: req.device,
-                    agent: req.agent,
-                    integrator: req.integrator,
-                })
-        } else {
-            None
-        };
-        if let Some(jid) = swapped {
-            info.requester = jid;
+        if let Some(swapped) = self.swap_pn_lid_namespace(&info.requester).await {
+            info.requester = swapped;
         }
     }
 
@@ -2226,5 +2200,69 @@ mod tests {
         let (msg_out, alt) = taken.unwrap();
         assert!(alt, "should be found via alternate key");
         assert_eq!(msg_out.conversation.as_deref(), Some("alternate key test"));
+    }
+
+    /// When the alternate key hits, normalize_requester_namespace should swap
+    /// the requester from LID to PN (matching the stored message's namespace).
+    #[tokio::test]
+    async fn normalize_requester_after_alternate_key_hit() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            config,
+        )
+        .await;
+
+        let pn_jid: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let lid_jid: Jid = "236395184570386@lid".parse().unwrap();
+
+        // Add bidirectional LID<->PN mapping
+        client
+            .lid_pn_cache
+            .add(wacore::types::lid_pn::LidPnEntry {
+                lid: lid_jid.user.to_string(),
+                phone_number: pn_jid.user.to_string(),
+                created_at: 0,
+                learning_source: wacore::types::lid_pn::LearningSource::Usync,
+            })
+            .await;
+
+        // LID requester with device 5 → should be swapped to PN
+        let mut info = RetryChatInfo {
+            chat: lid_jid.clone(),
+            requester: "236395184570386:5@lid".parse().unwrap(),
+        };
+        client.normalize_requester_namespace(&mut info).await;
+
+        assert!(info.requester.is_pn(), "requester should be swapped to PN");
+        assert_eq!(info.requester.user, "5511999999999");
+        assert_eq!(info.requester.device(), 5, "device should be preserved");
+
+        // PN requester with device 3 → should be swapped to LID
+        let mut info2 = RetryChatInfo {
+            chat: pn_jid.clone(),
+            requester: "5511999999999:3@s.whatsapp.net".parse().unwrap(),
+        };
+        client.normalize_requester_namespace(&mut info2).await;
+
+        assert!(
+            info2.requester.is_lid(),
+            "requester should be swapped to LID"
+        );
+        assert_eq!(info2.requester.user, "236395184570386");
+        assert_eq!(info2.requester.device(), 3, "device should be preserved");
     }
 }

@@ -161,27 +161,8 @@ impl Client {
     /// Mirrors WAWebLidMigrationUtils `getAlternateMsgKey` for 1x1 chats:
     /// swaps the chat JID between PN and LID namespaces.
     async fn alternate_message_key(&self, key: &ChatMessageId) -> Option<ChatMessageId> {
-        // Only applies to user chats (not groups/newsletters)
-        if !key.chat.is_pn() && !key.chat.is_lid() {
-            return None;
-        }
-
-        let alt_chat = if key.chat.is_lid() {
-            let pn_user = self.lid_pn_cache.get_phone_number(&key.chat.user).await?;
-            Jid {
-                user: pn_user.into(),
-                server: wacore_binary::Server::Pn,
-                ..Default::default()
-            }
-        } else {
-            let lid_user = self.lid_pn_cache.get_current_lid(&key.chat.user).await?;
-            Jid {
-                user: lid_user.into(),
-                server: wacore_binary::Server::Lid,
-                ..Default::default()
-            }
-        };
-
+        // swap_pn_lid_namespace returns None for non-PN/LID JIDs (groups, newsletters)
+        let alt_chat = self.swap_pn_lid_namespace(&key.chat).await?.to_non_ad();
         Some(ChatMessageId {
             chat: alt_chat,
             id: key.id.clone(),
