@@ -2259,4 +2259,154 @@ mod tests {
         let group: Jid = "120363021033254949@g.us".parse().unwrap();
         assert!(client.swap_pn_lid_namespace(&group).await.is_none());
     }
+
+    /// Alternate key lookup via PN input: message stored under PN, LID mapping
+    /// added later, lookup via PN. Exercises the `server != server` optimization
+    /// where `to` is used directly as alternate (no cache round-trip).
+    #[tokio::test]
+    async fn alternate_key_lookup_pn_input_server_changed() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            config,
+        )
+        .await;
+
+        let pn_jid: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let lid_jid: Jid = "236395184570386@lid".parse().unwrap();
+        let msg_id = "RETRY_ALT_PN";
+        let msg = wa::Message {
+            conversation: Some("pn input alternate".into()),
+            ..Default::default()
+        };
+
+        // Store under PN (no mapping at send time)
+        client.add_recent_message(&pn_jid, msg_id, &msg).await;
+
+        // Add LID mapping
+        client
+            .lid_pn_cache
+            .add(wacore::types::lid_pn::LidPnEntry {
+                lid: lid_jid.user.to_string(),
+                phone_number: pn_jid.user.to_string(),
+                created_at: 0,
+                learning_source: wacore::types::lid_pn::LearningSource::Usync,
+            })
+            .await;
+
+        // Lookup via PN: resolve_encryption_jid maps to LID (primary),
+        // primary misses, server changed (Lid != Pn) → uses `to` directly
+        let taken = client.take_recent_message(&pn_jid, msg_id).await;
+        assert!(
+            taken.is_some(),
+            "Should find message via server-changed path"
+        );
+        let (msg_out, alt_chat) = taken.unwrap();
+        let alt_chat = alt_chat.expect("should be alternate hit");
+        assert!(
+            alt_chat.is_pn(),
+            "alternate chat should be PN (the original input)"
+        );
+        assert_eq!(alt_chat.user, pn_jid.user);
+        assert_eq!(msg_out.conversation.as_deref(), Some("pn input alternate"));
+    }
+
+    /// When no PN/LID mapping exists, no alternate is tried and take returns None.
+    #[tokio::test]
+    async fn no_alternate_without_mapping() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            config,
+        )
+        .await;
+
+        let lid_jid: Jid = "236395184570386@lid".parse().unwrap();
+        let msg_id = "RETRY_NO_ALT";
+        let msg = wa::Message {
+            conversation: Some("no alternate".into()),
+            ..Default::default()
+        };
+
+        // Store under LID, no PN mapping exists
+        client.add_recent_message(&lid_jid, msg_id, &msg).await;
+
+        // Lookup via LID: primary hits directly (same namespace)
+        let taken = client.take_recent_message(&lid_jid, msg_id).await;
+        assert!(taken.is_some());
+        let (_, alt_chat) = taken.unwrap();
+        assert!(alt_chat.is_none(), "primary hit should have no alt_chat");
+
+        // Now try looking up a message that doesn't exist at all
+        let missing = client.take_recent_message(&lid_jid, "NONEXISTENT").await;
+        assert!(missing.is_none(), "non-existent message should return None");
+    }
+
+    /// When both primary and alternate miss, take returns None.
+    #[tokio::test]
+    async fn alternate_key_both_miss() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            config,
+        )
+        .await;
+
+        let pn_jid: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let lid_jid: Jid = "236395184570386@lid".parse().unwrap();
+
+        // Add mapping but don't store any message
+        client
+            .lid_pn_cache
+            .add(wacore::types::lid_pn::LidPnEntry {
+                lid: lid_jid.user.to_string(),
+                phone_number: pn_jid.user.to_string(),
+                created_at: 0,
+                learning_source: wacore::types::lid_pn::LearningSource::Usync,
+            })
+            .await;
+
+        // Lookup via PN: primary (LID) misses, alternate (PN) also misses
+        let taken = client.take_recent_message(&pn_jid, "MISSING").await;
+        assert!(taken.is_none(), "both primary and alternate miss → None");
+    }
 }
