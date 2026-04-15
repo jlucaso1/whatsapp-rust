@@ -159,28 +159,28 @@ impl CacheStores {
 pub struct CacheConfig {
     /// Group metadata cache (time_to_live). Default: 1h TTL, 250 entries.
     pub group_cache: CacheEntryConfig,
-    /// Device registry cache (time_to_live). Default: 1h TTL, 5000 entries.
+    /// Device registry cache (time_to_live). Default: 1h TTL, 1000 entries.
     pub device_registry_cache: CacheEntryConfig,
-    /// LID-to-phone cache (time_to_idle). Default: 1h timeout, 10000 entries.
+    /// LID-to-phone cache (time_to_idle). Default: 1h timeout, 2000 entries.
     pub lid_pn_cache: CacheEntryConfig,
-    /// Retried group messages tracker (time_to_live). Default: 5m TTL, 2000 entries.
+    /// Retried group messages tracker (time_to_live). Default: 5m TTL, 500 entries.
     pub retried_group_messages: CacheEntryConfig,
     /// Optional L1 in-memory cache for sent messages (retry support).
     /// Default: capacity 0 (disabled — DB-only, matching WA Web).
     /// Set capacity > 0 to enable a fast in-memory cache in front of the DB.
     pub recent_messages: CacheEntryConfig,
-    /// Message retry counts (time_to_live). Default: 5m TTL, 1000 entries.
+    /// Message retry counts (time_to_live). Default: 5m TTL, 500 entries.
     pub message_retry_counts: CacheEntryConfig,
-    /// PDO pending requests (time_to_live). Default: 30s TTL, 500 entries.
+    /// PDO pending requests (time_to_live). Default: 30s TTL, 200 entries.
     pub pdo_pending_requests: CacheEntryConfig,
     /// Sender key device tracking cache (time_to_idle). Default: 1h TTI, 500 entries.
     /// Caches per-group SKDM distribution state to avoid DB reads on every group send.
     pub sender_key_devices_cache: CacheEntryConfig,
 
     // --- Coordination caches (capacity-only, no TTL) ---
-    /// Per-device Signal session lock capacity. Default: 10000.
+    /// Per-device Signal session lock capacity. Default: 2000.
     pub session_locks_capacity: u64,
-    /// Per-chat lane capacity (combined lock + queue). Default: 5000.
+    /// Per-chat lane capacity (combined lock + queue). Default: 1000.
     pub chat_lanes_capacity: u64,
 
     // --- Sent message DB cleanup ---
@@ -239,18 +239,18 @@ impl Default for CacheConfig {
 
         Self {
             group_cache: CacheEntryConfig::new(one_hour, 250),
-            device_registry_cache: CacheEntryConfig::new(one_hour, 5_000),
-            lid_pn_cache: CacheEntryConfig::new(one_hour, 10_000),
-            retried_group_messages: CacheEntryConfig::new(five_min, 2_000),
+            device_registry_cache: CacheEntryConfig::new(one_hour, 1_000),
+            lid_pn_cache: CacheEntryConfig::new(one_hour, 2_000),
+            retried_group_messages: CacheEntryConfig::new(five_min, 500),
             recent_messages: CacheEntryConfig::new(five_min, 0),
-            message_retry_counts: CacheEntryConfig::new(five_min, 1_000),
-            pdo_pending_requests: CacheEntryConfig::new(Some(Duration::from_secs(30)), 500),
+            message_retry_counts: CacheEntryConfig::new(five_min, 500),
+            pdo_pending_requests: CacheEntryConfig::new(Some(Duration::from_secs(30)), 200),
             sender_key_devices_cache: CacheEntryConfig::new(one_hour, 500),
             // Coordination caches hold live mutexes/senders; capacity eviction
             // while a reference is held creates a second lock for the same key,
             // breaking serialization. Size generously to avoid eviction pressure.
-            session_locks_capacity: 10_000,
-            chat_lanes_capacity: 5_000,
+            session_locks_capacity: 2_000,
+            chat_lanes_capacity: 1_000,
             sent_message_ttl_secs: 300,
             cache_stores: CacheStores::default(),
         }
