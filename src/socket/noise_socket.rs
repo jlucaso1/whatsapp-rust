@@ -15,7 +15,7 @@ type SendResult = std::result::Result<(), EncryptSendError>;
 
 /// A job sent to the dedicated sender task.
 struct SendJob {
-    plaintext_buf: Vec<u8>,
+    plaintext: bytes::Bytes,
     response_tx: oneshot::Sender<SendResult>,
 }
 
@@ -78,6 +78,8 @@ impl NoiseSocket {
         send_job_rx: async_channel::Receiver<SendJob>,
     ) {
         let mut write_counter: u32 = 0;
+        // Reusable buffers -- capacity stays allocated between sends
+        let mut enc_buf = Vec::with_capacity(4096);
         let mut out_buf = Vec::with_capacity(4096);
 
         while let Ok(job) = send_job_rx.recv().await {
@@ -86,7 +88,8 @@ impl NoiseSocket {
                 &transport,
                 &write_key,
                 &mut write_counter,
-                job.plaintext_buf,
+                &job.plaintext,
+                &mut enc_buf,
                 &mut out_buf,
             )
             .await;
@@ -101,31 +104,33 @@ impl NoiseSocket {
         transport: &Arc<dyn Transport>,
         write_key: &Arc<NoiseCipher>,
         write_counter: &mut u32,
-        mut plaintext_buf: Vec<u8>,
+        plaintext: &[u8],
+        enc_buf: &mut Vec<u8>,
         out_buf: &mut Vec<u8>,
     ) -> SendResult {
         let counter = *write_counter;
 
-        if plaintext_buf.len() <= INLINE_ENCRYPT_THRESHOLD {
-            if let Err(e) = write_key.encrypt_in_place_with_counter(counter, &mut plaintext_buf) {
+        if plaintext.len() <= INLINE_ENCRYPT_THRESHOLD {
+            // Copy into reusable enc_buf, encrypt in place
+            enc_buf.clear();
+            enc_buf.extend_from_slice(plaintext);
+            if let Err(e) = write_key.encrypt_in_place_with_counter(counter, enc_buf) {
                 return Err(EncryptSendError::crypto(anyhow::anyhow!(e.to_string())));
             }
 
             out_buf.clear();
-            if let Err(e) = wacore::framing::encode_frame_into(&plaintext_buf, None, out_buf) {
+            if let Err(e) = wacore::framing::encode_frame_into(enc_buf, None, out_buf) {
                 return Err(EncryptSendError::framing(e));
             }
         } else {
+            // Large messages: encrypt on blocking thread (reads plaintext, returns new ciphertext)
             let write_key = write_key.clone();
-            let plaintext_arc = Arc::new(plaintext_buf);
-            let plaintext_arc_for_task = plaintext_arc.clone();
+            let plaintext_owned = plaintext.to_vec();
 
             let encrypt_result = wacore::runtime::blocking(&**runtime, move || {
-                write_key.encrypt_with_counter(counter, &plaintext_arc_for_task[..])
+                write_key.encrypt_with_counter(counter, &plaintext_owned)
             })
             .await;
-
-            drop(plaintext_arc);
 
             let ciphertext = match encrypt_result {
                 Ok(c) => c,
@@ -140,7 +145,6 @@ impl NoiseSocket {
             }
         }
 
-        // Swap out the framed data; the Vec retains capacity after drain
         let frame = bytes::Bytes::from(std::mem::take(out_buf));
         if let Err(e) = transport.send(frame).await {
             return Err(EncryptSendError::transport(e));
@@ -151,11 +155,11 @@ impl NoiseSocket {
         Ok(())
     }
 
-    pub async fn encrypt_and_send(&self, plaintext_buf: Vec<u8>) -> SendResult {
+    pub async fn encrypt_and_send(&self, plaintext: bytes::Bytes) -> SendResult {
         let (response_tx, response_rx) = oneshot::channel();
 
         let job = SendJob {
-            plaintext_buf,
+            plaintext,
             response_tx,
         };
 
@@ -205,9 +209,7 @@ mod tests {
             read_key,
         );
 
-        let plaintext_buf = Vec::with_capacity(1024);
-
-        let result = socket.encrypt_and_send(plaintext_buf).await;
+        let result = socket.encrypt_and_send(bytes::Bytes::new()).await;
         assert!(result.is_ok(), "encrypt_and_send should succeed");
     }
 
@@ -280,7 +282,7 @@ mod tests {
                 // Use index as the first byte of plaintext to identify this send
                 let mut plaintext = vec![i as u8];
                 plaintext.extend_from_slice(&[0u8; 99]);
-                socket.encrypt_and_send(plaintext).await
+                socket.encrypt_and_send(bytes::Bytes::from(plaintext)).await
             }));
         }
 
@@ -340,7 +342,9 @@ mod tests {
 
         for size in test_sizes {
             let plaintext = vec![0xABu8; size];
-            let result = socket.encrypt_and_send(plaintext.clone()).await;
+            let result = socket
+                .encrypt_and_send(bytes::Bytes::from(plaintext.clone()))
+                .await;
 
             assert!(
                 result.is_ok(),
@@ -391,11 +395,11 @@ mod tests {
         );
 
         // Test empty payload
-        let result = socket.encrypt_and_send(vec![]).await;
+        let result = socket.encrypt_and_send(bytes::Bytes::new()).await;
         assert!(result.is_ok(), "Empty payload should encrypt successfully");
 
         // Test payload at inline threshold boundary (16KB)
-        let at_threshold = vec![0u8; 16 * 1024];
+        let at_threshold = bytes::Bytes::from(vec![0u8; 16 * 1024]);
         let result = socket.encrypt_and_send(at_threshold).await;
         assert!(
             result.is_ok(),
@@ -403,7 +407,7 @@ mod tests {
         );
 
         // Test payload just above inline threshold
-        let above_threshold = vec![0u8; 16 * 1024 + 1];
+        let above_threshold = bytes::Bytes::from(vec![0u8; 16 * 1024 + 1]);
         let result = socket.encrypt_and_send(above_threshold).await;
         assert!(
             result.is_ok(),

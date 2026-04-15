@@ -143,13 +143,25 @@ impl Client {
             key_pairs_to_upload.push((pre_key_id, key_pair));
         }
 
-        // Encode once — reused for both pre-upload store and post-upload mark.
-        // Uses Bytes so store_prekeys_batch clones are O(1) refcount bumps.
+        // Encode all prekey records into a single contiguous buffer, then slice
+        // into Bytes sub-views. This replaces 812 individual encode_to_vec() allocs
+        // with one large allocation + zero-copy slicing.
         let encoded_batch: Vec<(u32, bytes::Bytes)> = {
             use prost::Message;
-            keys_to_upload
-                .iter()
-                .map(|(id, record)| (*id, bytes::Bytes::from(record.encode_to_vec())))
+            let total_len: usize = keys_to_upload.iter().map(|(_, r)| r.encoded_len()).sum();
+            let mut buf = Vec::with_capacity(total_len);
+            let mut offsets = Vec::with_capacity(keys_to_upload.len());
+            for (id, record) in &keys_to_upload {
+                let start = buf.len();
+                record
+                    .encode(&mut buf)
+                    .expect("prost encode into pre-sized Vec");
+                offsets.push((*id, start..buf.len()));
+            }
+            let shared = bytes::Bytes::from(buf);
+            offsets
+                .into_iter()
+                .map(|(id, range)| (id, shared.slice(range)))
                 .collect()
         };
 
