@@ -11,6 +11,7 @@ pub mod marshal;
 pub mod node;
 pub mod token;
 pub mod util;
+pub mod zlib_pool;
 
 pub use attrs::{AttrParser, AttrParserRef};
 pub use compact_str::CompactString;

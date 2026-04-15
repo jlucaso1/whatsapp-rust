@@ -1,7 +1,6 @@
 use bytes::Bytes;
-use flate2::read::ZlibDecoder;
-use std::io::Read;
 use thiserror::Error;
+use wacore_binary::zlib_pool::decompress_zlib_pooled;
 
 #[derive(Debug, Error)]
 pub enum HistorySyncError {
@@ -49,23 +48,14 @@ pub fn process_history_sync(
     compressed_data: Vec<u8>,
     own_user: Option<&str>,
     retain_blob: bool,
-    compressed_size_hint: Option<u64>,
+    _compressed_size_hint: Option<u64>,
 ) -> Result<HistorySyncResult, HistorySyncError> {
     // Hard limit to prevent OOM on malformed blobs.
     // Typical InitialBootstrap: 5-20 MB decompressed.
     const MAX_DECOMPRESSED: u64 = 64 * 1024 * 1024;
 
-    let estimated = compressed_size_hint
-        .and_then(|s| usize::try_from(s).ok())
-        .map(|s| s * 4)
-        .unwrap_or_else(|| compressed_data.len() * 4)
-        .clamp(256, MAX_DECOMPRESSED as usize);
-    let mut decompressed = Vec::with_capacity(estimated);
-    {
-        let decoder = ZlibDecoder::new(compressed_data.as_slice());
-        let mut limited = decoder.take(MAX_DECOMPRESSED);
-        limited.read_to_end(&mut decompressed)?;
-    }
+    let decompressed = decompress_zlib_pooled(&compressed_data, MAX_DECOMPRESSED)
+        .map_err(HistorySyncError::DecompressionError)?;
     drop(compressed_data);
 
     let buf = Bytes::from(decompressed);
