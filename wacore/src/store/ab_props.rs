@@ -13,11 +13,29 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use async_lock::RwLock;
 use wacore_binary::CompactString;
 
+use crate::iq::props::config_codes;
+
+/// All config codes that production code queries.
+/// Pre-populated so apply_props retains them without explicit watch() calls.
+const DEFAULT_INTEREST: &[u32] = &[
+    config_codes::PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES,
+    config_codes::PRIVACY_TOKEN_ON_GROUP_CREATE,
+    config_codes::PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD,
+    config_codes::PRIVACY_TOKEN_ONLY_CHECK_LID,
+    config_codes::PROFILE_PIC_PRIVACY_TOKEN,
+    config_codes::LID_TRUSTED_TOKEN_ISSUE_TO_LID,
+    config_codes::TCTOKEN_DURATION,
+    config_codes::TCTOKEN_DURATION_SENDER,
+    config_codes::TCTOKEN_NUM_BUCKETS,
+    config_codes::TCTOKEN_NUM_BUCKETS_SENDER,
+    config_codes::NCT_TOKEN_SEND_ENABLED,
+];
+
 /// In-memory cache of AB experiment properties, populated on connect.
-/// Only materializes props whose config_code is registered via `watch()`.
+/// Only materializes props whose config_code is in the interest set.
+/// Pre-populated with all known config_codes; extend via `watch()`.
 pub struct AbPropsCache {
     props: RwLock<HashMap<u32, CompactString>>,
-    /// Config codes to retain. Props not in this set are discarded.
     interest: RwLock<HashSet<u32>>,
     seeded: AtomicBool,
 }
@@ -26,7 +44,7 @@ impl AbPropsCache {
     pub fn new() -> Self {
         Self {
             props: RwLock::new(HashMap::new()),
-            interest: RwLock::new(HashSet::new()),
+            interest: RwLock::new(DEFAULT_INTEREST.iter().copied().collect()),
             seeded: AtomicBool::new(false),
         }
     }
@@ -61,13 +79,16 @@ impl AbPropsCache {
 
         if !delta_update {
             map.clear();
-            self.seeded.store(true, Ordering::Release);
         }
 
         for (code, value) in props {
             if interest.contains(&code) {
                 map.insert(code, value);
             }
+        }
+
+        if !delta_update {
+            self.seeded.store(true, Ordering::Release);
         }
     }
 
@@ -180,5 +201,64 @@ mod tests {
         assert_eq!(cache.get(100).await.as_deref(), Some("new"));
         assert_eq!(cache.get(200).await.as_deref(), Some("keep"));
         assert_eq!(cache.get(300).await.as_deref(), Some("added"));
+    }
+
+    /// Regression test: default interest set must include all production config codes.
+    /// Without this, apply_props would silently drop all props and every
+    /// is_enabled/get_int call would fall through to its default.
+    #[tokio::test]
+    async fn default_interest_retains_production_config_codes() {
+        let cache = AbPropsCache::new();
+
+        // Simulate a full props response containing all known production codes
+        let props = vec![
+            (
+                config_codes::PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES,
+                CompactString::from("1"),
+            ),
+            (
+                config_codes::NCT_TOKEN_SEND_ENABLED,
+                CompactString::from("true"),
+            ),
+            (
+                config_codes::TCTOKEN_DURATION,
+                CompactString::from("604800"),
+            ),
+            (config_codes::TCTOKEN_NUM_BUCKETS, CompactString::from("4")),
+            (99999u32, CompactString::from("unwatched")),
+        ];
+        cache.apply_props(false, props.into_iter()).await;
+
+        assert!(cache.is_seeded());
+        assert!(
+            cache
+                .is_enabled(config_codes::PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES)
+                .await
+        );
+        assert!(cache.is_enabled(config_codes::NCT_TOKEN_SEND_ENABLED).await);
+        assert_eq!(
+            cache.get_int(config_codes::TCTOKEN_DURATION, 0).await,
+            604800
+        );
+        assert_eq!(cache.get_int(config_codes::TCTOKEN_NUM_BUCKETS, 0).await, 4);
+        // Unwatched code should NOT be retained
+        assert_eq!(cache.get(99999).await, None);
+    }
+
+    /// Verify seeded flag is only set AFTER all props are inserted (not before).
+    #[tokio::test]
+    async fn seeded_set_after_inserts() {
+        let cache = AbPropsCache::new();
+        assert!(!cache.is_seeded());
+
+        cache
+            .apply_props(
+                false,
+                vec![(config_codes::TCTOKEN_DURATION, CompactString::from("100"))].into_iter(),
+            )
+            .await;
+
+        assert!(cache.is_seeded());
+        assert_eq!(cache.get_int(config_codes::TCTOKEN_DURATION, 0).await, 100);
     }
 }
