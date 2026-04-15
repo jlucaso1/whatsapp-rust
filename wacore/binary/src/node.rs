@@ -802,6 +802,21 @@ impl OwnedNodeRef {
         self.inner.get().to_owned()
     }
 
+    /// Return a zero-copy `Bytes` sub-view for a slice that borrows from this
+    /// node's backing buffer. Panics if `slice` does not point within the buffer.
+    pub fn slice_bytes(&self, slice: &[u8]) -> Bytes {
+        let cart = &self.inner.backing_cart().0;
+        let base = cart.as_ptr() as usize;
+        let end = base + cart.len();
+        let ptr = slice.as_ptr() as usize;
+        assert!(
+            ptr >= base && ptr + slice.len() <= end,
+            "slice is not within the backing buffer"
+        );
+        let offset = ptr - base;
+        cart.slice(offset..offset + slice.len())
+    }
+
     /// The tag name of this node.
     #[inline]
     pub fn tag(&self) -> &str {

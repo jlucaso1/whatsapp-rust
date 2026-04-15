@@ -36,7 +36,22 @@ pub(crate) struct EncPayload {
 }
 
 impl EncPayload {
-    /// Extract payload from a NodeRef (used in tests and classify_incoming_message).
+    /// Zero-copy extraction from an OwnedNodeRef. The ciphertext Bytes is a
+    /// sub-view into the node's backing buffer (no memcpy).
+    pub(crate) fn from_owned_node(owner: &OwnedNodeRef, enc_node: &NodeRef<'_>) -> Option<Self> {
+        let raw = enc_node.content_bytes()?;
+        let ciphertext = owner.slice_bytes(raw);
+        let enc_type = enc_node.attrs().optional_string("type")?.to_string();
+        let padding_version = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
+        Some(Self {
+            ciphertext,
+            enc_type,
+            padding_version,
+        })
+    }
+
+    /// Copying extraction from a NodeRef (used in tests where there's no OwnedNodeRef).
+    #[cfg(test)]
     pub(crate) fn from_node_ref(node: &NodeRef<'_>) -> Option<Self> {
         let ciphertext = bytes::Bytes::copy_from_slice(node.content_bytes()?);
         let enc_type = node.attrs().optional_string("type")?.to_string();
@@ -452,19 +467,14 @@ impl Client {
                 continue;
             }
 
-            // Extract owned payload so the node doesn't need to be borrowed later
-            let ct = match enc_node.content_bytes() {
-                Some(b) => bytes::Bytes::copy_from_slice(b),
+            // Zero-copy: slice_bytes returns a Bytes sub-view into the
+            // node's backing buffer without memcpy
+            let payload = match EncPayload::from_owned_node(node, enc_node) {
+                Some(p) => p,
                 None => {
                     log::warn!("Enc node has no byte content");
                     continue;
                 }
-            };
-            let pv = enc_node.attrs().optional_u64("v").unwrap_or(2) as u8;
-            let payload = EncPayload {
-                ciphertext: ct,
-                enc_type: enc_type.to_string(),
-                padding_version: pv,
             };
 
             match EncType::from_wire(enc_type.as_ref()) {
