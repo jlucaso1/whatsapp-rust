@@ -3,6 +3,7 @@
 use e2e_tests::{TestClient, send_and_expect_text, text_msg};
 use log::info;
 use wacore::types::events::Event;
+use wacore_binary::JidExt as _;
 use wacore_binary::node::Node;
 use whatsapp_rust::{NodeFilter, SendOptions};
 
@@ -107,11 +108,17 @@ async fn test_dm_retry_recovers_after_session_deletion() -> anyhow::Result<()> {
         Some("1"),
         "Retry resend should mark the payload with count=1"
     );
-    let jid_b_str = jid_b.to_string();
-    assert_eq!(
-        retry_node.attrs().optional_string("to").as_deref(),
-        Some(jid_b_str.as_str()),
-        "Retry resend should keep the user-level chat target"
+    // WA Web uses the raw receipt `from` (with device suffix) as the stanza `to`.
+    // The mock server may or may not include a device suffix depending on timing,
+    // so check user part only.
+    let retry_to = retry_node
+        .attrs()
+        .optional_jid("to")
+        .expect("Retry resend should have a 'to' attribute");
+    assert!(
+        retry_to.is_same_user_as(&jid_b),
+        "Retry resend 'to' should target the same user (got {retry_to}, expected user {})",
+        jid_b
     );
     info!("Retry recovered after B deleted its session with A");
 
