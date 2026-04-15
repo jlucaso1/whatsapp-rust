@@ -26,6 +26,9 @@ pub fn decompress_zlib_pooled(compressed: &[u8], max_size: u64) -> io::Result<Ve
 
         let mut input_offset = 0;
         loop {
+            let prev_in = decompressor.total_in();
+            let prev_out = decompressor.total_out();
+
             let status = decompressor
                 .decompress_vec(
                     &compressed[input_offset..],
@@ -45,17 +48,23 @@ pub fn decompress_zlib_pooled(compressed: &[u8], max_size: u64) -> io::Result<Ve
 
             match status {
                 Status::StreamEnd => break,
-                Status::Ok | Status::BufError => {
-                    // Need more output space
+                Status::Ok => {
+                    scratch.reserve(scratch.capacity().max(4096));
+                }
+                Status::BufError => {
+                    // BufError with no progress means the stream is truncated/corrupt
+                    if decompressor.total_in() == prev_in && decompressor.total_out() == prev_out {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            "zlib stream truncated (no progress)",
+                        ));
+                    }
                     scratch.reserve(scratch.capacity().max(4096));
                 }
             }
         }
 
-        // Return the data by swapping out to avoid cloning.
-        // The scratch buffer keeps its capacity for the next call.
-        let mut result = Vec::new();
-        std::mem::swap(scratch, &mut result);
-        Ok(result)
+        // Clone data out so scratch retains its capacity for the next call
+        Ok(scratch.clone())
     })
 }
