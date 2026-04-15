@@ -462,9 +462,7 @@ impl Client {
         let device_store = self.persistence_manager.get_device_arc().await;
 
         for device_jid in &device_jids {
-            // For DMs, handle base key tracking for collision detection (matches WhatsApp Web).
-            // This detects when we haven't regenerated our session despite receiving retry receipts,
-            // which can cause infinite retry loops where both sides are stuck with stale keys.
+            // Base key collision detection prevents stale-session retry loops.
             let signal_address = device_jid.to_protocol_address();
 
             // Check for base key collision before deleting the session.
@@ -483,7 +481,7 @@ impl Client {
                 {
                     let addr_str = signal_address.as_str();
                     if retry_count == MIN_RETRY_FOR_BASE_KEY_CHECK {
-                        // On retry 2: Save the base key for later comparison
+                        // Save retry #2's base key so later retries can prove regeneration happened.
                         if let Err(e) = device_guard
                             .backend
                             .save_base_key(addr_str, message_id, current_base_key)
@@ -497,7 +495,7 @@ impl Client {
                             );
                         }
                     } else if retry_count > MIN_RETRY_FOR_BASE_KEY_CHECK {
-                        // On retry > 2: Check if base key is the same (collision detection)
+                        // An unchanged base key means we never rebuilt the session.
                         match device_guard
                             .backend
                             .has_same_base_key(addr_str, message_id, current_base_key)
@@ -536,8 +534,7 @@ impl Client {
                 }
             }
 
-            // Delete the old session through the signal cache so encryption uses a fresh session.
-            // IMPORTANT: Must go through cache, not backend, to avoid stale cached sessions.
+            // Delete through the cache so resend can't revive a stale in-memory session.
             self.signal_cache.delete_session(&signal_address).await;
             info!("Deleted session for {signal_address} due to retry receipt");
         }
@@ -550,7 +547,7 @@ impl Client {
         let requester_bare = resolved_jid.to_non_ad();
         self.get_devices_from_registry(&requester_bare)
             .await
-            .unwrap_or_else(|| vec![resolved_jid.clone()])
+            .unwrap_or_else(|| vec![requester_bare])
     }
 
     /// Extracts and processes the key bundle from a retry receipt.
