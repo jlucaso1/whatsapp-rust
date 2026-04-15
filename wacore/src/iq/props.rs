@@ -26,6 +26,7 @@
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
+use wacore_binary::CompactString;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::{Jid, Server};
 use wacore_binary::{Node, NodeContent, NodeRef};
@@ -68,8 +69,8 @@ pub const PROPS_PROTOCOL_VERSION: &str = "1";
 pub struct AbProp {
     /// The config code (property identifier).
     pub config_code: u32,
-    /// The config value.
-    pub config_value: String,
+    /// The config value. CompactString inlines values <=24 bytes (covers most props).
+    pub config_value: CompactString,
     /// Optional experiment exposure key.
     pub config_expo_key: Option<u32>,
 }
@@ -82,7 +83,7 @@ impl crate::protocol::ProtocolNode for AbProp {
     fn into_node(self) -> Node {
         let mut builder = NodeBuilder::new("prop")
             .attr("config_code", self.config_code.to_string())
-            .attr("config_value", &self.config_value);
+            .attr("config_value", &*self.config_value);
 
         if let Some(expo_key) = self.config_expo_key {
             builder = builder.attr("config_expo_key", expo_key.to_string());
@@ -105,8 +106,8 @@ impl crate::protocol::ProtocolNode for AbProp {
             return Err(anyhow::anyhow!("config_code must be >= 1"));
         }
         let config_value = optional_attr(node, "config_value")
-            .ok_or_else(|| anyhow::anyhow!("missing config_value in prop"))?
-            .into_owned();
+            .ok_or_else(|| anyhow::anyhow!("missing config_value in prop"))?;
+        let config_value = CompactString::from(config_value.as_ref());
         let config_expo_key = optional_attr(node, "config_expo_key").and_then(|s| s.parse().ok());
 
         Ok(Self {
@@ -483,7 +484,7 @@ mod tests {
     fn test_ab_prop_protocol_node_round_trip() {
         let prop = AbProp {
             config_code: 123,
-            config_value: "test_value".to_string(),
+            config_value: "test_value".into(),
             config_expo_key: Some(456),
         };
 
@@ -499,7 +500,7 @@ mod tests {
     fn test_ab_prop_protocol_node_no_expo_key() {
         let prop = AbProp {
             config_code: 789,
-            config_value: "another_value".to_string(),
+            config_value: "another_value".into(),
             config_expo_key: None,
         };
 
@@ -522,7 +523,7 @@ mod tests {
             props: vec![
                 AbPropConfig::Experiment(AbProp {
                     config_code: 100,
-                    config_value: "value1".to_string(),
+                    config_value: "value1".into(),
                     config_expo_key: None,
                 }),
                 AbPropConfig::Sampling(SamplingProp {
@@ -531,7 +532,7 @@ mod tests {
                 }),
                 AbPropConfig::Experiment(AbProp {
                     config_code: 200,
-                    config_value: "value2".to_string(),
+                    config_value: "value2".into(),
                     config_expo_key: Some(99),
                 }),
             ],

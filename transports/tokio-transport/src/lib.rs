@@ -131,7 +131,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> WsTransport<S> {
 
 #[async_trait]
 impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Transport for WsTransport<S> {
-    async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error> {
+    async fn send(&self, data: bytes::Bytes) -> Result<(), anyhow::Error> {
         let mut guard = self.sink.lock().await;
         let sink = guard
             .as_mut()
