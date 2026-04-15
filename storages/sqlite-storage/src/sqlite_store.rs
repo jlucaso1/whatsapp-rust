@@ -1176,8 +1176,20 @@ impl SignalStore for SqliteStore {
             .await
     }
 
-    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
-        self.load_identity_for_device(address, self.device_id).await
+    async fn load_identity(&self, address: &str) -> Result<Option<[u8; 32]>> {
+        let blob = self
+            .load_identity_for_device(address, self.device_id)
+            .await?;
+        match blob {
+            None => Ok(None),
+            Some(v) => Ok(Some(v.try_into().map_err(|v: Vec<u8>| {
+                StoreError::Serialization(format!(
+                    "identity key for '{}' has invalid length {} (expected 32)",
+                    address,
+                    v.len()
+                ))
+            })?)),
+        }
     }
 
     async fn delete_identity(&self, address: &str) -> Result<()> {
@@ -1185,8 +1197,11 @@ impl SignalStore for SqliteStore {
             .await
     }
 
-    async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
-        self.get_session_for_device(address, self.device_id).await
+    async fn get_session(&self, address: &str) -> Result<Option<bytes::Bytes>> {
+        Ok(self
+            .get_session_for_device(address, self.device_id)
+            .await?
+            .map(bytes::Bytes::from))
     }
 
     async fn has_session(&self, address: &str) -> Result<bool> {

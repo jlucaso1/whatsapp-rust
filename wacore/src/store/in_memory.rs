@@ -38,7 +38,7 @@ type BaseKeyKey = (String, String);
 struct InMemoryState {
     // --- Signal ---
     identities: HashMap<String, [u8; 32]>,
-    sessions: HashMap<String, Vec<u8>>,
+    sessions: HashMap<String, Bytes>,
     prekeys: HashMap<u32, PreKeyEntry>,
     signed_prekeys: HashMap<u32, Vec<u8>>,
     sender_keys: HashMap<String, Vec<u8>>,
@@ -128,14 +128,8 @@ impl SignalStore for InMemoryBackend {
         Ok(())
     }
 
-    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
-        Ok(self
-            .state
-            .lock()
-            .await
-            .identities
-            .get(address)
-            .map(|k| k.to_vec()))
+    async fn load_identity(&self, address: &str) -> Result<Option<[u8; 32]>> {
+        Ok(self.state.lock().await.identities.get(address).copied())
     }
 
     async fn delete_identity(&self, address: &str) -> Result<()> {
@@ -143,7 +137,7 @@ impl SignalStore for InMemoryBackend {
         Ok(())
     }
 
-    async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
+    async fn get_session(&self, address: &str) -> Result<Option<Bytes>> {
         Ok(self.state.lock().await.sessions.get(address).cloned())
     }
 
@@ -152,7 +146,7 @@ impl SignalStore for InMemoryBackend {
             .lock()
             .await
             .sessions
-            .insert(address.to_string(), session.to_vec());
+            .insert(address.to_string(), Bytes::copy_from_slice(session));
         Ok(())
     }
 
