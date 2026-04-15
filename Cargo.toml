@@ -14,6 +14,7 @@ members = [
     ".",
     "http_clients/ureq-client",
     "storages/sqlite-storage",
+    "tests/bench-integration",
     "tests/e2e",
     "transports/tokio-transport",
     "wacore",
@@ -159,5 +160,11 @@ incremental = false
 [profile.bench]
 inherits = "release"
 lto = "thin"
+debug = 1
+strip = false
+
+# Profiling: optimized with debug symbols for DHAT / heaptrack / perf
+[profile.profiling]
+inherits = "release"
 debug = 1
 strip = false
