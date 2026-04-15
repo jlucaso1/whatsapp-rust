@@ -633,8 +633,10 @@ impl Client {
             return Err(anyhow::anyhow!("Invalid registration ID in retry receipt"));
         }
 
-        let resolved_jid = self.resolve_encryption_jid(requester_jid).await;
-        let signal_address = resolved_jid.to_protocol_address();
+        // Use requester_jid directly — the caller already resolved the correct
+        // namespace (including alternate PN/LID normalization). Re-resolving
+        // here would undo that normalization.
+        let signal_address = requester_jid.to_protocol_address();
 
         // Check if the registration ID changed (indicates device reinstall).
         // Read session through cache for consistent state.
