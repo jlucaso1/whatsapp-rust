@@ -28,46 +28,34 @@ fn main() -> std::io::Result<()> {
 
         let mut config = prost_build::Config::new();
 
-        // Only derive Serialize by default. Deserialize is gated behind the
-        // "serde-deserialize" feature — only needed by WASM bridge for JS interop.
-        // This eliminates ~50% of serde-generated code for non-WASM builds.
+        // Serialize always; Deserialize only for WASM bridge (halves serde codegen).
         config.type_attribute(".", "#[derive(serde::Serialize)]");
         config.type_attribute(
             ".",
             "#[cfg_attr(feature = \"serde-deserialize\", derive(serde::Deserialize))]",
         );
-        // Make serde deserialization lenient — use defaults for missing fields.
-        // This matches protobuf semantics (missing = default value) and avoids
-        // "missing field" errors when deserializing partial JSON from JS.
-        // Uses message_attribute (not type_attribute) so it only applies to structs, not enums.
+        // Default missing fields to match protobuf semantics (structs only).
         config.message_attribute(
             ".",
             "#[cfg_attr(feature = \"serde-deserialize\", serde(default))]",
         );
 
-        // Accept snake_case during deserialization. Primarily affects enum/oneof variants
-        // (prost generates PascalCase) so the bridge's to_snake_case_js works. No-op for
-        // struct fields (already snake_case). Serialize output unchanged.
+        // Accept snake_case on deserialization for WASM bridge enum variants.
         config.type_attribute(
             ".",
             "#[cfg_attr(feature = \"serde-snake-case\", serde(rename_all(deserialize = \"snake_case\")))]",
         );
 
-        // Use bytes::Bytes instead of Vec<u8> for frequently-serialized cryptographic structures.
-        // This enables O(1) cloning (reference-counted) instead of O(n) copying.
-        // See: https://docs.rs/prost-build/latest/prost_build/struct.Config.html#method.bytes
+        // O(1)-clone Bytes for hot-path crypto structures instead of Vec<u8>.
         config.bytes([
-            // Session chain keys (called on every message encrypt/decrypt)
             ".whatsapp.SessionStructure.Chain.ChainKey",
             ".whatsapp.SessionStructure.Chain.MessageKey",
-            // Sender key structures (group messaging hot path)
             ".whatsapp.SenderKeyStateStructure.SenderChainKey",
             ".whatsapp.SenderKeyStateStructure.SenderMessageKey",
             ".whatsapp.SenderKeyStateStructure.SenderSigningKey",
         ]);
 
-        // bytes::Bytes doesn't impl Serialize (prost's bytes dep lacks the serde feature).
-        // Skip serializing these fields — they're internal crypto state, not API-visible.
+        // Bytes fields lack serde support; skip them (internal crypto state).
         config.field_attribute(
             ".whatsapp.SessionStructure.Chain.ChainKey.key",
             "#[serde(skip)]",
@@ -101,8 +89,7 @@ fn main() -> std::io::Result<()> {
             "#[serde(skip)]",
         );
 
-        // Configure prost to output the file to the `src/` directory,
-        // so it can be version-controlled.
+        // Output to src/ so generated code is version-controlled.
         config.out_dir("src/");
 
         config.compile_protos(&["src/whatsapp.proto"], &["src/"])?;
