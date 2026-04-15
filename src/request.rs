@@ -130,11 +130,6 @@ impl Client {
         &self,
         query: InfoQuery<'_>,
     ) -> Result<Arc<wacore_binary::OwnedNodeRef>, IqError> {
-        // Fail fast if the client is shutting down
-        if !self.is_running.load(Ordering::Relaxed) {
-            return Err(IqError::NotConnected);
-        }
-
         let default_timeout = Duration::from_secs(75);
         let iq_timeout = query.timeout.unwrap_or(default_timeout);
         let req_id = query
@@ -142,57 +137,11 @@ impl Client {
             .clone()
             .unwrap_or_else(|| self.generate_request_id());
 
-        let (tx, rx) = futures::channel::oneshot::channel();
-        self.response_waiters
-            .lock()
-            .await
-            .insert(req_id.clone(), tx);
-
         let request_utils = self.get_request_utils();
         let node = request_utils.build_iq_node(query, Some(req_id.clone()));
 
-        // Register the shutdown listener BEFORE sending to avoid a window where
-        // a shutdown fires between send_node() completing and listen() being called.
-        let shutdown = self.shutdown_notifier.listen();
-
-        // Re-check after registering the listener to close the race window where
-        // shutdown fires between the initial check and the listen() call above.
-        if !self.is_running.load(Ordering::Acquire) {
-            self.response_waiters.lock().await.remove(&req_id);
-            return Err(IqError::NotConnected);
-        }
-
-        if let Err(e) = self.send_node(node).await {
-            self.response_waiters.lock().await.remove(&req_id);
-            return match e {
-                crate::client::ClientError::Socket(s_err) => Err(IqError::Socket(s_err)),
-                crate::client::ClientError::NotConnected => Err(IqError::NotConnected),
-                _ => Err(IqError::Socket(SocketError::Crypto(e.to_string()))),
-            };
-        }
-
-        // Race the IQ response against shutdown so we fail fast on disconnect
-        // instead of waiting the full timeout.
-
-        futures::select! {
-            result = rt_timeout(&*self.runtime, iq_timeout, rx).fuse() => {
-                match result {
-                    Ok(Ok(response_node)) => match request_utils.parse_iq_response(response_node.get()) {
-                        Ok(()) => Ok(response_node),
-                        Err(e) => Err(e.into()),
-                    },
-                    Ok(Err(_)) => Err(IqError::InternalChannelClosed),
-                    Err(_) => {
-                        self.response_waiters.lock().await.remove(&req_id);
-                        Err(IqError::Timeout)
-                    }
-                }
-            }
-            _ = shutdown.fuse() => {
-                self.response_waiters.lock().await.remove(&req_id);
-                Err(IqError::NotConnected)
-            }
-        }
+        self.send_and_wait_iq(req_id, iq_timeout, async { self.send_node(node).await })
+            .await
     }
 
     /// Executes an IQ specification and returns the typed response.
@@ -212,13 +161,16 @@ impl Client {
     where
         S: wacore::iq::spec::IqSpec,
     {
-        // Try the direct-encode fast path to avoid intermediate Node allocations.
-        // Only allocate the buffer if the spec actually uses it.
         let req_id = self.generate_request_id();
+        // Try direct-encode fast path (only PreKeyUploadSpec uses this)
         {
             let mut buf = Vec::new();
             if let Ok(true) = spec.encode_iq_direct(&req_id, &mut buf) {
-                let response = self.send_iq_raw(req_id, buf).await?;
+                let response = self
+                    .send_and_wait_iq(req_id, Duration::from_secs(75), async {
+                        self.send_raw_bytes(buf).await
+                    })
+                    .await?;
                 return spec
                     .parse_response(response.get())
                     .map_err(IqError::ParseError);
@@ -231,17 +183,19 @@ impl Client {
             .map_err(IqError::ParseError)
     }
 
-    /// Send pre-encoded IQ bytes and wait for the response.
-    async fn send_iq_raw(
+    /// Shared helper: register waiter, send, race response vs shutdown/timeout.
+    async fn send_and_wait_iq<F>(
         &self,
         req_id: String,
-        buf: Vec<u8>,
-    ) -> Result<Arc<wacore_binary::OwnedNodeRef>, IqError> {
+        timeout: Duration,
+        send_fn: F,
+    ) -> Result<Arc<wacore_binary::OwnedNodeRef>, IqError>
+    where
+        F: std::future::Future<Output = Result<(), crate::client::ClientError>>,
+    {
         if !self.is_running.load(Ordering::Relaxed) {
             return Err(IqError::NotConnected);
         }
-
-        let default_timeout = Duration::from_secs(75);
 
         let (tx, rx) = futures::channel::oneshot::channel();
         self.response_waiters
@@ -256,7 +210,7 @@ impl Client {
             return Err(IqError::NotConnected);
         }
 
-        if let Err(e) = self.send_raw_bytes(buf).await {
+        if let Err(e) = send_fn.await {
             self.response_waiters.lock().await.remove(&req_id);
             return match e {
                 crate::client::ClientError::Socket(s_err) => Err(IqError::Socket(s_err)),
@@ -267,7 +221,7 @@ impl Client {
 
         let request_utils = self.get_request_utils();
         futures::select! {
-            result = rt_timeout(&*self.runtime, default_timeout, rx).fuse() => {
+            result = rt_timeout(&*self.runtime, timeout, rx).fuse() => {
                 match result {
                     Ok(Ok(response_node)) => match request_utils.parse_iq_response(response_node.get()) {
                         Ok(()) => Ok(response_node),

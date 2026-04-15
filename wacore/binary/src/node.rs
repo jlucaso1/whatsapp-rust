@@ -456,11 +456,17 @@ impl<'a> FromIterator<(NodeStr<'a>, ValueRef<'a>)> for AttrsRef<'a> {
     }
 }
 
+// Compile-time covariance check: if AttrsRef ever becomes invariant
+// (e.g. by adding a Cell or &mut), this function will fail to compile.
+fn _assert_attrs_ref_covariant<'short, 'long: 'short>(x: AttrsRef<'long>) -> AttrsRef<'short> {
+    x
+}
+
 // Safety: AttrsRef is covariant in 'a because:
 // - Empty has no lifetime
 // - One contains (NodeStr<'a>, ValueRef<'a>) which are covariant
 // - Many(Vec<T>) is covariant in T
-// yoke::Yokeable requires covariance, which Vec and tuples provide.
+// The _assert_attrs_ref_covariant function above ensures this at compile time.
 unsafe impl<'a> yoke::Yokeable<'a> for AttrsRef<'static> {
     type Output = AttrsRef<'a>;
 
