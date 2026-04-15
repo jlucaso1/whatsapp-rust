@@ -562,7 +562,7 @@ pub enum NodeContent {
 pub enum NodeContentRef<'a> {
     Bytes(Cow<'a, [u8]>),
     String(NodeStr<'a>),
-    Nodes(Box<NodeVec<'a>>),
+    Nodes(Box<[NodeRef<'a>]>),
 }
 
 #[cfg(feature = "serde")]
@@ -576,7 +576,7 @@ impl serde::Serialize for NodeContentRef<'_> {
                 serializer.serialize_newtype_variant("NodeContent", 1, "String", &**s)
             }
             NodeContentRef::Nodes(nodes) => {
-                serializer.serialize_newtype_variant("NodeContent", 2, "Nodes", nodes.as_slice())
+                serializer.serialize_newtype_variant("NodeContent", 2, "Nodes", &**nodes)
             }
         }
     }
@@ -589,7 +589,8 @@ impl NodeContent {
             NodeContent::Bytes(b) => NodeContentRef::Bytes(Cow::Borrowed(b)),
             NodeContent::String(s) => NodeContentRef::String(NodeStr::Borrowed(s.as_str())),
             NodeContent::Nodes(nodes) => {
-                NodeContentRef::Nodes(Box::new(nodes.iter().map(|n| n.as_node_ref()).collect()))
+                let v: Vec<_> = nodes.iter().map(|n| n.as_node_ref()).collect();
+                NodeContentRef::Nodes(v.into_boxed_slice())
             }
         }
     }
@@ -741,7 +742,7 @@ impl<'a> NodeRef<'a> {
 
     pub fn children(&self) -> Option<&[NodeRef<'a>]> {
         match self.content.as_deref() {
-            Some(NodeContentRef::Nodes(nodes)) => Some(nodes.as_slice()),
+            Some(NodeContentRef::Nodes(nodes)) => Some(nodes),
             _ => None,
         }
     }

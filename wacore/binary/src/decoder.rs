@@ -1,6 +1,6 @@
 use crate::error::{BinaryError, Result};
 use crate::jid::{JidRef, push_jid_to_compact};
-use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeStr, NodeVec, ValueRef};
+use crate::node::{AttrsRef, NodeContentRef, NodeRef, NodeStr, ValueRef};
 use crate::token;
 use compact_str::CompactString;
 use std::borrow::Cow;
@@ -453,11 +453,11 @@ impl<'a> Decoder<'a> {
 
             token::LIST_8 | token::LIST_16 => {
                 let size = self.read_list_size(tag)?;
-                let mut nodes = NodeVec::with_capacity(size);
+                let mut nodes = Vec::with_capacity(size);
                 for _ in 0..size {
                     nodes.push(self.read_node_ref()?);
                 }
-                Ok(Some(NodeContentRef::Nodes(Box::new(nodes))))
+                Ok(Some(NodeContentRef::Nodes(nodes.into_boxed_slice())))
             }
 
             token::BINARY_8 => {
