@@ -199,9 +199,7 @@ impl Client {
                 .remove(&guard_key);
         });
 
-        let (original_msg, found_via_alternate) = match self
-            .take_recent_message(&info.chat, &message_id)
-            .await
+        let (original_msg, alt_chat) = match self.take_recent_message(&info.chat, &message_id).await
         {
             Some(result) => result,
             None => {
@@ -218,12 +216,22 @@ impl Client {
             .await;
 
         // When message was found via alternate PN<->LID key, the Signal session
-        // lives in the stored message's namespace (not the receipt's). Normalize
-        // the requester to match, then use it directly as the encryption target.
-        // Mirrors WA Web: `d.isLid() ? toLid(e.from) : toPn(e.from)` in
-        // getActualChatInfo (WAWebHandleRetryRequest).
-        let resolved_jid = if found_via_alternate && !is_group_or_status {
-            self.normalize_requester_namespace(&mut info).await;
+        // lives in the stored message's namespace (not the receipt's). Build the
+        // encryption JID from that namespace + requester's device, skipping
+        // resolve_encryption_jid (which would map back to the primary namespace).
+        // Mirrors WA Web: `d.isLid() ? toLid(e.from) : toPn(e.from)` +
+        // `createDeviceWidFromUserAndDevice` in getActualChatInfo.
+        let resolved_jid = if let Some(alt_chat) = alt_chat
+            && !is_group_or_status
+        {
+            let requester = &info.requester;
+            info.requester = Jid {
+                user: alt_chat.user,
+                server: alt_chat.server,
+                device: requester.device,
+                agent: requester.agent,
+                integrator: requester.integrator,
+            };
             info.requester.clone()
         } else {
             self.resolve_encryption_jid(&info.requester).await
@@ -495,14 +503,6 @@ impl Client {
         }
 
         Ok(())
-    }
-
-    /// Swap the requester's PN/LID namespace to match the stored message's
-    /// namespace when the alternate key was used. Preserves device/agent.
-    async fn normalize_requester_namespace(&self, info: &mut RetryChatInfo) {
-        if let Some(swapped) = self.swap_pn_lid_namespace(&info.requester).await {
-            info.requester = swapped;
-        }
     }
 
     async fn delete_dm_retry_session_target(
@@ -1018,8 +1018,8 @@ mod tests {
         // First take should return and remove it from cache
         let taken = client.take_recent_message(&chat, &msg_id).await;
         assert!(taken.is_some());
-        let (msg, alt) = taken.unwrap();
-        assert!(!alt, "primary key should match");
+        let (msg, alt_chat) = taken.unwrap();
+        assert!(alt_chat.is_none(), "primary key should match");
         assert_eq!(msg.conversation.as_deref(), Some("hello"));
 
         // Second take should return None
@@ -2129,8 +2129,8 @@ mod tests {
         // Lookup via bare JID should succeed (this is what info.chat provides)
         let taken = client.take_recent_message(&bare_jid, msg_id).await;
         assert!(taken.is_some(), "Lookup via bare JID should succeed");
-        let (msg_out, alt) = taken.unwrap();
-        assert!(!alt, "primary key should match for bare JID");
+        let (msg_out, alt_chat) = taken.unwrap();
+        assert!(alt_chat.is_none(), "primary key should match for bare JID");
 
         // Re-add under bare JID
         client.add_recent_message(&bare_jid, msg_id, &msg_out).await;
@@ -2197,15 +2197,18 @@ mod tests {
             taken.is_some(),
             "Alternate PN key lookup should find message stored under PN"
         );
-        let (msg_out, alt) = taken.unwrap();
-        assert!(alt, "should be found via alternate key");
+        let (msg_out, alt_chat) = taken.unwrap();
+        let alt_chat = alt_chat.expect("should be found via alternate key");
+        assert!(alt_chat.is_pn(), "alternate chat should be PN");
+        assert_eq!(alt_chat.user, pn_jid.user);
         assert_eq!(msg_out.conversation.as_deref(), Some("alternate key test"));
     }
 
-    /// When the alternate key hits, normalize_requester_namespace should swap
-    /// the requester from LID to PN (matching the stored message's namespace).
+    /// swap_pn_lid_namespace should swap between PN and LID while preserving
+    /// device/agent — this is the shared helper used for both alternate key
+    /// computation and requester normalization after an alternate hit.
     #[tokio::test]
-    async fn normalize_requester_after_alternate_key_hit() {
+    async fn swap_pn_lid_namespace_preserves_device() {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let backend = crate::test_utils::create_test_backend().await;
@@ -2214,22 +2217,18 @@ mod tests {
                 .await
                 .expect("persistence manager should initialize"),
         );
-        let mut config = crate::cache_config::CacheConfig::default();
-        config.recent_messages.capacity = 1_000;
-        let (client, _sync_rx) = Client::new_with_cache_config(
+        let (client, _sync_rx) = Client::new(
             Arc::new(crate::runtime_impl::TokioRuntime),
             pm.clone(),
             Arc::new(crate::transport::mock::MockTransportFactory::new()),
             Arc::new(MockHttpClient),
             None,
-            config,
         )
         .await;
 
         let pn_jid: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
         let lid_jid: Jid = "236395184570386@lid".parse().unwrap();
 
-        // Add bidirectional LID<->PN mapping
         client
             .lid_pn_cache
             .add(wacore::types::lid_pn::LidPnEntry {
@@ -2240,29 +2239,24 @@ mod tests {
             })
             .await;
 
-        // LID requester with device 5 → should be swapped to PN
-        let mut info = RetryChatInfo {
-            chat: lid_jid.clone(),
-            requester: "236395184570386:5@lid".parse().unwrap(),
-        };
-        client.normalize_requester_namespace(&mut info).await;
+        // LID:5 → PN:5
+        let lid_with_device: Jid = "236395184570386:5@lid".parse().unwrap();
+        let swapped = client.swap_pn_lid_namespace(&lid_with_device).await;
+        let swapped = swapped.expect("should resolve LID→PN");
+        assert!(swapped.is_pn());
+        assert_eq!(swapped.user, "5511999999999");
+        assert_eq!(swapped.device(), 5);
 
-        assert!(info.requester.is_pn(), "requester should be swapped to PN");
-        assert_eq!(info.requester.user, "5511999999999");
-        assert_eq!(info.requester.device(), 5, "device should be preserved");
+        // PN:3 → LID:3
+        let pn_with_device: Jid = "5511999999999:3@s.whatsapp.net".parse().unwrap();
+        let swapped = client.swap_pn_lid_namespace(&pn_with_device).await;
+        let swapped = swapped.expect("should resolve PN→LID");
+        assert!(swapped.is_lid());
+        assert_eq!(swapped.user, "236395184570386");
+        assert_eq!(swapped.device(), 3);
 
-        // PN requester with device 3 → should be swapped to LID
-        let mut info2 = RetryChatInfo {
-            chat: pn_jid.clone(),
-            requester: "5511999999999:3@s.whatsapp.net".parse().unwrap(),
-        };
-        client.normalize_requester_namespace(&mut info2).await;
-
-        assert!(
-            info2.requester.is_lid(),
-            "requester should be swapped to LID"
-        );
-        assert_eq!(info2.requester.user, "236395184570386");
-        assert_eq!(info2.requester.device(), 3, "device should be preserved");
+        // Group JID → None
+        let group: Jid = "120363021033254949@g.us".parse().unwrap();
+        assert!(client.swap_pn_lid_namespace(&group).await.is_none());
     }
 }

@@ -67,18 +67,18 @@ impl Client {
     /// then falls back to DB. On miss, tries an alternate PN/LID key to handle
     /// mapping changes between send time and retry time (WAWebLidMigrationUtils
     /// `getAlternateMsgKey`).
-    /// Returns `(message, found_via_alternate)`. The bool signals that the
-    /// message was found under the opposite PN/LID namespace, so the caller
-    /// should use that namespace for session operations instead of
+    /// Returns `(message, alternate_chat)`. When the message was found via the
+    /// alternate PN/LID key, `alternate_chat` contains the namespace that
+    /// matched — the caller should use it for session operations instead of
     /// `resolve_encryption_jid` (which would map back to the primary).
     pub(crate) async fn take_recent_message(
         &self,
         to: &Jid,
         id: &str,
-    ) -> Option<(wa::Message, bool)> {
+    ) -> Option<(wa::Message, Option<Jid>)> {
         let primary_key = self.make_chat_message_id(to, id).await;
         if let Some(msg) = self.try_take_by_key(&primary_key).await {
-            return Some((msg, false));
+            return Some((msg, None));
         }
 
         // Primary miss — try alternate PN<->LID key
@@ -90,7 +90,7 @@ impl Client {
                 alt_key.chat
             );
             if let Some(msg) = self.try_take_by_key(&alt_key).await {
-                return Some((msg, true));
+                return Some((msg, Some(alt_key.chat)));
             }
         }
 
@@ -161,8 +161,9 @@ impl Client {
     /// Mirrors WAWebLidMigrationUtils `getAlternateMsgKey` for 1x1 chats:
     /// swaps the chat JID between PN and LID namespaces.
     async fn alternate_message_key(&self, key: &ChatMessageId) -> Option<ChatMessageId> {
-        // swap_pn_lid_namespace returns None for non-PN/LID JIDs (groups, newsletters)
-        let alt_chat = self.swap_pn_lid_namespace(&key.chat).await?.to_non_ad();
+        // swap_pn_lid_namespace returns None for non-PN/LID JIDs (groups, newsletters).
+        // key.chat is already bare (from make_chat_message_id), so the result is too.
+        let alt_chat = self.swap_pn_lid_namespace(&key.chat).await?;
         Some(ChatMessageId {
             chat: alt_chat,
             id: key.id.clone(),
