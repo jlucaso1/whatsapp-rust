@@ -10,4 +10,4 @@ docs
 .claude
 __pycache__
 .codex
-dhat-heap.json
+dhat-heap*.json
