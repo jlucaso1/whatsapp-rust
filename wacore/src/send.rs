@@ -1,7 +1,7 @@
 use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::libsignal::protocol::{
-    CiphertextMessage, SENDERKEY_MESSAGE_CURRENT_VERSION, SenderKeyMessage, SenderKeyStore,
-    SignalProtocolError, UsePQRatchet, message_encrypt, process_prekey_bundle,
+    CiphertextMessage, ProtocolAddress, SENDERKEY_MESSAGE_CURRENT_VERSION, SenderKeyMessage,
+    SenderKeyStore, SignalProtocolError, UsePQRatchet, message_encrypt, process_prekey_bundle,
 };
 use crate::messages::MessageUtils;
 use crate::reporting_token::{
@@ -247,7 +247,7 @@ pub fn should_hide_decrypt_fail(msg: &wa::Message) -> bool {
 pub async fn encrypt_group_message<S, R>(
     sender_key_store: &mut S,
     group_jid: &Jid,
-    sender_jid: &Jid,
+    sender_address: &ProtocolAddress,
     plaintext: &[u8],
     csprng: &mut R,
 ) -> Result<SenderKeyMessage>
@@ -255,8 +255,7 @@ where
     S: SenderKeyStore + ?Sized,
     R: Rng + CryptoRng,
 {
-    let sender_address = sender_jid.to_protocol_address();
-    let sender_key_name = make_sender_key_name(group_jid, &sender_address);
+    let sender_key_name = make_sender_key_name(group_jid, sender_address);
     log::debug!(
         "Attempting to load sender key for group {} sender {}",
         sender_key_name.group_id(),
@@ -830,7 +829,7 @@ pub async fn prepare_peer_stanza<S, I>(
     session_store: &mut S,
     identity_store: &mut I,
     transport_jid: Jid,
-    encryption_jid: Jid,
+    signal_address: &ProtocolAddress,
     message: &wa::Message,
     request_id: String,
 ) -> Result<Node>
@@ -839,10 +838,9 @@ where
     I: crate::libsignal::protocol::IdentityKeyStore,
 {
     let plaintext = MessageUtils::encode_and_pad(message);
-    let signal_address = encryption_jid.to_protocol_address();
 
     let encrypted_message =
-        message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
+        message_encrypt(&plaintext, signal_address, session_store, identity_store).await?;
 
     let (enc_type, _, serialized_bytes) = extract_ciphertext(encrypted_message)
         .ok_or_else(|| anyhow!("Unexpected peer encryption message type"))?;
@@ -1053,6 +1051,8 @@ pub async fn prepare_group_stanza<
     let mut phash_for_stanza: Option<String> = None;
     let mut skdm_encrypted_devices: Vec<Jid> = Vec::new();
 
+    let sender_address = own_sending_jid.to_protocol_address();
+
     // Determine if we need to distribute SKDM and to which devices
     let distribution_list: Option<Vec<Jid>> = if let Some(target_devices) = skdm_target_devices {
         // Use the specific list of devices that need SKDM
@@ -1183,7 +1183,7 @@ pub async fn prepare_group_stanza<
         let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
             stores.sender_key_store,
             &to_jid,
-            &own_sending_jid,
+            &sender_address,
         )
         .await?;
 
@@ -1247,7 +1247,7 @@ pub async fn prepare_group_stanza<
     let skmsg = encrypt_group_message(
         stores.sender_key_store,
         &to_jid,
-        &own_sending_jid,
+        &sender_address,
         &plaintext,
         &mut rand::make_rng::<rand::rngs::StdRng>(),
     )
@@ -1334,10 +1334,9 @@ pub async fn prepare_group_stanza<
 pub async fn create_sender_key_distribution_message_for_group(
     store: &mut (dyn SenderKeyStore + Send + Sync),
     group_jid: &Jid,
-    own_sending_jid: &Jid,
+    sender_address: &ProtocolAddress,
 ) -> Result<Vec<u8>> {
-    let sender_address = own_sending_jid.to_protocol_address();
-    let sender_key_name = make_sender_key_name(group_jid, &sender_address);
+    let sender_key_name = make_sender_key_name(group_jid, sender_address);
     let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     let skdm = crate::libsignal::protocol::create_sender_key_distribution_message(

@@ -41,29 +41,28 @@ impl PreKeyUtils {
         NodeBuilder::new("key").children(user_nodes).build()
     }
 
-    pub fn build_upload_prekeys_request(
+    pub fn build_upload_prekeys_request<'a>(
         registration_id: u32,
-        identity_key_bytes: Vec<u8>,
+        identity_key_bytes: &[u8],
         signed_pre_key_id: u32,
-        signed_pre_key_public_bytes: Vec<u8>,
-        signed_pre_key_signature: Vec<u8>,
-        pre_keys: impl IntoIterator<Item = (u32, Vec<u8>)>,
+        signed_pre_key_public_bytes: &[u8],
+        signed_pre_key_signature: &[u8],
+        pre_keys: impl IntoIterator<Item = (u32, &'a [u8])>,
     ) -> Vec<Node> {
         let pre_keys = pre_keys.into_iter();
         let (lower, upper) = pre_keys.size_hint();
         let mut pre_key_nodes = Vec::with_capacity(upper.unwrap_or(lower));
         for (pre_key_id, public_bytes) in pre_keys {
-            let id_bytes = pre_key_id.to_be_bytes()[1..].to_vec();
             let node = NodeBuilder::new("key")
                 .children([
-                    NodeBuilder::new("id").bytes(id_bytes).build(),
+                    NodeBuilder::new("id")
+                        .bytes(pre_key_id.to_be_bytes()[1..].to_vec())
+                        .build(),
                     NodeBuilder::new("value").bytes(public_bytes).build(),
                 ])
                 .build();
             pre_key_nodes.push(node);
         }
-
-        let registration_id_bytes = registration_id.to_be_bytes().to_vec();
 
         let signed_pre_key_node = NodeBuilder::new("skey")
             .children([
@@ -79,13 +78,11 @@ impl PreKeyUtils {
             ])
             .build();
 
-        let type_bytes = vec![5u8];
-
         vec![
             NodeBuilder::new("registration")
-                .bytes(registration_id_bytes)
+                .bytes(registration_id.to_be_bytes().to_vec())
                 .build(),
-            NodeBuilder::new("type").bytes(type_bytes).build(),
+            NodeBuilder::new("type").bytes(vec![5u8]).build(),
             NodeBuilder::new("identity")
                 .bytes(identity_key_bytes)
                 .build(),

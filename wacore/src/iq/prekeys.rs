@@ -367,13 +367,13 @@ impl IqSpec for PreKeyUploadSpec {
     fn build_iq(&self) -> InfoQuery<'static> {
         let content = PreKeyUtils::build_upload_prekeys_request(
             self.registration_id,
-            self.identity_key.public_key_bytes().to_vec(),
+            self.identity_key.public_key_bytes(),
             self.signed_pre_key_id,
-            self.signed_pre_key_public.public_key_bytes().to_vec(),
-            self.signed_pre_key_signature.clone(),
+            self.signed_pre_key_public.public_key_bytes(),
+            &self.signed_pre_key_signature,
             self.pre_keys
                 .iter()
-                .map(|(id, pk)| (*id, pk.public_key_bytes().to_vec())),
+                .map(|(id, pk)| (*id, pk.public_key_bytes())),
         );
 
         InfoQuery::set(
