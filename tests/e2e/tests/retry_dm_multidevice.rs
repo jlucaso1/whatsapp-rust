@@ -1,7 +1,25 @@
 //! DM retry recovery after session deletion.
 
-use e2e_tests::{TestClient, send_and_expect_text};
+use e2e_tests::{TestClient, send_and_expect_text, text_msg};
 use log::info;
+use wacore::types::events::Event;
+use wacore_binary::node::Node;
+use whatsapp_rust::{NodeFilter, SendOptions};
+
+fn participant_target_count(node: &Node) -> usize {
+    node.get_optional_child("participants")
+        .and_then(|participants| participants.children())
+        .map(|children| children.iter().filter(|child| child.tag == "to").count())
+        .unwrap_or_default()
+}
+
+fn retry_enc_count(node: &Node) -> Option<String> {
+    node.get_optional_child("participants")
+        .and_then(|participants| participants.children())
+        .and_then(|children| children.first())
+        .and_then(|target| target.get_optional_child("enc"))
+        .and_then(|enc| enc.attrs().optional_string("count").map(|s| s.into_owned()))
+}
 
 #[tokio::test]
 async fn test_dm_retry_recovers_after_session_deletion() -> anyhow::Result<()> {
@@ -41,7 +59,60 @@ async fn test_dm_retry_recovers_after_session_deletion() -> anyhow::Result<()> {
         .delete_sessions(std::slice::from_ref(&jid_a))
         .await?;
 
-    send_and_expect_text(&client_a.client, &mut client_b, &jid_b, "retry-recover", 30).await?;
+    let message_id = format!("E2ERETRY{}", uuid::Uuid::new_v4().simple());
+    let initial_waiter = client_a
+        .client
+        .wait_for_sent_node(NodeFilter::tag("message").attr("id", &message_id));
+    client_a
+        .client
+        .send_message_with_options(
+            jid_b.clone(),
+            text_msg("retry-recover"),
+            SendOptions {
+                message_id: Some(message_id.clone()),
+                ..Default::default()
+            },
+        )
+        .await?;
+
+    let initial_node = tokio::time::timeout(tokio::time::Duration::from_secs(10), initial_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for initial DM send node"))?
+        .map_err(|_| anyhow::anyhow!("initial DM send waiter was canceled"))?;
+    assert!(
+        retry_enc_count(&initial_node).is_none(),
+        "Initial DM send should not carry a retry count"
+    );
+
+    let retry_waiter = client_a
+        .client
+        .wait_for_sent_node(NodeFilter::tag("message").attr("id", &message_id));
+
+    client_b
+        .wait_for_event(30, |e| matches!(e, Event::UndecryptableMessage(_)))
+        .await?;
+    client_b.wait_for_text("retry-recover", 30).await?;
+
+    let retry_node = tokio::time::timeout(tokio::time::Duration::from_secs(10), retry_waiter)
+        .await
+        .map_err(|_| anyhow::anyhow!("Timed out waiting for retry DM send node"))?
+        .map_err(|_| anyhow::anyhow!("retry DM send waiter was canceled"))?;
+    assert_eq!(
+        participant_target_count(&retry_node),
+        1,
+        "Retry resend should target exactly one device"
+    );
+    assert_eq!(
+        retry_enc_count(&retry_node).as_deref(),
+        Some("1"),
+        "Retry resend should mark the payload with count=1"
+    );
+    let jid_b_str = jid_b.to_string();
+    assert_eq!(
+        retry_node.attrs().optional_string("to").as_deref(),
+        Some(jid_b_str.as_str()),
+        "Retry resend should keep the user-level chat target"
+    );
     info!("Retry recovered after B deleted its session with A");
 
     send_and_expect_text(

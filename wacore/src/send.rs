@@ -863,6 +863,69 @@ where
     Ok(stanza)
 }
 
+/// Pairwise-encrypted retry stanza for a single DM recipient device.
+/// WA Web retries target only the failing device, not a full DM fanout.
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_dm_retry_stanza<S, I>(
+    session_store: &mut S,
+    identity_store: &mut I,
+    to_jid: Jid,
+    requester_jid: Jid,
+    encryption_jid: Jid,
+    message: &wa::Message,
+    message_id: String,
+    retry_count: u8,
+    account: Option<&wa::AdvSignedDeviceIdentity>,
+) -> Result<Node>
+where
+    S: crate::libsignal::protocol::SessionStore,
+    I: crate::libsignal::protocol::IdentityKeyStore,
+{
+    let plaintext = MessageUtils::encode_and_pad(message);
+    let signal_address = encryption_jid.to_protocol_address();
+
+    let encrypted =
+        message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
+
+    let (enc_type, is_prekey, serialized) = extract_ciphertext(encrypted)
+        .ok_or_else(|| anyhow!("Unexpected encryption message type for DM retry"))?;
+
+    let mut enc_builder = NodeBuilder::new("enc")
+        .attr("v", stanza::ENC_VERSION)
+        .attr("type", enc_type)
+        .attr("count", retry_count.to_string());
+    if let Some(mt) = media_type_from_message(message) {
+        enc_builder = enc_builder.attr("mediatype", mt);
+    }
+    let enc_node = enc_builder.bytes(serialized).build();
+
+    let participant_node = NodeBuilder::new("to")
+        .attr("jid", requester_jid)
+        .children([enc_node])
+        .build();
+
+    let mut children = vec![
+        NodeBuilder::new("participants")
+            .children([participant_node])
+            .build(),
+    ];
+
+    if is_prekey && let Some(acc) = account {
+        children.push(
+            NodeBuilder::new("device-identity")
+                .bytes(acc.encode_to_vec())
+                .build(),
+        );
+    }
+
+    Ok(NodeBuilder::new("message")
+        .attr("to", to_jid)
+        .attr("id", message_id)
+        .attr("type", stanza_type_from_message(message))
+        .children(children)
+        .build())
+}
+
 /// Pairwise-encrypted retry stanza for a single group participant.
 /// WA Web sends retries to the failing device only (RetryMsgJob.js:71),
 /// NOT as a sender-key broadcast to all participants.
@@ -2358,6 +2421,95 @@ mod tests {
             assert_eq!(ea.optional_string("count").unwrap().as_ref(), "1");
             assert!(matches!(&enc.content, Some(NodeContent::Bytes(_))));
             assert!(n.get_optional_child("device-identity").is_none());
+        }
+
+        #[tokio::test]
+        async fn dm_retry_pkmsg_targets_single_device() {
+            let (mut ss, mut is, jid) = setup_session().await;
+            let to: Jid = "559922223333@s.whatsapp.net".parse().unwrap();
+            let requester: Jid = jid.to_string().parse().unwrap();
+            let encryption = requester.clone();
+
+            let n = prepare_dm_retry_stanza(
+                &mut ss,
+                &mut is,
+                to.clone(),
+                requester.clone(),
+                encryption,
+                &wa::Message::default(),
+                "dm-retry-1".into(),
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(n.tag, "message");
+            let mut attrs = n.attrs();
+            assert_eq!(
+                attrs.optional_string("to").unwrap().as_ref(),
+                to.to_string()
+            );
+            assert_eq!(attrs.optional_string("id").unwrap().as_ref(), "dm-retry-1");
+            assert_eq!(
+                attrs.optional_string("type").unwrap().as_ref(),
+                stanza::MSG_TYPE_MEDIA
+            );
+            assert!(attrs.optional_string("participant").is_none());
+            assert!(attrs.optional_string("addressing_mode").is_none());
+
+            let participants = n.get_optional_child("participants").unwrap();
+            let targets = participants.children().unwrap();
+            assert_eq!(targets.len(), 1);
+            assert_eq!(targets[0].tag, "to");
+            assert_eq!(
+                targets[0].attrs().optional_string("jid").unwrap().as_ref(),
+                requester.to_string()
+            );
+
+            let enc = targets[0].get_optional_child("enc").unwrap();
+            let mut enc_attrs = enc.attrs();
+            assert_eq!(
+                enc_attrs.optional_string("type").unwrap().as_ref(),
+                stanza::ENC_TYPE_PKMSG
+            );
+            assert_eq!(enc_attrs.optional_string("count").unwrap().as_ref(), "1");
+            assert!(n.get_optional_child("device-identity").is_none());
+        }
+
+        #[tokio::test]
+        async fn dm_retry_pkmsg_with_account_has_device_identity() {
+            let (mut ss, mut is, jid) = setup_session().await;
+            let requester: Jid = jid.to_string().parse().unwrap();
+            let acc = wa::AdvSignedDeviceIdentity {
+                details: Some(b"t".to_vec()),
+                ..Default::default()
+            };
+
+            let n = prepare_dm_retry_stanza(
+                &mut ss,
+                &mut is,
+                "559922223333@s.whatsapp.net".parse().unwrap(),
+                requester.clone(),
+                requester,
+                &wa::Message::default(),
+                "dm-retry-2".into(),
+                2,
+                Some(&acc),
+            )
+            .await
+            .unwrap();
+
+            let participants = n.get_optional_child("participants").unwrap();
+            let enc = participants.children().unwrap()[0]
+                .get_optional_child("enc")
+                .unwrap();
+            assert_eq!(
+                enc.attrs().optional_string("type").unwrap().as_ref(),
+                stanza::ENC_TYPE_PKMSG
+            );
+            assert_eq!(enc.attrs().optional_string("count").unwrap().as_ref(), "2");
+            assert!(n.get_optional_child("device-identity").is_some());
         }
 
         #[tokio::test]

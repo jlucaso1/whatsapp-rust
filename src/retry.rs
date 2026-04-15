@@ -387,7 +387,7 @@ impl Client {
                 );
             }
         } else {
-            self.delete_dm_retry_sessions(&resolved_jid, &message_id, retry_count)
+            self.delete_dm_retry_session(&resolved_jid, &message_id, retry_count)
                 .await?;
         }
 
@@ -436,45 +436,41 @@ impl Client {
             self.send_node(stanza).await?;
             self.flush_signal_cache().await?;
         } else {
-            // DM retry: re-encrypt via normal send path (already targets single recipient)
-            self.send_message_impl(
+            // DM retry: pairwise resend to the requesting device only.
+            self.ensure_e2e_sessions(std::slice::from_ref(&resolved_jid))
+                .await?;
+
+            let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+            let mut store_adapter = self.signal_adapter().await;
+
+            let stanza = wacore::send::prepare_dm_retry_stanza(
+                &mut store_adapter.session_store,
+                &mut store_adapter.identity_store,
                 receipt.source.chat.clone(),
+                participant_jid,
+                resolved_jid.clone(),
                 &original_msg,
-                Some(message_id),
-                false,
-                true,
-                None,
-                vec![],
+                message_id,
+                retry_count,
+                device_snapshot.account.as_ref(),
             )
             .await?;
+
+            self.send_node(stanza).await?;
+            self.flush_signal_cache().await?;
         }
 
         Ok(())
     }
 
-    async fn delete_dm_retry_sessions(
+    async fn delete_dm_retry_session(
         &self,
         resolved_jid: &Jid,
         message_id: &str,
         retry_count: u8,
     ) -> Result<(), anyhow::Error> {
-        let requester_bare = resolved_jid.to_non_ad();
-        if let Some(device_jids) = self.get_devices_from_registry(&requester_bare).await {
-            for device_jid in &device_jids {
-                self.delete_dm_retry_session_target(device_jid, message_id, retry_count)
-                    .await;
-            }
-        } else {
-            let fallback_jid = if resolved_jid.device == 0 {
-                requester_bare
-            } else {
-                resolved_jid.clone()
-            };
-            self.delete_dm_retry_session_target(&fallback_jid, message_id, retry_count)
-                .await;
-        }
-
-        self.flush_signal_cache().await?;
+        self.delete_dm_retry_session_target(resolved_jid, message_id, retry_count)
+            .await;
         Ok(())
     }
 
@@ -949,26 +945,6 @@ mod tests {
     use wacore::types::jid::JidExt as _;
     use wacore_binary::{Jid, JidExt};
     use waproto::whatsapp as wa;
-
-    async fn setup_test_device_record(client: &Arc<Client>, user: &str, device_ids: &[u32]) {
-        let record = wacore::store::traits::DeviceListRecord {
-            user: user.into(),
-            devices: device_ids
-                .iter()
-                .map(|&id| wacore::store::traits::DeviceInfo {
-                    device_id: id,
-                    key_index: None,
-                })
-                .collect(),
-            timestamp: wacore::time::now_secs(),
-            phash: None,
-            raw_id: None,
-        };
-        client
-            .device_registry_cache
-            .insert(user.into(), record)
-            .await;
-    }
 
     #[tokio::test]
     async fn recent_message_cache_insert_and_take() {
@@ -1482,15 +1458,15 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dm_retry_deletes_sessions_for_all_known_devices() {
+    async fn dm_retry_deletes_only_requested_session() {
         let client =
             crate::test_utils::create_test_client_with_failing_http("retry_dm_devices").await;
-        let resolved_jid = Jid::lid("100000000000088");
-        setup_test_device_record(&client, &resolved_jid.user, &[0, 33]).await;
+        let user = "100000000000088".to_string();
+        let resolved_jid = Jid::lid_device(user.clone(), 33);
 
         let backend = client.persistence_manager.backend();
-        let device_0 = Jid::lid_device(resolved_jid.user.clone(), 0).to_protocol_address();
-        let device_33 = Jid::lid_device(resolved_jid.user.clone(), 33).to_protocol_address();
+        let device_0 = Jid::lid_device(user.clone(), 0).to_protocol_address();
+        let device_33 = Jid::lid_device(user, 33).to_protocol_address();
 
         backend
             .put_session(device_0.as_str(), b"invalid-session")
@@ -1502,17 +1478,18 @@ mod tests {
             .unwrap();
 
         client
-            .delete_dm_retry_sessions(&resolved_jid, "MSG-ALL-DEVICES", 1)
+            .delete_dm_retry_session(&resolved_jid, "MSG-ONE-DEVICE", 1)
             .await
             .unwrap();
+        client.flush_signal_cache().await.unwrap();
 
         assert!(
             backend
                 .get_session(device_0.as_str())
                 .await
                 .unwrap()
-                .is_none(),
-            "device 0 session should be deleted"
+                .is_some(),
+            "non-requesting device session should be preserved"
         );
         assert!(
             backend
@@ -1520,7 +1497,7 @@ mod tests {
                 .await
                 .unwrap()
                 .is_none(),
-            "companion device session should be deleted"
+            "requesting device session should be deleted"
         );
     }
 
@@ -1538,9 +1515,10 @@ mod tests {
             .unwrap();
 
         client
-            .delete_dm_retry_sessions(&resolved_jid, "MSG-FALLBACK", 1)
+            .delete_dm_retry_session(&resolved_jid, "MSG-FALLBACK", 1)
             .await
             .unwrap();
+        client.flush_signal_cache().await.unwrap();
 
         assert!(
             backend
