@@ -41,13 +41,13 @@ mod tests {
         async fn put_identity(&self, _: &str, _: [u8; 32]) -> StoreResult<()> {
             Ok(())
         }
-        async fn load_identity(&self, _: &str) -> StoreResult<Option<Vec<u8>>> {
+        async fn load_identity(&self, _: &str) -> StoreResult<Option<[u8; 32]>> {
             Ok(None)
         }
         async fn delete_identity(&self, _: &str) -> StoreResult<()> {
             Ok(())
         }
-        async fn get_session(&self, _: &str) -> StoreResult<Option<Vec<u8>>> {
+        async fn get_session(&self, _: &str) -> StoreResult<Option<bytes::Bytes>> {
             Ok(None)
         }
         async fn put_session(&self, _: &str, _: &[u8]) -> StoreResult<()> {

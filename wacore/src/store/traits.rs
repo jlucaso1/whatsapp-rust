@@ -88,8 +88,8 @@ pub trait SignalStore: Send + Sync {
     /// Store an identity key for a remote address.
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()>;
 
-    /// Load an identity key for a remote address.
-    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>>;
+    /// Load an identity key for a remote address (always 32 bytes).
+    async fn load_identity(&self, address: &str) -> Result<Option<[u8; 32]>>;
 
     /// Delete an identity key.
     async fn delete_identity(&self, address: &str) -> Result<()>;
@@ -97,7 +97,7 @@ pub trait SignalStore: Send + Sync {
     // --- Session Operations ---
 
     /// Get an encrypted session for an address.
-    async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>>;
+    async fn get_session(&self, address: &str) -> Result<Option<Bytes>>;
 
     /// Store an encrypted session.
     async fn put_session(&self, address: &str, session: &[u8]) -> Result<()>;
