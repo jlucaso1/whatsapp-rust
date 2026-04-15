@@ -14,11 +14,10 @@ fn participant_target_count(node: &Node) -> usize {
 }
 
 fn retry_enc_count(node: &Node) -> Option<String> {
-    node.get_optional_child("participants")
-        .and_then(|participants| participants.children())
-        .and_then(|children| children.first())
-        .and_then(|target| target.get_optional_child("enc"))
-        .and_then(|enc| enc.attrs().optional_string("count").map(|s| s.into_owned()))
+    let participants = node.get_optional_child("participants")?;
+    let target = participants.children()?.first()?;
+    let enc = target.get_optional_child("enc")?;
+    enc.attrs().optional_string("count").map(|s| s.into_owned())
 }
 
 #[tokio::test]

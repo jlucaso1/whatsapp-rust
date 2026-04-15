@@ -387,7 +387,7 @@ impl Client {
                 );
             }
         } else {
-            self.delete_dm_retry_session(&resolved_jid, &message_id, retry_count)
+            self.delete_dm_retry_session_target(&resolved_jid, &message_id, retry_count)
                 .await?;
         }
 
@@ -463,23 +463,12 @@ impl Client {
         Ok(())
     }
 
-    async fn delete_dm_retry_session(
-        &self,
-        resolved_jid: &Jid,
-        message_id: &str,
-        retry_count: u8,
-    ) -> Result<(), anyhow::Error> {
-        self.delete_dm_retry_session_target(resolved_jid, message_id, retry_count)
-            .await;
-        Ok(())
-    }
-
     async fn delete_dm_retry_session_target(
         &self,
         device_jid: &Jid,
         message_id: &str,
         retry_count: u8,
-    ) {
+    ) -> Result<(), anyhow::Error> {
         // Base key collision detection prevents stale-session retry loops.
         let signal_address = device_jid.to_protocol_address();
         let device_store = self.persistence_manager.get_device_arc().await;
@@ -556,6 +545,7 @@ impl Client {
         // Delete through the cache so resend can't revive a stale in-memory session.
         self.signal_cache.delete_session(&signal_address).await;
         info!("Deleted session for {signal_address} due to retry receipt");
+        Ok(())
     }
 
     /// Extracts and processes the key bundle from a retry receipt.
@@ -1478,7 +1468,7 @@ mod tests {
             .unwrap();
 
         client
-            .delete_dm_retry_session(&resolved_jid, "MSG-ONE-DEVICE", 1)
+            .delete_dm_retry_session_target(&resolved_jid, "MSG-ONE-DEVICE", 1)
             .await
             .unwrap();
         client.flush_signal_cache().await.unwrap();
@@ -1515,7 +1505,7 @@ mod tests {
             .unwrap();
 
         client
-            .delete_dm_retry_session(&resolved_jid, "MSG-FALLBACK", 1)
+            .delete_dm_retry_session_target(&resolved_jid, "MSG-FALLBACK", 1)
             .await
             .unwrap();
         client.flush_signal_cache().await.unwrap();
