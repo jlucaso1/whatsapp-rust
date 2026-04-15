@@ -1187,9 +1187,8 @@ mod tests {
         assert!(parsed.device_identity.is_none());
     }
 
-    /// Verify that encode_iq_direct produces identical bytes to build_iq + marshal.
-    #[test]
-    fn test_encode_iq_direct_matches_build_iq_marshal() {
+    /// Helper: assert direct encode produces identical bytes to build_iq + marshal.
+    fn assert_direct_encode_matches_marshal(num_prekeys: u32) {
         use crate::iq::spec::IqSpec;
         use crate::libsignal::protocol::KeyPair;
 
@@ -1201,7 +1200,7 @@ mod tests {
             .calculate_signature(&signed_prekey.public_key.serialize(), &mut rng)
             .unwrap();
 
-        let pre_keys: Vec<(u32, crate::libsignal::protocol::PublicKey)> = (1..=5u32)
+        let pre_keys: Vec<(u32, crate::libsignal::protocol::PublicKey)> = (1..=num_prekeys)
             .map(|id| {
                 let kp = KeyPair::generate(&mut rng);
                 (id, kp.public_key)
@@ -1219,14 +1218,12 @@ mod tests {
 
         let request_id = "test-req-id-123";
 
-        // Fast path: direct encoding
         let mut direct_buf = Vec::new();
         let used = spec
             .encode_iq_direct(request_id, &mut direct_buf)
             .expect("encode_iq_direct should succeed");
-        assert!(used, "PreKeyUploadSpec should use the fast path");
+        assert!(used);
 
-        // Slow path: build_iq + marshal (replicate what send_iq does)
         let iq = spec.build_iq();
         let iq_node = wacore_binary::builder::NodeBuilder::new("iq")
             .attr("id", request_id)
@@ -1240,7 +1237,22 @@ mod tests {
 
         assert_eq!(
             direct_buf, marshal_buf,
-            "encode_iq_direct must produce identical bytes to build_iq + marshal"
+            "encode_iq_direct must match build_iq + marshal for {num_prekeys} prekeys"
         );
+    }
+
+    #[test]
+    fn test_encode_iq_direct_matches_marshal_5_keys() {
+        assert_direct_encode_matches_marshal(5);
+    }
+
+    #[test]
+    fn test_encode_iq_direct_matches_marshal_0_keys() {
+        assert_direct_encode_matches_marshal(0);
+    }
+
+    #[test]
+    fn test_encode_iq_direct_matches_marshal_1_key() {
+        assert_direct_encode_matches_marshal(1);
     }
 }
