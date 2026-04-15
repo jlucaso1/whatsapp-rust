@@ -8,7 +8,7 @@ repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Appstate for WhatsApp protocol"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [features]
 default = ["simd"]

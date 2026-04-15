@@ -30,7 +30,7 @@ whatsapp-rust-ureq-http-client = { path = "../../http_clients/ureq-client", feat
 
 [dev-dependencies]
 chrono = { workspace = true, features = ["now", "serde"] }
-env_logger = { version = "0.11", default-features = false }
+env_logger = { workspace = true }
 hex = { workspace = true }
 log = { workspace = true }
 prost = { workspace = true }

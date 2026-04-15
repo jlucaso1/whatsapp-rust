@@ -1,8 +1,8 @@
 use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
-use once_cell::sync::Lazy;
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
+use std::sync::LazyLock;
 use wacore_binary::Jid;
 use waproto::whatsapp as wa;
 
@@ -103,7 +103,7 @@ fn build_base_client_payload(
     }
 }
 
-pub static DEVICE_PROPS: Lazy<wa::DeviceProps> = Lazy::new(|| wa::DeviceProps {
+pub static DEVICE_PROPS: LazyLock<wa::DeviceProps> = LazyLock::new(|| wa::DeviceProps {
     os: Some("rust".to_string()),
     version: Some(wa::device_props::AppVersion {
         primary: Some(0),

@@ -17,27 +17,17 @@ anyhow = { workspace = true }
 async-channel = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
-futures-util = { version = "0.3.31", default-features = false, features = [
-    "sink",
-    "alloc",
-    "std",
-] }
+futures-util = { version = "0.3.31", default-features = false, features = ["sink", "alloc", "std"] }
 http = "1.4.0"
 log = { workspace = true }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
-tokio = { workspace = true, features = [
-    "macros",
-    "net",
-    "rt-multi-thread",
-    "sync",
-    "time",
-] }
+tokio = { workspace = true, features = ["macros", "rt", "sync"] }
 tokio-rustls = { version = "0.26.4", default-features = false, features = ["ring"] }
 tokio-websockets = { version = "0.13.0", features = [
-    "client",
-    "rustls-bring-your-own-connector",
-    "rand",
-    "ring",
+  "client",
+  "rustls-bring-your-own-connector",
+  "rand",
+  "ring",
 ] }
 wacore = { workspace = true }
 webpki-roots = "1.0.4"
