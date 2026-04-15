@@ -162,28 +162,36 @@ impl Client {
         S: wacore::iq::spec::IqSpec,
     {
         let req_id = self.generate_request_id();
-        // Try direct-encode fast path (only PreKeyUploadSpec uses this)
+
+        // Direct-encode fast path: skip Node tree for hot IQ specs (e.g. PreKeyUploadSpec)
         {
             let mut buf = Vec::new();
-            if let Ok(true) = spec.encode_iq_direct(&req_id, &mut buf) {
-                let response = self
-                    .send_and_wait_iq(req_id, Duration::from_secs(75), async {
-                        self.send_raw_bytes(buf).await
-                    })
-                    .await?;
-                return spec
-                    .parse_response(response.get())
-                    .map_err(IqError::ParseError);
+            match spec.encode_iq_direct(&req_id, &mut buf) {
+                Ok(true) => {
+                    let response = self
+                        .send_and_wait_iq(req_id, Duration::from_secs(75), async {
+                            self.send_raw_bytes(buf).await
+                        })
+                        .await?;
+                    return spec
+                        .parse_response(response.get())
+                        .map_err(IqError::ParseError);
+                }
+                Err(e) => return Err(IqError::ParseError(e)),
+                Ok(false) => {}
             }
         }
 
-        let iq = spec.build_iq();
+        let mut iq = spec.build_iq();
+        if iq.id.is_none() {
+            iq.id = Some(req_id);
+        }
         let response = self.send_iq(iq).await?;
         spec.parse_response(response.get())
             .map_err(IqError::ParseError)
     }
 
-    /// Shared helper: register waiter, send, race response vs shutdown/timeout.
+    /// Centralizes waiter registration and shutdown/timeout handling.
     async fn send_and_wait_iq<F>(
         &self,
         req_id: String,

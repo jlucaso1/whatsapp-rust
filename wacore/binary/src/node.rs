@@ -448,7 +448,13 @@ impl<'a> AttrsRef<'a> {
 
 impl<'a> FromIterator<(NodeStr<'a>, ValueRef<'a>)> for AttrsRef<'a> {
     fn from_iter<I: IntoIterator<Item = (NodeStr<'a>, ValueRef<'a>)>>(iter: I) -> Self {
-        let mut result = Self::Empty;
+        let mut iter = iter.into_iter();
+        let (_, upper) = iter.size_hint();
+        let mut result = match upper {
+            Some(0) => Self::Empty,
+            Some(n) => Self::with_capacity(n),
+            None => Self::Empty,
+        };
         for item in iter {
             result.push(item);
         }
