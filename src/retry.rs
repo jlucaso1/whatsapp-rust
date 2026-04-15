@@ -82,6 +82,90 @@ const MAX_RETRY_COUNT: u8 = 5;
 /// WhatsApp Web saves base key on retry 2, checks on retry > 2.
 const MIN_RETRY_FOR_BASE_KEY_CHECK: u8 = 2;
 
+/// Separated chat and requester JIDs for retry receipt handling.
+/// Mirrors WAWebHandleRetryRequest `getActualChatInfo` + `getTargetChat`.
+struct RetryChatInfo {
+    /// Bare chat JID (no device suffix) for message lookup.
+    chat: Jid,
+    /// Device-specific JID of the requesting device, for session management.
+    requester: Jid,
+    /// Raw `from` JID from the receipt, for stanza `to` attribute.
+    /// WA Web preserves the original `from` (variable `m`) for the retry stanza.
+    original_from: Jid,
+    /// True if the requester is a bot JID (skip namespace normalization).
+    is_bot: bool,
+}
+
+/// Resolve the chat and requester JIDs from a retry receipt, separating
+/// message-lookup concerns from session-management concerns.
+/// Mirrors WAWebHandleRetryRequest `getActualChatInfo` + `getTargetChat`.
+fn resolve_retry_chat_info(
+    receipt: &Receipt,
+    node: &NodeRef<'_>,
+    own_pn: Option<&Jid>,
+    own_lid: Option<&Jid>,
+) -> RetryChatInfo {
+    let from = &receipt.source.chat;
+
+    if from.is_group() || from.is_status_broadcast() {
+        // Groups/status: chat is already the group/broadcast JID.
+        // Requester is the participant attr (the actual retrying device).
+        let requester = node
+            .attrs()
+            .optional_jid("participant")
+            .unwrap_or_else(|| receipt.source.sender.clone());
+        RetryChatInfo {
+            chat: from.clone(),
+            requester,
+            original_from: from.clone(),
+            is_bot: false,
+        }
+    } else {
+        // DM: resolve chat target via getTargetChat logic.
+        let recipient = node.attrs().optional_jid("recipient");
+        let is_bot = from.is_bot();
+
+        // WA Web getTargetChat (RetryRequest.js:339-371):
+        // 1. Bot + recipient → chat = recipient
+        // 2. Peer device + recipient → chat = recipient
+        // 3. Peer device without recipient → abort (return null)
+        // 4. Normal user → chat = asUserWidOrThrow(from) = from.to_non_ad()
+        let is_peer = own_pn.is_some_and(|pn| from.is_same_user_as(pn))
+            || own_lid.is_some_and(|lid| from.is_same_user_as(lid));
+
+        let chat = if is_bot && recipient.is_some() {
+            recipient.clone().unwrap().to_non_ad()
+        } else if is_peer {
+            match &recipient {
+                Some(r) => r.to_non_ad(),
+                // No recipient on peer retry — chat will be our own JID,
+                // message lookup will likely fail. WA Web returns null here.
+                None => {
+                    log::warn!(
+                        "Peer device retry without recipient attr — message lookup may fail"
+                    );
+                    from.to_non_ad()
+                }
+            }
+        } else {
+            from.to_non_ad()
+        };
+
+        let requester = if from.device() == 0 && from.agent == 0 {
+            chat.clone()
+        } else {
+            from.clone()
+        };
+
+        RetryChatInfo {
+            chat,
+            requester,
+            original_from: from.clone(),
+            is_bot,
+        }
+    }
+}
+
 fn build_retry_dedupe_key(chat: &Jid, message_id: &str, participant_jid: &Jid) -> String {
     let mut key = String::with_capacity(message_id.len() + 64);
     chat.push_to(&mut key);
@@ -124,30 +208,24 @@ impl Client {
             return Ok(());
         }
 
-        let is_group_or_status =
-            receipt.source.chat.is_group() || receipt.source.chat.is_status_broadcast();
-
-        // For groups/status broadcasts, the actual participant is in the
-        // `participant` attribute of the receipt node, NOT receipt.source.sender
-        // (which may be the group/broadcast JID for non-group servers).
-        let participant_jid = if is_group_or_status {
-            nr.attrs()
-                .optional_jid("participant")
-                .unwrap_or_else(|| receipt.source.sender.clone())
-        } else {
-            receipt.source.sender.clone()
-        };
+        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let mut info = resolve_retry_chat_info(
+            receipt,
+            nr,
+            device_snapshot.pn.as_ref(),
+            device_snapshot.lid.as_ref(),
+        );
+        let is_group_or_status = info.chat.is_group() || info.chat.is_status_broadcast();
 
         // Deduplicate retry receipts per requesting device.
         // DMs can also receive retries from multiple companion devices.
-        let dedupe_key =
-            build_retry_dedupe_key(&receipt.source.chat, &message_id, &participant_jid);
+        let dedupe_key = build_retry_dedupe_key(&info.chat, &message_id, &info.requester);
 
         if self.retried_group_messages.get(&dedupe_key).await.is_some() {
             log::debug!(
                 "Ignoring duplicate retry for message {} from {}: already handled.",
                 message_id,
-                receipt.source.sender
+                info.requester
             );
             return Ok(());
         }
@@ -174,11 +252,9 @@ impl Client {
                 .remove(&guard_key);
         });
 
-        let original_msg = match self
-            .take_recent_message(&receipt.source.chat, &message_id)
-            .await
+        let (original_msg, alt_chat) = match self.take_recent_message(&info.chat, &message_id).await
         {
-            Some(msg) => msg,
+            Some(result) => result,
             None => {
                 log::debug!(
                     "Ignoring retry for message {message_id}: already handled or not found in cache."
@@ -189,14 +265,34 @@ impl Client {
 
         // take_recent_message consumes the cached message; re-add it so other
         // devices for the same chat can still request a retry.
-        self.add_recent_message(&receipt.source.chat, &message_id, &original_msg)
+        self.add_recent_message(&info.chat, &message_id, &original_msg)
             .await;
 
-        // Resolved JID for session operations; keep original for stanza addressing
-        let resolved_jid = self.resolve_encryption_jid(&participant_jid).await;
+        // When message was found via alternate PN<->LID key, the Signal session
+        // lives in the stored message's namespace (not the receipt's). Build the
+        // encryption JID from that namespace + requester's device, skipping
+        // resolve_encryption_jid (which would map back to the primary namespace).
+        // WA Web: `e.from.isBot() ? (p = e.from) : (p = d.isLid() ? toLid(e.from) : toPn(e.from))`
+        // Bots skip namespace normalization (WAWebHandleRetryRequest:311-312).
+        let resolved_jid = if let Some(alt_chat) = alt_chat
+            && !is_group_or_status
+            && !info.is_bot
+        {
+            let requester = &info.requester;
+            info.requester = Jid {
+                user: alt_chat.user,
+                server: alt_chat.server,
+                device: requester.device,
+                agent: requester.agent,
+                integrator: requester.integrator,
+            };
+            info.requester.clone()
+        } else {
+            self.resolve_encryption_jid(&info.requester).await
+        };
 
-        let sender_device_id = participant_jid.device() as u32;
-        let sender_user = participant_jid.user.clone();
+        let sender_device_id = info.requester.device() as u32;
+        let sender_user = info.requester.user.clone();
         if !self.has_device(&sender_user, sender_device_id).await {
             warn!(
                 "handle_retry_receipt: device not found for device={}, user={}",
@@ -206,20 +302,19 @@ impl Client {
         }
 
         // Check if this is a retry from our own device (peer).
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let is_peer = device_snapshot
             .pn
             .as_ref()
-            .is_some_and(|our_pn| participant_jid.is_same_user_as(our_pn))
+            .is_some_and(|our_pn| info.requester.is_same_user_as(our_pn))
             || device_snapshot
                 .lid
                 .as_ref()
-                .is_some_and(|our_lid| participant_jid.is_same_user_as(our_lid));
+                .is_some_and(|our_lid| info.requester.is_same_user_as(our_lid));
 
         // Process key bundle to establish a pairwise session for the retry.
         // Needed for both DMs and groups (group retries use pairwise, not sender key).
         // Status broadcasts skip this — they can't resend and only mark for next send.
-        if !receipt.source.chat.is_status_broadcast() {
+        if !info.chat.is_status_broadcast() {
             // Try to process key bundle if present
             let key_bundle_result = self
                 .process_retry_key_bundle(nr, &resolved_jid, is_peer)
@@ -271,14 +366,14 @@ impl Client {
 
         // Fetch group info (cache-first, server on miss) — used for SKDM rotation + addressing_mode.
         // Without this, a cold cache would silently default to PN semantics for LID groups.
-        let cached_group_info = if receipt.source.chat.is_group() {
-            match self.groups().query_info(&receipt.source.chat).await {
-                Ok(info) => Some(info),
+        let cached_group_info = if info.chat.is_group() {
+            match self.groups().query_info(&info.chat).await {
+                Ok(gi) => Some(gi),
                 Err(e) => {
                     log::warn!(
                         "Failed to fetch group info for retry of msg {} in {}: {e}",
                         message_id,
-                        receipt.source.chat
+                        info.chat
                     );
                     None
                 }
@@ -288,25 +383,23 @@ impl Client {
         };
 
         if is_group_or_status {
-            let group_jid = receipt.source.chat.to_string();
+            let group_jid = info.chat.to_string();
 
             // WA Web rotateKey: unknown device (not in participant list, not LID) →
             // force full sender key rotation by clearing all sender key device tracking.
-            if !participant_jid.is_lid() && !receipt.source.chat.is_status_broadcast() {
+            if !info.requester.is_lid() && !info.chat.is_status_broadcast() {
                 // If we can't verify membership (no cached group info), treat
                 // as unknown and trigger rotation (matches WA Web where the
                 // device wouldn't be in the senderKey map → rotateKey=true)
-                let is_known_participant = cached_group_info.as_ref().is_some_and(|g| {
-                    g.participants
-                        .iter()
-                        .any(|p| p.user == participant_jid.user)
-                });
+                let is_known_participant = cached_group_info
+                    .as_ref()
+                    .is_some_and(|g| g.participants.iter().any(|p| p.user == info.requester.user));
 
                 if !is_known_participant {
                     log::warn!(
                         "Unknown device {} in group {} — forcing full sender key rotation \
                          (matches WA Web's rotateKey behavior)",
-                        participant_jid,
+                        info.requester,
                         group_jid
                     );
 
@@ -362,24 +455,24 @@ impl Client {
 
             // Mark this device as needing fresh SKDM (filters out own devices internally)
             if let Err(e) = self
-                .mark_forget_sender_key(&group_jid, std::slice::from_ref(&participant_jid))
+                .mark_forget_sender_key(&group_jid, std::slice::from_ref(&info.requester))
                 .await
             {
                 log::warn!(
                     "Failed to mark sender key forget for {} in {}: {}",
-                    participant_jid,
+                    info.requester,
                     group_jid,
                     e
                 );
             } else {
-                let chat_type = if receipt.source.chat.is_status_broadcast() {
+                let chat_type = if info.chat.is_status_broadcast() {
                     "status broadcast"
                 } else {
                     "group"
                 };
                 info!(
                     "Marked {} for fresh SKDM in {} {} due to retry receipt",
-                    participant_jid, chat_type, group_jid
+                    info.requester, chat_type, group_jid
                 );
             }
         } else {
@@ -389,7 +482,7 @@ impl Client {
 
         // Status broadcasts can't resend (requires explicit recipient list).
         // Participant already marked for fresh SKDM above; next status send includes them.
-        if receipt.source.chat.is_status_broadcast() {
+        if info.chat.is_status_broadcast() {
             info!(
                 "Status broadcast retry for {} — participant marked for fresh SKDM, \
                  will be included in next status send",
@@ -400,10 +493,10 @@ impl Client {
 
         info!(
             "Resending message {} to {} (retry #{})",
-            message_id, receipt.source.chat, retry_count
+            message_id, info.chat, retry_count
         );
 
-        if receipt.source.chat.is_group() {
+        if info.chat.is_group() {
             // Group retry: pairwise encrypt to failing device only (RetryMsgJob.js:71).
             // Using sender-key broadcast would resend to ALL participants → duplicates.
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -421,8 +514,8 @@ impl Client {
             let stanza = wacore::send::prepare_group_retry_stanza(
                 &mut store_adapter.session_store,
                 &mut store_adapter.identity_store,
-                receipt.source.chat.clone(),
-                participant_jid,
+                info.chat,
+                info.requester,
                 resolved_jid.clone(),
                 &original_msg,
                 message_id,
@@ -436,7 +529,10 @@ impl Client {
             self.flush_signal_cache().await?;
         } else {
             // DM retry: pairwise resend to the requesting device only.
-            self.ensure_e2e_sessions(std::slice::from_ref(&resolved_jid))
+            // Use _resolved variant: resolved_jid is already in the correct
+            // namespace (including alternate PN/LID normalization).
+            // WA Web's ensureE2ESessions also uses already-normalized JIDs.
+            self.ensure_e2e_sessions_resolved(std::slice::from_ref(&resolved_jid))
                 .await?;
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -448,8 +544,8 @@ impl Client {
             let stanza = wacore::send::prepare_dm_retry_stanza(
                 &mut store_adapter.session_store,
                 &mut store_adapter.identity_store,
-                receipt.source.chat.clone(),
-                participant_jid,
+                info.original_from,
+                info.requester,
                 resolved_jid.clone(),
                 &original_msg,
                 message_id,
@@ -593,8 +689,10 @@ impl Client {
             return Err(anyhow::anyhow!("Invalid registration ID in retry receipt"));
         }
 
-        let resolved_jid = self.resolve_encryption_jid(requester_jid).await;
-        let signal_address = resolved_jid.to_protocol_address();
+        // Use requester_jid directly — the caller already resolved the correct
+        // namespace (including alternate PN/LID normalization). Re-resolving
+        // here would undo that normalization.
+        let signal_address = requester_jid.to_protocol_address();
 
         // Check if the registration ID changed (indicates device reinstall).
         // Read session through cache for consistent state.
@@ -978,13 +1076,9 @@ mod tests {
         // First take should return and remove it from cache
         let taken = client.take_recent_message(&chat, &msg_id).await;
         assert!(taken.is_some());
-        assert_eq!(
-            taken
-                .expect("taken message should exist")
-                .conversation
-                .as_deref(),
-            Some("hello")
-        );
+        let (msg, alt_chat) = taken.unwrap();
+        assert!(alt_chat.is_none(), "primary key should match");
+        assert_eq!(msg.conversation.as_deref(), Some("hello"));
 
         // Second take should return None
         let taken_again = client.take_recent_message(&chat, &msg_id).await;
@@ -1825,59 +1919,133 @@ mod tests {
         // The optimization gives the sender one fewer round-trip to respond.
     }
 
-    /// Test that participant extraction from receipt nodes works correctly
-    /// for status broadcasts. The `participant` attribute contains the actual
-    /// retrying device, while `receipt.source.sender` may be `status@broadcast`.
+    /// Helper to build a DM Receipt for testing resolve_retry_chat_info.
+    fn make_test_receipt(from: &str) -> Receipt {
+        Receipt {
+            source: crate::types::message::MessageSource {
+                chat: from.parse().unwrap(),
+                sender: from.parse().unwrap(),
+                ..Default::default()
+            },
+            message_ids: vec!["MSG001".to_string()],
+            timestamp: wacore::time::now_utc(),
+            r#type: crate::types::presence::ReceiptType::Retry,
+        }
+    }
+
     #[test]
-    fn status_broadcast_participant_extraction() {
+    fn resolve_retry_chat_info_dm_with_device() {
         use wacore_binary::builder::NodeBuilder;
 
-        // Simulate a retry receipt for a status broadcast with participant attribute
+        // Node attrs are unused in the DM branch (no participant lookup)
+        let node = NodeBuilder::new("receipt").build();
+        let receipt = make_test_receipt("5511999999999:33@s.whatsapp.net");
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
+
+        // chat should be bare (device stripped)
+        assert_eq!(info.chat.device(), 0);
+        assert_eq!(info.chat.user, "5511999999999");
+        assert!(info.chat.is_pn());
+
+        // requester should preserve device 33
+        assert_eq!(info.requester.device(), 33);
+        assert_eq!(info.requester.user, "5511999999999");
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_lid_dm_with_device() {
+        use wacore_binary::builder::NodeBuilder;
+
+        let node = NodeBuilder::new("receipt").build();
+        let receipt = make_test_receipt("236395184570386:5@lid");
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
+
+        // chat should be bare LID (device stripped)
+        assert_eq!(info.chat.device(), 0);
+        assert_eq!(info.chat.user, "236395184570386");
+        assert!(info.chat.is_lid());
+
+        // requester should preserve device 5
+        assert_eq!(info.requester.device(), 5);
+        assert_eq!(info.requester.user, "236395184570386");
+        assert!(info.requester.is_lid());
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_dm_bare() {
+        use wacore_binary::builder::NodeBuilder;
+
+        let node = NodeBuilder::new("receipt").build();
+        let receipt = make_test_receipt("5511999999999@s.whatsapp.net");
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
+
+        assert_eq!(info.chat.device(), 0);
+        assert_eq!(info.requester.device(), 0);
+        assert_eq!(info.chat, info.requester);
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_group() {
+        use wacore_binary::builder::NodeBuilder;
+
+        let node = NodeBuilder::new("receipt")
+            .attr("from", "120363021033254949@g.us")
+            .attr("id", "MSG001")
+            .attr("participant", "236395184570386:33@lid")
+            .attr("type", "retry")
+            .build();
+        let receipt = Receipt {
+            source: crate::types::message::MessageSource {
+                chat: "120363021033254949@g.us".parse().unwrap(),
+                sender: "236395184570386:33@lid".parse().unwrap(),
+                ..Default::default()
+            },
+            message_ids: vec!["MSG001".to_string()],
+            timestamp: wacore::time::now_utc(),
+            r#type: crate::types::presence::ReceiptType::Retry,
+        };
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
+
+        assert!(info.chat.is_group());
+        assert_eq!(info.chat.user, "120363021033254949");
+        assert!(info.requester.is_lid());
+        assert_eq!(info.requester.device(), 33);
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_status_broadcast() {
+        use wacore_binary::builder::NodeBuilder;
+
         let node = NodeBuilder::new("receipt")
             .attr("from", "status@broadcast")
             .attr("id", "3EB06D00CAB92340790621")
             .attr("participant", "236395184570386@lid")
             .attr("type", "retry")
             .build();
+        let receipt = make_test_receipt("status@broadcast");
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
 
-        let is_group_or_status = true;
-        let fallback_sender: Jid = "status@broadcast".parse().unwrap();
-
-        let participant_jid = if is_group_or_status {
-            node.attrs()
-                .optional_jid("participant")
-                .unwrap_or_else(|| fallback_sender.clone())
-        } else {
-            fallback_sender.clone()
-        };
-
-        // Should extract the actual participant, not status@broadcast
-        assert!(participant_jid.is_lid());
-        assert_eq!(participant_jid.user, "236395184570386");
-        assert!(!participant_jid.is_status_broadcast());
+        assert!(info.chat.is_status_broadcast());
+        // requester should be the participant, not status@broadcast
+        assert!(info.requester.is_lid());
+        assert_eq!(info.requester.user, "236395184570386");
     }
 
-    /// Test fallback when participant attribute is missing from status receipt.
     #[test]
-    fn status_broadcast_participant_extraction_fallback() {
+    fn resolve_retry_chat_info_status_broadcast_no_participant() {
         use wacore_binary::builder::NodeBuilder;
 
-        // Receipt without participant attribute (edge case)
+        // Missing participant attr (edge case) — falls back to sender
         let node = NodeBuilder::new("receipt")
             .attr("from", "status@broadcast")
             .attr("id", "MSG001")
             .attr("type", "retry")
             .build();
+        let receipt = make_test_receipt("status@broadcast");
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
 
-        let fallback_sender: Jid = "status@broadcast".parse().unwrap();
-
-        let participant_jid = node
-            .attrs()
-            .optional_jid("participant")
-            .unwrap_or_else(|| fallback_sender.clone());
-
-        // Falls back to sender (status@broadcast) — not ideal but won't crash
-        assert!(participant_jid.is_status_broadcast());
+        assert!(info.chat.is_status_broadcast());
+        assert!(info.requester.is_status_broadcast());
     }
 
     /// Test that retry dedupe keys are differentiated per requesting device,
@@ -1960,7 +2128,7 @@ mod tests {
             let taken = client.take_recent_message(&chat, &msg_id).await;
             assert!(taken.is_some(), "First take should succeed for {chat}");
 
-            let taken_msg = taken.unwrap();
+            let (taken_msg, _) = taken.unwrap();
             client.add_recent_message(&chat, &msg_id, &taken_msg).await;
 
             let taken2 = client.take_recent_message(&chat, &msg_id).await;
@@ -1971,6 +2139,7 @@ mod tests {
             assert_eq!(
                 taken2
                     .unwrap()
+                    .0
                     .extended_text_message
                     .as_ref()
                     .unwrap()
@@ -1979,5 +2148,436 @@ mod tests {
                 Some("status text")
             );
         }
+    }
+
+    /// Message stored under bare JID should be found when looking up via bare
+    /// JID (the path resolve_retry_chat_info now provides for DMs).
+    #[tokio::test]
+    async fn dm_retry_message_lookup_uses_bare_jid() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            config,
+        )
+        .await;
+
+        let bare_jid: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let msg_id = "RETRY_MSG_001";
+        let msg = wa::Message {
+            conversation: Some("test dm".into()),
+            ..Default::default()
+        };
+
+        // Store under bare JID (how send_message stores it)
+        client.add_recent_message(&bare_jid, msg_id, &msg).await;
+
+        // Lookup via bare JID should succeed (this is what info.chat provides)
+        let taken = client.take_recent_message(&bare_jid, msg_id).await;
+        assert!(taken.is_some(), "Lookup via bare JID should succeed");
+        let (msg_out, alt_chat) = taken.unwrap();
+        assert!(alt_chat.is_none(), "primary key should match for bare JID");
+
+        // Re-add under bare JID
+        client.add_recent_message(&bare_jid, msg_id, &msg_out).await;
+
+        // Second take should also work
+        let taken2 = client.take_recent_message(&bare_jid, msg_id).await;
+        assert!(
+            taken2.is_some(),
+            "Second lookup via bare JID should succeed after re-add"
+        );
+    }
+
+    /// Alternate PN/LID key lookup: a message stored under PN should be found
+    /// when the primary lookup resolves to LID (because a mapping was added
+    /// between send time and retry time).
+    #[tokio::test]
+    async fn alternate_key_lookup_pn_to_lid() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            config,
+        )
+        .await;
+
+        let pn_jid: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let lid_jid: Jid = "236395184570386@lid".parse().unwrap();
+        let msg_id = "RETRY_ALT_001";
+        let msg = wa::Message {
+            conversation: Some("alternate key test".into()),
+            ..Default::default()
+        };
+
+        // Store under PN (no LID mapping existed at send time)
+        client.add_recent_message(&pn_jid, msg_id, &msg).await;
+
+        // Now add a LID mapping (simulates mapping arriving between send and retry)
+        client
+            .lid_pn_cache
+            .add(wacore::types::lid_pn::LidPnEntry {
+                lid: lid_jid.user.to_string(),
+                phone_number: pn_jid.user.to_string(),
+                created_at: 0,
+                learning_source: wacore::types::lid_pn::LearningSource::Usync,
+            })
+            .await;
+
+        // Lookup via LID: primary key resolves to LID (miss),
+        // alternate key falls back to PN (hit)
+        let taken = client.take_recent_message(&lid_jid, msg_id).await;
+        assert!(
+            taken.is_some(),
+            "Alternate PN key lookup should find message stored under PN"
+        );
+        let (msg_out, alt_chat) = taken.unwrap();
+        let alt_chat = alt_chat.expect("should be found via alternate key");
+        assert!(alt_chat.is_pn(), "alternate chat should be PN");
+        assert_eq!(alt_chat.user, pn_jid.user);
+        assert_eq!(msg_out.conversation.as_deref(), Some("alternate key test"));
+    }
+
+    /// swap_pn_lid_namespace should swap between PN and LID while preserving
+    /// device/agent — this is the shared helper used for both alternate key
+    /// computation and requester normalization after an alternate hit.
+    #[tokio::test]
+    async fn swap_pn_lid_namespace_preserves_device() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let pn_jid: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let lid_jid: Jid = "236395184570386@lid".parse().unwrap();
+
+        client
+            .lid_pn_cache
+            .add(wacore::types::lid_pn::LidPnEntry {
+                lid: lid_jid.user.to_string(),
+                phone_number: pn_jid.user.to_string(),
+                created_at: 0,
+                learning_source: wacore::types::lid_pn::LearningSource::Usync,
+            })
+            .await;
+
+        // LID:5 → PN:5
+        let lid_with_device: Jid = "236395184570386:5@lid".parse().unwrap();
+        let swapped = client.swap_pn_lid_namespace(&lid_with_device).await;
+        let swapped = swapped.expect("should resolve LID→PN");
+        assert!(swapped.is_pn());
+        assert_eq!(swapped.user, "5511999999999");
+        assert_eq!(swapped.device(), 5);
+
+        // PN:3 → LID:3
+        let pn_with_device: Jid = "5511999999999:3@s.whatsapp.net".parse().unwrap();
+        let swapped = client.swap_pn_lid_namespace(&pn_with_device).await;
+        let swapped = swapped.expect("should resolve PN→LID");
+        assert!(swapped.is_lid());
+        assert_eq!(swapped.user, "236395184570386");
+        assert_eq!(swapped.device(), 3);
+
+        // Group JID → None
+        let group: Jid = "120363021033254949@g.us".parse().unwrap();
+        assert!(client.swap_pn_lid_namespace(&group).await.is_none());
+    }
+
+    /// Alternate key lookup via PN input: message stored under PN, LID mapping
+    /// added later, lookup via PN. Exercises the `server != server` optimization
+    /// where `to` is used directly as alternate (no cache round-trip).
+    #[tokio::test]
+    async fn alternate_key_lookup_pn_input_server_changed() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            config,
+        )
+        .await;
+
+        let pn_jid: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let lid_jid: Jid = "236395184570386@lid".parse().unwrap();
+        let msg_id = "RETRY_ALT_PN";
+        let msg = wa::Message {
+            conversation: Some("pn input alternate".into()),
+            ..Default::default()
+        };
+
+        // Store under PN (no mapping at send time)
+        client.add_recent_message(&pn_jid, msg_id, &msg).await;
+
+        // Add LID mapping
+        client
+            .lid_pn_cache
+            .add(wacore::types::lid_pn::LidPnEntry {
+                lid: lid_jid.user.to_string(),
+                phone_number: pn_jid.user.to_string(),
+                created_at: 0,
+                learning_source: wacore::types::lid_pn::LearningSource::Usync,
+            })
+            .await;
+
+        // Lookup via PN: resolve_encryption_jid maps to LID (primary),
+        // primary misses, server changed (Lid != Pn) → uses `to` directly
+        let taken = client.take_recent_message(&pn_jid, msg_id).await;
+        assert!(
+            taken.is_some(),
+            "Should find message via server-changed path"
+        );
+        let (msg_out, alt_chat) = taken.unwrap();
+        let alt_chat = alt_chat.expect("should be alternate hit");
+        assert!(
+            alt_chat.is_pn(),
+            "alternate chat should be PN (the original input)"
+        );
+        assert_eq!(alt_chat.user, pn_jid.user);
+        assert_eq!(msg_out.conversation.as_deref(), Some("pn input alternate"));
+    }
+
+    /// When no PN/LID mapping exists, no alternate is tried and take returns None.
+    #[tokio::test]
+    async fn no_alternate_without_mapping() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            config,
+        )
+        .await;
+
+        let lid_jid: Jid = "236395184570386@lid".parse().unwrap();
+        let msg_id = "RETRY_NO_ALT";
+        let msg = wa::Message {
+            conversation: Some("no alternate".into()),
+            ..Default::default()
+        };
+
+        // Store under LID, no PN mapping exists
+        client.add_recent_message(&lid_jid, msg_id, &msg).await;
+
+        // Lookup via LID: primary hits directly (same namespace)
+        let taken = client.take_recent_message(&lid_jid, msg_id).await;
+        assert!(taken.is_some());
+        let (_, alt_chat) = taken.unwrap();
+        assert!(alt_chat.is_none(), "primary hit should have no alt_chat");
+
+        // Now try looking up a message that doesn't exist at all
+        let missing = client.take_recent_message(&lid_jid, "NONEXISTENT").await;
+        assert!(missing.is_none(), "non-existent message should return None");
+    }
+
+    /// When both primary and alternate miss, take returns None.
+    #[tokio::test]
+    async fn alternate_key_both_miss() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("persistence manager should initialize"),
+        );
+        let mut config = crate::cache_config::CacheConfig::default();
+        config.recent_messages.capacity = 1_000;
+        let (client, _sync_rx) = Client::new_with_cache_config(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm.clone(),
+            Arc::new(crate::transport::mock::MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+            config,
+        )
+        .await;
+
+        let pn_jid: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let lid_jid: Jid = "236395184570386@lid".parse().unwrap();
+
+        // Add mapping but don't store any message
+        client
+            .lid_pn_cache
+            .add(wacore::types::lid_pn::LidPnEntry {
+                lid: lid_jid.user.to_string(),
+                phone_number: pn_jid.user.to_string(),
+                created_at: 0,
+                learning_source: wacore::types::lid_pn::LearningSource::Usync,
+            })
+            .await;
+
+        // Lookup via PN: primary (LID) misses, alternate (PN) also misses
+        let taken = client.take_recent_message(&pn_jid, "MISSING").await;
+        assert!(taken.is_none(), "both primary and alternate miss → None");
+    }
+
+    // --- Peer device / bot / original_from tests ---
+
+    #[test]
+    fn resolve_retry_chat_info_peer_device_with_recipient() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Peer retry: from=our own JID, recipient=the actual chat partner
+        let our_pn: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let recipient: Jid = "5522888888888@s.whatsapp.net".parse().unwrap();
+
+        let node = NodeBuilder::new("receipt")
+            .attr("recipient", "5522888888888@s.whatsapp.net")
+            .build();
+        let receipt = make_test_receipt("5511999999999:2@s.whatsapp.net");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), Some(&our_pn), None);
+
+        // Chat should be the recipient (the actual conversation partner)
+        assert_eq!(info.chat.user, recipient.user);
+        assert_eq!(info.chat.device(), 0, "chat should be bare");
+        // Requester is still our device
+        assert_eq!(info.requester.user, our_pn.user);
+        assert_eq!(info.requester.device(), 2);
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_peer_device_without_recipient() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Peer retry without recipient attr — should fall back to from
+        let our_pn: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let node = NodeBuilder::new("receipt").build();
+        let receipt = make_test_receipt("5511999999999:2@s.whatsapp.net");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), Some(&our_pn), None);
+
+        // Falls back to from.to_non_ad() (our own bare JID)
+        assert_eq!(info.chat.user, our_pn.user);
+        assert_eq!(info.chat.device(), 0);
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_bot_with_recipient() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Bot retry: from=bot JID, recipient=actual chat
+        let node = NodeBuilder::new("receipt")
+            .attr("recipient", "5522888888888@s.whatsapp.net")
+            .build();
+        let receipt = make_test_receipt("131355500001@s.whatsapp.net");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
+
+        assert!(info.is_bot, "bot JID should be detected");
+        // Chat should be the recipient
+        assert_eq!(info.chat.user, "5522888888888");
+        assert_eq!(info.chat.device(), 0);
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_bot_without_recipient() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Bot retry without recipient — falls through to normal DM path
+        let node = NodeBuilder::new("receipt").build();
+        let receipt = make_test_receipt("131355500001@s.whatsapp.net");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
+
+        assert!(info.is_bot);
+        // Without recipient, falls to from.to_non_ad()
+        assert_eq!(info.chat.user, "131355500001");
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_preserves_original_from() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // DM with device suffix — original_from should preserve it
+        let node = NodeBuilder::new("receipt").build();
+        let receipt = make_test_receipt("5511999999999:33@s.whatsapp.net");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, None);
+
+        // original_from keeps the full JID including device
+        assert_eq!(info.original_from.device(), 33);
+        assert_eq!(info.original_from.user, "5511999999999");
+
+        // chat is bare
+        assert_eq!(info.chat.device(), 0);
+        assert_eq!(info.chat.user, "5511999999999");
+    }
+
+    #[test]
+    fn resolve_retry_chat_info_peer_via_lid() {
+        use wacore_binary::builder::NodeBuilder;
+
+        // Peer retry detected via LID (not PN)
+        let our_lid: Jid = "236395184570386@lid".parse().unwrap();
+        let recipient: Jid = "5522888888888@s.whatsapp.net".parse().unwrap();
+
+        let node = NodeBuilder::new("receipt")
+            .attr("recipient", "5522888888888@s.whatsapp.net")
+            .build();
+        let receipt = make_test_receipt("236395184570386:5@lid");
+
+        let info = resolve_retry_chat_info(&receipt, &node.as_node_ref(), None, Some(&our_lid));
+
+        assert_eq!(info.chat.user, recipient.user);
+        assert_eq!(info.chat.device(), 0);
+        assert_eq!(info.requester.device(), 5);
     }
 }

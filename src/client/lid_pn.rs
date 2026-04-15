@@ -165,6 +165,32 @@ impl Client {
         }
     }
 
+    /// Swap a JID's namespace between PN and LID, preserving device/agent/integrator.
+    /// Returns `None` if no mapping exists or the JID is neither PN nor LID.
+    pub(crate) async fn swap_pn_lid_namespace(&self, jid: &Jid) -> Option<Jid> {
+        if jid.is_lid() {
+            let pn_user = self.lid_pn_cache.get_phone_number(&jid.user).await?;
+            Some(Jid {
+                user: pn_user.into(),
+                server: wacore_binary::Server::Pn,
+                device: jid.device,
+                agent: jid.agent,
+                integrator: jid.integrator,
+            })
+        } else if jid.is_pn() {
+            let lid_user = self.lid_pn_cache.get_current_lid(&jid.user).await?;
+            Some(Jid {
+                user: lid_user.into(),
+                server: wacore_binary::Server::Lid,
+                device: jid.device,
+                agent: jid.agent,
+                integrator: jid.integrator,
+            })
+        } else {
+            None
+        }
+    }
+
     /// Migrate Signal sessions and identity keys from PN to LID address.
     ///
     /// All reads/writes go through `signal_cache` to avoid reading stale data
