@@ -1183,7 +1183,7 @@ impl SignalStore for SqliteStore {
         match blob {
             None => Ok(None),
             Some(v) => Ok(Some(v.try_into().map_err(|v: Vec<u8>| {
-                StoreError::Database(format!(
+                StoreError::Serialization(format!(
                     "identity key for '{}' has invalid length {} (expected 32)",
                     address,
                     v.len()
