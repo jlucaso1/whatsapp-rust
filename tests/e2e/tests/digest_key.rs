@@ -68,23 +68,14 @@ async fn test_digest_key_hash_matches_server() -> anyhow::Result<()> {
             )
         });
 
-        use prost::Message;
-        let record = whatsapp_rust::waproto::whatsapp::PreKeyRecordStructure::decode(
-            record_bytes.as_slice(),
-        )?;
-        let pk = record
-            .public_key
+        let pk = wacore::prekeys::extract_prekey_public_key(&record_bytes)
             .unwrap_or_else(|| panic!("Prekey {} has no public_key field", prekey_id));
-        prekey_pubkeys.push(pk);
+        prekey_pubkeys.push(pk.to_vec());
     }
 
-    // Compute SHA-1 digest the same way the server does
-    let local_hash = wacore::prekeys::compute_key_bundle_digest(
-        identity_pub,
-        skey_pub,
-        skey_sig,
-        &prekey_pubkeys,
-    );
+    let pubkey_refs: Vec<&[u8]> = prekey_pubkeys.iter().map(|v| v.as_slice()).collect();
+    let local_hash =
+        wacore::prekeys::compute_key_bundle_digest(identity_pub, skey_pub, skey_sig, &pubkey_refs);
 
     assert_eq!(
         local_hash,

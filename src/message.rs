@@ -789,7 +789,7 @@ impl Client {
                     if let Err(e) = self
                         .clone()
                         .handle_decrypted_plaintext(
-                            &enc_type,
+                            enc_type,
                             &padded_plaintext,
                             padding_version,
                             info,
@@ -875,7 +875,7 @@ impl Client {
                                 if let Err(e) = self
                                     .clone()
                                     .handle_decrypted_plaintext(
-                                        &enc_type,
+                                        enc_type,
                                         &padded_plaintext,
                                         padding_version,
                                         info,
@@ -913,7 +913,7 @@ impl Client {
                                             &parsed_message,
                                             &mut adapter,
                                             &mut rng,
-                                            &enc_type,
+                                            enc_type,
                                             padding_version,
                                             info,
                                         )
@@ -975,7 +975,7 @@ impl Client {
                                 &parsed_message,
                                 &mut adapter,
                                 &mut rng,
-                                &enc_type,
+                                enc_type,
                                 padding_version,
                                 info,
                             )
@@ -1041,7 +1041,7 @@ impl Client {
                                 &parsed_message,
                                 &mut adapter,
                                 &mut rng,
-                                &enc_type,
+                                enc_type,
                                 padding_version,
                                 info,
                             )
