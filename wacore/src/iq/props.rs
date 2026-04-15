@@ -59,6 +59,22 @@ pub mod config_codes {
     // --- NCT / cstoken ---
     /// Gates cstoken (HMAC fallback) inclusion in outgoing messages.
     pub const NCT_TOKEN_SEND_ENABLED: u32 = 24_941;
+
+    /// All production config codes. Must match DEFAULT_INTEREST in ab_props.rs.
+    /// When adding a new code above, add it here too.
+    pub const ALL: &[u32] = &[
+        PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES,
+        PRIVACY_TOKEN_ON_GROUP_CREATE,
+        PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD,
+        PRIVACY_TOKEN_ONLY_CHECK_LID,
+        PROFILE_PIC_PRIVACY_TOKEN,
+        LID_TRUSTED_TOKEN_ISSUE_TO_LID,
+        TCTOKEN_DURATION,
+        TCTOKEN_DURATION_SENDER,
+        TCTOKEN_NUM_BUCKETS,
+        TCTOKEN_NUM_BUCKETS_SENDER,
+        NCT_TOKEN_SEND_ENABLED,
+    ];
 }
 
 /// Protocol version for props requests.
@@ -241,6 +257,9 @@ impl crate::protocol::ProtocolNode for PropsResponse {
         "props"
     }
 
+    /// Serializes metadata attrs only. Individual `<prop>` children are not
+    /// emitted since experiment_props stores lightweight (code, value) tuples
+    /// without the full AbPropConfig structure needed for node construction.
     fn into_node(self) -> Node {
         let mut builder = NodeBuilder::new("props").attr("protocol", PROPS_PROTOCOL_VERSION);
 

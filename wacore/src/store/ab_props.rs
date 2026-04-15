@@ -15,22 +15,6 @@ use wacore_binary::CompactString;
 
 use crate::iq::props::config_codes;
 
-/// All config codes that production code queries.
-/// Pre-populated so apply_props retains them without explicit watch() calls.
-const DEFAULT_INTEREST: &[u32] = &[
-    config_codes::PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES,
-    config_codes::PRIVACY_TOKEN_ON_GROUP_CREATE,
-    config_codes::PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD,
-    config_codes::PRIVACY_TOKEN_ONLY_CHECK_LID,
-    config_codes::PROFILE_PIC_PRIVACY_TOKEN,
-    config_codes::LID_TRUSTED_TOKEN_ISSUE_TO_LID,
-    config_codes::TCTOKEN_DURATION,
-    config_codes::TCTOKEN_DURATION_SENDER,
-    config_codes::TCTOKEN_NUM_BUCKETS,
-    config_codes::TCTOKEN_NUM_BUCKETS_SENDER,
-    config_codes::NCT_TOKEN_SEND_ENABLED,
-];
-
 /// In-memory cache of AB experiment properties, populated on connect.
 /// Only materializes props whose config_code is in the interest set.
 /// Pre-populated with all known config_codes; extend via `watch()`.
@@ -44,7 +28,7 @@ impl AbPropsCache {
     pub fn new() -> Self {
         Self {
             props: RwLock::new(HashMap::new()),
-            interest: RwLock::new(DEFAULT_INTEREST.iter().copied().collect()),
+            interest: RwLock::new(config_codes::ALL.iter().copied().collect()),
             seeded: AtomicBool::new(false),
         }
     }
