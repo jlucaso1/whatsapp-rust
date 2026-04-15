@@ -1728,8 +1728,8 @@ impl Client {
         if !self.is_connected() {
             return Err(ClientError::NotConnected);
         }
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let ack = match build_ack_node(node, device_snapshot.pn.as_ref()) {
+        let own_pn = self.get_pn().await;
+        let ack = match build_ack_node(node, own_pn.as_ref()) {
             Some(ack) => ack,
             None => return Ok(()),
         };
@@ -3534,8 +3534,13 @@ impl Client {
     }
 
     pub async fn get_pn(&self) -> Option<Jid> {
-        let snapshot = self.persistence_manager.get_device_snapshot().await;
-        snapshot.pn.clone()
+        self.persistence_manager
+            .get_device_arc()
+            .await
+            .read()
+            .await
+            .pn
+            .clone()
     }
 
     pub async fn get_lid(&self) -> Option<Jid> {
