@@ -383,7 +383,104 @@ impl FromIterator<(Cow<'static, str>, NodeValue)> for Attrs {
         Self(iter.into_iter().collect())
     }
 }
-pub type AttrsRef<'a> = Vec<(NodeStr<'a>, ValueRef<'a>)>;
+/// Covariant inline container for decoded node attributes.
+/// Most WA protocol nodes have 0-1 attributes; storing them inline avoids
+/// a heap allocation for the common case. Covariant in `'a` (unlike SmallVec)
+/// so it works with yoke::Yokeable.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttrsRef<'a> {
+    Empty,
+    One((NodeStr<'a>, ValueRef<'a>)),
+    Many(Vec<(NodeStr<'a>, ValueRef<'a>)>),
+}
+
+impl<'a> AttrsRef<'a> {
+    pub fn with_capacity(n: usize) -> Self {
+        match n {
+            0 => Self::Empty,
+            _ => Self::Many(Vec::with_capacity(n)),
+        }
+    }
+
+    pub fn push(&mut self, item: (NodeStr<'a>, ValueRef<'a>)) {
+        match self {
+            Self::Empty => *self = Self::One(item),
+            Self::One(_) => {
+                let Self::One(prev) = std::mem::replace(self, Self::Empty) else {
+                    unreachable!()
+                };
+                *self = Self::Many(vec![prev, item]);
+            }
+            Self::Many(v) => v.push(item),
+        }
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        match self {
+            Self::Empty => 0,
+            Self::One(_) => 1,
+            Self::Many(v) => v.len(),
+        }
+    }
+
+    #[inline]
+    pub fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+
+    #[inline]
+    pub fn as_slice(&self) -> &[(NodeStr<'a>, ValueRef<'a>)] {
+        match self {
+            Self::Empty => &[],
+            Self::One(item) => std::slice::from_ref(item),
+            Self::Many(v) => v.as_slice(),
+        }
+    }
+
+    #[inline]
+    pub fn iter(&self) -> impl Iterator<Item = &(NodeStr<'a>, ValueRef<'a>)> {
+        self.as_slice().iter()
+    }
+}
+
+impl<'a> FromIterator<(NodeStr<'a>, ValueRef<'a>)> for AttrsRef<'a> {
+    fn from_iter<I: IntoIterator<Item = (NodeStr<'a>, ValueRef<'a>)>>(iter: I) -> Self {
+        let mut result = Self::Empty;
+        for item in iter {
+            result.push(item);
+        }
+        result
+    }
+}
+
+// Safety: AttrsRef is covariant in 'a because:
+// - Empty has no lifetime
+// - One contains (NodeStr<'a>, ValueRef<'a>) which are covariant
+// - Many(Vec<T>) is covariant in T
+// yoke::Yokeable requires covariance, which Vec and tuples provide.
+unsafe impl<'a> yoke::Yokeable<'a> for AttrsRef<'static> {
+    type Output = AttrsRef<'a>;
+
+    fn transform(&'a self) -> &'a Self::Output {
+        self
+    }
+
+    fn transform_owned(self) -> Self::Output {
+        self
+    }
+
+    unsafe fn make(from: Self::Output) -> Self {
+        unsafe { std::mem::transmute(from) }
+    }
+
+    fn transform_mut<F>(&'a mut self, f: F)
+    where
+        F: 'static + for<'b> FnOnce(&'b mut Self::Output),
+    {
+        unsafe { f(std::mem::transmute::<&mut Self, &mut Self::Output>(self)) }
+    }
+}
 
 /// A decoded attribute value that can be either a string or a structured JID.
 /// This avoids string allocation when decoding JID tokens - the JidRef is returned
@@ -615,7 +712,7 @@ struct AttrsRefWrapper<'a, 'b>(&'b AttrsRef<'a>);
 #[cfg(feature = "serde")]
 impl serde::Serialize for AttrsRefWrapper<'_, '_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_newtype_struct("Attrs", self.0)
+        serializer.serialize_newtype_struct("Attrs", self.0.as_slice())
     }
 }
 

@@ -177,7 +177,7 @@ impl EncodeNode for NodeRef<'_> {
     }
 
     fn encode_attrs<'a, W: ByteWriter>(&self, encoder: &mut Encoder<'a, W>) -> Result<()> {
-        for (k, v) in &self.attrs {
+        for (k, v) in self.attrs.iter() {
             encoder.write_string(k)?;
             match v {
                 ValueRef::String(s) => encoder.write_string(s)?,
