@@ -1288,7 +1288,7 @@ impl SignalStore for SqliteStore {
         let pool = self.pool.clone();
         let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
-        let keys: Vec<(u32, Vec<u8>)> = keys.iter().map(|(id, b)| (*id, b.to_vec())).collect();
+        let keys: Vec<(u32, Bytes)> = keys.to_vec();
 
         const MAX_RETRIES: u32 = 5;
 
@@ -1312,13 +1312,16 @@ impl SignalStore for SqliteStore {
                             diesel::insert_into(prekeys::table)
                                 .values((
                                     prekeys::id.eq(*id as i32),
-                                    prekeys::key.eq(record),
+                                    prekeys::key.eq(record.as_ref()),
                                     prekeys::uploaded.eq(uploaded),
                                     prekeys::device_id.eq(device_id),
                                 ))
                                 .on_conflict((prekeys::id, prekeys::device_id))
                                 .do_update()
-                                .set((prekeys::key.eq(record), prekeys::uploaded.eq(uploaded)))
+                                .set((
+                                    prekeys::key.eq(record.as_ref()),
+                                    prekeys::uploaded.eq(uploaded),
+                                ))
                                 .execute(conn)?;
                         }
                         Ok::<(), diesel::result::Error>(())

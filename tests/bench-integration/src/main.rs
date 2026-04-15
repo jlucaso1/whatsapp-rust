@@ -181,11 +181,12 @@ async fn bench_send_message(results: &mut BenchResults) -> anyhow::Result<()> {
 
     // -- Amortized: send N messages --
     const N: u64 = 20;
+    let send_texts: Vec<String> = (0..N).map(|i| format!("bench-send-{i}")).collect();
     let m = measure(async || {
-        for i in 0..N {
+        for text in &send_texts {
             client_a
                 .client
-                .send_message(jid_b.clone(), text_msg(&format!("bench-send-{i}")))
+                .send_message(jid_b.clone(), text_msg(text))
                 .await?;
         }
         Ok(())
@@ -208,10 +209,8 @@ async fn bench_send_message(results: &mut BenchResults) -> anyhow::Result<()> {
         );
     }
 
-    for i in 0..N {
-        client_b
-            .wait_for_text(&format!("bench-send-{i}"), 30)
-            .await?;
+    for text in &send_texts {
+        client_b.wait_for_text(text, 30).await?;
     }
 
     client_a.disconnect().await;

@@ -166,7 +166,15 @@ fn should_auto_reserve_node_ref(node: &NodeRef<'_>) -> bool {
     match node.content.as_deref() {
         Some(NodeContentRef::Bytes(bytes)) => bytes.len() >= AUTO_RESERVE_SCALAR_THRESHOLD,
         Some(NodeContentRef::String(text)) => text.len() >= AUTO_RESERVE_SCALAR_THRESHOLD,
-        Some(NodeContentRef::Nodes(children)) => children.len() >= AUTO_RESERVE_CHILDREN_THRESHOLD,
+        Some(NodeContentRef::Nodes(children)) => {
+            if children.len() >= AUTO_RESERVE_CHILDREN_THRESHOLD {
+                return true;
+            }
+            // Check one level deeper for large nested lists (e.g., <iq> -> <list> -> 812 keys)
+            children.iter().any(|child| {
+                matches!(child.content.as_deref(), Some(NodeContentRef::Nodes(gc)) if gc.len() >= AUTO_RESERVE_CHILDREN_THRESHOLD)
+            })
+        }
         None => false,
     }
 }

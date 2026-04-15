@@ -29,9 +29,11 @@ pub fn compute_key_bundle_digest(
 }
 
 /// Extract the `publicKey` field (tag 2) from a protobuf-encoded PreKeyRecordStructure
-/// without full prost decode. Returns None if the field is missing.
+/// without full prost decode. Uses last-one-wins semantics per protobuf spec.
+/// Skips unknown fields gracefully.
 pub fn extract_prekey_public_key(record: &[u8]) -> Option<&[u8]> {
     let mut pos = 0;
+    let mut result: Option<&[u8]> = None;
     while pos < record.len() {
         let (tag_byte, consumed) = decode_varint(&record[pos..])?;
         pos += consumed;
@@ -49,26 +51,42 @@ pub fn extract_prekey_public_key(record: &[u8]) -> Option<&[u8]> {
                 pos += c;
                 let len = len as usize;
                 if pos + len > record.len() {
-                    return None;
+                    return result;
                 }
                 if field_number == 2 {
-                    return Some(&record[pos..pos + len]);
+                    result = Some(&record[pos..pos + len]);
                 }
                 pos += len;
             }
             // fixed64
-            1 => pos += 8,
+            1 => {
+                if pos + 8 > record.len() {
+                    return result;
+                }
+                pos += 8;
+            }
             // fixed32
-            5 => pos += 4,
-            _ => return None,
+            5 => {
+                if pos + 4 > record.len() {
+                    return result;
+                }
+                pos += 4;
+            }
+            // Unknown wire type -- skip gracefully
+            _ => return result,
         }
     }
-    None
+    result
 }
 
 fn decode_varint(buf: &[u8]) -> Option<(u64, usize)> {
     let mut result: u64 = 0;
     for (i, &byte) in buf.iter().enumerate().take(10) {
+        // The 10th byte (i==9) carries the highest bits; only the low bit
+        // is valid payload (64 - 9*7 = 1). Reject if more bits are set.
+        if i == 9 && (byte & 0x7F) > 1 {
+            return None;
+        }
         result |= ((byte & 0x7F) as u64) << (i * 7);
         if byte & 0x80 == 0 {
             return Some((result, i + 1));

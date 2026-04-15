@@ -6,11 +6,6 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
-  pull-requests: write
-  deployments: write
-
 concurrency:
   group: bench-integration-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
@@ -22,9 +17,13 @@ env:
   RUSTC_WRAPPER: "sccache"
 
 jobs:
-  bench-integration:
-    name: Integration Benchmark
+  bench-integration-pr:
+    if: github.event_name == 'pull_request'
+    name: Integration Benchmark (PR)
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
     services:
       mock-server:
         image: ghcr.io/whiskeysockets-devtools/bartender:latest
@@ -90,23 +89,7 @@ jobs:
             bench_integration.log
           retention-days: 30
 
-      # Push to main: store baseline
-      - name: Store baseline (push to main)
-        if: github.event_name == 'push'
-        uses: benchmark-action/github-action-benchmark@v1
-        with:
-          name: "whatsapp-rust integration benchmarks"
-          tool: "customSmallerIsBetter"
-          output-file-path: bench_integration_results.json
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: true
-          benchmark-data-dir-path: dev/bench-integration
-          max-items-in-chart: 100
-          summary-always: true
-
-      # PR: compare against baseline
-      - name: Compare against baseline (pull request)
-        if: github.event_name == 'pull_request'
+      - name: Compare against baseline
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: "whatsapp-rust integration benchmarks"
@@ -116,4 +99,88 @@ jobs:
           auto-push: false
           save-data-file: false
           benchmark-data-dir-path: dev/bench-integration
+          summary-always: true
+
+  bench-integration-push:
+    if: github.event_name == 'push'
+    name: Integration Benchmark (push)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      deployments: write
+    services:
+      mock-server:
+        image: ghcr.io/whiskeysockets-devtools/bartender:latest
+        credentials:
+          username: ${{ github.actor }}
+          password: ${{ secrets.BARTENDER_GHCR_TOKEN }}
+        ports:
+          - 8080:8080
+        env:
+          CHATSTATE_TTL_SECS: "3"
+        options: --log-driver none
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-04-05
+
+      - name: Install protoc
+        uses: taiki-e/install-action@v2
+        with:
+          tool: protoc@${{ env.PROTOC_VERSION }}
+
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache Rust registry
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: ${{ runner.os }}-cargo-bench-int
+          cache-targets: "false"
+
+      - name: Wait for mock server
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sk https://localhost:8080/ > /dev/null 2>&1; then
+              echo "Mock server is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Mock server failed to become ready"
+          exit 1
+
+      - name: Run integration benchmarks
+        env:
+          MOCK_SERVER_URL: "wss://127.0.0.1:8080/ws/chat"
+          RUST_LOG: warn
+        run: |
+          cargo run -p bench-integration --release \
+            > bench_integration_results.json \
+            2> bench_integration.log
+          cat bench_integration.log >&2
+          echo "Results:"
+          cat bench_integration_results.json
+
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: bench-integration-results
+          path: |
+            bench_integration_results.json
+            bench_integration.log
+          retention-days: 30
+
+      - name: Store baseline
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: "whatsapp-rust integration benchmarks"
+          tool: "customSmallerIsBetter"
+          output-file-path: bench_integration_results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          benchmark-data-dir-path: dev/bench-integration
+          max-items-in-chart: 100
           summary-always: true
