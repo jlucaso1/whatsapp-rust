@@ -791,10 +791,12 @@ impl SessionRecord {
     pub fn serialize_into(&self, buf: &mut Vec<u8>) {
         use buffa::encoding::{Tag, WireType, encode_varint, varint_len};
 
-        fn encode_len_delimited(field: u32, msg: &impl Message, buf: &mut Vec<u8>) {
+        // write_to uses cached_size() internally, so compute_size() must be
+        // called first. We call it once per message during the length-sum pass
+        // and the cache survives into the write pass — no double traversal.
+        fn write_len_delimited(field: u32, msg: &impl Message, buf: &mut Vec<u8>) {
             Tag::new(field, WireType::LengthDelimited).encode(buf);
-            let size = msg.compute_size();
-            encode_varint(size as u64, buf);
+            encode_varint(msg.cached_size() as u64, buf);
             msg.write_to(buf);
         }
 
@@ -820,10 +822,10 @@ impl SessionRecord {
         buf.reserve(current_len + previous_len);
 
         if let Some(state) = &self.current_session {
-            encode_len_delimited(1, &state.session, buf);
+            write_len_delimited(1, &state.session, buf);
         }
         for session in self.previous_sessions.iter() {
-            encode_len_delimited(2, session, buf);
+            write_len_delimited(2, session, buf);
         }
     }
 
