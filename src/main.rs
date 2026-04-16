@@ -7,7 +7,7 @@ use waproto::whatsapp as wa;
 use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::bot::{Bot, MessageContext};
 use whatsapp_rust::pair_code::PairCodeOptions;
-use whatsapp_rust::store::SqliteStore;
+use whatsapp_rust::store::RedbStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
 
@@ -54,14 +54,14 @@ fn main() {
         .expect("Failed to build tokio runtime");
 
     rt.block_on(async {
-        let backend = match SqliteStore::new("whatsapp.db").await {
+        let backend = match RedbStore::new("whatsapp.redb").await {
             Ok(store) => Arc::new(store),
             Err(e) => {
-                error!("Failed to create SQLite backend: {}", e);
+                error!("Failed to create Redb backend: {}", e);
                 return;
             }
         };
-        info!("SQLite backend initialized successfully.");
+        info!("Redb backend initialized successfully.");
 
         let transport_factory = TokioWebSocketTransportFactory::new();
         let http_client = UreqHttpClient::new();

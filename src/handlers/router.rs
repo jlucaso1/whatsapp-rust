@@ -151,7 +151,7 @@ mod tests {
 
         use crate::store::persistence_manager::PersistenceManager;
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = PersistenceManager::new(backend)
             .await
             .expect("persistence manager should initialize");
@@ -184,7 +184,7 @@ mod tests {
 
         use crate::store::persistence_manager::PersistenceManager;
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = PersistenceManager::new(backend)
             .await
             .expect("persistence manager should initialize");

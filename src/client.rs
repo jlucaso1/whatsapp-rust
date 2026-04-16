@@ -3850,7 +3850,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ack_behavior_for_incoming_stanzas() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -3904,7 +3904,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ack_waiter_resolves() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -3973,7 +3973,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_ack_without_matching_waiter() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4013,11 +4013,7 @@ mod tests {
     /// we can reuse the existing LID session instead of creating a new PN session.
     #[tokio::test]
     async fn test_lid_pn_cache_basic_operations() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_lid_cache_basic?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4083,13 +4079,7 @@ mod tests {
     /// When a phone number has multiple LIDs, the most recent one should be returned.
     #[tokio::test]
     async fn test_lid_pn_cache_timestamp_resolution() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(
-                "file:memdb_lid_cache_timestamp?mode=memory&cache=shared",
-            )
-            .await
-            .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4175,11 +4165,7 @@ mod tests {
     async fn test_get_lid_for_phone_via_send_context_resolver() {
         use wacore::client::context::SendContextResolver;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_get_lid_for_phone?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4229,13 +4215,7 @@ mod tests {
     /// Test that wait_for_offline_delivery_end returns immediately when the flag is already set.
     #[tokio::test]
     async fn test_wait_for_offline_delivery_end_returns_immediately_when_flag_set() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(
-                "file:memdb_offline_sync_flag_set?mode=memory&cache=shared",
-            )
-            .await
-            .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4274,13 +4254,7 @@ mod tests {
     /// This verifies the 10-second timeout is working.
     #[tokio::test]
     async fn test_wait_for_offline_delivery_end_times_out_when_flag_not_set() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(
-                "file:memdb_offline_sync_timeout?mode=memory&cache=shared",
-            )
-            .await
-            .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4337,11 +4311,7 @@ mod tests {
     /// Test that wait_for_offline_delivery_end returns when notified.
     #[tokio::test]
     async fn test_wait_for_offline_delivery_end_returns_on_notify() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_offline_notify?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4386,13 +4356,7 @@ mod tests {
     /// Test that the offline_sync_completed flag starts as false.
     #[tokio::test]
     async fn test_offline_sync_flag_initially_false() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new(
-                "file:memdb_offline_flag_initial?mode=memory&cache=shared",
-            )
-            .await
-            .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4426,11 +4390,7 @@ mod tests {
     async fn test_offline_sync_lifecycle() {
         use std::sync::atomic::Ordering;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_offline_lifecycle?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4484,11 +4444,7 @@ mod tests {
     /// This verifies the "not logged in" guard works.
     #[tokio::test]
     async fn test_establish_primary_phone_session_fails_without_pn() {
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_no_pn?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4530,11 +4486,7 @@ mod tests {
         use std::sync::atomic::Ordering;
         use wacore_binary::Jid;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_ensure_e2e_waits?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4615,11 +4567,7 @@ mod tests {
         use std::sync::atomic::Ordering;
         use wacore_binary::Jid;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_immediate_no_wait?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend.clone())
                 .await
@@ -4696,11 +4644,7 @@ mod tests {
         use wacore::types::jid::JidExt;
         use wacore_binary::Jid;
 
-        let backend = Arc::new(
-            crate::store::SqliteStore::new("file:memdb_skip_existing?mode=memory&cache=shared")
-                .await
-                .expect("Failed to create in-memory backend for test"),
-        );
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend.clone())
                 .await
@@ -4854,7 +4798,7 @@ mod tests {
     async fn test_server_time_offset_extraction() {
         use wacore_binary::builder::NodeBuilder;
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -4930,7 +4874,7 @@ mod tests {
     async fn test_unified_session_manager_integration() {
         // Test the unified session manager through the client
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5028,7 +4972,7 @@ mod tests {
 
     /// Helper to create a test client for offline sync tests
     async fn create_offline_sync_test_client() -> Arc<Client> {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5217,7 +5161,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_iq_ping_with_child_element() {
         // Format 1: <iq type="get"><ping/></iq> — the legacy format with a <ping> child node.
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5251,7 +5195,7 @@ mod tests {
         // Format 2: <iq type="get" xmlns="urn:xmpp:ping"/> — the real WhatsApp Web format.
         // This is a self-closing IQ with NO children, only an xmlns attribute.
         // The server sends this format; failing to respond causes keepalive timeout cascade.
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5284,7 +5228,7 @@ mod tests {
     async fn test_handle_iq_ping_with_both_child_and_xmlns() {
         // Edge case: node has BOTH a <ping> child AND xmlns="urn:xmpp:ping".
         // Should still be handled (OR condition).
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5317,7 +5261,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_iq_non_ping_returns_false() {
         // A type="get" IQ without ping child or xmlns should NOT be handled as ping.
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5349,7 +5293,7 @@ mod tests {
     #[tokio::test]
     async fn test_handle_iq_ping_wrong_type_returns_false() {
         // xmlns="urn:xmpp:ping" but type="result" (not "get") — should NOT be handled as ping.
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5554,7 +5498,7 @@ mod tests {
     /// Smoke test: server ping with xmlns but no id attribute is handled.
     #[tokio::test]
     async fn test_handle_iq_ping_without_id() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5685,7 +5629,7 @@ mod tests {
         use crate::cache_config::{CacheConfig, CacheEntryConfig};
         use std::time::Duration;
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5726,7 +5670,7 @@ mod tests {
         use crate::socket::NoiseSocket;
         use wacore::handshake::NoiseCipher;
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5775,7 +5719,7 @@ mod tests {
     /// are visible in logs.
     #[tokio::test]
     async fn test_send_ack_for_returns_error_when_disconnected() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -5808,7 +5752,7 @@ mod tests {
     /// since this is an intentional shutdown path.
     #[tokio::test]
     async fn test_send_ack_for_returns_ok_on_expected_disconnect() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await

@@ -204,7 +204,7 @@ impl Client {
 mod tests {
     use super::*;
     use crate::store::persistence_manager::PersistenceManager;
-    use crate::test_utils::{MockHttpClient, TestEventCollector};
+    use crate::test_utils::{MockHttpClient, TestEventCollector, create_test_backend};
     use crate::types::message::{MessageInfo, MessageSource};
 
     fn node_to_arc(node: wacore_binary::Node) -> Arc<OwnedNodeRef> {
@@ -213,7 +213,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_delivery_receipt_dm() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -257,7 +257,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_send_delivery_receipt_group() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -294,7 +294,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skip_delivery_receipt_for_own_messages() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -333,7 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skip_delivery_receipt_for_empty_id() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -370,7 +370,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_skip_delivery_receipt_for_status_broadcast() {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -458,7 +458,7 @@ mod tests {
 
     /// Create a test client with an event collector registered.
     async fn setup_client_with_collector() -> (Arc<Client>, Arc<TestEventCollector>) {
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await

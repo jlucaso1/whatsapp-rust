@@ -71,7 +71,7 @@ mod tests {
         let mock_handler = MockEncHandler::new();
 
         // Build bot with custom handler and in-memory DB
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
 
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();
@@ -103,7 +103,7 @@ mod tests {
         let handler2 = MockEncHandler::new();
 
         // Build bot with in-memory DB
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
 
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();
@@ -141,7 +141,7 @@ mod tests {
         use crate::bot::Bot;
 
         // Build bot without custom handlers but with in-memory DB
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
 
         let transport = whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory::new();
         let http_client = whatsapp_rust_ureq_http_client::UreqHttpClient::new();

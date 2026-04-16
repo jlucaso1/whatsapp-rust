@@ -1042,7 +1042,7 @@ mod tests {
     async fn recent_message_cache_insert_and_take() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -1395,7 +1395,7 @@ mod tests {
     async fn base_key_store_operations() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
 
         let address = "12345.0:1";
         let msg_id = "ABC123";
@@ -1437,7 +1437,7 @@ mod tests {
     async fn base_key_store_upsert() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
 
         let address = "12345.0:1";
         let msg_id = "MSG001";
@@ -1485,7 +1485,7 @@ mod tests {
     async fn base_key_store_multiple_messages() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
 
         let address = "12345.0:1";
         let msg_id_1 = "MSG001";
@@ -1547,8 +1547,7 @@ mod tests {
 
     #[tokio::test]
     async fn dm_retry_deletes_only_requested_session() {
-        let client =
-            crate::test_utils::create_test_client_with_failing_http("retry_dm_devices").await;
+        let client = crate::test_utils::create_test_client_with_failing_http().await;
         let user = "100000000000088".to_string();
         let resolved_jid = Jid::lid_device(user.clone(), 33);
 
@@ -1591,8 +1590,7 @@ mod tests {
 
     #[tokio::test]
     async fn dm_retry_deletes_resolved_session_without_registry_devices() {
-        let client =
-            crate::test_utils::create_test_client_with_failing_http("retry_dm_fallback").await;
+        let client = crate::test_utils::create_test_client_with_failing_http().await;
         let resolved_jid = Jid::lid("100000000000099");
         let signal_address = resolved_jid.to_protocol_address();
         let backend = client.persistence_manager.backend();
@@ -2092,7 +2090,7 @@ mod tests {
     async fn recent_message_cache_readd_after_take() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2156,7 +2154,7 @@ mod tests {
     async fn dm_retry_message_lookup_uses_bare_jid() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2208,7 +2206,7 @@ mod tests {
     async fn alternate_key_lookup_pn_to_lid() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2269,7 +2267,7 @@ mod tests {
     async fn swap_pn_lid_namespace_preserves_device() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2325,7 +2323,7 @@ mod tests {
     async fn alternate_key_lookup_pn_input_server_changed() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2387,7 +2385,7 @@ mod tests {
     async fn no_alternate_without_mapping() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await
@@ -2431,7 +2429,7 @@ mod tests {
     async fn alternate_key_both_miss() {
         let _ = env_logger::builder().is_test(true).try_init();
 
-        let backend = crate::test_utils::create_test_backend().await;
+        let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
             PersistenceManager::new(backend)
                 .await

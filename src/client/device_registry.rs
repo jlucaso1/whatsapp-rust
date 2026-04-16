@@ -547,7 +547,7 @@ mod tests {
     use std::sync::Arc;
 
     async fn create_test_client() -> Arc<Client> {
-        create_test_client_with_failing_http("device_registry").await
+        create_test_client_with_failing_http().await
     }
 
     async fn setup_lid_pn(client: &Arc<Client>, lid: &str, pn: &str) {

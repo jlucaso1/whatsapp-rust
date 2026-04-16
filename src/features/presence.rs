@@ -245,12 +245,10 @@ mod tests {
     use crate::TokioRuntime;
     use crate::bot::Bot;
     use crate::http::{HttpClient, HttpRequest, HttpResponse};
-    use crate::store::SqliteStore;
     use crate::store::commands::DeviceCommand;
+    use crate::test_utils::create_test_backend;
     use anyhow::Result;
     use std::str::FromStr;
-    use std::sync::Arc;
-    use wacore::store::traits::Backend;
     use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 
     // Mock HTTP client for testing
@@ -267,22 +265,10 @@ mod tests {
         }
     }
 
-    async fn create_test_backend() -> Arc<dyn Backend> {
-        let temp_db = format!(
-            "file:memdb_presence_{}?mode=memory&cache=shared",
-            uuid::Uuid::new_v4()
-        );
-        Arc::new(
-            SqliteStore::new(&temp_db)
-                .await
-                .expect("Failed to create test SqliteStore"),
-        ) as Arc<dyn Backend>
-    }
-
     /// Verifies WhatsApp Web behavior: presence deferred until pushname available.
     #[tokio::test]
     async fn test_presence_rejected_when_pushname_empty() {
-        let backend = create_test_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
 
         let bot = Bot::builder()
@@ -317,7 +303,7 @@ mod tests {
     /// Simulates pushname arriving from app state sync (setting_pushName mutation).
     #[tokio::test]
     async fn test_presence_succeeds_after_pushname_set() {
-        let backend = create_test_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
 
         let bot = Bot::builder()
@@ -359,7 +345,7 @@ mod tests {
     /// Matches WAWebPushNameSync.js: fresh pairing -> app state sync -> presence.
     #[tokio::test]
     async fn test_pushname_presence_flow_matches_whatsapp_web() {
-        let backend = create_test_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
 
         let bot = Bot::builder()
@@ -401,7 +387,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_presence_subscription_tracking_is_deduplicated() {
-        let backend = create_test_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
 
         let bot = Bot::builder()
@@ -425,7 +411,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_presence_unsubscription_removes_tracked_jid() {
-        let backend = create_test_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
 
         let bot = Bot::builder()
@@ -452,7 +438,7 @@ mod tests {
     #[tokio::test]
     async fn test_unsubscribe_builds_expected_presence_stanza() {
         let jid = Jid::from_str("1234567890@s.whatsapp.net").expect("valid jid");
-        let backend = create_test_backend().await;
+        let backend = create_test_backend();
         let transport = TokioWebSocketTransportFactory::new();
 
         let bot = Bot::builder()
