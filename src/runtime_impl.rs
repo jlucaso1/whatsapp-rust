@@ -30,10 +30,15 @@ mod tokio_impl {
             })
         }
 
+        fn yield_frequency(&self) -> u32 {
+            match tokio::runtime::Handle::current().runtime_flavor() {
+                tokio::runtime::RuntimeFlavor::CurrentThread => 1,
+                _ => 10,
+            }
+        }
+
         fn yield_now(&self) -> Option<Pin<Box<dyn Future<Output = ()> + Send>>> {
-            // Multi-threaded runtime: other tasks run on separate threads,
-            // no cooperative yielding needed.
-            None
+            Some(Box::pin(tokio::task::yield_now()))
         }
     }
 }

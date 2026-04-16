@@ -14,7 +14,6 @@
 //! 3. The phone responds with PeerDataOperationRequestResponseMessage containing the decoded message
 //! 4. We emit the message as if we had decrypted it ourselves
 
-use crate::cache::Cache;
 use crate::client::Client;
 use crate::types::message::MessageInfo;
 use log::{debug, info, warn};
@@ -31,13 +30,6 @@ use waproto::whatsapp as wa;
 pub struct PendingPdoRequest {
     pub message_info: Arc<MessageInfo>,
     pub requested_at: wacore::time::Instant,
-}
-
-pub fn new_pdo_cache() -> Cache<ChatMessageId, PendingPdoRequest> {
-    Cache::builder()
-        .time_to_live(Duration::from_secs(30))
-        .max_capacity(500)
-        .build()
 }
 
 impl Client {

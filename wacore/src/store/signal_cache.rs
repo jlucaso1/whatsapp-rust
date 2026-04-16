@@ -43,7 +43,7 @@ fn evict_clean_entries<V>(
 }
 
 /// Default max entries per store before clean entry eviction triggers.
-const DEFAULT_MAX_CACHE_ENTRIES: usize = 10_000;
+const DEFAULT_MAX_CACHE_ENTRIES: usize = 2_000;
 
 /// In-memory write-back cache for Signal protocol state.
 /// Keys use `Arc<str>` for O(1) clone. Sessions cached as objects (serialized on flush).

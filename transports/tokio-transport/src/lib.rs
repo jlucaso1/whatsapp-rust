@@ -15,7 +15,7 @@ use wacore::net::{Transport, TransportEvent, TransportFactory, WHATSAPP_WEB_WS_U
 
 pub use tokio_websockets::Connector;
 
-const EVENT_CHANNEL_CAPACITY: usize = 1_024;
+const EVENT_CHANNEL_CAPACITY: usize = 64;
 
 static CRYPTO_PROVIDER_INIT: Once = Once::new();
 

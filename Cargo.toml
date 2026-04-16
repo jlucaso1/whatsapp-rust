@@ -98,7 +98,6 @@ default = [
     "tokio-transport",
     "tokio-runtime",
     "ureq-client",
-    "tokio-native",
     "signal",
 ]
 moka-cache = ["dep:moka"]
