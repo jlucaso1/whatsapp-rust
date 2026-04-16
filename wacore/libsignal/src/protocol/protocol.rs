@@ -178,7 +178,7 @@ impl SignalMessage {
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
         view.ciphertext
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)
-            .map(|v| Box::from(v))
+            .map(Box::from)
     }
 
     pub fn verify_mac(
