@@ -359,7 +359,7 @@ fn decrypt_dm(
         .unwrap();
 
         let unpadded = MessageUtils::unpad_message_ref(&plaintext, 2).unwrap();
-        wa::Message::decode(unpadded).unwrap()
+        wa::Message::decode_from_slice(unpadded).unwrap()
     })
 }
 
@@ -376,7 +376,7 @@ fn decrypt_group(
             .unwrap();
 
         let unpadded = MessageUtils::unpad_message_ref(&plaintext, 2).unwrap();
-        wa::Message::decode(unpadded).unwrap()
+        wa::Message::decode_from_slice(unpadded).unwrap()
     })
 }
 
