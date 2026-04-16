@@ -4,6 +4,7 @@
 //
 
 use buffa::Message;
+use buffa::view::MessageView;
 use hmac::{Hmac, KeyInit, Mac};
 use rand::{CryptoRng, Rng};
 use sha2::Sha256;
@@ -173,12 +174,11 @@ impl SignalMessage {
 
     fn decode_ciphertext(&self) -> Result<Box<[u8]>> {
         let proto_bytes = &self.serialized[1..self.serialized.len() - Self::MAC_LENGTH];
-        let proto = waproto::whatsapp::SignalMessage::decode_from_slice(proto_bytes)
+        let view = waproto::whatsapp::SignalMessageView::decode_view(proto_bytes)
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
-        proto
-            .ciphertext
+        view.ciphertext
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)
-            .map(|v| v.into_boxed_slice())
+            .map(|v| Box::from(v))
     }
 
     pub fn verify_mac(
@@ -248,23 +248,23 @@ impl TryFrom<&[u8]> for SignalMessage {
             ));
         }
 
-        let proto_structure = waproto::whatsapp::SignalMessage::decode_from_slice(
+        let view = waproto::whatsapp::SignalMessageView::decode_view(
             &value[1..value.len() - SignalMessage::MAC_LENGTH],
         )
         .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
 
-        let sender_ratchet_key = proto_structure
+        let sender_ratchet_key = view
             .ratchet_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let sender_ratchet_key = PublicKey::deserialize(&sender_ratchet_key)?;
-        let counter = proto_structure
+        let sender_ratchet_key = PublicKey::deserialize(sender_ratchet_key)?;
+        let counter = view
             .counter
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let previous_counter = proto_structure.previous_counter.unwrap_or(0);
-        let ciphertext = proto_structure
+        let previous_counter = view.previous_counter.unwrap_or(0);
+        let ciphertext = view
             .ciphertext
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
-            .into_boxed_slice();
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)
+            .map(Box::from)?;
 
         let ciphertext_cache = OnceLock::new();
         let _ = ciphertext_cache.set(ciphertext);
@@ -394,33 +394,32 @@ impl TryFrom<&[u8]> for PreKeySignalMessage {
             ));
         }
 
-        let proto_structure =
-            waproto::whatsapp::PreKeySignalMessage::decode_from_slice(&value[1..])
-                .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
+        let view = waproto::whatsapp::PreKeySignalMessageView::decode_view(&value[1..])
+            .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
 
-        let base_key = proto_structure
+        let base_key = view
             .base_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let identity_key = proto_structure
+        let identity_key = view
             .identity_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let message = proto_structure
+        let message = view
             .message
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let signed_pre_key_id = proto_structure
+        let signed_pre_key_id = view
             .signed_pre_key_id
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
 
-        let base_key = PublicKey::deserialize(base_key.as_ref())?;
+        let base_key = PublicKey::deserialize(base_key)?;
 
         Ok(PreKeySignalMessage {
             message_version,
-            registration_id: proto_structure.registration_id.unwrap_or(0),
-            pre_key_id: proto_structure.pre_key_id.map(|id| id.into()),
+            registration_id: view.registration_id.unwrap_or(0),
+            pre_key_id: view.pre_key_id.map(|id| id.into()),
             signed_pre_key_id: signed_pre_key_id.into(),
             base_key,
-            identity_key: IdentityKey::try_from(identity_key.as_ref())?,
-            message: SignalMessage::try_from(message.as_ref())?,
+            identity_key: IdentityKey::try_from(identity_key)?,
+            message: SignalMessage::try_from(message)?,
             serialized: Box::from(value),
         })
     }
@@ -533,12 +532,11 @@ impl SenderKeyMessage {
     fn decode_ciphertext(&self) -> Result<Box<[u8]>> {
         // serialized layout: [version_byte || protobuf || signature]
         let proto_bytes = &self.serialized[1..self.serialized.len() - Self::SIGNATURE_LEN];
-        let proto = waproto::whatsapp::SenderKeyMessage::decode_from_slice(proto_bytes)
+        let view = waproto::whatsapp::SenderKeyMessageView::decode_view(proto_bytes)
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
-        let ciphertext = proto
-            .ciphertext
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        Ok(ciphertext.into_boxed_slice())
+        view.ciphertext
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)
+            .map(Box::from)
     }
 
     #[inline]
@@ -576,21 +574,21 @@ impl TryFrom<&[u8]> for SenderKeyMessage {
                 message_version,
             ));
         }
-        let proto_structure = waproto::whatsapp::SenderKeyMessage::decode_from_slice(
+        let view = waproto::whatsapp::SenderKeyMessageView::decode_view(
             &value[1..value.len() - Self::SIGNATURE_LEN],
         )
         .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
 
-        let chain_id = proto_structure
+        let chain_id = view
             .id
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let iteration = proto_structure
+        let iteration = view
             .iteration
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let ciphertext = proto_structure
+        let ciphertext = view
             .ciphertext
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
-            .into_boxed_slice();
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)
+            .map(Box::from)?;
 
         let ciphertext_cache = OnceLock::new();
         let _ = ciphertext_cache.set(ciphertext);
@@ -708,31 +706,30 @@ impl TryFrom<&[u8]> for SenderKeyDistributionMessage {
             ));
         }
 
-        let proto_structure =
-            waproto::whatsapp::SenderKeyDistributionMessage::decode_from_slice(&value[1..])
-                .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
+        let view = waproto::whatsapp::SenderKeyDistributionMessageView::decode_view(&value[1..])
+            .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
 
-        let chain_id = proto_structure
+        let chain_id = view
             .id
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let iteration = proto_structure
+        let iteration = view
             .iteration
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let chain_key_vec = proto_structure
+        let chain_key_bytes = view
             .chain_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let signing_key = proto_structure
+        let signing_key = view
             .signing_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
 
-        if chain_key_vec.len() != 32 || signing_key.len() != 33 {
+        if chain_key_bytes.len() != 32 || signing_key.len() != 33 {
             return Err(SignalProtocolError::InvalidProtobufEncoding);
         }
 
-        let chain_key: [u8; 32] = chain_key_vec
+        let chain_key: [u8; 32] = chain_key_bytes
             .try_into()
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
-        let signing_key = PublicKey::deserialize(&signing_key)?;
+        let signing_key = PublicKey::deserialize(signing_key)?;
 
         Ok(SenderKeyDistributionMessage {
             message_version,
