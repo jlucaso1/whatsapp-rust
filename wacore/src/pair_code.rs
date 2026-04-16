@@ -29,9 +29,9 @@ use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use rand::RngExt;
 use sha2::Sha256;
+use wacore_binary::SERVER_JID;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::SERVER_JID;
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Node, NodeContentRef, NodeRef};
 
 // Type aliases
 type Aes256Ctr = Ctr128BE<aes::Aes256>;
@@ -341,12 +341,11 @@ impl PairCodeUtils {
     }
 
     /// Parses the stage 1 response to extract the pairing ref.
-    pub fn parse_companion_hello_response(node: &Node) -> Option<Vec<u8>> {
+    pub fn parse_companion_hello_response(node: &NodeRef<'_>) -> Option<Vec<u8>> {
         node.get_optional_child_by_tag(&["link_code_companion_reg"])
             .and_then(|n| n.get_optional_child_by_tag(&["link_code_pairing_ref"]))
-            .and_then(|n| n.content.as_ref())
-            .and_then(|c| match c {
-                NodeContent::Bytes(b) => Some(b.clone()),
+            .and_then(|n| match n.content.as_deref() {
+                Some(NodeContentRef::Bytes(b)) => Some(b.to_vec()),
                 _ => None,
             })
     }
@@ -472,9 +471,8 @@ impl PairCodeUtils {
         // AES-GCM encrypt the bundle
         let cipher = Aes256Gcm::new_from_slice(&enc_key)
             .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM init failed: {e}")))?;
-        let nonce = aes_gcm::Nonce::from_slice(&iv);
         let encrypted_bundle = cipher
-            .encrypt(nonce, bundle.as_slice())
+            .encrypt((&iv).into(), bundle.as_slice())
             .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM encryption failed: {e}")))?;
 
         // Wrapped bundle = salt (32) + iv (12) + encrypted_bundle (96 + 16 = 112)

@@ -15,6 +15,7 @@ members = [
     "http_clients/ureq-client",
     "storages/redb-storage",
     "storages/sqlite-storage",
+    "tests/bench-integration",
     "tests/e2e",
     "transports/tokio-transport",
     "wacore",
@@ -41,17 +42,19 @@ default-members = [
 
 [workspace.dependencies]
 # Shared dependencies
-aes = "0.8.3"
-aes-gcm = { version = "0.10.2", default-features = false, features = ["aes", "alloc", "std"] }
+aes = "0.9.0"
+aes-gcm = { version = "0.11.0-rc.3", default-features = false, features = ["aes", "alloc", "bytes"] }
 anyhow = { version = "1.0", default-features = false }
 async-channel = { version = "2.5.0", default-features = false, features = ["std"] }
 async-lock = { version = "3", default-features = false }
 async-trait = "0.1.89"
 base64 = { version = "0.22.1", default-features = false, features = ["alloc"] }
 bytemuck = { version = "1.22", default-features = false }
-bytes = { version = "1.5", default-features = false, features = ["serde"] }
+bytes = { version = "1.5", default-features = false }
 chrono = { version = "0.4", default-features = false }
-ctr = { version = "0.9", default-features = false }
+compact_str = { version = "0.9", default-features = false }
+ctr = { version = "0.10", default-features = false }
+env_logger = { version = "0.11", default-features = false }
 event-listener = { version = "5", default-features = false }
 flate2 = { version = "1.1.5", default-features = false, features = ["zlib-rs"] }
 futures = { version = "0.3", default-features = false, features = ["alloc", "async-await"] }
@@ -60,12 +63,13 @@ hex = { version = "0.4", default-features = false, features = ["alloc"] }
 hkdf = { version = "0.13.0", default-features = false }
 hmac = { version = "0.13.0", default-features = false }
 iai-callgrind = "0.16"
+itoa = "1"
 log = "0.4"
 portable-atomic = { version = "1", default-features = false, features = ["fallback"] }
 prost = { version = "0.14.3", default-features = false, features = ["std"] }
 prost-build = { version = "0.14.3", default-features = false }
 rand = "0.10"
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive", "rc"] }
 serde-big-array = "0.5"
 serde_json = { version = "1.0", default-features = false }
 sha1 = { version = "0.11.0", default-features = false }
@@ -82,6 +86,7 @@ wacore-derive = { path = "./wacore/derive", version = "0.5.0" }
 wacore-libsignal = { path = "./wacore/libsignal", version = "0.5.0" }
 wacore-noise = { path = "./wacore/noise", version = "0.5.0" }
 waproto = { path = "./waproto", version = "0.5.0" }
+yoke = { version = "0.7", features = ["derive"] }
 
 [features]
 debug-diagnostics = ["wacore/debug-diagnostics"]
@@ -114,11 +119,12 @@ async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true, features = ["clock", "serde"] }
-env_logger = { version = "0.11", default-features = false }
+chrono = { workspace = true, features = ["clock"] }
+env_logger = { workspace = true }
 event-listener = { workspace = true }
 futures = { workspace = true, features = ["std"] }
 hex = { workspace = true }
+itoa = { workspace = true }
 log = { workspace = true }
 moka = { version = "0.12.12", features = ["future"], optional = true }
 portable-atomic = { workspace = true }
@@ -157,5 +163,11 @@ incremental = false
 [profile.bench]
 inherits = "release"
 lto = "thin"
+debug = 1
+strip = false
+
+# Profiling: optimized with debug symbols for DHAT / heaptrack / perf
+[profile.profiling]
+inherits = "release"
 debug = 1
 strip = false

@@ -11,13 +11,16 @@ use crate::lid_pn_cache::LidPnCache;
 use crate::pair;
 use anyhow::{Result, anyhow};
 use futures::FutureExt;
+#[cfg(test)]
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 
-use wacore::xml::DisplayableNode;
+use wacore::xml::{DisplayableNode, DisplayableNodeRef};
+use wacore_binary::JidExt;
+use wacore_binary::Node;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::JidExt;
-use wacore_binary::node::{Attrs, Node, NodeValue};
+#[cfg(test)]
+use wacore_binary::{Attrs, NodeValue};
 
 use crate::appstate_sync::AppStateProcessor;
 use crate::handlers::chatstate::ChatStateEvent;
@@ -30,7 +33,7 @@ use log::{debug, error, info, trace, warn};
 
 use rand::{Rng, RngExt};
 use scopeguard;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 use portable_atomic::AtomicU64;
 use std::sync::Arc;
@@ -78,23 +81,47 @@ impl NodeFilter {
         self.attr("from", jid.to_string())
     }
 
-    fn matches(&self, node: &Node) -> bool {
-        node.tag == self.tag
-            && self
-                .attrs
-                .iter()
-                .all(|(k, v)| node.attrs.get(k.as_str()).is_some_and(|attr| *attr == *v))
+    fn matches(&self, node: &wacore_binary::NodeRef<'_>) -> bool {
+        node.tag == self.tag.as_str()
+            && self.attrs.iter().all(|(k, v)| {
+                node.get_attr(k.as_str())
+                    .is_some_and(|attr| attr.as_str() == v.as_str())
+            })
     }
 }
 
 struct NodeWaiter {
     filter: NodeFilter,
-    tx: futures::channel::oneshot::Sender<Arc<Node>>,
+    tx: futures::channel::oneshot::Sender<Arc<wacore_binary::OwnedNodeRef>>,
 }
 
 struct SentNodeWaiter {
     filter: NodeFilter,
     tx: futures::channel::oneshot::Sender<Arc<Node>>,
+}
+
+fn resolve_waiters(
+    waiters_mutex: &std::sync::Mutex<Vec<NodeWaiter>>,
+    counter: &AtomicUsize,
+    node: &Arc<wacore_binary::OwnedNodeRef>,
+) {
+    let nr = node.get();
+    let mut waiters = waiters_mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut i = 0;
+    while i < waiters.len() {
+        if waiters[i].tx.is_canceled() {
+            waiters.swap_remove(i);
+            counter.fetch_sub(1, Ordering::Release);
+        } else if waiters[i].filter.matches(nr) {
+            let w = waiters.swap_remove(i);
+            counter.fetch_sub(1, Ordering::Release);
+            let _ = w.tx.send(Arc::clone(node));
+        } else {
+            i += 1;
+        }
+    }
 }
 
 use async_lock::Mutex;
@@ -114,6 +141,15 @@ use wacore::runtime::Runtime;
 
 /// Type alias for chatstate event handler functions.
 type ChatStateHandler = Arc<dyn Fn(ChatStateEvent) + Send + Sync>;
+
+/// Per-chat lane for sequential message processing. Combines the enqueue lock
+/// and queue sender into a single cached entry (one lookup instead of two).
+/// Keyed by `Jid` to avoid per-message `to_string()` allocation.
+#[derive(Clone)]
+pub(crate) struct ChatLane {
+    pub enqueue_lock: Arc<async_lock::Mutex<()>>,
+    pub queue_tx: async_channel::Sender<Arc<wacore_binary::OwnedNodeRef>>,
+}
 
 const APP_STATE_RETRY_MAX_ATTEMPTS: u32 = 6;
 
@@ -142,8 +178,7 @@ pub struct MemoryDiagnostics {
     pub pdo_pending_requests: u64,
     // -- Moka caches (capacity-only, no TTL) --
     pub session_locks: u64,
-    pub message_queues: u64,
-    pub message_enqueue_locks: u64,
+    pub chat_lanes: u64,
     // -- Unbounded collections --
     pub response_waiters: usize,
     pub node_waiters: usize,
@@ -187,12 +222,7 @@ impl std::fmt::Display for MemoryDiagnostics {
         writeln!(f, "  pdo_pending_requests:   {}", self.pdo_pending_requests)?;
         writeln!(f, "--- Moka caches (capacity-only) ---")?;
         writeln!(f, "  session_locks:          {}", self.session_locks)?;
-        writeln!(f, "  message_queues:         {}", self.message_queues)?;
-        writeln!(
-            f,
-            "  message_enqueue_locks:  {}",
-            self.message_enqueue_locks
-        )?;
+        writeln!(f, "  chat_lanes:             {}", self.chat_lanes)?;
         writeln!(f, "--- Unbounded collections ---")?;
         writeln!(f, "  response_waiters:       {}", self.response_waiters)?;
         writeln!(f, "  node_waiters:           {}", self.node_waiters)?;
@@ -244,7 +274,17 @@ pub enum ClientError {
     NotLoggedIn,
 }
 
-use wacore::types::message::StanzaKey;
+impl ClientError {
+    pub fn is_transport_unavailable(&self) -> bool {
+        match self {
+            ClientError::NotConnected => true,
+            ClientError::EncryptSend(e) => e.is_transport_unavailable(),
+            _ => false,
+        }
+    }
+}
+
+use wacore::types::message::ChatMessageId;
 
 /// Metrics for tracking offline sync progress
 #[derive(Debug)]
@@ -286,8 +326,9 @@ pub struct Client {
     pub(crate) transport_factory: Arc<dyn crate::transport::TransportFactory>,
     pub(crate) noise_socket: Arc<Mutex<Option<Arc<NoiseSocket>>>>,
 
-    pub(crate) response_waiters:
-        Arc<Mutex<HashMap<String, futures::channel::oneshot::Sender<wacore_binary::Node>>>>,
+    pub(crate) response_waiters: Arc<
+        Mutex<HashMap<String, futures::channel::oneshot::Sender<Arc<wacore_binary::OwnedNodeRef>>>>,
+    >,
 
     /// Generic node waiters for waiting on specific stanzas by tag/attributes.
     /// Uses std::sync::Mutex (not tokio) since the critical section is trivial.
@@ -321,10 +362,9 @@ pub struct Client {
     /// to match the SignalProtocolStoreAdapter's internal locking.
     pub(crate) session_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
-    /// Per-chat message queues for sequential message processing.
-    /// Prevents race conditions where a later message is processed before
-    /// the PreKey message that establishes the Signal session.
-    pub(crate) message_queues: Cache<String, async_channel::Sender<Arc<Node>>>,
+    /// Per-chat lane combining enqueue lock + message queue into a single cached entry.
+    /// One cache lookup instead of two per incoming message.
+    pub(crate) chat_lanes: Cache<Jid, ChatLane>,
 
     /// Cache for LID to Phone Number mappings (bidirectional).
     /// When we receive a message with sender_lid/sender_pn attributes, we store the mapping here.
@@ -332,11 +372,6 @@ pub struct Client {
     /// The cache is backed by persistent storage and warmed up on client initialization.
     pub(crate) lid_pn_cache: Arc<LidPnCache>,
     pub(crate) ab_props: Arc<wacore::store::ab_props::AbPropsCache>,
-
-    /// Per-chat mutex for serializing message enqueue operations.
-    /// This ensures messages are enqueued in the order they arrive,
-    /// preventing race conditions during queue initialization.
-    pub(crate) message_enqueue_locks: Cache<String, Arc<async_lock::Mutex<()>>>,
 
     pub group_cache: async_lock::Mutex<Option<Arc<TypedCache<Jid, GroupInfo>>>>,
 
@@ -352,7 +387,7 @@ pub struct Client {
 
     /// Cache for recent messages (serialized bytes) for retry functionality.
     /// Uses moka cache with TTL and max capacity for automatic eviction.
-    pub(crate) recent_messages: Cache<StanzaKey, Vec<u8>>,
+    pub(crate) recent_messages: Cache<ChatMessageId, Vec<u8>>,
 
     pub(crate) sender_key_device_cache: crate::sender_key_device_cache::SenderKeyDeviceCache,
 
@@ -418,9 +453,8 @@ pub struct Client {
     /// Each handler receives a `ChatStateEvent` describing the chat, optional participant and state.
     pub(crate) chatstate_handlers: Arc<RwLock<Vec<ChatStateHandler>>>,
 
-    /// Cache for pending PDO (Peer Data Operation) requests.
-    /// Maps message cache keys (chat:id) to pending request info.
-    pub(crate) pdo_pending_requests: Cache<String, crate::pdo::PendingPdoRequest>,
+    pub(crate) pdo_pending_requests:
+        Cache<wacore::types::message::ChatMessageId, crate::pdo::PendingPdoRequest>,
 
     /// LRU cache for device registry (matches WhatsApp Web's 5000 entry limit).
     /// Maps user ID to DeviceListRecord for fast device existence checks.
@@ -519,7 +553,7 @@ impl Client {
         self.is_ready.store(true, Ordering::Relaxed);
         self.core
             .event_bus
-            .dispatch(&Event::Connected(crate::types::events::Connected));
+            .dispatch(Event::Connected(crate::types::events::Connected));
         self.connected_notifier.notify(usize::MAX);
     }
 
@@ -636,17 +670,14 @@ impl Client {
             session_locks: Cache::builder()
                 .max_capacity(cache_config.session_locks_capacity.max(1))
                 .build(),
-            message_queues: Cache::builder()
-                .max_capacity(cache_config.message_queues_capacity.max(1))
+            chat_lanes: Cache::builder()
+                .max_capacity(cache_config.chat_lanes_capacity.max(1))
                 .build(),
             lid_pn_cache: Arc::new(LidPnCache::with_config(
                 &cache_config.lid_pn_cache,
                 cache_config.cache_stores.lid_pn_cache.clone(),
             )),
             ab_props: Arc::new(wacore::store::ab_props::AbPropsCache::new()),
-            message_enqueue_locks: Cache::builder()
-                .max_capacity(cache_config.message_enqueue_locks_capacity.max(1))
-                .build(),
             group_cache: async_lock::Mutex::new(None),
             retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
 
@@ -865,9 +896,8 @@ impl Client {
     /// [`send_node`](Client::send_node) for normal stanza sending.
     pub async fn send_raw_bytes(&self, plaintext: Vec<u8>) -> Result<(), ClientError> {
         let noise_socket = self.get_noise_socket().await?;
-        let encrypted_buf = Vec::with_capacity(plaintext.len() + 32);
         noise_socket
-            .encrypt_and_send(plaintext, encrypted_buf)
+            .encrypt_and_send(bytes::Bytes::from(plaintext))
             .await?;
         self.last_data_sent_ms
             .store(wacore::time::now_millis().max(0) as u64, Ordering::Relaxed);
@@ -914,7 +944,7 @@ impl Client {
 
         self.core
             .event_bus
-            .dispatch(&Event::ChatPresence(ChatPresenceUpdate {
+            .dispatch(Event::ChatPresence(ChatPresenceUpdate {
                 source: MessageSource {
                     chat,
                     sender,
@@ -989,7 +1019,7 @@ impl Client {
                 if unexpected_disconnect {
                     self.core
                         .event_bus
-                        .dispatch(&Event::Disconnected(crate::types::events::Disconnected));
+                        .dispatch(Event::Disconnected(crate::types::events::Disconnected));
                 }
             }
 
@@ -1122,7 +1152,7 @@ impl Client {
 
         self.core
             .event_bus
-            .dispatch(&Event::LoggedOut(crate::types::events::LoggedOut {
+            .dispatch(Event::LoggedOut(crate::types::events::LoggedOut {
                 on_connect: false,
                 reason: ConnectFailureReason::LoggedOut,
             }));
@@ -1211,10 +1241,8 @@ impl Client {
         // checks the socket, but this ordering avoids a confusing state window.
         self.is_connected.store(false, Ordering::Release);
         self.retried_group_messages.invalidate_all();
-        // Drop per-chat message queue senders so workers exit via channel close.
-        // Without this, stale workers from the old connection survive reconnects
-        // holding outdated signal/crypto state.
-        self.message_queues.invalidate_all();
+        // Drop per-chat lanes so workers exit via channel close.
+        self.chat_lanes.invalidate_all();
         // Clear pending retries so stale keys from detached scopeguard
         // cleanup don't suppress the first retry after reconnect.
         self.pending_retries
@@ -1310,8 +1338,7 @@ impl Client {
             message_retry_counts: self.message_retry_counts.entry_count(),
             pdo_pending_requests: self.pdo_pending_requests.entry_count(),
             session_locks: self.session_locks.entry_count(),
-            message_queues: self.message_queues.entry_count(),
-            message_enqueue_locks: self.message_enqueue_locks.entry_count(),
+            chat_lanes: self.chat_lanes.entry_count(),
             response_waiters: self.response_waiters.lock().await.len(),
             node_waiters: self.node_waiter_count.load(Ordering::Relaxed),
             pending_retries: pending_retries_count,
@@ -1338,9 +1365,13 @@ impl Client {
     }
 
     /// [`flush_signal_cache`](Self::flush_signal_cache) with error logging instead of propagation.
-    pub(crate) async fn flush_signal_cache_logged(&self, context: &str) {
+    pub(crate) async fn flush_signal_cache_logged(&self, context: &str, id: Option<&str>) {
         if let Err(e) = self.flush_signal_cache().await {
-            log::error!("Failed to flush signal cache ({context}): {e:?}");
+            if let Some(id) = id {
+                log::error!("Failed to flush signal cache ({context} {id}): {e:?}");
+            } else {
+                log::error!("Failed to flush signal cache ({context}): {e:?}");
+            }
         }
     }
 
@@ -1381,7 +1412,7 @@ impl Client {
 
                                 while let Some(encrypted_frame) = frame_decoder.decode_frame() {
                                     // Decrypt the frame synchronously (required for noise counter ordering)
-                                    if let Some(node) = self.decrypt_frame(&encrypted_frame).await {
+                                    if let Some(node) = self.decrypt_frame(encrypted_frame).await {
                                         // Determine processing mode for this node:
                                         // - Critical nodes (success/failure/stream:error): inline, required for state
                                         // - Message nodes: inline, preserves arrival order for per-chat queues
@@ -1390,7 +1421,7 @@ impl Client {
                                         //   is set up before offline messages are processed
                                         // - Everything else: spawned concurrently for parallelism
                                         let process_inline = matches!(
-                                            node.tag.as_ref(),
+                                            node.tag(),
                                             "success" | "failure" | "stream:error" | "message" | "ib"
                                         );
 
@@ -1449,12 +1480,12 @@ impl Client {
         }
     }
 
-    /// Decrypt a frame and return the parsed node.
+    /// Decrypt a frame and return the parsed node as a zero-copy OwnedNodeRef.
     /// This must be called sequentially due to noise protocol counter requirements.
     pub(crate) async fn decrypt_frame(
         self: &Arc<Self>,
-        encrypted_frame: &bytes::Bytes,
-    ) -> Option<wacore_binary::node::Node> {
+        encrypted_frame: bytes::BytesMut,
+    ) -> Option<wacore_binary::OwnedNodeRef> {
         let noise_socket = match self.get_noise_socket().await {
             Ok(s) => s,
             Err(_) => {
@@ -1471,7 +1502,7 @@ impl Client {
             }
         };
 
-        let unpacked_data_cow = match wacore_binary::util::unpack(&decrypted_payload) {
+        let buffer = match wacore_binary::util::unpack_bytes(decrypted_payload) {
             Ok(data) => data,
             Err(e) => {
                 log::warn!(target: "Client/Recv", "Failed to decompress frame: {e}");
@@ -1479,8 +1510,8 @@ impl Client {
             }
         };
 
-        match wacore_binary::marshal::unmarshal_ref(unpacked_data_cow.as_ref()) {
-            Ok(node_ref) => Some(node_ref.to_owned()),
+        match wacore_binary::OwnedNodeRef::new(buffer) {
+            Ok(owned) => Some(owned),
             Err(e) => {
                 log::warn!(target: "Client/Recv", "Failed to unmarshal node: {e}");
                 None
@@ -1491,24 +1522,28 @@ impl Client {
     /// Process an already-decrypted node.
     /// This can be spawned concurrently since it doesn't depend on noise protocol state.
     /// The node is wrapped in Arc to avoid cloning when passing through handlers.
-    pub(crate) async fn process_decrypted_node(self: &Arc<Self>, node: wacore_binary::node::Node) {
+    pub(crate) async fn process_decrypted_node(
+        self: &Arc<Self>,
+        node: wacore_binary::OwnedNodeRef,
+    ) {
         // Wrap in Arc once - all handlers will share this same allocation
         let node_arc = Arc::new(node);
         self.process_node(node_arc).await;
     }
 
     /// Process a node wrapped in Arc. Handlers receive the Arc and can share/store it cheaply.
-    pub(crate) async fn process_node(self: &Arc<Self>, node: Arc<Node>) {
-        use wacore::xml::DisplayableNode;
+    pub(crate) async fn process_node(self: &Arc<Self>, node: Arc<wacore_binary::OwnedNodeRef>) {
+        use wacore::xml::DisplayableNodeRef;
+        let nr = node.get();
 
         // --- Offline Sync Tracking ---
-        if node.tag.as_ref() == "ib" {
+        if nr.tag.as_ref() == "ib" {
             // Check for offline_preview child to get expected count
-            if let Some(preview) = node.get_optional_child("offline_preview") {
+            if let Some(preview) = nr.get_optional_child("offline_preview") {
                 let count: usize = preview
-                    .attrs
-                    .get("count")
-                    .and_then(|v| v.as_str().parse().ok())
+                    .get_attr("count")
+                    .map(|v| v.as_str())
+                    .and_then(|s| s.parse().ok())
                     .unwrap_or(0);
 
                 if count == 0 {
@@ -1534,7 +1569,7 @@ impl Client {
                     debug!(target: "Client/OfflineSync", "Sync STARTED: Expecting {} items.", count);
                 }
             } else if self.offline_sync_metrics.active.load(Ordering::Acquire)
-                && node.get_optional_child("offline").is_some()
+                && nr.get_optional_child("offline").is_some()
             {
                 // Handle end marker: <ib><offline count="N"/> signals sync completion
                 // Only <ib> with an <offline> child is a real end marker.
@@ -1557,7 +1592,7 @@ impl Client {
         // Track progress if active
         if self.offline_sync_metrics.active.load(Ordering::Acquire) {
             // Check for 'offline' attribute on relevant stanzas
-            if node.attrs.contains_key("offline") {
+            if nr.get_attr("offline").is_some() {
                 let processed = self
                     .offline_sync_metrics
                     .processed_messages
@@ -1586,15 +1621,15 @@ impl Client {
         }
         // --- End Tracking ---
 
-        if node.tag.as_ref() == "iq"
-            && let Some(sync_node) = node.get_optional_child("sync")
+        if nr.tag.as_ref() == "iq"
+            && let Some(sync_node) = nr.get_optional_child("sync")
             && let Some(collection_node) = sync_node.get_optional_child("collection")
         {
             let name = collection_node.attrs().optional_string("name");
             let name = name.as_deref().unwrap_or("<unknown>");
             debug!(target: "Client/Recv", "Received app state sync response for '{name}' (hiding content).");
         } else {
-            debug!(target: "Client/Recv","{}", DisplayableNode(&node));
+            debug!(target: "Client/Recv","{}", DisplayableNodeRef(nr));
         }
 
         // Prepare deferred ACK cancellation flag (sent after dispatch unless cancelled)
@@ -1605,10 +1640,10 @@ impl Client {
         if self.raw_node_forwarding.load(Ordering::Relaxed) {
             self.core
                 .event_bus
-                .dispatch(&Event::RawNode(Arc::clone(&node)));
+                .dispatch(Event::RawNode(Arc::clone(&node)));
         }
 
-        if node.tag.as_ref() == "xmlstreamend" {
+        if nr.tag.as_ref() == "xmlstreamend" {
             if self.expected_disconnect.load(Ordering::Relaxed) {
                 debug!("Received <xmlstreamend/>, expected disconnect.");
             } else {
@@ -1623,14 +1658,13 @@ impl Client {
             self.resolve_node_waiters(&node);
         }
 
-        if node.tag.as_ref() == "iq"
-            && let Some(id) = node.attrs.get("id").map(|v| v.as_str())
+        if nr.tag.as_ref() == "iq"
+            && let Some(id) = nr.get_attr("id").map(|v| v.as_str())
         {
             // Single lock acquisition: try to remove the waiter directly.
             let waiter = self.response_waiters.lock().await.remove(id.as_ref());
             if let Some(waiter) = waiter {
-                let owned_node = Arc::try_unwrap(node).unwrap_or_else(|arc| (*arc).clone());
-                if waiter.send(owned_node).is_err() {
+                if waiter.send(Arc::clone(&node)).is_err() {
                     warn!(target: "Client/IQ", "Failed to send IQ response to waiter. Receiver was likely dropped.");
                 }
                 return;
@@ -1646,39 +1680,41 @@ impl Client {
         {
             warn!(
                 "Received unknown top-level node: {}",
-                DisplayableNode(&node)
+                DisplayableNodeRef(nr)
             );
         }
 
         // Send the deferred ACK if applicable and not cancelled by handler
-        if self.should_ack(&node) && !cancelled {
+        if self.should_ack(nr) && !cancelled {
             self.maybe_deferred_ack(node).await;
         }
     }
 
-    /// Determine if a Node should be acknowledged with <ack/>.
-    fn should_ack(&self, node: &Node) -> bool {
+    /// Determine if a node should be acknowledged with <ack/>.
+    fn should_ack(&self, node: &wacore_binary::NodeRef<'_>) -> bool {
         matches!(
             node.tag.as_ref(),
             "message" | "receipt" | "notification" | "call"
-        ) && node.attrs.contains_key("id")
-            && node.attrs.contains_key("from")
+        ) && node.get_attr("id").is_some()
+            && node.get_attr("from").is_some()
     }
 
     /// Possibly send a deferred ack: either immediately or via spawned task.
     /// Handlers can cancel by setting `cancelled` to true.
-    /// Uses Arc<Node> to avoid cloning when spawning the async task.
-    async fn maybe_deferred_ack(self: &Arc<Self>, node: Arc<Node>) {
+    /// Uses Arc<OwnedNodeRef> to avoid cloning when spawning the async task.
+    async fn maybe_deferred_ack(self: &Arc<Self>, node: Arc<wacore_binary::OwnedNodeRef>) {
         if self.synchronous_ack {
-            if let Err(e) = self.send_ack_for(&node).await {
+            if let Err(e) = self.send_ack_for(node.get()).await
+                && !e.is_transport_unavailable()
+            {
                 warn!("Failed to send ack: {e:?}");
             }
         } else {
             let this = self.clone();
             self.runtime
                 .spawn(Box::pin(async move {
-                    if let Err(e) = this.send_ack_for(&node).await
-                        && !matches!(e, ClientError::NotConnected)
+                    if let Err(e) = this.send_ack_for(node.get()).await
+                        && !e.is_transport_unavailable()
                     {
                         warn!("Failed to send ack: {e:?}");
                     }
@@ -1688,19 +1724,23 @@ impl Client {
     }
 
     /// Build and send an <ack/> node corresponding to the given stanza.
-    async fn send_ack_for(&self, node: &Node) -> Result<(), ClientError> {
+    async fn send_ack_for(&self, node: &wacore_binary::NodeRef<'_>) -> Result<(), ClientError> {
         if self.expected_disconnect.load(Ordering::Relaxed) {
             return Ok(());
         }
         if !self.is_connected() {
             return Err(ClientError::NotConnected);
         }
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        let ack = match build_ack_node(node, device_snapshot.pn.as_ref()) {
-            Some(ack) => ack,
-            None => return Ok(()),
+        let own_pn = self.get_pn().await;
+        let buf = match encode_ack_bytes(node, own_pn.as_ref()) {
+            Ok(Some(buf)) => buf,
+            Ok(None) => return Ok(()),
+            Err(e) => {
+                log::warn!("Failed to encode ack: {e}");
+                return Ok(());
+            }
         };
-        self.send_node(ack).await
+        self.send_raw_bytes(buf).await
     }
 
     pub(crate) async fn handle_unimplemented(&self, tag: &str) {
@@ -1750,17 +1790,19 @@ impl Client {
         if response.delta_update {
             debug!(
                 "Props delta update received ({} changed props)",
-                response.props.len()
+                response.experiment_props.len()
             );
         } else {
             debug!(
                 "Props full update received ({} props, hash={:?})",
-                response.props.len(),
+                response.experiment_props.len(),
                 response.hash
             );
         }
 
-        self.ab_props.apply_response(&response).await;
+        self.ab_props
+            .apply_props(response.delta_update, response.experiment_props.into_iter())
+            .await;
 
         if let Some(new_hash) = response.hash {
             self.persistence_manager
@@ -1833,7 +1875,7 @@ impl Client {
     /// Get business profile for a WhatsApp Business account.
     pub async fn get_business_profile(
         &self,
-        jid: &wacore_binary::jid::Jid,
+        jid: &wacore_binary::Jid,
     ) -> Result<Option<wacore::iq::business::BusinessProfile>, crate::request::IqError> {
         use wacore::iq::business::BusinessProfileSpec;
         self.execute(BusinessProfileSpec::new(jid)).await
@@ -1843,17 +1885,17 @@ impl Client {
     pub async fn reject_call(
         &self,
         call_id: &str,
-        call_from: &wacore_binary::jid::Jid,
+        call_from: &wacore_binary::Jid,
     ) -> Result<(), anyhow::Error> {
         anyhow::ensure!(!call_id.is_empty(), "call_id cannot be empty");
         let id = self.generate_request_id();
 
         let stanza = wacore_binary::builder::NodeBuilder::new("call")
-            .attr("to", call_from.clone())
+            .attr("to", call_from)
             .attr("id", id)
             .children([wacore_binary::builder::NodeBuilder::new("reject")
                 .attr("call-id", call_id)
-                .attr("call-creator", call_from.clone())
+                .attr("call-creator", call_from)
                 .attr("count", "0")
                 .build()])
             .build();
@@ -1870,7 +1912,7 @@ impl Client {
         self.execute(DigestKeyBundleSpec::new()).await.map(|_| ())
     }
 
-    pub(crate) async fn handle_success(self: &Arc<Self>, node: &wacore_binary::node::Node) {
+    pub(crate) async fn handle_success(self: &Arc<Self>, node: &wacore_binary::NodeRef<'_>) {
         // Skip processing if an expected disconnect is pending (e.g., 515 received).
         // This prevents race conditions where a spawned success handler runs after
         // cleanup_connection_state has already reset is_logged_in.
@@ -1899,7 +1941,7 @@ impl Client {
         self.update_server_time_offset(node);
 
         // Extract LID from the node before spawning (node isn't Send).
-        let lid_from_server = match node.attrs.get("lid") {
+        let lid_from_server = match node.get_attr("lid") {
             Some(lid_value) => match lid_value.to_jid() {
                 Some(lid) => Some(lid),
                 None => {
@@ -2235,12 +2277,12 @@ impl Client {
     ///
     /// If an ack with an ID that matches a pending task in `response_waiters`,
     /// the task is resolved and the function returns `true`. Otherwise, returns `false`.
-    pub(crate) async fn handle_ack_response(&self, node: Node) -> bool {
+    pub(crate) async fn handle_ack_response(&self, node: &wacore_binary::NodeRef<'_>) -> bool {
         // Surface privacy-token nack codes for diagnosability
-        if let Some(error_code) = node.attrs.get("error") {
+        if let Some(error_code) = node.get_attr("error") {
             let code = error_code.as_str();
-            let id = node.attrs.get("id").map(|v| v.as_str().into_owned());
-            match &*code {
+            let id = node.get_attr("id").map(|v| v.as_str().into_owned());
+            match code.as_ref() {
                 "463" => {
                     warn!(
                         target: "Client/Ack",
@@ -2262,19 +2304,30 @@ impl Client {
             }
         }
 
-        let id_opt = node.attrs.get("id").map(|v| v.as_str().into_owned());
+        let id_opt = node.get_attr("id").map(|v| v.as_str().into_owned());
         if let Some(id) = id_opt
             && let Some(waiter) = self.response_waiters.lock().await.remove(&id)
         {
-            if waiter.send(node).is_err() {
-                warn!(target: "Client/Ack", "Failed to send ACK response to waiter for ID {id}. Receiver was likely dropped.");
+            // ACK responses are infrequent; re-encode into OwnedNodeRef for the channel.
+            // marshal_ref prepends a leading 0x00 format byte; OwnedNodeRef::new expects raw
+            // protocol bytes without it, matching what unpack() produces from the network.
+            match wacore_binary::marshal::marshal_ref(node)
+                .and_then(|bytes| wacore_binary::OwnedNodeRef::new(bytes[1..].to_vec()))
+            {
+                Ok(onr) => {
+                    if waiter.send(Arc::new(onr)).is_err() {
+                        warn!(target: "Client/Ack", "Failed to send ACK response to waiter for ID {id}. Receiver was likely dropped.");
+                    }
+                }
+                Err(e) => {
+                    warn!(target: "Client/Ack", "Failed to re-encode ACK node for waiter: {e}");
+                }
             }
             return true;
         }
         false
     }
 
-    #[allow(dead_code)] // Used by per-collection callers (e.g., critical sync gating)
     pub(crate) async fn fetch_app_state_with_retry(&self, name: WAPatchName) -> anyhow::Result<()> {
         // In-flight dedup: skip if this collection is already being synced.
         // Matches WA Web's WAWebSyncdCollectionsStateMachine which tracks in-flight syncs
@@ -2295,7 +2348,6 @@ impl Client {
         result
     }
 
-    #[allow(dead_code)]
     async fn fetch_app_state_with_retry_inner(&self, name: WAPatchName) -> anyhow::Result<()> {
         let mut attempt = 0u32;
         loop {
@@ -2435,7 +2487,7 @@ impl Client {
                 to: server_jid().clone(),
                 target: None,
                 id: None,
-                content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
+                content: Some(wacore_binary::NodeContent::Nodes(vec![sync_node])),
                 timeout: Some(Duration::from_secs(30)),
             };
 
@@ -2445,7 +2497,9 @@ impl Client {
             let mut pre_downloaded: std::collections::HashMap<String, Vec<u8>> =
                 std::collections::HashMap::new();
 
-            if let Ok(patch_lists) = wacore::appstate::patch_decode::parse_patch_lists(&resp) {
+            if let Ok(patch_lists) =
+                wacore::appstate::patch_decode::parse_patch_lists_ref(resp.get())
+            {
                 for pl in &patch_lists {
                     // Download external snapshot
                     if let Some(ext) = &pl.snapshot_ref
@@ -2504,7 +2558,9 @@ impl Client {
 
             // Parse and process all collections from the response
             let proc = self.get_app_state_processor().await;
-            let results = proc.decode_multi_patch_list(&resp, &download, true).await?;
+            let results = proc
+                .decode_multi_patch_list_ref(resp.get(), &download, true)
+                .await?;
 
             let mut needs_refetch = Vec::new();
 
@@ -2547,28 +2603,7 @@ impl Client {
                         Vec::new()
                     }
                 };
-                if !missing.is_empty() {
-                    let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
-                    let mut guard = self.app_state_key_requests.lock().await;
-                    let now = wacore::time::Instant::now();
-                    for key_id in missing {
-                        let hex_id = hex::encode(&key_id);
-                        let should = guard
-                            .get(&hex_id)
-                            .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
-                            .unwrap_or(true);
-                        if should {
-                            guard.insert(hex_id, now);
-                            to_request.push(key_id);
-                        }
-                    }
-                    // Evict stale entries to prevent unbounded growth over long sessions
-                    guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
-                    drop(guard);
-                    if !to_request.is_empty() {
-                        self.request_app_state_keys(&to_request).await;
-                    }
-                }
+                self.request_missing_keys_with_dedup(missing).await;
 
                 // full_sync is true only when this collection had a snapshot
                 // (version was 0 before sync). This prevents server_sync-triggered
@@ -2664,7 +2699,7 @@ impl Client {
                 to: server_jid().clone(),
                 target: None,
                 id: None,
-                content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
+                content: Some(wacore_binary::NodeContent::Nodes(vec![sync_node])),
                 timeout: None,
             };
 
@@ -2682,7 +2717,7 @@ impl Client {
             let mut pre_downloaded: std::collections::HashMap<String, Vec<u8>> =
                 std::collections::HashMap::new();
 
-            if let Ok(pl) = wacore::appstate::patch_decode::parse_patch_list(&resp) {
+            if let Ok(pl) = wacore::appstate::patch_decode::parse_patch_list_ref(resp.get()) {
                 debug!(target: "Client/AppState", "Parsed patch list for {:?}: has_snapshot_ref={} has_more_patches={} patches_count={}",
                     name, pl.snapshot_ref.is_some(), pl.has_more_patches, pl.patches.len());
 
@@ -2740,8 +2775,9 @@ impl Client {
             };
 
             let proc = self.get_app_state_processor().await;
-            let (mutations, new_state, list) =
-                proc.decode_patch_list(&resp, &download, true).await?;
+            let (mutations, new_state, list) = proc
+                .decode_patch_list_ref(resp.get(), &download, true)
+                .await?;
             let decode_elapsed = _decode_start.elapsed();
             if decode_elapsed.as_millis() > 500 {
                 debug!(target: "Client/AppState", "Patch decode for {:?} took {:?}", name, decode_elapsed);
@@ -2754,28 +2790,7 @@ impl Client {
                     Vec::new()
                 }
             };
-            if !missing.is_empty() {
-                let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
-                let mut guard = self.app_state_key_requests.lock().await;
-                let now = wacore::time::Instant::now();
-                for key_id in missing {
-                    let hex_id = hex::encode(&key_id);
-                    let should = guard
-                        .get(&hex_id)
-                        .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
-                        .unwrap_or(true);
-                    if should {
-                        guard.insert(hex_id, now);
-                        to_request.push(key_id);
-                    }
-                }
-                // Evict stale entries to prevent unbounded growth over long sessions
-                guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
-                drop(guard);
-                if !to_request.is_empty() {
-                    self.request_app_state_keys(&to_request).await;
-                }
-            }
+            self.request_missing_keys_with_dedup(missing).await;
 
             for m in mutations {
                 debug!(target: "Client/AppState", "Dispatching mutation kind={} index_len={} full_sync={}", m.index.first().map(|s| s.as_str()).unwrap_or(""), m.index.len(), full_sync);
@@ -2795,14 +2810,51 @@ impl Client {
         Ok(())
     }
 
-    async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) {
-        if raw_key_ids.is_empty() {
+    /// Request missing app-state keys with dedup stamps.
+    /// On send failure, removes stamps so keys can be retried next sync.
+    async fn request_missing_keys_with_dedup(&self, missing: Vec<Vec<u8>>) {
+        if missing.is_empty() {
             return;
+        }
+        let mut to_request: Vec<Vec<u8>> = Vec::with_capacity(missing.len());
+        let mut guard = self.app_state_key_requests.lock().await;
+        let now = wacore::time::Instant::now();
+        for key_id in missing {
+            let hex_id = hex::encode(&key_id);
+            let should = guard
+                .get(&hex_id)
+                .map(|t| t.elapsed() > std::time::Duration::from_secs(24 * 3600))
+                .unwrap_or(true);
+            if should {
+                guard.insert(hex_id, now);
+                to_request.push(key_id);
+            }
+        }
+        guard.retain(|_, t| t.elapsed() < std::time::Duration::from_secs(24 * 3600));
+        drop(guard);
+        if !to_request.is_empty()
+            && let Err(e) = self.request_app_state_keys(&to_request).await
+        {
+            warn!("Failed to send app state key request: {e}");
+            let mut guard = self.app_state_key_requests.lock().await;
+            for key_id in &to_request {
+                guard.remove(&hex::encode(key_id));
+            }
+        }
+    }
+
+    async fn request_app_state_keys(&self, raw_key_ids: &[Vec<u8>]) -> Result<(), anyhow::Error> {
+        if raw_key_ids.is_empty() {
+            return Ok(());
         }
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
         let own_jid = match device_snapshot.pn.clone() {
             Some(j) => j,
-            None => return,
+            None => {
+                return Err(anyhow::anyhow!(
+                    "no own JID available for app-state key request"
+                ));
+            }
         };
         let key_ids: Vec<wa::message::AppStateSyncKeyId> = raw_key_ids
             .iter()
@@ -2818,20 +2870,17 @@ impl Client {
             })),
             ..Default::default()
         };
-        if let Err(e) = self
-            .send_message_impl(
-                own_jid,
-                &msg,
-                Some(self.generate_message_id().await),
-                true,
-                false,
-                None,
-                vec![],
-            )
-            .await
-        {
-            warn!("Failed to send app state key request: {e}");
-        }
+        self.send_message_impl(
+            own_jid,
+            &msg,
+            Some(self.generate_message_id().await),
+            true,
+            false,
+            None,
+            vec![],
+        )
+        .await?;
+        Ok(())
     }
 
     /// Send an app state patch to the server for a given collection.
@@ -2858,7 +2907,7 @@ impl Client {
             to: server_jid().clone(),
             target: None,
             id: None,
-            content: Some(wacore_binary::node::NodeContent::Nodes(vec![sync_node])),
+            content: Some(wacore_binary::NodeContent::Nodes(vec![sync_node])),
             timeout: None,
         };
 
@@ -2939,7 +2988,7 @@ impl Client {
                 self.persistence_manager
                     .process_command(DeviceCommand::SetPushName(new_name.clone()))
                     .await;
-                bus.dispatch(&Event::SelfPushNameUpdated(
+                bus.dispatch(Event::SelfPushNameUpdated(
                     crate::types::events::SelfPushNameUpdated {
                         from_server: true,
                         old_name: old.clone(),
@@ -2960,7 +3009,7 @@ impl Client {
         }
     }
 
-    pub(crate) async fn handle_stream_error(&self, node: &wacore_binary::node::Node) {
+    pub(crate) async fn handle_stream_error(&self, node: &wacore_binary::NodeRef<'_>) {
         self.is_logged_in.store(false, Ordering::Relaxed);
 
         let mut attrs = node.attrs();
@@ -2996,7 +3045,7 @@ impl Client {
                     reason: ConnectFailureReason::LoggedOut,
                 })
             };
-            self.core.event_bus.dispatch(&event);
+            self.core.event_bus.dispatch(event);
             should_disconnect = true;
         } else {
             match code {
@@ -3011,7 +3060,7 @@ impl Client {
                     info!("Got 516 stream error (device removed). Logging out.");
                     self.expected_disconnect.store(true, Ordering::Relaxed);
                     self.enable_auto_reconnect.store(false, Ordering::Relaxed);
-                    self.core.event_bus.dispatch(&Event::LoggedOut(
+                    self.core.event_bus.dispatch(Event::LoggedOut(
                         crate::types::events::LoggedOut {
                             on_connect: false,
                             reason: ConnectFailureReason::LoggedOut,
@@ -3023,7 +3072,7 @@ impl Client {
                     info!("Got 401 stream error (unauthorized). Logging out.");
                     self.expected_disconnect.store(true, Ordering::Relaxed);
                     self.enable_auto_reconnect.store(false, Ordering::Relaxed);
-                    self.core.event_bus.dispatch(&Event::LoggedOut(
+                    self.core.event_bus.dispatch(Event::LoggedOut(
                         crate::types::events::LoggedOut {
                             on_connect: false,
                             reason: ConnectFailureReason::LoggedOut,
@@ -3037,7 +3086,7 @@ impl Client {
                     self.enable_auto_reconnect.store(false, Ordering::Relaxed);
                     self.core
                         .event_bus
-                        .dispatch(&Event::StreamReplaced(crate::types::events::StreamReplaced));
+                        .dispatch(Event::StreamReplaced(crate::types::events::StreamReplaced));
                     should_disconnect = true;
                 }
                 "429" => {
@@ -3050,12 +3099,12 @@ impl Client {
                     info!("Got 503 service unavailable, will auto-reconnect.");
                 }
                 _ => {
-                    error!("Unknown stream error: {}", DisplayableNode(node));
+                    error!("Unknown stream error: {}", DisplayableNodeRef(node));
                     self.expected_disconnect.store(true, Ordering::Relaxed);
-                    self.core.event_bus.dispatch(&Event::StreamError(
+                    self.core.event_bus.dispatch(Event::StreamError(
                         crate::types::events::StreamError {
                             code: code.to_string(),
-                            raw: Some(node.clone()),
+                            raw: Some(node.to_owned()),
                         },
                     ));
                 }
@@ -3078,7 +3127,7 @@ impl Client {
         self.shutdown_notifier.notify(usize::MAX);
     }
 
-    pub(crate) async fn handle_connect_failure(&self, node: &wacore_binary::node::Node) {
+    pub(crate) async fn handle_connect_failure(&self, node: &wacore_binary::NodeRef<'_>) {
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.shutdown_notifier.notify(usize::MAX);
 
@@ -3096,7 +3145,7 @@ impl Client {
             info!("Got {reason:?} connect failure, logging out.");
             self.core
                 .event_bus
-                .dispatch(&wacore::types::events::Event::LoggedOut(
+                .dispatch(wacore::types::events::Event::LoggedOut(
                     crate::types::events::LoggedOut {
                         on_connect: true,
                         reason,
@@ -3107,21 +3156,24 @@ impl Client {
             let expire_secs = attrs.optional_u64("expire").unwrap_or(0);
             let expire_duration =
                 chrono::Duration::try_seconds(expire_secs as i64).unwrap_or_default();
-            warn!("Temporary ban connect failure: {}", DisplayableNode(node));
-            self.core.event_bus.dispatch(&Event::TemporaryBan(
-                crate::types::events::TemporaryBan {
+            warn!(
+                "Temporary ban connect failure: {}",
+                DisplayableNodeRef(node)
+            );
+            self.core
+                .event_bus
+                .dispatch(Event::TemporaryBan(crate::types::events::TemporaryBan {
                     code: crate::types::events::TempBanReason::from(ban_code),
                     expire: expire_duration,
-                },
-            ));
+                }));
         } else if let ConnectFailureReason::ClientOutdated = reason {
             error!("Client is outdated and was rejected by server.");
             self.core
                 .event_bus
-                .dispatch(&Event::ClientOutdated(crate::types::events::ClientOutdated));
+                .dispatch(Event::ClientOutdated(crate::types::events::ClientOutdated));
         } else {
-            warn!("Unknown connect failure: {}", DisplayableNode(node));
-            self.core.event_bus.dispatch(&Event::ConnectFailure(
+            warn!("Unknown connect failure: {}", DisplayableNodeRef(node));
+            self.core.event_bus.dispatch(Event::ConnectFailure(
                 crate::types::events::ConnectFailure {
                     reason,
                     message: attrs
@@ -3129,21 +3181,20 @@ impl Client {
                         .as_deref()
                         .unwrap_or("")
                         .to_string(),
-                    raw: Some(node.clone()),
+                    raw: Some(node.to_owned()),
                 },
             ));
         }
     }
 
-    pub(crate) async fn handle_iq(self: &Arc<Self>, node: &wacore_binary::node::Node) -> bool {
-        if node.attrs.get("type").is_some_and(|s| s == "get")
+    pub(crate) async fn handle_iq(self: &Arc<Self>, node: &wacore_binary::NodeRef<'_>) -> bool {
+        if node.get_attr("type").is_some_and(|s| s.as_str() == "get")
             && (node.get_optional_child("ping").is_some()
                 || node
-                    .attrs
-                    .get("xmlns")
-                    .is_some_and(|s| s == "urn:xmpp:ping"))
+                    .get_attr("xmlns")
+                    .is_some_and(|s| s.as_str() == "urn:xmpp:ping"))
         {
-            info!("Received ping, sending pong.");
+            debug!("Received ping, sending pong.");
             let mut parser = node.attrs();
             let from_jid = parser.jid("from");
             let id = parser.optional_string("id").map(|s| s.to_string());
@@ -3154,7 +3205,6 @@ impl Client {
             return true;
         }
 
-        // Pass Node directly to pair handling
         if pair::handle_iq(self, node).await {
             return true;
         }
@@ -3190,7 +3240,7 @@ impl Client {
     pub fn wait_for_node(
         &self,
         filter: NodeFilter,
-    ) -> futures::channel::oneshot::Receiver<Arc<Node>> {
+    ) -> futures::channel::oneshot::Receiver<Arc<wacore_binary::OwnedNodeRef>> {
         let (tx, rx) = futures::channel::oneshot::channel();
         self.node_waiter_count.fetch_add(1, Ordering::Release);
         let mut waiters = self
@@ -3222,29 +3272,12 @@ impl Client {
 
     /// Check pending node waiters against an incoming node.
     /// Only called when `node_waiter_count > 0`.
-    fn resolve_node_waiters(&self, node: &Arc<Node>) {
-        let mut waiters = self
-            .node_waiters
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let mut i = 0;
-        while i < waiters.len() {
-            if waiters[i].tx.is_canceled() {
-                // Receiver dropped — clean up
-                waiters.swap_remove(i);
-                self.node_waiter_count.fetch_sub(1, Ordering::Release);
-            } else if waiters[i].filter.matches(node) {
-                // Match found — remove and send
-                let w = waiters.swap_remove(i);
-                self.node_waiter_count.fetch_sub(1, Ordering::Release);
-                let _ = w.tx.send(Arc::clone(node));
-            } else {
-                i += 1;
-            }
-        }
+    fn resolve_node_waiters(&self, node: &Arc<wacore_binary::OwnedNodeRef>) {
+        resolve_waiters(&self.node_waiters, &self.node_waiter_count, node);
     }
 
     fn resolve_sent_node_waiters(&self, node: &Arc<Node>) {
+        let nr = node.as_node_ref();
         let mut waiters = self
             .sent_node_waiters
             .lock()
@@ -3254,7 +3287,7 @@ impl Client {
             if waiters[i].tx.is_canceled() {
                 waiters.swap_remove(i);
                 self.sent_node_waiter_count.fetch_sub(1, Ordering::Release);
-            } else if waiters[i].filter.matches(node) {
+            } else if waiters[i].filter.matches(&nr) {
                 let w = waiters.swap_remove(i);
                 self.sent_node_waiter_count.fetch_sub(1, Ordering::Release);
                 let _ = w.tx.send(Arc::clone(node));
@@ -3277,7 +3310,7 @@ impl Client {
         }
     }
 
-    pub(crate) fn update_server_time_offset(&self, node: &wacore_binary::node::Node) {
+    pub(crate) fn update_server_time_offset(&self, node: &wacore_binary::NodeRef<'_>) {
         self.unified_session.update_server_time_offset(node);
     }
 
@@ -3420,17 +3453,37 @@ impl Client {
         Ok(original_id)
     }
 
+    /// Send a server-side reaction (used by both newsletter and status reactions).
+    pub(crate) async fn send_server_reaction(
+        &self,
+        to: &Jid,
+        server_id: u64,
+        reaction: &str,
+    ) -> Result<(), anyhow::Error> {
+        let request_id = self.generate_message_id().await;
+
+        let stanza = NodeBuilder::new("message")
+            .attr("to", to)
+            .attr("type", "reaction")
+            .attr("id", &request_id)
+            .attr("server_id", server_id.to_string())
+            .children([NodeBuilder::new("reaction").attr("code", reaction).build()])
+            .build();
+
+        self.send_node(stanza).await?;
+        Ok(())
+    }
+
     pub async fn send_node(&self, node: Node) -> Result<(), ClientError> {
         debug!(target: "Client/Send", "{}", DisplayableNode(&node));
         if self.sent_node_waiter_count.load(Ordering::Acquire) > 0 {
             self.resolve_sent_node_waiters(&Arc::new(node.clone()));
         }
 
-        let mut plaintext_buf = Vec::with_capacity(1024);
-        if let Err(e) = wacore_binary::marshal::marshal_to(&node, &mut plaintext_buf) {
+        let plaintext_buf = wacore_binary::marshal::marshal_auto(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");
-            return Err(SocketError::Crypto("Marshal error".to_string()).into());
-        }
+            SocketError::Crypto("Marshal error".to_string())
+        })?;
 
         self.send_raw_bytes(plaintext_buf).await
     }
@@ -3440,7 +3493,7 @@ impl Client {
     pub(crate) async fn register_ack_waiter(
         &self,
         message_id: &str,
-    ) -> futures::channel::oneshot::Receiver<wacore_binary::Node> {
+    ) -> futures::channel::oneshot::Receiver<std::sync::Arc<wacore_binary::OwnedNodeRef>> {
         let (tx, rx) = futures::channel::oneshot::channel();
         self.response_waiters
             .lock()
@@ -3462,7 +3515,7 @@ impl Client {
             .process_command(DeviceCommand::SetPushName(new_name.clone()))
             .await;
 
-        self.core.event_bus.dispatch(&Event::SelfPushNameUpdated(
+        self.core.event_bus.dispatch(Event::SelfPushNameUpdated(
             crate::types::events::SelfPushNameUpdated {
                 from_server: true,
                 old_name,
@@ -3488,8 +3541,13 @@ impl Client {
     }
 
     pub async fn get_pn(&self) -> Option<Jid> {
-        let snapshot = self.persistence_manager.get_device_snapshot().await;
-        snapshot.pn.clone()
+        self.persistence_manager
+            .get_device_arc()
+            .await
+            .read()
+            .await
+            .pn
+            .clone()
     }
 
     pub async fn get_lid(&self) -> Option<Jid> {
@@ -3530,12 +3588,12 @@ impl Client {
         })
     }
 
-    /// Creates a normalized StanzaKey by resolving PN to LID JIDs.
-    pub(crate) async fn make_stanza_key(&self, chat: &Jid, id: &str) -> StanzaKey {
+    /// Creates a normalized ChatMessageId by resolving PN to LID JIDs.
+    pub(crate) async fn make_chat_message_id(&self, chat: &Jid, id: &str) -> ChatMessageId {
         // Resolve chat JID to LID if possible
         let chat = self.resolve_encryption_jid(chat).await;
 
-        StanzaKey {
+        ChatMessageId {
             chat,
             id: id.to_owned(),
         }
@@ -3591,7 +3649,7 @@ impl Client {
 ///
 /// Matches WhatsApp Web (`WAWebCommsHandleStanza`): only includes `id`
 /// when the server ping carried one.
-fn build_pong(to: String, id: Option<&str>) -> wacore_binary::node::Node {
+fn build_pong(to: String, id: Option<&str>) -> wacore_binary::Node {
     let mut builder = NodeBuilder::new("iq").attr("to", to).attr("type", "result");
     if let Some(id) = id {
         builder = builder.attr("id", id);
@@ -3611,25 +3669,122 @@ fn build_pong(to: String, id: Option<&str>) -> wacore_binary::node::Node {
 /// `ackString = maybeAttrString("type")` — so `type` is only included when
 /// explicitly present on the incoming receipt (delivery receipts normally
 /// have no type attribute, meaning the ack also has no type).
-fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
-    let id = node.attrs.get("id")?.clone();
-    let from = node.attrs.get("from")?.clone();
-    let participant = node.attrs.get("participant").cloned();
+/// Encode an ack stanza directly to bytes, bypassing Node + marshal_auto.
+/// Acks are the most frequent outbound stanza (~1 per inbound message).
+fn encode_ack_bytes(
+    node: &wacore_binary::NodeRef<'_>,
+    own_device_pn: Option<&Jid>,
+) -> Result<Option<Vec<u8>>, wacore_binary::error::BinaryError> {
+    use wacore_binary::encoder::{ByteWriter, EncodeNode, Encoder};
 
-    // Whatsmeow: echo type for all stanza tags EXCEPT "message".
-    // WA Web additionally omits type for notification type="encrypt" with <identity/> child.
-    let typ = if node.tag != "message" && !is_encrypt_identity_notification(node) {
-        node.attrs.get("type").cloned()
+    let Some(id_val) = node.get_attr("id") else {
+        return Ok(None);
+    };
+    let Some(from_val) = node.get_attr("from") else {
+        return Ok(None);
+    };
+    let participant_val = node.get_attr("participant");
+    let tag = node.tag.as_ref();
+
+    let typ_val = if tag != "message" && !is_encrypt_identity_notification(node) {
+        node.get_attr("type")
     } else {
         None
     };
 
-    let mut attrs = Attrs::new();
-    attrs.insert("class", NodeValue::String(node.tag.to_string()));
+    let include_from = tag == "message" && own_device_pn.is_some();
+
+    // Count attrs: class + id + to + optional(from, participant, type)
+    let attr_count = 3
+        + usize::from(include_from)
+        + usize::from(participant_val.is_some())
+        + usize::from(typ_val.is_some());
+
+    struct AckNode<'a> {
+        id: &'a wacore_binary::node::ValueRef<'a>,
+        from: &'a wacore_binary::node::ValueRef<'a>,
+        participant: Option<&'a wacore_binary::node::ValueRef<'a>>,
+        typ: Option<&'a wacore_binary::node::ValueRef<'a>>,
+        own_pn: Option<&'a Jid>,
+        tag_str: &'a str,
+        attr_count: usize,
+    }
+
+    impl EncodeNode for AckNode<'_> {
+        fn tag(&self) -> &str {
+            "ack"
+        }
+        fn attrs_len(&self) -> usize {
+            self.attr_count
+        }
+        fn has_content(&self) -> bool {
+            false
+        }
+        fn encode_attrs<'a, W: ByteWriter>(
+            &self,
+            enc: &mut Encoder<'a, W>,
+        ) -> wacore_binary::Result<()> {
+            enc.write_string("class")?;
+            enc.write_string(self.tag_str)?;
+            enc.write_string("id")?;
+            self.id.encode_value(enc)?;
+            enc.write_string("to")?;
+            self.from.encode_value(enc)?;
+            if let Some(pn) = self.own_pn {
+                enc.write_string("from")?;
+                enc.write_jid_owned(pn)?;
+            }
+            if let Some(p) = self.participant {
+                enc.write_string("participant")?;
+                p.encode_value(enc)?;
+            }
+            if let Some(t) = self.typ {
+                enc.write_string("type")?;
+                t.encode_value(enc)?;
+            }
+            Ok(())
+        }
+        fn encode_content<'a, W: ByteWriter>(
+            &self,
+            _enc: &mut Encoder<'a, W>,
+        ) -> wacore_binary::Result<()> {
+            Ok(())
+        }
+    }
+
+    let ack = AckNode {
+        id: id_val,
+        from: from_val,
+        participant: participant_val,
+        typ: typ_val,
+        own_pn: if include_from { own_device_pn } else { None },
+        tag_str: tag,
+        attr_count,
+    };
+
+    let mut buf = Vec::with_capacity(64);
+    let mut encoder = Encoder::new_vec(&mut buf)?;
+    encoder.write_node(&ack)?;
+    Ok(Some(buf))
+}
+
+/// Build an ack Node (used in tests for structure verification).
+#[cfg(test)]
+fn build_ack_node(node: &wacore_binary::NodeRef<'_>, own_device_pn: Option<&Jid>) -> Option<Node> {
+    let id = node.get_attr("id")?.to_node_value();
+    let from = node.get_attr("from")?.to_node_value();
+    let participant = node.get_attr("participant").map(|v| v.to_node_value());
+    let tag = node.tag.as_ref();
+    let typ = if tag != "message" && !is_encrypt_identity_notification(node) {
+        node.get_attr("type").map(|v| v.to_node_value())
+    } else {
+        None
+    };
+    let mut attrs = Attrs::with_capacity(6);
+    attrs.insert("class", NodeValue::from(tag));
     attrs.insert("id", id);
     attrs.insert("to", from);
-
-    if node.tag == "message"
+    if tag == "message"
         && let Some(own_device_pn) = own_device_pn
     {
         attrs.insert("from", NodeValue::Jid(own_device_pn.clone()));
@@ -3640,7 +3795,6 @@ fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
     if let Some(t) = typ {
         attrs.insert("type", t);
     }
-
     Some(Node {
         tag: Cow::Borrowed("ack"),
         attrs,
@@ -3649,9 +3803,11 @@ fn build_ack_node(node: &Node, own_device_pn: Option<&Jid>) -> Option<Node> {
 }
 
 /// WA Web omits `type` when ACKing `<notification type="encrypt"><identity/></notification>`.
-fn is_encrypt_identity_notification(node: &Node) -> bool {
+fn is_encrypt_identity_notification(node: &wacore_binary::NodeRef<'_>) -> bool {
     node.tag == "notification"
-        && node.attrs.get("type").is_some_and(|v| v == "encrypt")
+        && node
+            .get_attr("type")
+            .is_some_and(|v| v.as_str() == "encrypt")
         && node.get_optional_child("identity").is_some()
 }
 
@@ -3690,7 +3846,7 @@ mod tests {
     use crate::lid_pn_cache::LearningSource;
     use crate::test_utils::MockHttpClient;
     use futures::channel::oneshot;
-    use wacore_binary::jid::SERVER_JID;
+    use wacore_binary::SERVER_JID;
 
     #[tokio::test]
     async fn test_ack_behavior_for_incoming_stanzas() {
@@ -3712,7 +3868,7 @@ mod tests {
         // --- Assertions ---
 
         // Verify that we still ack other critical stanzas (regression check).
-        use wacore_binary::node::{Attrs, Node, NodeContent};
+        use wacore_binary::{Attrs, Node, NodeContent};
 
         let mut receipt_attrs = Attrs::new();
         receipt_attrs.insert("from".to_string(), "@s.whatsapp.net".to_string());
@@ -3720,7 +3876,7 @@ mod tests {
         let receipt_node = Node::new(
             "receipt",
             receipt_attrs,
-            Some(NodeContent::String("test".to_string())),
+            Some(NodeContent::String("test".into())),
         );
 
         let mut notification_attrs = Attrs::new();
@@ -3729,15 +3885,15 @@ mod tests {
         let notification_node = Node::new(
             "notification",
             notification_attrs,
-            Some(NodeContent::String("test".to_string())),
+            Some(NodeContent::String("test".into())),
         );
 
         assert!(
-            client.should_ack(&receipt_node),
+            client.should_ack(&receipt_node.as_node_ref()),
             "should_ack must still return TRUE for <receipt> stanzas."
         );
         assert!(
-            client.should_ack(&notification_node),
+            client.should_ack(&notification_node.as_node_ref()),
             "should_ack must still return TRUE for <notification> stanzas."
         );
 
@@ -3783,7 +3939,7 @@ mod tests {
             .build();
 
         // 3. Handle the ack
-        let handled = client.handle_ack_response(ack_node).await;
+        let handled = client.handle_ack_response(&ack_node.as_node_ref()).await;
         assert!(
             handled,
             "handle_ack_response should return true when waiter exists"
@@ -3794,9 +3950,9 @@ mod tests {
             Ok(Ok(response_node)) => {
                 assert!(
                     response_node
-                        .attrs
-                        .get("id")
-                        .is_some_and(|v| v == test_id.as_str()),
+                        .get()
+                        .get_attr("id")
+                        .is_some_and(|v| v.as_str() == test_id.as_str()),
                     "Response node should have correct ID"
                 );
             }
@@ -3839,7 +3995,7 @@ mod tests {
             .build();
 
         // Should return false since there's no waiter
-        let handled = client.handle_ack_response(ack_node).await;
+        let handled = client.handle_ack_response(&ack_node.as_node_ref()).await;
         assert!(
             !handled,
             "handle_ack_response should return false when no waiter exists"
@@ -4328,7 +4484,7 @@ mod tests {
     #[tokio::test]
     async fn test_ensure_e2e_sessions_waits_for_offline_sync() {
         use std::sync::atomic::Ordering;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
@@ -4409,7 +4565,7 @@ mod tests {
     #[tokio::test]
     async fn test_immediate_session_does_not_wait_for_offline_sync() {
         use std::sync::atomic::Ordering;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
@@ -4486,7 +4642,7 @@ mod tests {
         use wacore::libsignal::protocol::SessionRecord;
         use wacore::libsignal::store::SessionStore;
         use wacore::types::jid::JidExt;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         let backend = crate::test_utils::create_test_backend();
         let pm = Arc::new(
@@ -4671,7 +4827,7 @@ mod tests {
             .build();
 
         // Update the offset
-        client.update_server_time_offset(&node);
+        client.update_server_time_offset(&node.as_node_ref());
 
         // The offset should be approximately 10 * 1000 = 10000 ms
         // Allow some tolerance for timing differences during the test
@@ -4684,7 +4840,7 @@ mod tests {
 
         // Test with no 't' attribute - should not change offset
         let node_no_t = NodeBuilder::new("success").build();
-        client.update_server_time_offset(&node_no_t);
+        client.update_server_time_offset(&node_no_t.as_node_ref());
         let offset_after = client.unified_session.server_time_offset_ms();
         assert!(
             (offset_after - offset).abs() < 100, // Should be same (or very close)
@@ -4695,7 +4851,7 @@ mod tests {
         let node_invalid = NodeBuilder::new("success")
             .attr("t", "not_a_number")
             .build();
-        client.update_server_time_offset(&node_invalid);
+        client.update_server_time_offset(&node_invalid.as_node_ref());
         let offset_after_invalid = client.unified_session.server_time_offset_ms();
         assert!(
             (offset_after_invalid - offset).abs() < 100,
@@ -4704,7 +4860,7 @@ mod tests {
 
         // Test with negative/zero 't' - should not change offset
         let node_zero = NodeBuilder::new("success").attr("t", "0").build();
-        client.update_server_time_offset(&node_zero);
+        client.update_server_time_offset(&node_zero.as_node_ref());
         let offset_after_zero = client.unified_session.server_time_offset_ms();
         assert!(
             (offset_after_zero - offset).abs() < 100,
@@ -4810,6 +4966,10 @@ mod tests {
         info!("✅ test_unified_session_protocol_node passed");
     }
 
+    fn node_to_owned_ref(node: Node) -> Arc<wacore_binary::OwnedNodeRef> {
+        crate::test_utils::node_to_owned_ref(&node)
+    }
+
     /// Helper to create a test client for offline sync tests
     async fn create_offline_sync_test_client() -> Arc<Client> {
         let backend = crate::test_utils::create_test_backend();
@@ -4843,7 +5003,7 @@ mod tests {
                 .build()])
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert!(
             client.offline_sync_metrics.active.load(Ordering::Acquire),
             "<ib><thread_metadata> should NOT end offline sync"
@@ -4866,7 +5026,7 @@ mod tests {
                 .build()])
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert!(
             client.offline_sync_metrics.active.load(Ordering::Acquire),
             "<ib><edge_routing> should NOT end offline sync"
@@ -4888,7 +5048,7 @@ mod tests {
                 .build()])
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert!(
             client.offline_sync_metrics.active.load(Ordering::Acquire),
             "<ib><dirty> should NOT end offline sync"
@@ -4911,7 +5071,7 @@ mod tests {
             .children([NodeBuilder::new("offline").attr("count", "301").build()])
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert!(
             !client.offline_sync_metrics.active.load(Ordering::Acquire),
             "<ib><offline count='301'/> should end offline sync"
@@ -4932,7 +5092,7 @@ mod tests {
                 .build()])
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert!(
             client.offline_sync_metrics.active.load(Ordering::Acquire),
             "offline_preview with count>0 should activate sync"
@@ -4966,7 +5126,7 @@ mod tests {
             .attr("type", "text")
             .build();
 
-        client.process_node(Arc::new(node)).await;
+        client.process_node(node_to_owned_ref(node)).await;
         assert_eq!(
             client
                 .offline_sync_metrics
@@ -5023,7 +5183,7 @@ mod tests {
             .children([NodeBuilder::new("ping").build()])
             .build();
 
-        let handled = client.handle_iq(&ping_node).await;
+        let handled = client.handle_iq(&ping_node.as_node_ref()).await;
         assert!(
             handled,
             "handle_iq must recognize ping with <ping> child element"
@@ -5057,7 +5217,7 @@ mod tests {
             .attr("xmlns", "urn:xmpp:ping")
             .build();
 
-        let handled = client.handle_iq(&ping_node).await;
+        let handled = client.handle_iq(&ping_node.as_node_ref()).await;
         assert!(
             handled,
             "handle_iq must recognize ping with xmlns=\"urn:xmpp:ping\" attribute (no children)"
@@ -5091,7 +5251,7 @@ mod tests {
             .children([NodeBuilder::new("ping").build()])
             .build();
 
-        let handled = client.handle_iq(&ping_node).await;
+        let handled = client.handle_iq(&ping_node.as_node_ref()).await;
         assert!(
             handled,
             "handle_iq must handle ping with both child and xmlns"
@@ -5123,7 +5283,7 @@ mod tests {
             .attr("xmlns", "some:other:namespace")
             .build();
 
-        let handled = client.handle_iq(&non_ping_node).await;
+        let handled = client.handle_iq(&non_ping_node.as_node_ref()).await;
         assert!(
             !handled,
             "handle_iq must NOT treat non-ping xmlns as a ping"
@@ -5155,7 +5315,7 @@ mod tests {
             .attr("xmlns", "urn:xmpp:ping")
             .build();
 
-        let handled = client.handle_iq(&result_node).await;
+        let handled = client.handle_iq(&result_node.as_node_ref()).await;
         assert!(
             !handled,
             "handle_iq must NOT respond to type=\"result\" even with ping xmlns"
@@ -5195,7 +5355,7 @@ mod tests {
             .build();
 
         assert!(
-            is_encrypt_identity_notification(&node),
+            is_encrypt_identity_notification(&node.as_node_ref()),
             "identity-change notification ACK must omit type to match WA Web"
         );
     }
@@ -5210,7 +5370,7 @@ mod tests {
             .build();
 
         assert!(
-            !is_encrypt_identity_notification(&node),
+            !is_encrypt_identity_notification(&node.as_node_ref()),
             "device notification is not an encrypt+identity notification"
         );
     }
@@ -5229,7 +5389,7 @@ mod tests {
             .parse()
             .expect("own device PN JID should parse");
 
-        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+        let ack = build_ack_node(&incoming.as_node_ref(), Some(&own_device_pn))
             .expect("message ack should be buildable");
 
         assert_eq!(ack.tag, "ack");
@@ -5269,7 +5429,7 @@ mod tests {
             .parse()
             .expect("own device PN JID should parse");
 
-        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+        let ack = build_ack_node(&incoming.as_node_ref(), Some(&own_device_pn))
             .expect("notification ack should be buildable");
 
         assert!(ack.attrs.get("class").is_some_and(|v| v == "notification"));
@@ -5295,7 +5455,7 @@ mod tests {
             .parse()
             .expect("own device PN JID should parse");
 
-        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+        let ack = build_ack_node(&incoming.as_node_ref(), Some(&own_device_pn))
             .expect("receipt ack should be buildable");
 
         assert!(ack.attrs.get("class").is_some_and(|v| v == "receipt"));
@@ -5321,7 +5481,7 @@ mod tests {
             .parse()
             .expect("own device PN JID should parse");
 
-        let ack = build_ack_node(&incoming, Some(&own_device_pn))
+        let ack = build_ack_node(&incoming.as_node_ref(), Some(&own_device_pn))
             .expect("receipt ack should be buildable");
 
         assert!(ack.attrs.get("class").is_some_and(|v| v == "receipt"));
@@ -5360,7 +5520,7 @@ mod tests {
             .attr("xmlns", "urn:xmpp:ping")
             .build();
 
-        let handled = client.handle_iq(&ping_node).await;
+        let handled = client.handle_iq(&ping_node.as_node_ref()).await;
         assert!(
             handled,
             "handle_iq must recognize ping without id attribute"
@@ -5417,7 +5577,7 @@ mod tests {
     async fn test_stream_error_401_disables_reconnect() {
         let client = create_offline_sync_test_client().await;
         let node = NodeBuilder::new("stream:error").attr("code", "401").build();
-        client.handle_stream_error(&node).await;
+        client.handle_stream_error(&node.as_node_ref()).await;
         assert!(
             !client.enable_auto_reconnect.load(Ordering::Relaxed),
             "401 should disable auto-reconnect"
@@ -5428,7 +5588,7 @@ mod tests {
     async fn test_stream_error_409_disables_reconnect() {
         let client = create_offline_sync_test_client().await;
         let node = NodeBuilder::new("stream:error").attr("code", "409").build();
-        client.handle_stream_error(&node).await;
+        client.handle_stream_error(&node.as_node_ref()).await;
         assert!(
             !client.enable_auto_reconnect.load(Ordering::Relaxed),
             "409 should disable auto-reconnect"
@@ -5440,7 +5600,7 @@ mod tests {
         let client = create_offline_sync_test_client().await;
         let before = client.auto_reconnect_errors.load(Ordering::Relaxed);
         let node = NodeBuilder::new("stream:error").attr("code", "429").build();
-        client.handle_stream_error(&node).await;
+        client.handle_stream_error(&node.as_node_ref()).await;
         assert!(
             client.enable_auto_reconnect.load(Ordering::Relaxed),
             "429 should keep auto-reconnect enabled"
@@ -5457,7 +5617,7 @@ mod tests {
     async fn test_stream_error_503_keeps_reconnect() {
         let client = create_offline_sync_test_client().await;
         let node = NodeBuilder::new("stream:error").attr("code", "503").build();
-        client.handle_stream_error(&node).await;
+        client.handle_stream_error(&node.as_node_ref()).await;
         assert!(
             client.enable_auto_reconnect.load(Ordering::Relaxed),
             "503 should keep auto-reconnect enabled"
@@ -5581,7 +5741,7 @@ mod tests {
             .attr("participant", "236395184570386@lid")
             .build();
 
-        let result = client.send_ack_for(&receipt).await;
+        let result = client.send_ack_for(&receipt.as_node_ref()).await;
         assert!(
             matches!(result, Err(ClientError::NotConnected)),
             "send_ack_for must return Err(NotConnected) when disconnected, got: {result:?}"
@@ -5615,7 +5775,7 @@ mod tests {
             .attr("id", "TEST-RECEIPT-ID")
             .build();
 
-        let result = client.send_ack_for(&receipt).await;
+        let result = client.send_ack_for(&receipt.as_node_ref()).await;
         assert!(
             result.is_ok(),
             "send_ack_for should return Ok during expected disconnect"

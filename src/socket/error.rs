@@ -71,4 +71,12 @@ impl EncryptSendError {
             source: anyhow::anyhow!("sender task channel closed unexpectedly"),
         }
     }
+
+    /// The transport is gone (broken pipe, closed connection, channel dropped).
+    pub fn is_transport_unavailable(&self) -> bool {
+        matches!(
+            self.kind,
+            EncryptSendErrorKind::Transport | EncryptSendErrorKind::ChannelClosed
+        )
+    }
 }

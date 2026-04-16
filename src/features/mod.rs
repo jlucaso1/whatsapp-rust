@@ -28,9 +28,11 @@ pub use chatstate::{ChatStateType, Chatstate};
 pub use contacts::{Contacts, IsOnWhatsAppResult, ProfilePicture, UserInfo};
 
 pub use groups::{
-    CreateGroupResult, GroupCreateOptions, GroupDescription, GroupMetadata, GroupParticipant,
-    GroupParticipantOptions, GroupSubject, Groups, JoinGroupResult, MemberAddMode, MemberLinkMode,
-    MembershipApprovalMode, MembershipRequest, ParticipantChangeResponse,
+    BatchGroupResult, CreateGroupResult, GroupCreateOptions, GroupDescription, GroupJoinError,
+    GroupMetadata, GroupParticipant, GroupParticipantOptions, GroupProfilePicture, GroupSubject,
+    Groups, GrowthLockInfo, InviteInfoError, JoinGroupResult, MemberAddMode, MemberLinkMode,
+    MemberShareHistoryMode, MembershipApprovalMode, MembershipRequest, ParticipantChangeResponse,
+    ParticipantType, PictureType,
 };
 
 pub use media_reupload::{MediaRetryResult, MediaReupload, MediaReuploadRequest};

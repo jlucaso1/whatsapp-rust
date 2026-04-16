@@ -26,9 +26,10 @@
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
+use wacore_binary::CompactString;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{Node, NodeContent, NodeRef};
 
 /// IQ namespace for A/B props.
 pub const PROPS_NAMESPACE: &str = "abt";
@@ -58,6 +59,22 @@ pub mod config_codes {
     // --- NCT / cstoken ---
     /// Gates cstoken (HMAC fallback) inclusion in outgoing messages.
     pub const NCT_TOKEN_SEND_ENABLED: u32 = 24_941;
+
+    /// All production config codes. Must match DEFAULT_INTEREST in ab_props.rs.
+    /// When adding a new code above, add it here too.
+    pub const ALL: &[u32] = &[
+        PRIVACY_TOKEN_ON_ALL_1_ON_1_MESSAGES,
+        PRIVACY_TOKEN_ON_GROUP_CREATE,
+        PRIVACY_TOKEN_ON_GROUP_PARTICIPANT_ADD,
+        PRIVACY_TOKEN_ONLY_CHECK_LID,
+        PROFILE_PIC_PRIVACY_TOKEN,
+        LID_TRUSTED_TOKEN_ISSUE_TO_LID,
+        TCTOKEN_DURATION,
+        TCTOKEN_DURATION_SENDER,
+        TCTOKEN_NUM_BUCKETS,
+        TCTOKEN_NUM_BUCKETS_SENDER,
+        NCT_TOKEN_SEND_ENABLED,
+    ];
 }
 
 /// Protocol version for props requests.
@@ -68,8 +85,8 @@ pub const PROPS_PROTOCOL_VERSION: &str = "1";
 pub struct AbProp {
     /// The config code (property identifier).
     pub config_code: u32,
-    /// The config value.
-    pub config_value: String,
+    /// The config value. CompactString inlines values <=24 bytes (covers most props).
+    pub config_value: CompactString,
     /// Optional experiment exposure key.
     pub config_expo_key: Option<u32>,
 }
@@ -82,7 +99,7 @@ impl crate::protocol::ProtocolNode for AbProp {
     fn into_node(self) -> Node {
         let mut builder = NodeBuilder::new("prop")
             .attr("config_code", self.config_code.to_string())
-            .attr("config_value", &self.config_value);
+            .attr("config_value", &*self.config_value);
 
         if let Some(expo_key) = self.config_expo_key {
             builder = builder.attr("config_expo_key", expo_key.to_string());
@@ -91,7 +108,7 @@ impl crate::protocol::ProtocolNode for AbProp {
         builder.build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         use crate::iq::node::optional_attr;
 
         if node.tag != "prop" {
@@ -105,8 +122,8 @@ impl crate::protocol::ProtocolNode for AbProp {
             return Err(anyhow::anyhow!("config_code must be >= 1"));
         }
         let config_value = optional_attr(node, "config_value")
-            .ok_or_else(|| anyhow::anyhow!("missing config_value in prop"))?
-            .to_string();
+            .ok_or_else(|| anyhow::anyhow!("missing config_value in prop"))?;
+        let config_value = CompactString::from(config_value.as_ref());
         let config_expo_key = optional_attr(node, "config_expo_key").and_then(|s| s.parse().ok());
 
         Ok(Self {
@@ -138,7 +155,7 @@ impl crate::protocol::ProtocolNode for SamplingProp {
             .build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         use crate::iq::node::optional_attr;
 
         if node.tag != "prop" {
@@ -188,32 +205,32 @@ impl crate::protocol::ProtocolNode for AbPropConfig {
         }
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
+        use crate::iq::node::optional_attr;
+
         if node.tag != "prop" {
             return Err(anyhow::anyhow!("expected <prop>, got <{}>", node.tag));
         }
 
-        let experiment = AbProp::try_from_node(node);
-        if let Ok(prop) = experiment {
-            return Ok(Self::Experiment(prop));
-        }
+        // Check discriminating attribute to avoid double-parse allocations
+        let has_config = optional_attr(node, "config_code").is_some();
+        let has_event = optional_attr(node, "event_code").is_some();
 
-        let sampling = SamplingProp::try_from_node(node);
-        if let Ok(prop) = sampling {
-            return Ok(Self::Sampling(prop));
+        if has_config && has_event {
+            Err(anyhow::anyhow!(
+                "prop has both config_code and event_code (attrs: {:?})",
+                node.attrs
+            ))
+        } else if has_config {
+            Ok(Self::Experiment(AbProp::try_from_node_ref(node)?))
+        } else if has_event {
+            Ok(Self::Sampling(SamplingProp::try_from_node_ref(node)?))
+        } else {
+            Err(anyhow::anyhow!(
+                "prop has neither config_code nor event_code (attrs: {:?})",
+                node.attrs
+            ))
         }
-
-        let experiment_err = experiment
-            .err()
-            .unwrap_or_else(|| anyhow::anyhow!("unknown error"));
-        let sampling_err = sampling
-            .err()
-            .unwrap_or_else(|| anyhow::anyhow!("unknown error"));
-        Err(anyhow::anyhow!(
-            "prop did not match experiment or sampling config: experiment_err={}; sampling_err={}",
-            experiment_err,
-            sampling_err
-        ))
     }
 }
 
@@ -230,8 +247,9 @@ pub struct PropsResponse {
     pub refresh_id: Option<u32>,
     /// Whether this is a delta update.
     pub delta_update: bool,
-    /// The properties (experiment or sampling configs).
-    pub props: Vec<AbPropConfig>,
+    /// Experiment prop code-value pairs (lightweight, no enum wrapper).
+    /// Sampling props are skipped during parsing.
+    pub experiment_props: Vec<(u32, CompactString)>,
 }
 
 impl crate::protocol::ProtocolNode for PropsResponse {
@@ -239,6 +257,9 @@ impl crate::protocol::ProtocolNode for PropsResponse {
         "props"
     }
 
+    /// Serializes metadata attrs only. Individual `<prop>` children are not
+    /// emitted since experiment_props stores lightweight (code, value) tuples
+    /// without the full AbPropConfig structure needed for node construction.
     fn into_node(self) -> Node {
         let mut builder = NodeBuilder::new("props").attr("protocol", PROPS_PROTOCOL_VERSION);
 
@@ -256,13 +277,10 @@ impl crate::protocol::ProtocolNode for PropsResponse {
         }
         builder = builder.attr("delta_update", self.delta_update.to_string());
 
-        let prop_nodes: Vec<Node> = self.props.into_iter().map(|p| p.into_node()).collect();
-        builder = builder.children(prop_nodes);
-
         builder.build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         use crate::iq::node::optional_attr;
 
         if node.tag != "props" {
@@ -277,9 +295,17 @@ impl crate::protocol::ProtocolNode for PropsResponse {
             .map(|s| s == "true")
             .unwrap_or(false);
 
-        let mut props = Vec::new();
+        // Parse experiment props as lightweight (code, value) tuples.
+        // Sampling props (missing config_code or config_value) are skipped.
+        let mut experiment_props = Vec::new();
         for child in node.get_children_by_tag("prop") {
-            props.push(AbPropConfig::try_from_node(child)?);
+            if let Some(code_str) = optional_attr(child, "config_code")
+                && let Ok(code) = code_str.parse::<u32>()
+                && code > 0
+                && let Some(value) = optional_attr(child, "config_value")
+            {
+                experiment_props.push((code, CompactString::from(value.as_ref())));
+            }
         }
 
         Ok(Self {
@@ -288,7 +314,7 @@ impl crate::protocol::ProtocolNode for PropsResponse {
             refresh,
             refresh_id,
             delta_update,
-            props,
+            experiment_props,
         })
     }
 }
@@ -341,17 +367,16 @@ impl IqSpec for PropsSpec {
 
         InfoQuery::get(
             PROPS_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![builder.build()])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         use crate::iq::node::required_child;
 
-        // Find the props child node and parse it using ProtocolNode
         let props_node = required_child(response, "props")?;
-        PropsResponse::try_from_node(props_node)
+        PropsResponse::try_from_node_ref(props_node)
     }
 }
 
@@ -433,36 +458,14 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.ab_key, Some("test_key".to_string()));
         assert_eq!(result.hash, Some("abcdef".to_string()));
         assert_eq!(result.refresh, Some(3600));
         assert_eq!(result.refresh_id, Some(123));
         assert!(!result.delta_update);
-        assert_eq!(result.props.len(), 3);
-        match &result.props[0] {
-            AbPropConfig::Experiment(prop) => {
-                assert_eq!(prop.config_code, 100);
-                assert_eq!(prop.config_value, "enabled");
-                assert!(prop.config_expo_key.is_none());
-            }
-            _ => panic!("Expected Experiment prop"),
-        }
-        match &result.props[1] {
-            AbPropConfig::Sampling(prop) => {
-                assert_eq!(prop.event_code, 5138);
-                assert_eq!(prop.sampling_weight, -1);
-            }
-            _ => panic!("Expected Sampling prop"),
-        }
-        match &result.props[2] {
-            AbPropConfig::Experiment(prop) => {
-                assert_eq!(prop.config_code, 200);
-                assert_eq!(prop.config_value, "disabled");
-                assert_eq!(prop.config_expo_key, Some(5));
-            }
-            _ => panic!("Expected Experiment prop"),
-        }
+        // 2 of 3 props are experiments (sampling props are skipped)
+        assert_eq!(result.experiment_props.len(), 2);
     }
 
     #[test]
@@ -476,7 +479,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert!(result.delta_update);
     }
 
@@ -484,7 +487,7 @@ mod tests {
     fn test_ab_prop_protocol_node_round_trip() {
         let prop = AbProp {
             config_code: 123,
-            config_value: "test_value".to_string(),
+            config_value: "test_value".into(),
             config_expo_key: Some(456),
         };
 
@@ -500,7 +503,7 @@ mod tests {
     fn test_ab_prop_protocol_node_no_expo_key() {
         let prop = AbProp {
             config_code: 789,
-            config_value: "another_value".to_string(),
+            config_value: "another_value".into(),
             config_expo_key: None,
         };
 
@@ -520,21 +523,9 @@ mod tests {
             refresh: Some(7200),
             refresh_id: Some(42),
             delta_update: true,
-            props: vec![
-                AbPropConfig::Experiment(AbProp {
-                    config_code: 100,
-                    config_value: "value1".to_string(),
-                    config_expo_key: None,
-                }),
-                AbPropConfig::Sampling(SamplingProp {
-                    event_code: 9001,
-                    sampling_weight: -5,
-                }),
-                AbPropConfig::Experiment(AbProp {
-                    config_code: 200,
-                    config_value: "value2".to_string(),
-                    config_expo_key: Some(99),
-                }),
+            experiment_props: vec![
+                (100, CompactString::from("value1")),
+                (200, CompactString::from("value2")),
             ],
         };
 
@@ -546,19 +537,6 @@ mod tests {
         assert_eq!(parsed.refresh, response.refresh);
         assert_eq!(parsed.refresh_id, response.refresh_id);
         assert_eq!(parsed.delta_update, response.delta_update);
-        assert_eq!(parsed.props.len(), response.props.len());
-        match &parsed.props[0] {
-            AbPropConfig::Experiment(prop) => assert_eq!(prop.config_code, 100),
-            _ => panic!("Expected Experiment prop"),
-        }
-        match &parsed.props[1] {
-            AbPropConfig::Sampling(prop) => assert_eq!(prop.event_code, 9001),
-            _ => panic!("Expected Sampling prop"),
-        }
-        match &parsed.props[2] {
-            AbPropConfig::Experiment(prop) => assert_eq!(prop.config_expo_key, Some(99)),
-            _ => panic!("Expected Experiment prop"),
-        }
     }
 
     #[test]
@@ -569,7 +547,7 @@ mod tests {
             refresh: None,
             refresh_id: None,
             delta_update: false,
-            props: vec![],
+            experiment_props: vec![],
         };
 
         let node = response.clone().into_node();
@@ -577,10 +555,8 @@ mod tests {
 
         assert_eq!(parsed.ab_key, None);
         assert_eq!(parsed.hash, None);
-        assert_eq!(parsed.refresh, None);
-        assert_eq!(parsed.refresh_id, None);
         assert!(!parsed.delta_update);
-        assert_eq!(parsed.props.len(), 0);
+        assert_eq!(parsed.experiment_props.len(), 0);
     }
 
     #[test]

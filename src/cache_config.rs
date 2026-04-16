@@ -104,7 +104,7 @@ pub struct CacheStores {
 impl CacheStores {
     /// Set the same [`CacheStore`] for all pluggable caches at once.
     ///
-    /// Coordination caches (`session_locks`, `message_queues`, etc.) and the
+    /// Coordination caches (`session_locks`, `chat_lanes`, etc.) and the
     /// signal write-behind cache always remain in-process regardless of this
     /// setting.
     ///
@@ -178,12 +178,10 @@ pub struct CacheConfig {
     pub sender_key_devices_cache: CacheEntryConfig,
 
     // --- Coordination caches (capacity-only, no TTL) ---
-    /// Per-device Signal session lock capacity. Default: 2000.
+    /// Per-device Signal session lock capacity. Default: 10000.
     pub session_locks_capacity: u64,
-    /// Per-chat message processing queue capacity. Default: 2000.
-    pub message_queues_capacity: u64,
-    /// Per-chat message enqueue lock capacity. Default: 2000.
-    pub message_enqueue_locks_capacity: u64,
+    /// Per-chat lane capacity (combined lock + queue). Default: 5000.
+    pub chat_lanes_capacity: u64,
 
     // --- Sent message DB cleanup ---
     /// TTL in seconds for sent messages in DB before periodic cleanup.
@@ -197,9 +195,8 @@ pub struct CacheConfig {
     /// backend instead of the default in-process moka cache. Fields left as
     /// `None` keep the default moka behaviour.
     ///
-    /// Coordination caches (`session_locks`, `message_queues`,
-    /// `message_enqueue_locks`), the signal write-behind cache, and
-    /// `pdo_pending_requests` always stay in-process — they hold live Rust
+    /// Coordination caches (`session_locks`, `chat_lanes`), the signal write-behind
+    /// cache, and `pdo_pending_requests` always stay in-process — they hold live Rust
     /// objects (mutexes, channel senders, oneshot senders) that cannot be
     /// serialised to an external store.
     pub cache_stores: CacheStores,
@@ -217,11 +214,7 @@ impl std::fmt::Debug for CacheConfig {
             .field("pdo_pending_requests", &self.pdo_pending_requests)
             .field("sender_key_devices_cache", &self.sender_key_devices_cache)
             .field("session_locks_capacity", &self.session_locks_capacity)
-            .field("message_queues_capacity", &self.message_queues_capacity)
-            .field(
-                "message_enqueue_locks_capacity",
-                &self.message_enqueue_locks_capacity,
-            )
+            .field("chat_lanes_capacity", &self.chat_lanes_capacity)
             .field("sent_message_ttl_secs", &self.sent_message_ttl_secs)
             .field(
                 "cache_stores.group_cache",
@@ -253,9 +246,11 @@ impl Default for CacheConfig {
             message_retry_counts: CacheEntryConfig::new(five_min, 1_000),
             pdo_pending_requests: CacheEntryConfig::new(Some(Duration::from_secs(30)), 500),
             sender_key_devices_cache: CacheEntryConfig::new(one_hour, 500),
-            session_locks_capacity: 2_000,
-            message_queues_capacity: 2_000,
-            message_enqueue_locks_capacity: 2_000,
+            // Coordination caches hold live mutexes/senders; capacity eviction
+            // while a reference is held creates a second lock for the same key,
+            // breaking serialization. Size generously to avoid eviction pressure.
+            session_locks_capacity: 10_000,
+            chat_lanes_capacity: 5_000,
             sent_message_ttl_secs: 300,
             cache_stores: CacheStores::default(),
         }

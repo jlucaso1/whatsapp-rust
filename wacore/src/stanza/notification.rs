@@ -10,7 +10,7 @@
 //! the handler.  If more parsing logic is added to the handler in the future,
 //! it should be extracted here as pure functions.
 
-use wacore_binary::node::Node;
+use wacore_binary::Node;
 
 /// Extract a notification timestamp from a node's `t` attribute.
 ///
@@ -20,7 +20,7 @@ use wacore_binary::node::Node;
 pub fn notification_timestamp(node: &Node) -> chrono::DateTime<chrono::Utc> {
     node.attrs()
         .optional_u64("t")
-        .and_then(|t| chrono::DateTime::from_timestamp(t as i64, 0))
+        .and_then(|t| crate::time::from_secs(t as i64))
         .unwrap_or_else(crate::time::now_utc)
 }
 

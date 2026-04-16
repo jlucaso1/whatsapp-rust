@@ -1,21 +1,21 @@
 use crate::libsignal::protocol::{IdentityKey, PreKeyBundle, PreKeyId, PublicKey, SignedPreKeyId};
-use crate::xml::DisplayableNode;
 use std::collections::HashMap;
+use wacore_binary::CompactString;
+use wacore_binary::Jid;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Node, NodeRef};
 
 pub struct PreKeyUtils;
 
 /// Compute SHA-1 digest of a key bundle for validation against server.
 ///
 /// Matches WA Web's `validateLocalKeyBundle` hash computation:
-/// SHA-1(identity_pub_key || signed_prekey_pub || signed_prekey_signature || prekey_pub_1 || prekey_pub_2 || ...)
+/// SHA-1(identity_pub_key || signed_prekey_pub || signed_prekey_signature || prekey_pub_1 || ...)
 pub fn compute_key_bundle_digest(
     identity_pub_key: &[u8],
     signed_prekey_pub: &[u8],
     signed_prekey_signature: &[u8],
-    prekey_pubkeys: &[Vec<u8>],
+    prekey_pubkeys: &[&[u8]],
 ) -> Vec<u8> {
     use sha1::Digest;
     let mut hasher = sha1::Sha1::new();
@@ -28,10 +28,77 @@ pub fn compute_key_bundle_digest(
     hasher.finalize().to_vec()
 }
 
+/// Extract the `publicKey` field (tag 2) from a protobuf-encoded PreKeyRecordStructure
+/// without full prost decode. Uses last-one-wins semantics per protobuf spec.
+/// Skips unknown fields gracefully.
+pub fn extract_prekey_public_key(record: &[u8]) -> Option<&[u8]> {
+    let mut pos = 0;
+    let mut result: Option<&[u8]> = None;
+    while pos < record.len() {
+        let (tag_byte, consumed) = decode_varint(&record[pos..])?;
+        pos += consumed;
+        let field_number = (tag_byte >> 3) as u32;
+        let wire_type = (tag_byte & 0x7) as u32;
+        match wire_type {
+            // varint
+            0 => {
+                let (_, c) = decode_varint(&record[pos..])?;
+                pos += c;
+            }
+            // length-delimited
+            2 => {
+                let (len, c) = decode_varint(&record[pos..])?;
+                pos += c;
+                let len = len as usize;
+                if pos + len > record.len() {
+                    return result;
+                }
+                if field_number == 2 {
+                    result = Some(&record[pos..pos + len]);
+                }
+                pos += len;
+            }
+            // fixed64
+            1 => {
+                if pos + 8 > record.len() {
+                    return result;
+                }
+                pos += 8;
+            }
+            // fixed32
+            5 => {
+                if pos + 4 > record.len() {
+                    return result;
+                }
+                pos += 4;
+            }
+            // Unknown wire type -- skip gracefully
+            _ => return result,
+        }
+    }
+    result
+}
+
+fn decode_varint(buf: &[u8]) -> Option<(u64, usize)> {
+    let mut result: u64 = 0;
+    for (i, &byte) in buf.iter().enumerate().take(10) {
+        // The 10th byte (i==9) carries the highest bits; only the low bit
+        // is valid payload (64 - 9*7 = 1). Reject if more bits are set.
+        if i == 9 && (byte & 0x7F) > 1 {
+            return None;
+        }
+        result |= ((byte & 0x7F) as u64) << (i * 7);
+        if byte & 0x80 == 0 {
+            return Some((result, i + 1));
+        }
+    }
+    None
+}
+
 impl PreKeyUtils {
     pub fn build_fetch_prekeys_request(jids: &[Jid], reason: Option<&str>) -> Node {
         let user_nodes = jids.iter().map(|jid| {
-            let mut user_builder = NodeBuilder::new("user").attr("jid", jid.clone());
+            let mut user_builder = NodeBuilder::new("user").attr("jid", jid);
             if let Some(r) = reason {
                 user_builder = user_builder.attr("reason", r);
             }
@@ -41,29 +108,28 @@ impl PreKeyUtils {
         NodeBuilder::new("key").children(user_nodes).build()
     }
 
-    pub fn build_upload_prekeys_request(
+    pub fn build_upload_prekeys_request<'a>(
         registration_id: u32,
-        identity_key_bytes: Vec<u8>,
+        identity_key_bytes: &[u8],
         signed_pre_key_id: u32,
-        signed_pre_key_public_bytes: Vec<u8>,
-        signed_pre_key_signature: Vec<u8>,
-        pre_keys: &[(u32, Vec<u8>)],
+        signed_pre_key_public_bytes: &[u8],
+        signed_pre_key_signature: &[u8],
+        pre_keys: impl IntoIterator<Item = (u32, &'a [u8])>,
     ) -> Vec<Node> {
-        let mut pre_key_nodes = Vec::new();
+        let pre_keys = pre_keys.into_iter();
+        let (lower, upper) = pre_keys.size_hint();
+        let mut pre_key_nodes = Vec::with_capacity(upper.unwrap_or(lower));
         for (pre_key_id, public_bytes) in pre_keys {
-            let id_bytes = pre_key_id.to_be_bytes()[1..].to_vec();
             let node = NodeBuilder::new("key")
                 .children([
-                    NodeBuilder::new("id").bytes(id_bytes).build(),
-                    NodeBuilder::new("value")
-                        .bytes(public_bytes.clone())
+                    NodeBuilder::new("id")
+                        .bytes(pre_key_id.to_be_bytes()[1..].to_vec())
                         .build(),
+                    NodeBuilder::new("value").bytes(public_bytes).build(),
                 ])
                 .build();
             pre_key_nodes.push(node);
         }
-
-        let registration_id_bytes = registration_id.to_be_bytes().to_vec();
 
         let signed_pre_key_node = NodeBuilder::new("skey")
             .children([
@@ -79,13 +145,11 @@ impl PreKeyUtils {
             ])
             .build();
 
-        let type_bytes = vec![5u8];
-
         vec![
             NodeBuilder::new("registration")
-                .bytes(registration_id_bytes)
+                .bytes(registration_id.to_be_bytes().to_vec())
                 .build(),
-            NodeBuilder::new("type").bytes(type_bytes).build(),
+            NodeBuilder::new("type").bytes(vec![5u8]).build(),
             NodeBuilder::new("identity")
                 .bytes(identity_key_bytes)
                 .build(),
@@ -95,29 +159,33 @@ impl PreKeyUtils {
     }
 
     pub fn parse_prekeys_response(
-        resp_node: &Node,
+        resp_node: &NodeRef<'_>,
     ) -> Result<HashMap<Jid, PreKeyBundle>, anyhow::Error> {
         let list_node = resp_node
             .get_optional_child("list")
             .ok_or_else(|| anyhow::anyhow!("<list> not found in pre-key response"))?;
 
         let mut bundles = HashMap::new();
-        for user_node in list_node.children().unwrap_or_default() {
-            if user_node.tag != "user" {
+        for user_node_ref in list_node.children().unwrap_or_default() {
+            if user_node_ref.tag != "user" {
                 continue;
             }
-            let mut attrs = user_node.attrs();
-            let mut jid = attrs.jid("jid").normalize_for_prekey_bundle();
+            let mut jid = user_node_ref
+                .attrs()
+                .jid("jid")
+                .normalize_for_prekey_bundle();
             if jid.device == 0
-                && (jid.server == wacore_binary::jid::DEFAULT_USER_SERVER
-                    || jid.server == wacore_binary::jid::HIDDEN_USER_SERVER)
+                && matches!(
+                    jid.server,
+                    wacore_binary::Server::Pn | wacore_binary::Server::Lid
+                )
                 && let Some((user_base, device_str)) = jid.user.split_once(':')
                 && let Ok(device) = device_str.parse::<u16>()
             {
-                jid.user = user_base.to_string();
+                jid.user = CompactString::from(user_base);
                 jid.device = device;
             }
-            let bundle = match Self::node_to_pre_key_bundle(&jid, user_node) {
+            let bundle = match Self::node_to_pre_key_bundle_ref(&jid, user_node_ref) {
                 Ok(b) => b,
                 Err(e) => {
                     log::warn!("Failed to parse prekey bundle for {}: {}", jid, e);
@@ -130,10 +198,16 @@ impl PreKeyUtils {
         Ok(bundles)
     }
 
-    fn node_to_pre_key_bundle(jid: &Jid, node: &Node) -> Result<PreKeyBundle, anyhow::Error> {
-        fn extract_bytes(node: Option<&Node>) -> Result<Vec<u8>, anyhow::Error> {
-            match node.and_then(|n| n.content.as_ref()) {
-                Some(NodeContent::Bytes(b)) => Ok(b.clone()),
+    fn node_to_pre_key_bundle_ref(
+        jid: &Jid,
+        node: &NodeRef<'_>,
+    ) -> Result<PreKeyBundle, anyhow::Error> {
+        use crate::xml::DisplayableNodeRef;
+        use wacore_binary::NodeContentRef;
+
+        fn extract_bytes_ref(node: Option<&NodeRef<'_>>) -> Result<Vec<u8>, anyhow::Error> {
+            match node.and_then(|n| n.content.as_deref()) {
+                Some(NodeContentRef::Bytes(b)) => Ok(b.to_vec()),
                 _ => Err(anyhow::anyhow!("Expected bytes in node content")),
             }
         }
@@ -141,11 +215,11 @@ impl PreKeyUtils {
         if let Some(error_node) = node.get_optional_child("error") {
             return Err(anyhow::anyhow!(
                 "Error getting prekeys: {}",
-                DisplayableNode(error_node)
+                DisplayableNodeRef(error_node)
             ));
         }
 
-        let reg_id_bytes = extract_bytes(node.get_optional_child("registration"))?;
+        let reg_id_bytes = extract_bytes_ref(node.get_optional_child("registration"))?;
         if reg_id_bytes.len() != 4 {
             return Err(anyhow::anyhow!("Invalid registration ID length"));
         }
@@ -156,21 +230,19 @@ impl PreKeyUtils {
             reg_id_bytes[3],
         ]);
 
-        let keys_node = node.get_optional_child("keys").unwrap_or(node); // unwrap_or is fine here
+        let keys_node = node.get_optional_child("keys").unwrap_or(node);
 
-        let identity_key_bytes = extract_bytes(keys_node.get_optional_child("identity"))?;
-
+        let identity_key_bytes = extract_bytes_ref(keys_node.get_optional_child("identity"))?;
         let identity_key_array: [u8; 32] =
             identity_key_bytes.try_into().map_err(|v: Vec<u8>| {
                 anyhow::anyhow!("Invalid identity key length: got {}, expected 32", v.len())
             })?;
-
         let identity_key =
             IdentityKey::new(PublicKey::from_djb_public_key_bytes(&identity_key_array)?);
 
         let mut pre_key_tuple = None;
         if let Some(pre_key_node) = keys_node.get_optional_child("key")
-            && let Some((id, key_bytes)) = Self::node_to_pre_key(pre_key_node)?
+            && let Some((id, key_bytes)) = Self::node_to_pre_key_ref(pre_key_node)?
         {
             let pre_key_id: PreKeyId = id.into();
             let pre_key_public = PublicKey::from_djb_public_key_bytes(&key_bytes)?;
@@ -181,7 +253,7 @@ impl PreKeyUtils {
             .get_optional_child("skey")
             .ok_or(anyhow::anyhow!("Missing signed prekey"))?;
         let (signed_pre_key_id_u32, signed_pre_key_public_bytes, signed_pre_key_signature) =
-            Self::node_to_signed_pre_key(signed_pre_key_node)?;
+            Self::node_to_signed_pre_key_ref(signed_pre_key_node)?;
 
         let signed_pre_key_id: SignedPreKeyId = signed_pre_key_id_u32.into();
         let signed_pre_key_public =
@@ -200,16 +272,18 @@ impl PreKeyUtils {
         Ok(bundle)
     }
 
-    fn node_to_pre_key(node: &Node) -> Result<Option<(u32, [u8; 32])>, anyhow::Error> {
-        let id_node_content = node
-            .get_optional_child("id")
-            .and_then(|n| n.content.as_ref());
+    fn node_to_pre_key_ref(node: &NodeRef<'_>) -> Result<Option<(u32, [u8; 32])>, anyhow::Error> {
+        use wacore_binary::NodeContentRef;
 
-        let id = match id_node_content {
-            Some(NodeContent::Bytes(b)) if !b.is_empty() => {
+        let id_content = node
+            .get_optional_child("id")
+            .and_then(|n| n.content.as_deref());
+
+        let id = match id_content {
+            Some(NodeContentRef::Bytes(b)) if !b.is_empty() => {
                 if b.len() == 3 {
                     Ok(u32::from_be_bytes([0, b[0], b[1], b[2]]))
-                } else if let Ok(s) = std::str::from_utf8(b) {
+                } else if let Ok(s) = std::str::from_utf8(b.as_ref()) {
                     let trimmed_s = s.trim();
                     if trimmed_s.is_empty() {
                         Err(anyhow::anyhow!("ID content is only whitespace"))
@@ -230,10 +304,10 @@ impl PreKeyUtils {
 
         let value_bytes = node
             .get_optional_child("value")
-            .and_then(|n| n.content.as_ref())
+            .and_then(|n| n.content.as_deref())
             .and_then(|c| {
-                if let NodeContent::Bytes(b) = c {
-                    Some(b.clone())
+                if let NodeContentRef::Bytes(b) = c {
+                    Some(b.to_vec())
                 } else {
                     None
                 }
@@ -248,17 +322,21 @@ impl PreKeyUtils {
         Ok(Some((id, value_arr)))
     }
 
-    fn node_to_signed_pre_key(node: &Node) -> Result<(u32, [u8; 32], [u8; 64]), anyhow::Error> {
-        let (id, public_key_bytes) = match Self::node_to_pre_key(node)? {
+    fn node_to_signed_pre_key_ref(
+        node: &NodeRef<'_>,
+    ) -> Result<(u32, [u8; 32], [u8; 64]), anyhow::Error> {
+        use wacore_binary::NodeContentRef;
+
+        let (id, public_key_bytes) = match Self::node_to_pre_key_ref(node)? {
             Some((id, key)) => (id, key),
             None => return Err(anyhow::anyhow!("Signed pre-key is missing ID or value")),
         };
         let signature_bytes = node
             .get_optional_child("signature")
-            .and_then(|n| n.content.as_ref())
+            .and_then(|n| n.content.as_deref())
             .and_then(|c| {
-                if let NodeContent::Bytes(b) = c {
-                    Some(b.clone())
+                if let NodeContentRef::Bytes(b) = c {
+                    Some(b.to_vec())
                 } else {
                     None
                 }
@@ -281,8 +359,7 @@ mod tests {
     use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
     use crate::protocol::ProtocolNode;
 
-    use std::borrow::Cow;
-    use wacore_binary::node::NodeValue;
+    use wacore_binary::NodeValue;
 
     fn create_mock_bundle(device_id: u32) -> PreKeyBundle {
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
@@ -311,8 +388,8 @@ mod tests {
             .into_node();
 
         let raw_jid = Jid {
-            user: "100000012345678:33".to_string(),
-            server: Cow::Borrowed("lid"),
+            user: "100000012345678:33".into(),
+            server: wacore_binary::Server::Lid,
             agent: 1,
             device: 0,
             integrator: 0,
@@ -325,7 +402,8 @@ mod tests {
             .children([NodeBuilder::new("list").children([user_node]).build()])
             .build();
 
-        let bundles = PreKeyUtils::parse_prekeys_response(&response).expect("parse bundles");
+        let bundles =
+            PreKeyUtils::parse_prekeys_response(&response.as_node_ref()).expect("parse bundles");
         assert!(bundles.contains_key(&base_jid));
         assert!(!bundles.contains_key(&raw_jid));
 

@@ -11,13 +11,13 @@
 //! - `hash` attribute is REQUIRED for update
 
 use crate::StringEnum;
-use crate::iq::node::{optional_attr, optional_child, required_attr, required_child};
+use crate::iq::node::{required_attr, required_child};
 use crate::protocol::ProtocolNode;
 use anyhow::{Result, anyhow};
 use serde::Serialize;
+use wacore_binary::Jid;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Node, NodeRef};
 
 /// Device notification operation type.
 ///
@@ -68,7 +68,8 @@ impl ProtocolNode for KeyIndexInfo {
         builder.build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self> {
+        use wacore_binary::NodeContentRef;
         if node.tag != "key-index-list" {
             return Err(anyhow!("expected <key-index-list>, got <{}>", node.tag));
         }
@@ -78,8 +79,8 @@ impl ProtocolNode for KeyIndexInfo {
             .ok_or_else(|| anyhow!("key-index-list missing required 'ts' attribute"))?;
         let timestamp = i64::try_from(ts_u64)
             .map_err(|_| anyhow!("key-index-list 'ts' value {} exceeds i64::MAX", ts_u64))?;
-        let signed_bytes = match &node.content {
-            Some(NodeContent::Bytes(b)) if !b.is_empty() => Some(b.clone()),
+        let signed_bytes = match node.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) if !b.is_empty() => Some(b.to_vec()),
             _ => None,
         };
         Ok(Self {
@@ -136,17 +137,16 @@ impl ProtocolNode for DeviceElement {
         builder.build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self> {
         if node.tag != "device" {
             return Err(anyhow!("expected <device>, got <{}>", node.tag));
         }
-        let jid = node
-            .attrs()
+        let mut attrs = node.attrs();
+        let jid = attrs
             .optional_jid("jid")
             .ok_or_else(|| anyhow!("device missing required 'jid' attribute"))?;
 
-        // Parse key-index with checked conversion (u64 -> u32)
-        let key_index = match node.attrs().optional_u64("key-index") {
+        let key_index = match attrs.optional_u64("key-index") {
             Some(v) => Some(
                 u32::try_from(v)
                     .map_err(|_| anyhow!("device 'key-index' value {} exceeds u32::MAX", v))?,
@@ -154,10 +154,8 @@ impl ProtocolNode for DeviceElement {
             None => None,
         };
 
-        let lid = node.attrs().optional_jid("lid");
+        let lid = attrs.optional_jid("lid");
 
-        // Per WhatsApp Web: validate device ID matches between jid and lid attributes
-        // Reference: 5Yec01dI04o.js:23169-23175
         if let Some(ref lid_jid) = lid {
             let jid_device_id = jid.device;
             let lid_device_id = lid_jid.device;
@@ -212,31 +210,28 @@ pub struct DeviceOperation {
 }
 
 impl DeviceOperation {
-    /// Parse from an add/remove/update child node.
+    /// Parse from an add/remove/update child `NodeRef`.
     ///
     /// Per WhatsApp Web (5Yec01dI04o.js:23141-23157):
     /// - `key-index-list` is REQUIRED for add/remove operations
     /// - `ts` attribute is REQUIRED for remove operations
-    pub fn try_from_child(node: &Node) -> Result<Self> {
+    pub fn try_from_child(node: &NodeRef<'_>) -> Result<Self> {
         let operation_type = DeviceNotificationType::try_from(node.tag.as_ref())
             .map_err(|_| anyhow!("unknown device operation: {}", node.tag))?;
 
         match operation_type {
             DeviceNotificationType::Add | DeviceNotificationType::Remove => {
-                // Per WhatsApp Web: key-index-list is required for add/remove
                 let key_index_node = required_child(node, "key-index-list")?;
-                let key_index = KeyIndexInfo::try_from_node(key_index_node)?;
+                let key_index = KeyIndexInfo::try_from_node_ref(key_index_node)?;
 
-                // Per WhatsApp Web: timestamp is required for remove
                 if operation_type == DeviceNotificationType::Remove && key_index.timestamp == 0 {
                     return Err(anyhow!(
                         "timestamp is required to handle device remove notification"
                     ));
                 }
 
-                // Parse device element
                 let device_node = required_child(node, "device")?;
-                let device = DeviceElement::try_from_node(device_node)?;
+                let device = DeviceElement::try_from_node_ref(device_node)?;
 
                 Ok(Self {
                     operation_type,
@@ -298,42 +293,44 @@ pub struct DeviceNotification {
 }
 
 impl DeviceNotification {
-    /// Parse from a `<notification type="devices">` node.
+    /// Parse from a `<notification type="devices">` NodeRef.
     ///
     /// Per WhatsApp Web: Only ONE operation per notification is processed.
     /// Priority order: remove > add > update
     /// Returns error if no operation is found.
-    pub fn try_parse(node: &Node) -> Result<Self> {
+    pub fn try_parse(node: &NodeRef<'_>) -> Result<Self> {
         if node.tag != "notification" {
             return Err(anyhow!("expected <notification>, got <{}>", node.tag));
         }
-        if !node.attrs.get("type").is_some_and(|v| v == "devices") {
+        if node
+            .get_attr("type")
+            .is_none_or(|v| v.as_str() != "devices")
+        {
             return Err(anyhow!("expected type='devices'"));
         }
 
-        let from = node
-            .attrs()
+        let mut parser = node.attrs();
+        let from = parser
             .optional_jid("from")
             .ok_or_else(|| anyhow!("notification missing required 'from' attribute"))?;
-        let lid_user = node.attrs().optional_jid("lid");
-        let stanza_id = optional_attr(node, "id")
-            .map(|s| s.into_owned())
-            .unwrap_or_default();
-
-        // Parse timestamp with checked conversion
-        let timestamp = match node.attrs().optional_u64("t") {
+        let lid_user = parser.optional_jid("lid");
+        let stanza_id = node
+            .get_attr("id")
+            .map(|v| v.as_str())
+            .unwrap_or_default()
+            .into_owned();
+        let timestamp = match parser.optional_u64("t") {
             Some(t) => i64::try_from(t)
                 .map_err(|_| anyhow!("notification timestamp {} exceeds i64::MAX", t))?,
             None => 0,
         };
 
         // Per WhatsApp Web: Priority order is remove > add > update
-        // Only one operation is processed per notification
-        let operation = if let Some(remove_node) = optional_child(node, "remove") {
+        let operation = if let Some(remove_node) = node.get_optional_child("remove") {
             DeviceOperation::try_from_child(remove_node)?
-        } else if let Some(add_node) = optional_child(node, "add") {
+        } else if let Some(add_node) = node.get_optional_child("add") {
             DeviceOperation::try_from_child(add_node)?
-        } else if let Some(update_node) = optional_child(node, "update") {
+        } else if let Some(update_node) = node.get_optional_child("update") {
             DeviceOperation::try_from_child(update_node)?
         } else {
             return Err(anyhow!(
@@ -417,7 +414,7 @@ mod tests {
                 .build()])
             .build();
 
-        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        let parsed = DeviceNotification::try_parse(&node.as_node_ref()).unwrap();
         assert_eq!(parsed.from.user, "185169143189667");
         assert_eq!(parsed.stanza_id, "511477682");
         assert_eq!(parsed.timestamp, 1769296817);
@@ -452,7 +449,7 @@ mod tests {
                 .build()])
             .build();
 
-        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        let parsed = DeviceNotification::try_parse(&node.as_node_ref()).unwrap();
 
         // Check LID-PN mapping detection
         let (lid, pn) = parsed.lid_pn_mapping().unwrap();
@@ -481,7 +478,7 @@ mod tests {
                 .build()])
             .build();
 
-        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        let parsed = DeviceNotification::try_parse(&node.as_node_ref()).unwrap();
 
         let op = &parsed.operation;
         assert_eq!(op.operation_type, DeviceNotificationType::Update);
@@ -502,7 +499,7 @@ mod tests {
             .children([NodeBuilder::new("update").attr("hash", "test_hash").build()])
             .build();
 
-        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        let parsed = DeviceNotification::try_parse(&node.as_node_ref()).unwrap();
         // No mapping should be detected when from is also a LID
         assert!(parsed.lid_pn_mapping().is_none());
     }
@@ -522,7 +519,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = DeviceNotification::try_parse(&node);
+        let result = DeviceNotification::try_parse(&node.as_node_ref());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("key-index-list"));
     }
@@ -547,7 +544,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = DeviceNotification::try_parse(&node);
+        let result = DeviceNotification::try_parse(&node.as_node_ref());
         assert!(result.is_err());
         assert!(
             result
@@ -576,7 +573,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = DeviceNotification::try_parse(&node);
+        let result = DeviceNotification::try_parse(&node.as_node_ref());
         assert!(result.is_err());
         assert!(
             result
@@ -605,7 +602,7 @@ mod tests {
                 .build()])
             .build();
 
-        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        let parsed = DeviceNotification::try_parse(&node.as_node_ref()).unwrap();
         assert_eq!(parsed.operation.devices[0].device_id(), 64);
         assert!(parsed.operation.devices[0].lid.is_some());
     }
@@ -620,7 +617,7 @@ mod tests {
             .attr("t", "1000")
             .build(); // No operation children
 
-        let result = DeviceNotification::try_parse(&node);
+        let result = DeviceNotification::try_parse(&node.as_node_ref());
         assert!(result.is_err());
         assert!(
             result
@@ -659,7 +656,7 @@ mod tests {
             ])
             .build();
 
-        let parsed = DeviceNotification::try_parse(&node).unwrap();
+        let parsed = DeviceNotification::try_parse(&node.as_node_ref()).unwrap();
         // Should process remove, not add
         assert_eq!(
             parsed.operation.operation_type,
@@ -679,7 +676,7 @@ mod tests {
             .children([NodeBuilder::new("update").build()]) // Missing hash attribute
             .build();
 
-        let result = DeviceNotification::try_parse(&node);
+        let result = DeviceNotification::try_parse(&node.as_node_ref());
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("hash"));
     }

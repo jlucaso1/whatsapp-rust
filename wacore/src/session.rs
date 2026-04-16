@@ -11,7 +11,7 @@
 use async_lock::Mutex;
 use futures::channel::oneshot;
 use std::collections::{HashMap, HashSet};
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 // Tests live in whatsapp-rust/src/session.rs (they use tokio for spawning)
 

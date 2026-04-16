@@ -97,7 +97,7 @@ async fn test_message_revoke() -> anyhow::Result<()> {
         )
         .await?;
 
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let proto = msg.protocol_message.as_ref().unwrap();
         assert_eq!(
             proto.r#type(),
@@ -139,7 +139,7 @@ async fn test_message_has_push_name() -> anyhow::Result<()> {
 
     // Assert the push_name field on the received event
     let event = client_b.wait_for_text(text, 15).await?;
-    if let Event::Message(_, info) = event {
+    if let Event::Message(_, info) = &*event {
         assert_eq!(
             info.push_name, push_name,
             "Received message push_name should match the sender's display name"

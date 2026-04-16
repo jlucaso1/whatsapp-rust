@@ -222,7 +222,7 @@ async fn test_star_received_message() -> anyhow::Result<()> {
         })
         .await?;
 
-    let msg_id = if let Event::Message(_, info) = &event {
+    let msg_id = if let Event::Message(_, info) = &*event {
         info.id.clone()
     } else {
         panic!("Expected Message event");
@@ -295,7 +295,7 @@ async fn test_multi_device_app_state_sync() -> anyhow::Result<()> {
         .wait_for_event(15, |e| matches!(e, Event::SelfPushNameUpdated(_)))
         .await?;
 
-    if let Event::SelfPushNameUpdated(update) = &event {
+    if let Event::SelfPushNameUpdated(update) = &*event {
         assert_eq!(
             update.new_name, *new_name,
             "A2 should receive the updated push name from A1"

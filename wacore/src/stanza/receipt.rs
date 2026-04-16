@@ -4,7 +4,7 @@
 //! Orchestration and dispatch remain in `whatsapp-rust/src/receipt.rs`.
 
 use crate::types::message::{MessageCategory, MessageInfo};
-use wacore_binary::jid::{JidExt as _, STATUS_BROADCAST_USER};
+use wacore_binary::{JidExt as _, STATUS_BROADCAST_USER};
 
 /// Determines whether a delivery receipt should be sent for this message.
 ///

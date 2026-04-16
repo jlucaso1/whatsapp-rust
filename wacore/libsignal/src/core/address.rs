@@ -276,33 +276,82 @@ where
 )]
 pub struct DeviceId(u32);
 
+impl DeviceId {
+    #[inline]
+    pub const fn new(id: u32) -> Self {
+        Self(id)
+    }
+}
+
 impl fmt::Display for DeviceId {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", self.0)
     }
 }
 
+const fn digit_count(n: u32) -> usize {
+    if n == 0 {
+        return 1;
+    }
+    n.ilog10() as usize + 1
+}
+
+#[inline]
+fn append_device_suffix(buf: &mut String, device_id: DeviceId) {
+    let id = u32::from(device_id);
+    if id == 0 {
+        buf.push_str(".0");
+    } else {
+        use std::fmt::Write;
+        write!(buf, ".{id}").unwrap();
+    }
+}
+
+/// Single-buffer protocol address. The buffer stores `"{name}.{device_id}"` and
+/// `name_len` marks where the name ends, so `name()` and `as_str()` are both
+/// zero-cost slices. One String instead of two — halves allocation count for
+/// one-shot construction and eliminates the copy in `reset_with()`.
 #[derive(Clone, Debug)]
 pub struct ProtocolAddress {
-    name: String,
+    buf: String,
+    name_len: usize,
     device_id: DeviceId,
-    /// Pre-computed `"{name}.{device_id}"` — avoids allocation on every `to_string()`.
-    display: String,
 }
 
 impl ProtocolAddress {
     pub fn new(name: String, device_id: DeviceId) -> Self {
-        let display = format!("{name}.{device_id}");
-        ProtocolAddress {
-            name,
+        let name_len = name.len();
+        let mut buf = name;
+        append_device_suffix(&mut buf, device_id);
+        Self {
+            buf,
+            name_len,
             device_id,
-            display,
         }
+    }
+
+    /// Pre-allocated empty address. Call `reset_with()` to fill.
+    pub fn with_capacity(capacity: usize, device_id: DeviceId) -> Self {
+        let suffix_len = 1 + digit_count(u32::from(device_id));
+        Self {
+            buf: String::with_capacity(capacity + suffix_len),
+            name_len: 0,
+            device_id,
+        }
+    }
+
+    /// Write the name via closure, then append the device_id suffix.
+    /// Single write pass — no intermediate copy.
+    pub fn reset_with(&mut self, write_name: impl FnOnce(&mut String)) {
+        self.buf.clear();
+        write_name(&mut self.buf);
+        self.name_len = self.buf.len();
+        append_device_suffix(&mut self.buf, self.device_id);
     }
 
     #[inline]
     pub fn name(&self) -> &str {
-        &self.name
+        &self.buf[..self.name_len]
     }
 
     #[inline]
@@ -310,16 +359,15 @@ impl ProtocolAddress {
         self.device_id
     }
 
-    /// Returns the cached `"name.device_id"` string without allocation.
     #[inline]
     pub fn as_str(&self) -> &str {
-        &self.display
+        &self.buf
     }
 }
 
 impl PartialEq for ProtocolAddress {
     fn eq(&self, other: &Self) -> bool {
-        self.display == other.display
+        self.buf == other.buf
     }
 }
 
@@ -327,7 +375,7 @@ impl Eq for ProtocolAddress {}
 
 impl Hash for ProtocolAddress {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.display.hash(state);
+        self.buf.hash(state);
     }
 }
 
@@ -339,12 +387,12 @@ impl PartialOrd for ProtocolAddress {
 
 impl Ord for ProtocolAddress {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.display.cmp(&other.display)
+        self.buf.cmp(&other.buf)
     }
 }
 
 impl fmt::Display for ProtocolAddress {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(&self.display)
+        f.write_str(&self.buf)
     }
 }

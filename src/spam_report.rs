@@ -43,7 +43,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wacore_binary::jid::Jid;
+    use wacore_binary::Jid;
 
     #[test]
     fn test_spam_flow_as_str() {

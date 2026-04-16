@@ -38,12 +38,11 @@
 //! <tctoken><!-- raw token bytes --></tctoken>
 //! ```
 
-use crate::iq::node::{optional_attr, required_attr, required_child};
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{Node, NodeContent, NodeRef};
 
 use super::privacy::PRIVACY_NAMESPACE;
 
@@ -255,7 +254,7 @@ impl IqSpec for IssuePrivacyTokensSpec {
             .iter()
             .map(|jid| {
                 NodeBuilder::new("token")
-                    .attr("jid", jid.clone())
+                    .attr("jid", jid)
                     .attr("t", self.timestamp.to_string())
                     .attr("type", "trusted_contact")
                     .build()
@@ -264,14 +263,14 @@ impl IqSpec for IssuePrivacyTokensSpec {
 
         InfoQuery::set(
             PRIVACY_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("tokens").children(token_nodes).build(),
             ])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let tokens_node = match response.get_optional_child("tokens") {
             Some(n) => n,
             None => return Ok(IssuePrivacyTokensResponse::default()),
@@ -279,26 +278,26 @@ impl IqSpec for IssuePrivacyTokensSpec {
 
         let mut tokens = Vec::new();
         for token_node in tokens_node.get_children_by_tag("token") {
-            let jid_str = required_attr(token_node, "jid")?;
-            let jid: Jid = jid_str
-                .parse()
-                .map_err(|e| anyhow::anyhow!("invalid jid '{}': {}", jid_str, e))?;
-            let t_str = required_attr(token_node, "t")?;
+            let jid: Jid = token_node
+                .attrs()
+                .optional_jid("jid")
+                .ok_or_else(|| anyhow::anyhow!("missing required attribute jid"))?;
+            let t_str = token_node
+                .get_attr("t")
+                .map(|v| v.as_str())
+                .ok_or_else(|| anyhow::anyhow!("missing required attribute t"))?;
             let timestamp: i64 = t_str
                 .parse()
                 .map_err(|e| anyhow::anyhow!("invalid timestamp '{}': {}", t_str, e))?;
 
-            let token_bytes = match &token_node.content {
-                Some(NodeContent::Bytes(data)) => data.clone(),
-                _ => {
-                    log::warn!(target: "TcToken", "Token node for {} has no binary content, skipping", jid);
-                    continue;
-                }
+            let Some(token_data) = token_node.content_bytes() else {
+                log::warn!(target: "TcToken", "Token node for {} has no binary content, skipping", jid);
+                continue;
             };
 
             tokens.push(ReceivedTcToken {
                 jid,
-                token: token_bytes,
+                token: token_data.to_vec(),
                 timestamp,
             });
         }
@@ -313,19 +312,26 @@ impl IqSpec for IssuePrivacyTokensSpec {
 /// Returns `ParsedTokenData` items without JID — the caller is responsible for
 /// resolving the sender JID from the notification's `sender_lid` / `from` attributes.
 pub fn parse_privacy_token_notification(
-    notification: &Node,
+    notification: &NodeRef<'_>,
 ) -> Result<Vec<ParsedTokenData>, anyhow::Error> {
-    let tokens_node = required_child(notification, "tokens")?;
+    let tokens_node = notification
+        .get_optional_child("tokens")
+        .ok_or_else(|| anyhow::anyhow!("<tokens> child not found"))?;
 
     let mut tokens = Vec::new();
     for token_node in tokens_node.get_children_by_tag("token") {
-        let token_type = optional_attr(token_node, "type");
-        let token_type = token_type.as_deref().unwrap_or("");
+        let token_type = token_node
+            .get_attr("type")
+            .map(|v| v.as_str())
+            .unwrap_or_default();
         if token_type != "trusted_contact" {
             continue;
         }
 
-        let t_str = required_attr(token_node, "t")?;
+        let t_str = token_node
+            .get_attr("t")
+            .map(|v| v.as_str())
+            .ok_or_else(|| anyhow::anyhow!("missing required attribute t"))?;
         let timestamp: i64 = t_str.parse().map_err(|e| {
             anyhow::anyhow!(
                 "invalid timestamp '{}' in privacy_token notification: {}",
@@ -334,16 +340,13 @@ pub fn parse_privacy_token_notification(
             )
         })?;
 
-        let token_bytes = match &token_node.content {
-            Some(NodeContent::Bytes(data)) => data.clone(),
-            _ => {
-                log::warn!(target: "TcToken", "Notification token node has no binary content, skipping");
-                continue;
-            }
+        let Some(token_data) = token_node.content_bytes() else {
+            log::warn!(target: "TcToken", "Notification token node has no binary content, skipping");
+            continue;
         };
 
         tokens.push(ParsedTokenData {
-            token: token_bytes,
+            token: token_data.to_vec(),
             timestamp,
         });
     }
@@ -529,7 +532,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.tokens.len(), 1);
         assert_eq!(result.tokens[0].jid.to_string(), "100000000000001@lid");
         assert_eq!(result.tokens[0].token, vec![0xDE, 0xAD, 0xBE, 0xEF]);
@@ -555,7 +558,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert!(result.tokens.is_empty());
     }
 
@@ -572,7 +575,7 @@ mod tests {
                 .build()])
             .build();
 
-        let tokens = parse_privacy_token_notification(&notification).unwrap();
+        let tokens = parse_privacy_token_notification(&notification.as_node_ref()).unwrap();
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].token, vec![0xCA, 0xFE]);
         assert_eq!(tokens[0].timestamp, 1707000000);
@@ -596,7 +599,7 @@ mod tests {
                 .build()])
             .build();
 
-        let tokens = parse_privacy_token_notification(&notification).unwrap();
+        let tokens = parse_privacy_token_notification(&notification.as_node_ref()).unwrap();
         assert_eq!(tokens.len(), 1);
         assert_eq!(tokens[0].timestamp, 2000);
     }
@@ -612,7 +615,7 @@ mod tests {
                 .build()])
             .build();
 
-        let tokens = parse_privacy_token_notification(&notification).unwrap();
+        let tokens = parse_privacy_token_notification(&notification.as_node_ref()).unwrap();
         assert!(tokens.is_empty());
     }
 
@@ -645,7 +648,7 @@ mod tests {
 
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert!(result.tokens.is_empty());
     }
 

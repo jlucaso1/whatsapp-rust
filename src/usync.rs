@@ -6,7 +6,7 @@ use crate::client::Client;
 use log::{debug, warn};
 use std::collections::HashSet;
 use wacore::iq::usync::DeviceListSpec;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 impl Client {
     pub(crate) async fn get_user_devices(&self, jids: &[Jid]) -> Result<Vec<Jid>, anyhow::Error> {
@@ -56,7 +56,7 @@ impl Client {
                 );
             }
 
-            let mut fetched_devices = Vec::new();
+            let mut fetched_devices = Vec::with_capacity(response.device_lists.len());
 
             for user_list in &response.device_lists {
                 // Update device registry (single source of truth for device lists).
@@ -97,7 +97,7 @@ impl Client {
                     );
                     self.clear_device_record(
                         &user_list.user.user,
-                        &user_list.user.server,
+                        user_list.user.server.as_str(),
                         existing,
                     )
                     .await;
@@ -142,7 +142,7 @@ impl Client {
                 }
 
                 let device_list = wacore::store::traits::DeviceListRecord {
-                    user: user_list.user.user.clone(),
+                    user: user_list.user.user.to_string(),
                     devices,
                     timestamp: wacore::time::now_secs(),
                     phash: user_list.phash.clone(),

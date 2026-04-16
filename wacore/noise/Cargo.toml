@@ -8,7 +8,7 @@ repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Noise Protocol implementation for WhatsApp with AES-256-GCM"
 
 [lib]
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 aes-gcm = { workspace = true }

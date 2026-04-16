@@ -276,7 +276,7 @@ impl PreKeyStore for Device {
         match self.backend.load_prekey(prekey_id).await {
             Ok(Some(bytes)) => {
                 // Try new format first (protobuf-encoded PreKeyRecordStructure)
-                if let Ok(record) = PreKeyRecordStructure::decode(bytes.as_slice()) {
+                if let Ok(record) = PreKeyRecordStructure::decode(bytes.as_ref()) {
                     return Ok(Some(record));
                 }
 
@@ -483,7 +483,7 @@ impl SenderKeyStore for Device {
     }
 
     async fn load_sender_key(
-        &mut self,
+        &self,
         sender_key_name: &SenderKeyName,
     ) -> SignalResult<Option<SenderKeyRecord>> {
         match self

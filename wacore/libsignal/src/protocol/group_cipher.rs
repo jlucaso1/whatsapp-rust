@@ -316,7 +316,7 @@ pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
         None => {
             // libsignal-protocol-java uses 31-bit integers for sender key chain IDs
             let chain_id = (csprng.random::<u32>()) >> 1;
-            log::info!("Creating SenderKey with chain ID {chain_id}");
+            log::debug!("Creating SenderKey with chain ID {chain_id}");
 
             let iteration = 0;
             let sender_key: [u8; 32] = csprng.random();

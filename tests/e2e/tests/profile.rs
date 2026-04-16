@@ -275,7 +275,7 @@ async fn test_status_text_notification_received() -> anyhow::Result<()> {
         )
         .await?;
 
-    if let Event::UserAboutUpdate(update) = event {
+    if let Event::UserAboutUpdate(update) = &*event {
         info!(
             "Client B received status update from {} (length={})",
             update.jid,

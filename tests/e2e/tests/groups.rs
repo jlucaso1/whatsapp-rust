@@ -210,7 +210,7 @@ fn find_participant_admin_status(
             .as_ref()
             .is_some_and(|pn| pn.user == target_jid.user)
             || p.jid.user == target_jid.user;
-        matches.then_some(p.is_admin)
+        matches.then_some(p.is_admin())
     })
 }
 

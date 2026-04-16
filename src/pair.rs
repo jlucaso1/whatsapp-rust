@@ -7,8 +7,8 @@ use prost::Message;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use wacore::libsignal::protocol::KeyPair;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::NodeRef;
+use wacore_binary::{Jid, SERVER_JID};
 use waproto::whatsapp as wa;
 
 pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
@@ -22,13 +22,11 @@ pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
     PairUtils::make_qr_data(&device_state, ref_str)
 }
 
-pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
+pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
     // Server JID is "s.whatsapp.net" (no @ prefix for server-only JIDs)
-    if !node
-        .attrs
-        .get("from")
-        .map(|from| from == SERVER_JID)
-        .unwrap_or(false)
+    if node
+        .get_attr("from")
+        .is_none_or(|v| v.as_str() != SERVER_JID)
     {
         return false;
     }
@@ -37,7 +35,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
         for child in children {
             let handled = match child.tag.as_ref() {
                 "pair-device" => {
-                    if let Some(ack_node) = PairUtils::build_ack_node(node)
+                    if let Some(ack_node) = PairUtils::build_ack_node_ref(node)
                         && let Err(e) = client.send_node(ack_node).await
                     {
                         warn!("Failed to send acknowledgement: {e:?}");
@@ -53,10 +51,10 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     };
 
                     for grandchild in child.get_children_by_tag("ref") {
-                        if let Some(NodeContent::Bytes(bytes)) = &grandchild.content
-                            && let Ok(r) = String::from_utf8(bytes.clone())
+                        if let Some(bytes) = grandchild.content_bytes()
+                            && let Ok(r) = std::str::from_utf8(bytes)
                         {
-                            codes.push(PairUtils::make_qr_data(&device_state, r));
+                            codes.push(PairUtils::make_qr_data(&device_state, r.to_string()));
                         }
                     }
 
@@ -87,7 +85,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                                 client_clone
                                     .core
                                     .event_bus
-                                    .dispatch(&Event::PairingQrCode { code, timeout });
+                                    .dispatch(Event::PairingQrCode { code, timeout });
 
                                 let sleep = client_clone.runtime.sleep(timeout);
                                 let stop = stop_rx.recv();
@@ -117,9 +115,6 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                         .detach();
 
                     *client.pairing_cancellation_tx.lock().await = Some(stop_tx);
-
-                    // We no longer dispatch the raw Event::Qr
-                    // client.core.event_bus.dispatch(&Event::Qr(Qr { codes }));
                     true
                 }
                 "pair-success" => {
@@ -137,7 +132,11 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
     false
 }
 
-async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_node: &Node) {
+async fn handle_pair_success<'a>(
+    client: &Arc<Client>,
+    request_node: &NodeRef<'a>,
+    success_node: &NodeRef<'a>,
+) {
     if let Some(tx) = client.pairing_cancellation_tx.lock().await.take() {
         let _ = tx.try_send(());
         debug!("Sent QR rotation stop signal");
@@ -150,20 +149,18 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
     client.update_server_time_offset(request_node);
 
-    let req_id = match request_node.attrs.get("id") {
-        Some(id) => id.to_string(),
+    let req_id = match request_node.get_attr("id").map(|v| v.as_str()) {
+        Some(id) => id.into_owned(),
         None => {
             error!("Received pair-success without request ID");
             return;
         }
     };
 
-    let device_identity_bytes = match success_node
-        .get_optional_child_by_tag(&["device-identity"])
-        .and_then(|n| n.content.as_ref())
-    {
-        Some(NodeContent::Bytes(b)) => b.clone(),
-        _ => {
+    let device_identity_node = success_node.get_optional_child_by_tag(&["device-identity"]);
+    let device_identity_bytes = match device_identity_node.and_then(|n| n.content_bytes()) {
+        Some(b) => b,
+        None => {
             let error_node = PairUtils::build_pair_error_node(&req_id, 500, "internal-error");
             if let Err(e) = client.send_node(error_node).await {
                 error!("Failed to send pair error node: {e}");
@@ -176,22 +173,18 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
     let business_name = success_node
         .get_optional_child_by_tag(&["biz"])
         .map(|n| {
-            n.attrs()
-                .optional_string("name")
-                .as_deref()
-                .unwrap_or("")
-                .to_string()
+            n.get_attr("name")
+                .map(|v| v.as_str().into_owned())
+                .unwrap_or_default()
         })
         .unwrap_or_default();
 
     let platform = success_node
         .get_optional_child_by_tag(&["platform"])
         .map(|n| {
-            n.attrs()
-                .optional_string("name")
-                .as_deref()
-                .unwrap_or("")
-                .to_string()
+            n.get_attr("name")
+                .map(|v| v.as_str().into_owned())
+                .unwrap_or_default()
         })
         .unwrap_or_default();
 
@@ -201,13 +194,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
         let mut parser = device_node.attrs();
         let parsed_jid = parser.optional_jid("jid").unwrap_or_default();
         let parsed_lid = parser.optional_jid("lid").unwrap_or_default();
-
-        if let Err(e) = parser.finish() {
-            warn!(target: "Client/Pair", "Error parsing device node attributes: {e:?}");
-            (Jid::default(), Jid::default())
-        } else {
-            (parsed_jid, parsed_lid)
-        }
+        (parsed_jid, parsed_lid)
     } else {
         (Jid::default(), Jid::default())
     };
@@ -219,7 +206,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 
-    let result = PairUtils::do_pair_crypto(&device_state, &device_identity_bytes);
+    let result = PairUtils::do_pair_crypto(&device_state, device_identity_bytes);
 
     match result {
         Ok((self_signed_identity_bytes, key_index)) => {
@@ -231,7 +218,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                     error!(
                         "FATAL: Failed to re-decode self-signed identity for event, pairing cannot complete: {e}"
                     );
-                    client.core.event_bus.dispatch(&Event::PairError(PairError {
+                    client.core.event_bus.dispatch(Event::PairError(PairError {
                         id: jid.clone(),
                         lid: lid.clone(),
                         business_name: business_name.clone(),
@@ -334,7 +321,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             client
                 .core
                 .event_bus
-                .dispatch(&Event::PairSuccess(success_event));
+                .dispatch(Event::PairSuccess(success_event));
         }
         Err(e) => {
             error!("Pairing crypto failed: {e}");
@@ -353,7 +340,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             client
                 .core
                 .event_bus
-                .dispatch(&Event::PairError(pair_error_event));
+                .dispatch(Event::PairError(pair_error_event));
         }
     }
 }

@@ -82,7 +82,7 @@ fn main() {
 
         let mut bot = builder
             .on_event(move |event, client| async move {
-                match event {
+                match &*event {
                     Event::PairingQrCode { code, timeout } => {
                         info!("----------------------------------------");
                         info!(
@@ -104,12 +104,15 @@ fn main() {
                         info!("========================================");
                     }
                     Event::Message(msg, info) => {
-                        let ctx = MessageContext {
-                            message: msg,
-                            info,
-                            client,
-                        };
-                        handle_message(&ctx).await;
+                        let ctx = MessageContext::from_parts(msg, info, client);
+                        if let Some(reply) = build_media_pong(msg) {
+                            info!("Received media ping from {}", ctx.info.source.sender);
+                            if let Err(e) = ctx.send_message(reply).await {
+                                error!("Failed to send media pong: {}", e);
+                            }
+                        } else if msg.text_content() == Some(PING_TRIGGER) {
+                            handle_text_ping(&ctx).await;
+                        }
                     }
                     Event::Connected(_) => info!("✅ Bot connected successfully!"),
                     Event::LoggedOut(_) => error!("❌ Bot was logged out!"),
@@ -148,20 +151,6 @@ fn main() {
                 .expect("Bot task should complete without panicking");
         }
     });
-}
-
-async fn handle_message(ctx: &MessageContext) {
-    if let Some(reply) = build_media_pong(&ctx.message) {
-        info!("Received media ping from {}", ctx.info.source.sender);
-        if let Err(e) = ctx.send_message(reply).await {
-            error!("Failed to send media pong: {}", e);
-        }
-        return;
-    }
-
-    if ctx.message.text_content() == Some(PING_TRIGGER) {
-        handle_text_ping(ctx).await;
-    }
 }
 
 async fn handle_text_ping(ctx: &MessageContext) {

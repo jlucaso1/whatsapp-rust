@@ -12,9 +12,9 @@ use prost::Message as ProtoMessage;
 use serde_json::json;
 use wacore::iq::newsletter::NEWSLETTER_XMLNS;
 use wacore::request::InfoQuery;
+use wacore_binary::Jid;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{NodeContent, NodeContentRef, NodeRef};
 use waproto::whatsapp as wa;
 
 // Types
@@ -353,9 +353,10 @@ impl<'a> Newsletter<'a> {
         );
 
         let response = self.client.send_iq(iq).await?;
-        let duration = response
+        let nr = response.get();
+        let duration = nr
             .get_optional_child("live_updates")
-            .and_then(|n| n.attrs.get("duration"))
+            .and_then(|n| n.get_attr("duration"))
             .map(|v| v.as_str())
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(300);
@@ -373,18 +374,9 @@ impl<'a> Newsletter<'a> {
         server_id: u64,
         reaction: &str,
     ) -> Result<(), anyhow::Error> {
-        let request_id = self.client.generate_message_id().await;
-
-        let stanza = NodeBuilder::new("message")
-            .attr("to", jid.clone())
-            .attr("type", "reaction")
-            .attr("id", &request_id)
-            .attr("server_id", server_id.to_string())
-            .children([NodeBuilder::new("reaction").attr("code", reaction).build()])
-            .build();
-
-        self.client.send_node(stanza).await?;
-        Ok(())
+        self.client
+            .send_server_reaction(jid, server_id, reaction)
+            .await
     }
 
     /// Fetch message history from a newsletter.
@@ -409,7 +401,7 @@ impl<'a> Newsletter<'a> {
         );
 
         let response = self.client.send_iq(iq).await?;
-        parse_newsletter_messages_response(&response)
+        parse_newsletter_messages_response(response.get())
     }
 }
 
@@ -496,23 +488,22 @@ fn parse_newsletter_metadata(value: &serde_json::Value) -> Result<NewsletterMeta
 
 /// Parse reaction counts from a `<reactions>` node.
 /// Used by both message history parsing and notification handling.
-pub(crate) fn parse_reaction_counts(node: &Node) -> Vec<NewsletterReactionCount> {
+pub(crate) fn parse_reaction_counts(node: &NodeRef<'_>) -> Vec<NewsletterReactionCount> {
     let mut reactions = Vec::new();
     if let Some(reactions_node) = node.get_optional_child("reactions")
         && let Some(children) = reactions_node.children()
     {
         for r in children.iter().filter(|n| n.tag.as_ref() == "reaction") {
             let Some(code) = r
-                .attrs
-                .get("code")
-                .map(|v| v.as_str().into_owned())
+                .get_attr("code")
+                .map(|v| v.as_str())
                 .filter(|s| !s.is_empty())
+                .map(|s| s.into_owned())
             else {
                 continue;
             };
             let count = r
-                .attrs
-                .get("count")
+                .get_attr("count")
                 .map(|v| v.as_str())
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(0);
@@ -536,7 +527,7 @@ pub(crate) fn parse_reaction_counts(node: &Node) -> Vec<NewsletterReactionCount>
 /// </messages>
 /// ```
 fn parse_newsletter_messages_response(
-    response: &Node,
+    response: &NodeRef<'_>,
 ) -> Result<Vec<NewsletterMessage>, anyhow::Error> {
     // Response is the IQ result node; find <messages> child
     let messages_node = response
@@ -552,8 +543,7 @@ fn parse_newsletter_messages_response(
     for msg_node in children.iter().filter(|n| n.tag.as_ref() == "message") {
         // Skip nodes without a valid server_id (required for pagination/correlation)
         let Some(server_id) = msg_node
-            .attrs
-            .get("server_id")
+            .get_attr("server_id")
             .map(|v| v.as_str())
             .and_then(|s| s.parse::<u64>().ok())
         else {
@@ -561,27 +551,29 @@ fn parse_newsletter_messages_response(
         };
 
         let timestamp = msg_node
-            .attrs
-            .get("t")
+            .get_attr("t")
             .map(|v| v.as_str())
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(0);
 
         let message_type = msg_node
-            .attrs
-            .get("type")
-            .map(|v| NewsletterMessageType::from(v.as_str().as_ref()))
+            .get_attr("type")
+            .map(|v| v.as_str())
+            .map(|s| NewsletterMessageType::from(s.as_ref()))
             .unwrap_or(NewsletterMessageType::Text);
 
-        let is_sender = msg_node.attrs.get("is_sender").is_some_and(|v| v == "true");
+        let is_sender = msg_node
+            .get_attr("is_sender")
+            .is_some_and(|v| v.as_str() == "true");
 
         // Decode <plaintext> protobuf bytes
-        let message = msg_node
-            .get_optional_child("plaintext")
-            .and_then(|pt| match &pt.content {
-                Some(NodeContent::Bytes(bytes)) => wa::Message::decode(bytes.as_slice()).ok(),
-                _ => None,
-            });
+        let message =
+            msg_node
+                .get_optional_child("plaintext")
+                .and_then(|pt| match pt.content.as_deref() {
+                    Some(NodeContentRef::Bytes(bytes)) => wa::Message::decode(bytes.as_ref()).ok(),
+                    _ => None,
+                });
 
         let reactions = parse_reaction_counts(msg_node);
 
@@ -614,7 +606,7 @@ mod tests {
                 .build()])
             .build();
 
-        let msgs = parse_newsletter_messages_response(&response).unwrap();
+        let msgs = parse_newsletter_messages_response(&response.as_node_ref()).unwrap();
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0].message_type, NewsletterMessageType::Text);
     }
@@ -631,7 +623,7 @@ mod tests {
                 .build()])
             .build();
 
-        let msgs = parse_newsletter_messages_response(&response).unwrap();
+        let msgs = parse_newsletter_messages_response(&response.as_node_ref()).unwrap();
         assert_eq!(msgs[0].message_type, NewsletterMessageType::Media);
     }
 }

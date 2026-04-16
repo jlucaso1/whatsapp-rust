@@ -51,7 +51,7 @@ async fn test_presence_available() -> anyhow::Result<()> {
         .await
         .map_err(|_| anyhow::anyhow!("Timed out waiting for presence node"))?
         .map_err(|_| anyhow::anyhow!("Presence waiter channel closed"))?;
-    info!("Client B received presence node: tag={}", node.tag);
+    info!("Client B received presence node: tag={}", node.tag());
 
     client_a.disconnect().await;
     client_b.disconnect().await;

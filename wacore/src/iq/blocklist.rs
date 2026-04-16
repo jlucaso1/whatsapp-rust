@@ -11,8 +11,8 @@ use crate::request::InfoQuery;
 use anyhow::Result;
 use log::warn;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{Node, NodeContent, NodeRef};
 /// IQ namespace for blocklist operations.
 pub const BLOCKLIST_IQ_NAMESPACE: &str = "blocklist";
 /// Action to perform on a blocklist entry.
@@ -81,7 +81,7 @@ impl ProtocolNode for BlocklistResponse {
         NodeBuilder::new("list").children(children).build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self> {
         // Response can be either:
         // 1. <list><item .../></list>
         // 2. Direct <item .../> children in the response node
@@ -90,13 +90,10 @@ impl ProtocolNode for BlocklistResponse {
         } else {
             node.get_children_by_tag("item")
         }
-        .filter_map(|item| match BlocklistEntry::try_from_node(item) {
+        .filter_map(|item| match BlocklistEntry::try_from_node_ref(item) {
             Ok(entry) => Some(entry),
             Err(e) => {
-                warn!(
-                    target: "blocklist",
-                    "Failed to parse blocklist entry: {e}"
-                );
+                warn!(target: "blocklist", "Failed to parse blocklist entry: {e}");
                 None
             }
         })
@@ -113,12 +110,25 @@ impl IqSpec for GetBlocklistSpec {
     type Response = Vec<BlocklistEntry>;
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        InfoQuery::get(BLOCKLIST_IQ_NAMESPACE, Jid::new("", SERVER_JID), None)
+        InfoQuery::get(BLOCKLIST_IQ_NAMESPACE, Jid::new("", Server::Pn), None)
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response> {
-        let blocklist = BlocklistResponse::try_from_node(response)?;
-        Ok(blocklist.entries)
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response> {
+        // BlocklistResponse checks for a <list> child or direct <item> children
+        let entries = if let Some(list) = response.get_optional_child("list") {
+            list.get_children_by_tag("item")
+        } else {
+            response.get_children_by_tag("item")
+        }
+        .filter_map(|item| match BlocklistEntry::try_from_node_ref(item) {
+            Ok(entry) => Some(entry),
+            Err(e) => {
+                warn!(target: "blocklist", "Failed to parse blocklist entry: {e}");
+                None
+            }
+        })
+        .collect();
+        Ok(entries)
     }
 }
 
@@ -154,12 +164,12 @@ impl IqSpec for UpdateBlocklistSpec {
     fn build_iq(&self) -> InfoQuery<'static> {
         InfoQuery::set(
             BLOCKLIST_IQ_NAMESPACE,
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![self.request.clone().into_node()])),
         )
     }
 
-    fn parse_response(&self, _response: &Node) -> Result<Self::Response> {
+    fn parse_response(&self, _response: &NodeRef<'_>) -> Result<Self::Response> {
         Ok(())
     }
 }

@@ -57,8 +57,8 @@ use anyhow::anyhow;
 use log::warn;
 use std::collections::HashMap;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{Node, NodeContent, NodeContentRef, NodeRef};
 
 /// Usync mode.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
@@ -100,22 +100,18 @@ fn build_user_nodes(users: &[IsOnWhatsAppUser]) -> Vec<Node> {
         .map(|user| {
             if user.jid.is_pn() {
                 let phone = if user.jid.user.starts_with('+') {
-                    user.jid.user.clone()
+                    user.jid.user.to_string()
                 } else {
                     format!("+{}", user.jid.user)
                 };
                 let mut children = vec![NodeBuilder::new("contact").string_content(phone).build()];
                 if let Some(lid) = &user.known_lid {
-                    children.push(
-                        NodeBuilder::new("lid")
-                            .attr("jid", Jid::lid(lid).to_string())
-                            .build(),
-                    );
+                    children.push(NodeBuilder::new("lid").attr("jid", Jid::lid(lid)).build());
                 }
                 NodeBuilder::new("user").children(children).build()
             } else {
                 NodeBuilder::new("user")
-                    .attr("jid", user.jid.to_non_ad().to_string())
+                    .attr("jid", user.jid.to_non_ad())
                     .build()
             }
         })
@@ -123,7 +119,7 @@ fn build_user_nodes(users: &[IsOnWhatsAppUser]) -> Vec<Node> {
 }
 
 /// Parse LID JID from a `<lid val="..."/>` child node.
-fn parse_lid_jid(user_node: &Node) -> Option<Jid> {
+fn parse_lid_jid(user_node: &NodeRef<'_>) -> Option<Jid> {
     user_node.get_optional_child("lid").and_then(|lid_node| {
         lid_node
             .attrs()
@@ -141,7 +137,7 @@ struct ParsedUserFields {
 }
 
 /// Parse common fields from a usync `<user>` node.
-fn parse_user_common_fields(user_node: &Node) -> Option<ParsedUserFields> {
+fn parse_user_common_fields(user_node: &NodeRef<'_>) -> Option<ParsedUserFields> {
     let jid = user_node
         .attrs()
         .optional_string("jid")?
@@ -156,8 +152,8 @@ fn parse_user_common_fields(user_node: &Node) -> Option<ParsedUserFields> {
             if status_node.get_optional_child("error").is_some() {
                 return None;
             }
-            match &status_node.content {
-                Some(NodeContent::String(s)) if !s.is_empty() => Some(s.clone()),
+            match status_node.content.as_deref() {
+                Some(NodeContentRef::String(s)) if !s.is_empty() => Some(s.to_string()),
                 _ => None,
             }
         });
@@ -173,7 +169,7 @@ fn parse_user_common_fields(user_node: &Node) -> Option<ParsedUserFields> {
 }
 
 /// Parse picture ID as String (used in UserInfo).
-fn parse_picture_id_string(user_node: &Node) -> Option<String> {
+fn parse_picture_id_string(user_node: &NodeRef<'_>) -> Option<String> {
     user_node
         .get_optional_child("picture")
         .and_then(|pic_node| {
@@ -249,7 +245,7 @@ fn build_business_query_node() -> Node {
 }
 
 /// Check `<usync><result>` for per-protocol errors.
-fn check_usync_result_errors(usync: &Node) -> Result<(), anyhow::Error> {
+fn check_usync_result_errors(usync: &NodeRef<'_>) -> Result<(), anyhow::Error> {
     let Some(result_node) = usync.get_optional_child("result") else {
         return Ok(());
     };
@@ -298,12 +294,12 @@ impl IqSpec for IsOnWhatsAppSpec {
 
         InfoQuery::get(
             "usync",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![usync_node])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let usync = response
             .get_optional_child("usync")
             .ok_or_else(|| anyhow!("Response missing <usync> node"))?;
@@ -337,7 +333,7 @@ impl IqSpec for IsOnWhatsAppSpec {
                 true
             } else {
                 contact_node
-                    .map(|c| c.attrs.get("type").is_some_and(|v| v == "in"))
+                    .map(|c| c.get_attr("type").is_some_and(|v| v.as_str() == "in"))
                     .unwrap_or(false)
             };
 
@@ -393,7 +389,7 @@ impl IqSpec for UserInfoSpec {
             .iter()
             .map(|jid| {
                 NodeBuilder::new("user")
-                    .attr("jid", jid.to_non_ad().to_string())
+                    .attr("jid", jid.to_non_ad())
                     .build()
             })
             .collect();
@@ -411,12 +407,12 @@ impl IqSpec for UserInfoSpec {
 
         InfoQuery::get(
             "usync",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![usync_node])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let usync = response
             .get_optional_child("usync")
             .ok_or_else(|| anyhow!("Response missing <usync> node"))?;
@@ -518,7 +514,7 @@ impl IqSpec for DeviceListSpec {
             .iter()
             .map(|jid| {
                 NodeBuilder::new("user")
-                    .attr("jid", jid.to_non_ad().to_string())
+                    .attr("jid", jid.to_non_ad())
                     .build()
             })
             .collect();
@@ -536,12 +532,12 @@ impl IqSpec for DeviceListSpec {
 
         InfoQuery::get(
             "usync",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![usync_node])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let list_node = response
             .get_optional_child_by_tag(&["usync", "list"])
             .ok_or_else(|| anyhow!("<usync> or <list> not found in usync response"))?;
@@ -556,13 +552,13 @@ impl IqSpec for DeviceListSpec {
                 .ok_or_else(|| anyhow!("user node missing required 'jid' attribute"))?;
 
             // Extract LID mapping if present
-            if user_jid.server == wacore_binary::jid::DEFAULT_USER_SERVER
+            if user_jid.server == wacore_binary::Server::Pn
                 && let Some(lid_node) = user_node.get_optional_child("lid")
             {
                 let lid_val = lid_node.attrs().optional_string("val").unwrap_or_default();
                 if !lid_val.is_empty()
                     && let Ok(lid_jid) = lid_val.parse::<Jid>()
-                    && lid_jid.server == wacore_binary::jid::HIDDEN_USER_SERVER
+                    && lid_jid.server == wacore_binary::Server::Lid
                 {
                     lid_mappings.push(UsyncLidMapping {
                         phone_number: user_jid.user.clone(),
@@ -592,10 +588,8 @@ impl IqSpec for DeviceListSpec {
             let devices_parent = user_node.get_optional_child("devices");
             let key_index_bytes = devices_parent
                 .and_then(|dp| dp.get_optional_child("key-index-list"))
-                .and_then(|ki| match &ki.content {
-                    Some(wacore_binary::node::NodeContent::Bytes(b)) if !b.is_empty() => {
-                        Some(b.clone())
-                    }
+                .and_then(|ki| match ki.content.as_deref() {
+                    Some(NodeContentRef::Bytes(b)) if !b.is_empty() => Some(b.to_vec()),
                     _ => None,
                 });
 
@@ -682,7 +676,7 @@ impl IqSpec for LidQuerySpec {
             .iter()
             .map(|jid| {
                 NodeBuilder::new("user")
-                    .attr("jid", jid.to_non_ad().to_string())
+                    .attr("jid", jid.to_non_ad())
                     .build()
             })
             .collect();
@@ -701,12 +695,12 @@ impl IqSpec for LidQuerySpec {
 
         InfoQuery::get(
             "usync",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![usync_node])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let usync = response
             .get_optional_child("usync")
             .ok_or_else(|| anyhow!("LID query response missing <usync> node"))?;
@@ -878,7 +872,7 @@ mod tests {
                 .build()])
             .build();
 
-        let results = spec.parse_response(&response).unwrap();
+        let results = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].jid.user, "1234567890");
         assert!(results[0].is_registered);
@@ -907,7 +901,7 @@ mod tests {
                 .build()])
             .build();
 
-        let results = spec.parse_response(&response).unwrap();
+        let results = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(results.len(), 1);
         assert!(!results[0].is_registered);
         assert!(!results[0].is_business);
@@ -937,7 +931,7 @@ mod tests {
                 .build()])
             .build();
 
-        let results = spec.parse_response(&response).unwrap();
+        let results = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].jid.user, "100000001");
         assert!(results[0].jid.is_lid());
@@ -992,7 +986,7 @@ mod tests {
                 .build()])
             .build();
 
-        let results = spec.parse_response(&response).unwrap();
+        let results = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(results.len(), 1);
         let info = results.get(&jid).unwrap();
         assert_eq!(info.jid.user, "1234567890");
@@ -1077,7 +1071,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.device_lists.len(), 1);
         assert_eq!(result.device_lists[0].user.user, "1234567890");
         assert_eq!(result.device_lists[0].devices.len(), 3);
@@ -1131,7 +1125,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.device_lists.len(), 2);
         assert_eq!(result.device_lists[0].user.user, "1111111111");
         assert_eq!(result.device_lists[0].devices.len(), 1);
@@ -1168,7 +1162,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
         assert_eq!(result.device_lists.len(), 1);
         assert_eq!(result.lid_mappings.len(), 1);
         assert_eq!(result.lid_mappings[0].phone_number, "1234567890");

@@ -3,7 +3,7 @@
 use anyhow::{Result, anyhow};
 use prost::Message;
 use std::str::FromStr;
-use wacore_binary::node::Node;
+use wacore_binary::node::{Node, NodeRef};
 use waproto::whatsapp as wa;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -86,9 +86,18 @@ pub fn parse_patch_list(node: &Node) -> Result<PatchList> {
     parse_single_collection(collection)
 }
 
+/// Zero-copy entry point for `parse_patch_list`.
+pub fn parse_patch_list_ref(node: &NodeRef<'_>) -> Result<PatchList> {
+    parse_patch_list(&node.to_owned())
+}
+
 /// Parse all `<collection>` children from a `<sync>` response into PatchLists.
 /// Used for batched multi-collection IQ responses.
 /// Tolerates both `<iq><sync>...</sync></iq>` and bare `<sync>...</sync>` roots.
+pub fn parse_patch_lists_ref(node: &NodeRef<'_>) -> Result<Vec<PatchList>> {
+    parse_patch_lists(&node.to_owned())
+}
+
 pub fn parse_patch_lists(node: &Node) -> Result<Vec<PatchList>> {
     let sync_node = if node.tag == "sync" {
         node
@@ -134,10 +143,12 @@ fn parse_single_collection(collection: &Node) -> Result<PatchList> {
     let snapshot = None; // external only currently
 
     // patches list
-    let mut patches: Vec<wa::SyncdPatch> = Vec::new();
-    if let Some(patches_node) = collection.get_optional_child("patches")
-        && let Some(children) = patches_node.children()
-    {
+    let children_ref = collection
+        .get_optional_child("patches")
+        .and_then(|n| n.children());
+    let mut patches: Vec<wa::SyncdPatch> =
+        Vec::with_capacity(children_ref.as_ref().map_or(0, |c| c.len()));
+    if let Some(children) = children_ref {
         for child in children {
             if child.tag == "patch"
                 && let Some(wacore_binary::node::NodeContent::Bytes(raw)) = &child.content

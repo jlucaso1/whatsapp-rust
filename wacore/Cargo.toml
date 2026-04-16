@@ -34,9 +34,9 @@ getrandom = { workspace = true, optional = true }
 hex = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }
+itoa = { workspace = true }
 log = { workspace = true }
 md5 = "0.8.0"
-once_cell = { version = "1.21", default-features = false, features = ["std"] }
 portable-atomic = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
@@ -55,9 +55,14 @@ wacore-noise = { workspace = true }
 waproto = { workspace = true }
 
 [dev-dependencies]
+futures = { workspace = true, features = ["executor"] }
 iai-callgrind = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [[bench]]
 name = "reporting_token_benchmark"
+harness = false
+
+[[bench]]
+name = "send_receive_benchmark"
 harness = false

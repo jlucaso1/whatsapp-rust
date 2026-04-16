@@ -1,8 +1,10 @@
 pub use wacore::{
     iq::privacy as privacy_settings, proto_helpers, sticker_pack, store::traits, webp,
 };
+pub use wacore_binary::CompactString;
+pub use wacore_binary::OwnedNodeRef;
 pub use wacore_binary::builder::NodeBuilder;
-pub use wacore_binary::jid::Jid;
+pub use wacore_binary::{Jid, Server};
 pub use waproto;
 
 pub mod cache;
@@ -60,16 +62,18 @@ pub mod usync;
 
 pub mod features;
 pub use features::{
-    Blocking, BlocklistEntry, ChatActions, ChatStateType, Chatstate, Community, CommunitySubgroup,
-    Contacts, CreateCommunityOptions, CreateCommunityResult, CreateGroupResult, GroupCreateOptions,
-    GroupDescription, GroupMetadata, GroupParticipant, GroupParticipantOptions, GroupSubject,
-    GroupType, Groups, IsOnWhatsAppResult, JoinGroupResult, LinkSubgroupsResult, MediaRetryResult,
-    MediaReupload, MediaReuploadRequest, MemberAddMode, MemberLinkMode, MembershipApprovalMode,
-    MembershipRequest, Mex, MexError, MexErrorExtensions, MexRequest, MexResponse, Newsletter,
-    NewsletterMessage, NewsletterMessageType, NewsletterMetadata, NewsletterReactionCount,
-    NewsletterRole, NewsletterState, NewsletterVerification, ParticipantChangeResponse, Presence,
-    PresenceError, PresenceStatus, Profile, ProfilePicture, SetProfilePictureResponse, Signal,
-    Status, StatusPrivacySetting, StatusSendOptions, SyncActionMessageRange, TcToken,
+    BatchGroupResult, Blocking, BlocklistEntry, ChatActions, ChatStateType, Chatstate, Community,
+    CommunitySubgroup, Contacts, CreateCommunityOptions, CreateCommunityResult, CreateGroupResult,
+    GroupCreateOptions, GroupDescription, GroupJoinError, GroupMetadata, GroupParticipant,
+    GroupParticipantOptions, GroupProfilePicture, GroupSubject, GroupType, Groups, GrowthLockInfo,
+    InviteInfoError, IsOnWhatsAppResult, JoinGroupResult, LinkSubgroupsResult, MediaRetryResult,
+    MediaReupload, MediaReuploadRequest, MemberAddMode, MemberLinkMode, MemberShareHistoryMode,
+    MembershipApprovalMode, MembershipRequest, Mex, MexError, MexErrorExtensions, MexRequest,
+    MexResponse, Newsletter, NewsletterMessage, NewsletterMessageType, NewsletterMetadata,
+    NewsletterReactionCount, NewsletterRole, NewsletterState, NewsletterVerification,
+    ParticipantChangeResponse, ParticipantType, PictureType, Presence, PresenceError,
+    PresenceStatus, Profile, ProfilePicture, SetProfilePictureResponse, Signal, Status,
+    StatusPrivacySetting, StatusSendOptions, SyncActionMessageRange, TcToken,
     UnlinkSubgroupsResult, UserInfo, group_type, message_key, message_range,
 };
 

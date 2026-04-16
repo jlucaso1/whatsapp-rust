@@ -22,7 +22,7 @@ use crate::client::Client;
 use crate::request::IqError;
 use wacore::iq::tctoken::{IssuePrivacyTokensSpec, ReceivedTcToken};
 use wacore::store::traits::TcTokenEntry;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 /// Feature handle for trusted contact token operations.
 pub struct TcToken<'a> {

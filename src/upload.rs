@@ -69,7 +69,8 @@ fn build_upload_request(
 ) -> HttpRequest {
     let mut url = format!("https://{hostname}{upload_path}/{token}?auth={auth}&token={token}");
     if let Some(offset) = file_offset {
-        url.push_str(&format!("&file_offset={offset}"));
+        url.push_str("&file_offset=");
+        url.push_str(itoa::Buffer::new().format(offset));
     }
 
     HttpRequest::post(url)
@@ -164,9 +165,17 @@ where
                             });
                         }
                         UploadExistsResult::Resume { byte_offset } => {
-                            log::info!("Resuming upload from byte {byte_offset}/{total}");
-                            upload_data = &enc.data_to_upload[byte_offset as usize..];
-                            file_offset = Some(byte_offset);
+                            let offset = byte_offset as usize;
+                            if offset >= enc.data_to_upload.len() {
+                                log::warn!(
+                                    "Server resume offset {offset} exceeds data length {}; uploading from start",
+                                    enc.data_to_upload.len()
+                                );
+                            } else {
+                                log::info!("Resuming upload from byte {byte_offset}/{total}");
+                                upload_data = &enc.data_to_upload[offset..];
+                                file_offset = Some(byte_offset);
+                            }
                         }
                         UploadExistsResult::NotFound => {}
                     }

@@ -18,6 +18,14 @@ impl UreqHttpClient {
         let agent = build_agent();
         Self { agent }
     }
+
+    /// Create a client with a pre-configured [`ureq::Agent`].
+    ///
+    /// This lets you configure proxy support, custom TLS, timeouts,
+    /// or any other agent-level settings externally.
+    pub fn with_agent(agent: ureq::Agent) -> Self {
+        Self { agent }
+    }
 }
 
 impl Default for UreqHttpClient {
@@ -27,20 +35,24 @@ impl Default for UreqHttpClient {
 }
 
 fn build_agent() -> ureq::Agent {
+    use ureq::config::Config;
+
+    #[allow(unused_mut)]
+    let mut builder = Config::builder()
+        // 16 KB per buffer instead of the 128 KB default.
+        // WA API payloads are small JSON; media uses streaming I/O.
+        .input_buffer_size(16 * 1024)
+        .output_buffer_size(16 * 1024)
+        .max_idle_connections(3)
+        .max_idle_connections_per_host(2);
+
     #[cfg(feature = "danger-skip-tls-verify")]
     {
-        use ureq::config::Config;
         use ureq::tls::TlsConfig;
-        Config::builder()
-            .tls_config(TlsConfig::builder().disable_verification(true).build())
-            .build()
-            .into()
+        builder = builder.tls_config(TlsConfig::builder().disable_verification(true).build());
     }
 
-    #[cfg(not(feature = "danger-skip-tls-verify"))]
-    {
-        ureq::Agent::new_with_defaults()
-    }
+    builder.build().into()
 }
 
 #[async_trait]

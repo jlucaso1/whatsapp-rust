@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use wacore::store::InMemoryBackend;
 use wacore::store::traits::TcTokenEntry;
 use wacore::types::events::{ChannelEventHandler, Event};
 use wacore_binary::node::Node;
@@ -7,19 +8,8 @@ use whatsapp_rust::Jid;
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::store::traits::Backend;
 use whatsapp_rust::waproto::whatsapp as wa;
-use whatsapp_rust_sqlite_storage::SqliteStore;
 use whatsapp_rust_tokio_transport::TokioWebSocketTransportFactory;
 use whatsapp_rust_ureq_http_client::UreqHttpClient;
-
-/// Creates a SqliteStore with a unique in-memory database for test isolation.
-pub async fn create_test_store(prefix: &str) -> anyhow::Result<SqliteStore> {
-    let db = format!(
-        "file:{}_{}?mode=memory&cache=shared",
-        prefix,
-        uuid::Uuid::new_v4()
-    );
-    Ok(SqliteStore::new(&db).await?)
-}
 
 /// Returns the mock server WebSocket URL from env, or the default.
 pub fn mock_server_url() -> String {
@@ -45,7 +35,7 @@ pub fn scenario_push_name(prefix: &str, flags: &[&str]) -> String {
 /// A connected client ready for testing, with its event receiver and run handle.
 pub struct TestClient {
     pub client: Arc<whatsapp_rust::client::Client>,
-    pub event_rx: async_channel::Receiver<Event>,
+    pub event_rx: async_channel::Receiver<Arc<Event>>,
     pub run_handle: whatsapp_rust::bot::BotHandle,
 }
 
@@ -64,9 +54,8 @@ impl TestClient {
         Self::connect_inner(prefix, Some(push_name.to_string())).await
     }
 
-    async fn connect_inner(prefix: &str, push_name: Option<String>) -> anyhow::Result<Self> {
-        let store = create_test_store(prefix).await?;
-        let backend = Arc::new(store) as Arc<dyn Backend>;
+    async fn connect_inner(_prefix: &str, push_name: Option<String>) -> anyhow::Result<Self> {
+        let backend = Arc::new(InMemoryBackend::new()) as Arc<dyn Backend>;
         let transport_factory = TokioWebSocketTransportFactory::new().with_url(mock_server_url());
         let (event_handler, event_rx) = ChannelEventHandler::new();
 
@@ -104,13 +93,13 @@ impl TestClient {
         let wait_result = tokio::time::timeout(timeout, async {
             loop {
                 match event_rx.recv().await {
-                    Ok(Event::PairSuccess(_)) => {
+                    Ok(ref event) if matches!(**event, Event::PairSuccess(_)) => {
                         got_pair = true;
                         if got_connected {
                             break;
                         }
                     }
-                    Ok(Event::Connected(_)) => {
+                    Ok(ref event) if matches!(**event, Event::Connected(_)) => {
                         got_connected = true;
                         if got_pair {
                             break;
@@ -150,7 +139,7 @@ impl TestClient {
                     let _ = tokio::time::timeout(connected_timeout, async {
                         loop {
                             match event_rx.recv().await {
-                                Ok(Event::Connected(_)) => break,
+                                Ok(ref event) if matches!(**event, Event::Connected(_)) => break,
                                 Ok(_) => continue,
                                 Err(_) => break,
                             }
@@ -209,13 +198,13 @@ impl TestClient {
     /// available, otherwise it falls back to the phone-number user part.
     pub async fn tc_token_key(&self) -> anyhow::Result<String> {
         if let Some(lid) = self.client.get_lid().await {
-            return Ok(lid.user);
+            return Ok(lid.user.to_string());
         }
 
         self.client
             .get_pn()
             .await
-            .map(|jid| jid.user)
+            .map(|jid| jid.user.to_string())
             .ok_or_else(|| anyhow::anyhow!("Client should have a JID after connect"))
     }
 
@@ -288,7 +277,7 @@ impl TestClient {
         &mut self,
         timeout_secs: u64,
         mut predicate: F,
-    ) -> anyhow::Result<Event>
+    ) -> anyhow::Result<Arc<Event>>
     where
         F: FnMut(&Event) -> bool,
     {
@@ -307,14 +296,14 @@ impl TestClient {
     }
 
     /// Wait for a text message with specific content.
-    pub async fn wait_for_text(&mut self, text: &str, timeout_secs: u64) -> anyhow::Result<Event> {
+    pub async fn wait_for_text(
+        &mut self,
+        text: &str,
+        timeout_secs: u64,
+    ) -> anyhow::Result<Arc<Event>> {
         let text = text.to_string();
         self.wait_for_event(timeout_secs, move |e| {
-            matches!(
-                e,
-                Event::Message(msg, _)
-                if msg.conversation.as_deref() == Some(text.as_str())
-            )
+            e.message_text() == Some(text.as_str())
         })
         .await
     }
@@ -325,7 +314,7 @@ impl TestClient {
         group_jid: &Jid,
         text: &str,
         timeout_secs: u64,
-    ) -> anyhow::Result<Event> {
+    ) -> anyhow::Result<Arc<Event>> {
         let gid = group_jid.clone();
         let text = text.to_string();
         self.wait_for_event(timeout_secs, move |e| {
@@ -343,9 +332,9 @@ impl TestClient {
     pub async fn wait_for_group_notification(
         &mut self,
         timeout_secs: u64,
-    ) -> anyhow::Result<Event> {
+    ) -> anyhow::Result<Arc<Event>> {
         self.wait_for_event(timeout_secs, |e| {
-            matches!(e, Event::Notification(node) if node.attrs.get("type").is_some_and(|v| v == "w:gp2"))
+            matches!(e, Event::Notification(node) if node.get().get_attr("type").is_some_and(|v| v.as_str() == "w:gp2"))
         })
         .await
     }
@@ -392,7 +381,7 @@ impl TestClient {
     pub async fn reconnect_and_wait(&mut self) -> anyhow::Result<()> {
         // Drain any buffered Connected events from prior connections
         while let Ok(event) = self.event_rx.try_recv() {
-            if matches!(event, Event::Connected(_)) {
+            if matches!(&*event, Event::Connected(_)) {
                 continue;
             }
         }

@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use crate::error::{BinaryError, Result};
 use crate::jid::Jid;
-use crate::node::{Attrs, Node, NodeRef, NodeValue, ValueRef};
+use crate::node::{Attrs, Node, NodeRef, NodeStr, NodeValue, ValueRef};
 
 pub struct AttrParser<'a> {
     pub attrs: &'a Attrs,
@@ -11,7 +11,7 @@ pub struct AttrParser<'a> {
 }
 
 pub struct AttrParserRef<'a> {
-    pub attrs: &'a [(Cow<'a, str>, ValueRef<'a>)],
+    pub(crate) attrs: &'a [(NodeStr<'a>, ValueRef<'a>)],
     pub errors: Vec<BinaryError>,
 }
 
@@ -36,11 +36,7 @@ impl<'a> AttrParserRef<'a> {
     }
 
     fn get_raw(&mut self, key: &str, require: bool) -> Option<&'a ValueRef<'a>> {
-        let val = self
-            .attrs
-            .iter()
-            .find(|(k, _)| k.as_ref() == key)
-            .map(|(_, v)| v);
+        let val = self.attrs.iter().find(|(k, _)| **k == *key).map(|(_, v)| v);
 
         if require && val.is_none() {
             self.errors.push(BinaryError::AttrParse(format!(
@@ -55,7 +51,7 @@ impl<'a> AttrParserRef<'a> {
     /// - String variant: Cow::Borrowed — zero copy
     /// - JID variant: Cow::Owned — allocates only when needed
     pub fn optional_string(&mut self, key: &str) -> Option<Cow<'a, str>> {
-        self.get_raw(key, false).map(|v| v.to_string_cow())
+        self.get_raw(key, false).map(|v| v.as_str())
     }
 
     /// Get a required string attribute, returning an error if missing.
@@ -94,7 +90,7 @@ impl<'a> AttrParserRef<'a> {
     }
 
     fn get_string_value(&mut self, key: &str, require: bool) -> Option<Cow<'a, str>> {
-        self.get_raw(key, require).map(|v| v.to_string_cow())
+        self.get_raw(key, require).map(|v| v.as_str())
     }
 
     fn get_bool(&mut self, key: &str, require: bool) -> Option<bool> {

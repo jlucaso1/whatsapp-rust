@@ -11,7 +11,7 @@
 
 use anyhow::Result;
 use log::debug;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 use super::Client;
 use crate::lid_pn_cache::{LearningSource, LidPnEntry};
@@ -136,18 +136,15 @@ impl Client {
     /// For PN JIDs, this checks if a LID mapping exists and returns the LID.
     /// This ensures that sending and receiving use the same session lock.
     pub(crate) async fn resolve_encryption_jid(&self, target: &Jid) -> Jid {
-        let pn_server = wacore_binary::jid::DEFAULT_USER_SERVER;
-        let lid_server = wacore_binary::jid::HIDDEN_USER_SERVER;
-
-        if target.server == lid_server {
+        if target.is_lid() {
             // Already a LID - use it directly
             target.clone()
-        } else if target.server == pn_server {
+        } else if target.is_pn() {
             // PN JID - check if we have a LID mapping
             if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&target.user).await {
                 let lid_jid = Jid {
-                    user: lid_user,
-                    server: wacore_binary::jid::cow_server_from_str(lid_server),
+                    user: lid_user.into(),
+                    server: wacore_binary::Server::Lid,
                     device: target.device,
                     agent: target.agent,
                     integrator: target.integrator,
@@ -165,6 +162,32 @@ impl Client {
         } else {
             // Other server type - use as-is
             target.clone()
+        }
+    }
+
+    /// Swap a JID's namespace between PN and LID, preserving device/agent/integrator.
+    /// Returns `None` if no mapping exists or the JID is neither PN nor LID.
+    pub(crate) async fn swap_pn_lid_namespace(&self, jid: &Jid) -> Option<Jid> {
+        if jid.is_lid() {
+            let pn_user = self.lid_pn_cache.get_phone_number(&jid.user).await?;
+            Some(Jid {
+                user: pn_user.into(),
+                server: wacore_binary::Server::Pn,
+                device: jid.device,
+                agent: jid.agent,
+                integrator: jid.integrator,
+            })
+        } else if jid.is_pn() {
+            let lid_user = self.lid_pn_cache.get_current_lid(&jid.user).await?;
+            Some(Jid {
+                user: lid_user.into(),
+                server: wacore_binary::Server::Lid,
+                device: jid.device,
+                agent: jid.agent,
+                integrator: jid.integrator,
+            })
+        } else {
+            None
         }
     }
 
@@ -186,26 +209,35 @@ impl Client {
             let pn_proto = pn_jid.to_protocol_address();
             let lid_proto = lid_jid.to_protocol_address();
 
-            // Migrate session: read from cache (authoritative), write to cache
+            // Migrate session: take from cache (authoritative), write to cache
             if let Ok(Some(session)) = self
                 .signal_cache
                 .get_session(&pn_proto, backend.as_ref())
                 .await
             {
-                if self
+                match self
                     .signal_cache
-                    .get_session(&lid_proto, backend.as_ref())
+                    .has_session(&lid_proto, backend.as_ref())
                     .await
-                    .ok()
-                    .flatten()
-                    .is_some()
                 {
-                    self.signal_cache.delete_session(&pn_proto).await;
-                    info!("Deleted stale PN session {} (LID exists)", pn_proto);
-                } else {
-                    self.signal_cache.put_session(&lid_proto, session).await;
-                    self.signal_cache.delete_session(&pn_proto).await;
-                    info!("Migrated session {} -> {}", pn_proto, lid_proto);
+                    Ok(true) => {
+                        self.signal_cache.delete_session(&pn_proto).await;
+                        info!("Deleted stale PN session {} (LID exists)", pn_proto);
+                    }
+                    Ok(false) => {
+                        self.signal_cache.put_session(&lid_proto, session).await;
+                        self.signal_cache.delete_session(&pn_proto).await;
+                        info!("Migrated session {} -> {}", pn_proto, lid_proto);
+                    }
+                    Err(e) => {
+                        // Restore the taken PN session to avoid losing it
+                        self.signal_cache.put_session(&pn_proto, session).await;
+                        log::warn!(
+                            "Skipping session migration {} -> {}: {e}",
+                            pn_proto,
+                            lid_proto
+                        );
+                    }
                 }
             }
 
@@ -259,7 +291,7 @@ mod tests {
     use crate::lid_pn_cache::LearningSource;
     use crate::test_utils::create_test_client;
     use std::sync::Arc;
-    use wacore_binary::jid::HIDDEN_USER_SERVER;
+    use wacore_binary::Server;
 
     #[tokio::test]
     async fn test_resolve_encryption_jid_pn_to_lid() {
@@ -277,7 +309,7 @@ mod tests {
         let resolved = client.resolve_encryption_jid(&pn_jid).await;
 
         assert_eq!(resolved.user, lid);
-        assert_eq!(resolved.server, HIDDEN_USER_SERVER);
+        assert_eq!(resolved.server, Server::Lid);
     }
 
     #[tokio::test]

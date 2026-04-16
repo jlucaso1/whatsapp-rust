@@ -33,7 +33,8 @@ fn classify_keepalive_error(e: &IqError) -> KeepaliveResult {
         IqError::Socket(_)
         | IqError::Disconnected(_)
         | IqError::NotConnected
-        | IqError::InternalChannelClosed => KeepaliveResult::FatalFailure,
+        | IqError::InternalChannelClosed
+        | IqError::EncodeError(_) => KeepaliveResult::FatalFailure,
         // Exhaustive: forces a compile error when new IqError variants are added
         // so the developer must decide the classification.
         IqError::Timeout | IqError::ServerError { .. } | IqError::ParseError(_) => {
@@ -72,7 +73,7 @@ impl Client {
                 debug!(target: "Client/Keepalive", "Received keepalive pong (RTT: {rtt_ms}ms)");
                 // WA Web: onClockSkewUpdate — Math.round((startTime + rtt/2) / 1000 - serverTime)
                 self.unified_session.update_server_time_offset_with_rtt(
-                    &response_node,
+                    response_node.get(),
                     start_ms,
                     rtt_ms,
                 );

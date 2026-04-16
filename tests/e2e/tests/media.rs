@@ -418,7 +418,7 @@ async fn test_send_image_message() -> anyhow::Result<()> {
         )
         .await?;
 
-    if let Event::Message(msg, info) = event {
+    if let Event::Message(msg, info) = &*event {
         let img = msg.image_message.as_ref().unwrap();
         assert_eq!(img.caption.as_deref(), Some(caption));
         assert_eq!(img.mimetype.as_deref(), Some("image/jpeg"));
@@ -476,7 +476,7 @@ async fn test_send_video_message() -> anyhow::Result<()> {
         )
         .await?;
 
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let vid = msg.video_message.as_ref().unwrap();
         assert_eq!(vid.caption.as_deref(), Some("Cool video"));
         assert_eq!(vid.seconds, Some(15));
@@ -526,7 +526,7 @@ async fn test_send_document_message() -> anyhow::Result<()> {
         )
         .await?;
 
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let doc = msg.document_message.as_ref().unwrap();
         assert_eq!(doc.file_name.as_deref(), Some("report.pdf"));
         assert_eq!(doc.mimetype.as_deref(), Some("application/pdf"));
@@ -575,7 +575,7 @@ async fn test_send_audio_message() -> anyhow::Result<()> {
         )
         .await?;
 
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let audio = msg.audio_message.as_ref().unwrap();
         assert_eq!(audio.seconds, Some(30));
         assert_eq!(audio.ptt, Some(false));
@@ -624,7 +624,7 @@ async fn test_send_ptt_voice_message() -> anyhow::Result<()> {
         )
         .await?;
 
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let audio = msg.audio_message.as_ref().unwrap();
         assert_eq!(audio.ptt, Some(true));
         assert_eq!(audio.seconds, Some(5));
@@ -682,7 +682,7 @@ async fn test_send_image_bidirectional() -> anyhow::Result<()> {
             |e| matches!(e, Event::Message(m, _) if m.image_message.is_some()),
         )
         .await?;
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let img = msg.image_message.as_ref().unwrap();
         assert_eq!(img.caption.as_deref(), Some("From A"));
         let downloaded = client_b
@@ -708,7 +708,7 @@ async fn test_send_image_bidirectional() -> anyhow::Result<()> {
             |e| matches!(e, Event::Message(m, _) if m.image_message.is_some()),
         )
         .await?;
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let img = msg.image_message.as_ref().unwrap();
         assert_eq!(img.caption.as_deref(), Some("From B"));
         let downloaded = client_a
@@ -754,7 +754,7 @@ async fn test_send_multiple_media_types() -> anyhow::Result<()> {
             |e| matches!(e, Event::Message(m, _) if m.image_message.is_some()),
         )
         .await?;
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let img = msg.image_message.as_ref().unwrap();
         let dl = client_b
             .client
@@ -778,7 +778,7 @@ async fn test_send_multiple_media_types() -> anyhow::Result<()> {
             |e| matches!(e, Event::Message(m, _) if m.document_message.is_some()),
         )
         .await?;
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let doc = msg.document_message.as_ref().unwrap();
         let dl = client_b
             .client
@@ -802,7 +802,7 @@ async fn test_send_multiple_media_types() -> anyhow::Result<()> {
             |e| matches!(e, Event::Message(m, _) if m.audio_message.is_some()),
         )
         .await?;
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let audio = msg.audio_message.as_ref().unwrap();
         let dl = client_b
             .client
@@ -919,7 +919,7 @@ async fn test_send_image_no_caption() -> anyhow::Result<()> {
         )
         .await?;
 
-    if let Event::Message(msg, _) = event {
+    if let Event::Message(msg, _) = &*event {
         let img = msg.image_message.as_ref().unwrap();
         assert!(
             img.caption.is_none() || img.caption.as_deref() == Some(""),

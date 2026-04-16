@@ -1,15 +1,15 @@
 use anyhow::{Result, anyhow};
+use wacore_binary::Jid;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::Node;
+use wacore_binary::{Node, NodeRef};
 
 /// A LID mapping learned from usync response
 #[derive(Debug, Clone)]
 pub struct UsyncLidMapping {
     /// The phone number user part (e.g., "559980000001")
-    pub phone_number: String,
+    pub phone_number: wacore_binary::CompactString,
     /// The LID user part (e.g., "100000012345678")
-    pub lid: String,
+    pub lid: wacore_binary::CompactString,
 }
 
 #[derive(Debug, Clone)]
@@ -31,7 +31,7 @@ pub fn build_get_user_devices_query(jids: &[Jid], sid: &str) -> Node {
         .iter()
         .map(|jid| {
             NodeBuilder::new("user")
-                .attr("jid", jid.to_non_ad().to_string())
+                .attr("jid", jid.to_non_ad())
                 .build()
         })
         .collect::<Vec<_>>();
@@ -81,13 +81,12 @@ pub fn parse_get_user_devices_response_with_phash(resp_node: &Node) -> Result<Ve
         let key_index_bytes = devices_parent
             .and_then(|dp| dp.get_optional_child("key-index-list"))
             .and_then(|ki| match &ki.content {
-                Some(wacore_binary::node::NodeContent::Bytes(b)) if !b.is_empty() => {
-                    Some(b.clone())
-                }
+                Some(wacore_binary::NodeContent::Bytes(b)) if !b.is_empty() => Some(b.clone()),
                 _ => None,
             });
 
-        let mut devices = Vec::new();
+        let capacity = device_list_node.children().map_or(0, |c| c.len());
+        let mut devices = Vec::with_capacity(capacity);
         for device_node in device_list_node.get_children_by_tag("device") {
             let device_id_str = match device_node.attrs().optional_string("id") {
                 Some(id) => id,
@@ -152,9 +151,8 @@ pub fn parse_get_user_devices_response(resp_node: &Node) -> Result<Vec<Jid>> {
         .collect())
 }
 
-/// Parse LID mappings from a usync response.
-/// Returns a list of phone -> LID mappings learned from the response.
-pub fn parse_lid_mappings_from_response(resp_node: &Node) -> Vec<UsyncLidMapping> {
+/// Parse LID mappings from a usync `NodeRef` response (zero-copy path).
+pub fn parse_lid_mappings_from_response(resp_node: &NodeRef<'_>) -> Vec<UsyncLidMapping> {
     let mut mappings = Vec::new();
 
     let list_node = match resp_node.get_optional_child_by_tag(&["usync", "list"]) {
@@ -172,27 +170,23 @@ pub fn parse_lid_mappings_from_response(resp_node: &Node) -> Vec<UsyncLidMapping
             Err(_) => continue,
         };
 
-        // Only extract mappings for phone number JIDs (not LID JIDs)
-        if user_jid.server != wacore_binary::jid::DEFAULT_USER_SERVER {
+        if user_jid.server != wacore_binary::Server::Pn {
             continue;
         }
 
-        // Look for <lid val="...@lid"> node inside the user node
         if let Some(lid_node) = user_node.get_optional_child("lid") {
             let lid_val = match lid_node.attrs().optional_string("val") {
                 Some(v) => v,
                 None => continue,
             };
-            if !lid_val.is_empty() {
-                // Parse the LID JID to extract just the user part
-                if let Ok(lid_jid) = lid_val.parse::<Jid>()
-                    && lid_jid.server == wacore_binary::jid::HIDDEN_USER_SERVER
-                {
-                    mappings.push(UsyncLidMapping {
-                        phone_number: user_jid.user.clone(),
-                        lid: lid_jid.user.clone(),
-                    });
-                }
+            if !lid_val.is_empty()
+                && let Ok(lid_jid) = lid_val.parse::<Jid>()
+                && lid_jid.server == wacore_binary::Server::Lid
+            {
+                mappings.push(UsyncLidMapping {
+                    phone_number: user_jid.user.clone(),
+                    lid: lid_jid.user.clone(),
+                });
             }
         }
     }

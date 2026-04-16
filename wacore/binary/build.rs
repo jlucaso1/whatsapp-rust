@@ -1,5 +1,5 @@
-use phf_codegen::Map;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::env;
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -11,68 +11,73 @@ struct Tokens {
     double_byte: Vec<Vec<String>>,
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("cargo:rerun-if-changed=src/tokens.json");
     println!("cargo:rerun-if-changed=build.rs");
 
-    let path = Path::new(&env::var("OUT_DIR").unwrap()).join("token_maps.rs");
-    let mut file = BufWriter::new(File::create(&path).unwrap());
+    let path = Path::new(&env::var("OUT_DIR")?).join("token_maps.rs");
+    let mut file = BufWriter::new(File::create(&path)?);
 
-    let tokens_json = fs::read_to_string("src/tokens.json").unwrap();
-    let tokens: Tokens = serde_json::from_str(&tokens_json).unwrap();
+    let tokens_json = fs::read_to_string("src/tokens.json")?;
+    let tokens: Tokens = serde_json::from_str(&tokens_json)?;
 
-    let mut single_byte_map = Map::new();
-    let single_byte_values: Vec<String> = (0..tokens.single_byte.len())
-        .map(|i| i.to_string())
-        .collect();
+    let mut values: Vec<(String, String)> = Vec::new();
+    let mut seen: HashMap<String, String> = HashMap::new();
+
     for (i, token) in tokens.single_byte.iter().enumerate() {
         if !token.is_empty() {
-            single_byte_map.entry(token.as_str(), &single_byte_values[i]);
+            let kind = format!("TokenKind::Single({})", i);
+            if let Some(existing) = seen.get(token) {
+                panic!("duplicate token {:?}: {} vs {}", token, existing, kind);
+            }
+            seen.insert(token.clone(), kind.clone());
+            values.push((token.clone(), kind));
         }
     }
-    writeln!(
-        &mut file,
-        "static SINGLE_BYTE_MAP: phf::Map<&'static str, u8> = \n{};",
-        single_byte_map.build()
-    )
-    .unwrap();
 
-    let mut double_byte_map = Map::new();
-    let mut double_byte_values = Vec::new();
     for (dict_idx, dict) in tokens.double_byte.iter().enumerate() {
-        for (token_idx, _token) in dict.iter().enumerate() {
-            let value = format!("({}, {})", dict_idx, token_idx);
-            double_byte_values.push(value);
+        for (token_idx, token) in dict.iter().enumerate() {
+            if !token.is_empty() {
+                let kind = format!("TokenKind::Double({}, {})", dict_idx, token_idx);
+                if let Some(existing) = seen.get(token) {
+                    panic!("duplicate token {:?}: {} vs {}", token, existing, kind);
+                }
+                seen.insert(token.clone(), kind.clone());
+                values.push((token.clone(), kind));
+            }
         }
     }
 
-    let mut value_idx = 0;
-    for dict in tokens.double_byte.iter() {
-        for token in dict.iter() {
-            double_byte_map.entry(token.as_str(), &double_byte_values[value_idx]);
-            value_idx += 1;
-        }
-    }
+    // Generate hashify PTHash lookup (FNV-1a, compile-time perfect hash)
     writeln!(
-        &mut file,
-        "\nstatic DOUBLE_BYTE_MAP: phf::Map<&'static str, (u8, u8)> = \n{};",
-        double_byte_map.build()
-    )
-    .unwrap();
+        file,
+        "fn hashify_lookup(key: &[u8]) -> Option<&'static TokenKind> {{"
+    )?;
+    writeln!(file, "    hashify::map! {{")?;
+    writeln!(file, "        key,")?;
+    writeln!(file, "        TokenKind,")?;
+    for (token, kind) in &values {
+        writeln!(file, "        {:?} => {},", token.as_bytes(), kind)?;
+    }
+    writeln!(file, "    }}")?;
+    writeln!(file, "}}")?;
 
-    writeln!(&mut file, "\nstatic SINGLE_BYTE_TOKENS: &[&str] = &[").unwrap();
+    // Decode arrays: index → string
+    writeln!(file, "\nstatic SINGLE_BYTE_TOKENS: &[&str] = &[")?;
     for token in &tokens.single_byte {
-        writeln!(&mut file, "    {:?},", token).unwrap();
+        writeln!(file, "    {:?},", token)?;
     }
-    writeln!(&mut file, "];").unwrap();
+    writeln!(file, "];")?;
 
-    writeln!(&mut file, "\nstatic DOUBLE_BYTE_TOKENS: &[&[&str]] = &[").unwrap();
+    writeln!(file, "\nstatic DOUBLE_BYTE_TOKENS: &[&[&str]] = &[")?;
     for dict in &tokens.double_byte {
-        writeln!(&mut file, "    &[").unwrap();
+        writeln!(file, "    &[")?;
         for token in dict {
-            writeln!(&mut file, "        {:?},", token).unwrap();
+            writeln!(file, "        {:?},", token)?;
         }
-        writeln!(&mut file, "    ],").unwrap();
+        writeln!(file, "    ],")?;
     }
-    writeln!(&mut file, "];").unwrap();
+    writeln!(file, "];")?;
+
+    Ok(())
 }

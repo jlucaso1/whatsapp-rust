@@ -154,7 +154,7 @@ async fn test_prekey_collision_regression() -> anyhow::Result<()> {
             break;
         }
         match tokio::time::timeout(remaining, recipient.event_rx.recv()).await {
-            Ok(Ok(Event::Connected(_))) => {
+            Ok(Ok(ref event)) if matches!(**event, Event::Connected(_)) => {
                 got_connected = true;
             }
             Ok(Ok(_)) => {} // Skip messages, undecryptable, etc.

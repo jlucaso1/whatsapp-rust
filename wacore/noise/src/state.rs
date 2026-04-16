@@ -1,6 +1,6 @@
 use crate::error::{NoiseError, Result};
 use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::{Aead, AeadInPlace, KeyInit, Payload};
+use aes_gcm::aead::{Aead, AeadInOut, KeyInit, Payload};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 
@@ -31,8 +31,8 @@ pub fn generate_iv(counter: u32) -> [u8; 12] {
 /// let ciphertext = cipher.encrypt_with_counter(counter, plaintext)?;
 /// counter = counter.wrapping_add(1);
 ///
-/// // Decrypt with counter
-/// let plaintext = cipher.decrypt_with_counter(counter, ciphertext)?;
+/// // Decrypt in place with counter
+/// cipher.decrypt_in_place_with_counter(counter, &mut ciphertext_buf)?;
 /// ```
 pub struct NoiseCipher {
     inner: Aes256Gcm,
@@ -52,7 +52,7 @@ impl NoiseCipher {
     pub fn encrypt_with_counter(&self, counter: u32, plaintext: &[u8]) -> Result<Vec<u8>> {
         let iv = generate_iv(counter);
         self.inner
-            .encrypt(iv.as_ref().into(), plaintext)
+            .encrypt((&iv).into(), plaintext)
             .map_err(|e| NoiseError::CryptoError(e.to_string()))
     }
 
@@ -63,28 +63,22 @@ impl NoiseCipher {
     pub fn encrypt_in_place_with_counter(&self, counter: u32, buffer: &mut Vec<u8>) -> Result<()> {
         let iv = generate_iv(counter);
         self.inner
-            .encrypt_in_place(iv.as_ref().into(), b"", buffer)
+            .encrypt_in_place((&iv).into(), b"", buffer)
             .map_err(|e| NoiseError::CryptoError(e.to_string()))
-    }
-
-    /// Decrypts ciphertext using the specified counter for IV generation.
-    ///
-    /// The ciphertext should include the 16-byte authentication tag.
-    pub fn decrypt_with_counter(&self, counter: u32, ciphertext: &[u8]) -> Result<Vec<u8>> {
-        let iv = generate_iv(counter);
-        self.inner
-            .decrypt(iv.as_ref().into(), ciphertext)
-            .map_err(|e| NoiseError::CryptoError(format!("Decrypt failed: {e}")))
     }
 
     /// Decrypts ciphertext in-place within the provided buffer.
     ///
     /// The buffer should contain the ciphertext with the 16-byte authentication tag.
     /// After decryption, it will contain the plaintext (tag is removed).
-    pub fn decrypt_in_place_with_counter(&self, counter: u32, buffer: &mut Vec<u8>) -> Result<()> {
+    pub fn decrypt_in_place_with_counter<B: aes_gcm::aead::Buffer>(
+        &self,
+        counter: u32,
+        buffer: &mut B,
+    ) -> Result<()> {
         let iv = generate_iv(counter);
         self.inner
-            .decrypt_in_place(iv.as_ref().into(), b"", buffer)
+            .decrypt_in_place((&iv).into(), b"", buffer)
             .map_err(|e| NoiseError::CryptoError(format!("Decrypt failed: {e}")))
     }
 }
@@ -213,7 +207,7 @@ impl NoiseState {
         };
         let ciphertext = self
             .cipher
-            .encrypt(iv.as_ref().into(), payload)
+            .encrypt((&iv).into(), payload)
             .map_err(|e| NoiseError::CryptoError(e.to_string()))?;
         self.authenticate(&ciphertext);
         Ok(ciphertext)
@@ -234,7 +228,7 @@ impl NoiseState {
         // Encrypt in-place and get the tag separately
         let tag = self
             .cipher
-            .encrypt_in_place_detached(iv.as_ref().into(), &aad, &mut out[start..])
+            .encrypt_inout_detached((&iv).into(), &aad, (&mut out[start..]).into())
             .map_err(|e| NoiseError::CryptoError(e.to_string()))?;
 
         // Append the authentication tag
@@ -255,7 +249,7 @@ impl NoiseState {
         };
         let plaintext = self
             .cipher
-            .decrypt(iv.as_ref().into(), payload)
+            .decrypt((&iv).into(), payload)
             .map_err(|e| NoiseError::CryptoError(format!("Noise decrypt failed: {e}")))?;
 
         self.authenticate(ciphertext);
@@ -289,7 +283,7 @@ impl NoiseState {
 
         // Decrypt in-place
         self.cipher
-            .decrypt_in_place_detached(iv.as_ref().into(), &aad, &mut out[start..], tag.into())
+            .decrypt_inout_detached((&iv).into(), &aad, (&mut out[start..]).into(), tag.into())
             .map_err(|e| NoiseError::CryptoError(format!("Noise decrypt failed: {e}")))?;
 
         // Authenticate with the original ciphertext (including tag)

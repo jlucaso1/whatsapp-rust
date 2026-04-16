@@ -100,7 +100,7 @@ async fn process_prekey_impl(
         .key_pair()?;
 
     let our_one_time_pre_key_pair = if let Some(pre_key_id) = message.pre_key_id() {
-        log::info!(
+        log::debug!(
             "processing PreKey message from {remote_address} with one-time prekey {pre_key_id}"
         );
         Some(pre_key_store.get_pre_key(pre_key_id).await?.key_pair()?)
@@ -167,13 +167,41 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         return Err(SignalProtocolError::SignatureValidationFailed);
     }
 
-    let mut session_record = session_store
-        .load_session(remote_address)
-        .await?
-        .unwrap_or_else(SessionRecord::new_fresh);
+    let existing = session_store.load_session(remote_address).await?;
+    let had_session = existing.is_some();
+    let mut session_record = existing.unwrap_or_else(SessionRecord::new_fresh);
 
-    let our_base_key_pair = KeyPair::generate(&mut csprng);
-    let our_base_public_key = our_base_key_pair.public_key; // Save before moving
+    let result = process_prekey_bundle_inner(
+        remote_address,
+        &mut session_record,
+        identity_store,
+        bundle,
+        their_identity_key,
+        &mut csprng,
+        use_pq_ratchet,
+    )
+    .await;
+
+    if had_session || result.is_ok() {
+        session_store
+            .store_session(remote_address, session_record)
+            .await?;
+    }
+
+    result
+}
+
+async fn process_prekey_bundle_inner<R: Rng + CryptoRng>(
+    remote_address: &ProtocolAddress,
+    session_record: &mut SessionRecord,
+    identity_store: &mut dyn IdentityKeyStore,
+    bundle: &PreKeyBundle,
+    their_identity_key: &IdentityKey,
+    csprng: &mut R,
+    use_pq_ratchet: ratchet::UsePQRatchet,
+) -> Result<()> {
+    let our_base_key_pair = KeyPair::generate(csprng);
+    let our_base_public_key = our_base_key_pair.public_key;
     let their_signed_prekey = bundle.signed_pre_key_public()?;
 
     let their_one_time_prekey_id = bundle.pre_key_id()?;
@@ -194,7 +222,7 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
 
     let mut session = ratchet::initialize_alice_session(&parameters, csprng)?;
 
-    log::info!(
+    log::debug!(
         "set_unacknowledged_pre_key_message for: {} with preKeyId: {}",
         remote_address,
         their_one_time_prekey_id.map_or_else(|| "<none>".to_string(), |id| id.to_string())
@@ -214,10 +242,6 @@ pub async fn process_prekey_bundle<R: Rng + CryptoRng>(
         .await?;
 
     session_record.promote_state(session);
-
-    session_store
-        .store_session(remote_address, session_record)
-        .await?;
 
     Ok(())
 }

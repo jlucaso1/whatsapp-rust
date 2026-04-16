@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use prost::Message;
+use prost::bytes::Bytes;
 use redb::{
     Builder, Database, ReadableDatabase, ReadableTable, TableError, backends::InMemoryBackend,
 };
@@ -112,16 +113,25 @@ impl SignalStore for RedbStore {
         Ok(())
     }
 
-    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
+    async fn load_identity(&self, address: &str) -> Result<Option<[u8; 32]>> {
         let db = self.db.clone();
         let key_str = self.keys().key1(address);
 
-        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+        tokio::task::spawn_blocking(move || -> Result<Option<[u8; 32]>> {
             let read_txn = db.begin_read().map_err(db_err)?;
             let table = open_table_or_default!(read_txn, IDENTITIES, None);
 
             match table.get(key_str.as_str()) {
-                Ok(Some(guard)) => Ok(Some(guard.value().to_vec())),
+                Ok(Some(guard)) => {
+                    let bytes = guard.value();
+                    let arr: [u8; 32] = bytes.try_into().map_err(|_| {
+                        StoreError::Database(format!(
+                            "identity key has invalid length {}, expected 32",
+                            bytes.len()
+                        ))
+                    })?;
+                    Ok(Some(arr))
+                }
                 Ok(None) => Ok(None),
                 Err(e) => Err(db_err(e)),
             }
@@ -149,16 +159,16 @@ impl SignalStore for RedbStore {
         Ok(())
     }
 
-    async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
+    async fn get_session(&self, address: &str) -> Result<Option<Bytes>> {
         let db = self.db.clone();
         let key_str = self.keys().key1(address);
 
-        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+        tokio::task::spawn_blocking(move || -> Result<Option<Bytes>> {
             let read_txn = db.begin_read().map_err(db_err)?;
             let table = open_table_or_default!(read_txn, SESSIONS, None);
 
             match table.get(key_str.as_str()) {
-                Ok(Some(guard)) => Ok(Some(guard.value().to_vec())),
+                Ok(Some(guard)) => Ok(Some(Bytes::copy_from_slice(guard.value()))),
                 Ok(None) => Ok(None),
                 Err(e) => Err(db_err(e)),
             }
@@ -208,14 +218,14 @@ impl SignalStore for RedbStore {
         Ok(())
     }
 
-    async fn store_prekeys_batch(&self, keys: &[(u32, Vec<u8>)], uploaded: bool) -> Result<()> {
+    async fn store_prekeys_batch(&self, keys: &[(u32, Bytes)], uploaded: bool) -> Result<()> {
         if keys.is_empty() {
             return Ok(());
         }
 
         let db = self.db.clone();
         let keys_builder = self.keys();
-        let keys: Vec<(u64, Vec<u8>)> = keys
+        let keys: Vec<(u64, Bytes)> = keys
             .iter()
             .map(|(id, record)| (keys_builder.pack_id(*id), record.clone()))
             .collect();
@@ -228,7 +238,7 @@ impl SignalStore for RedbStore {
 
                 for (packed_key, record) in &keys {
                     prekey_table
-                        .insert(*packed_key, record.as_slice())
+                        .insert(*packed_key, &record[..])
                         .map_err(db_err)?;
                     uploaded_table
                         .insert(*packed_key, uploaded)
@@ -271,16 +281,16 @@ impl SignalStore for RedbStore {
         Ok(())
     }
 
-    async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
+    async fn load_prekey(&self, id: u32) -> Result<Option<Bytes>> {
         let db = self.db.clone();
         let packed_key = self.keys().pack_id(id);
 
-        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+        tokio::task::spawn_blocking(move || -> Result<Option<Bytes>> {
             let read_txn = db.begin_read().map_err(db_err)?;
             let table = open_table_or_default!(read_txn, PREKEYS, None);
 
             match table.get(packed_key) {
-                Ok(Some(guard)) => Ok(Some(guard.value().to_vec())),
+                Ok(Some(guard)) => Ok(Some(Bytes::copy_from_slice(guard.value()))),
                 Ok(None) => Ok(None),
                 Err(e) => Err(db_err(e)),
             }
@@ -1506,7 +1516,7 @@ mod tests {
         store.put_identity(address, key).await.unwrap();
 
         let loaded = store.load_identity(address).await.unwrap();
-        assert_eq!(loaded, Some(key.to_vec()));
+        assert_eq!(loaded, Some(key));
 
         store.delete_identity(address).await.unwrap();
         let loaded = store.load_identity(address).await.unwrap();
@@ -1523,7 +1533,7 @@ mod tests {
         store.put_session(address, &session).await.unwrap();
 
         let loaded = store.get_session(address).await.unwrap();
-        assert_eq!(loaded, Some(session));
+        assert_eq!(loaded, Some(Bytes::from(session)));
 
         store.delete_session(address).await.unwrap();
         let loaded = store.get_session(address).await.unwrap();
@@ -1540,7 +1550,7 @@ mod tests {
         store.store_prekey(id, &record, true).await.unwrap();
 
         let loaded = store.load_prekey(id).await.unwrap();
-        assert_eq!(loaded, Some(record));
+        assert_eq!(loaded, Some(Bytes::from(record)));
 
         store.remove_prekey(id).await.unwrap();
         let loaded = store.load_prekey(id).await.unwrap();
@@ -1707,8 +1717,14 @@ mod tests {
         // Prekeys
         store_a.store_prekey(10, b"prekey-a", false).await.unwrap();
         store_b.store_prekey(10, b"prekey-b", false).await.unwrap();
-        assert_eq!(store_a.load_prekey(10).await.unwrap().unwrap(), b"prekey-a");
-        assert_eq!(store_b.load_prekey(10).await.unwrap().unwrap(), b"prekey-b");
+        assert_eq!(
+            store_a.load_prekey(10).await.unwrap().unwrap(),
+            &b"prekey-a"[..]
+        );
+        assert_eq!(
+            store_b.load_prekey(10).await.unwrap().unwrap(),
+            &b"prekey-b"[..]
+        );
         assert_eq!(store_a.get_max_prekey_id().await.unwrap(), 10);
 
         // Sessions
@@ -1741,7 +1757,10 @@ mod tests {
         // Prekeys batch
         store_a
             .store_prekeys_batch(
-                &[(20, b"batch-a-20".to_vec()), (21, b"batch-a-21".to_vec())],
+                &[
+                    (20, Bytes::from_static(b"batch-a-20")),
+                    (21, Bytes::from_static(b"batch-a-21")),
+                ],
                 true,
             )
             .await
@@ -1756,13 +1775,17 @@ mod tests {
     async fn test_store_prekeys_batch() {
         let store = create_test_store();
 
-        let keys = vec![(1, vec![10, 11]), (2, vec![20, 21]), (3, vec![30, 31])];
+        let keys: Vec<(u32, Bytes)> = vec![
+            (1, Bytes::from_static(&[10, 11])),
+            (2, Bytes::from_static(&[20, 21])),
+            (3, Bytes::from_static(&[30, 31])),
+        ];
 
         store.store_prekeys_batch(&keys, true).await.unwrap();
 
         // All three should be loadable
         for (id, data) in &keys {
-            assert_eq!(store.load_prekey(*id).await.unwrap().unwrap(), *data);
+            assert_eq!(store.load_prekey(*id).await.unwrap().unwrap(), &data[..]);
         }
 
         assert_eq!(store.get_max_prekey_id().await.unwrap(), 3);

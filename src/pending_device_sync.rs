@@ -2,7 +2,7 @@
 //! WA Web: `OfflinePendingDeviceCache` + `doPendingDeviceSync()`.
 
 use std::collections::HashSet;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 pub(crate) struct PendingDeviceSync {
     pending: async_lock::Mutex<HashSet<Jid>>,

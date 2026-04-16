@@ -1,7 +1,7 @@
 use crate::download::{DownloadUtils, MediaType};
 use crate::libsignal::crypto::{CryptographicHash, CryptographicMac};
 use aes::Aes256;
-use aes::cipher::{Block, BlockEncrypt, KeyInit};
+use aes::cipher::{Block, BlockCipherEncrypt, KeyInit};
 use anyhow::Result;
 use rand::RngExt;
 use rand::rng;

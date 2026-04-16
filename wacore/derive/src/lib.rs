@@ -107,7 +107,7 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
         }
     };
 
-    let mut attr_fields = Vec::new();
+    let mut attr_fields = Vec::with_capacity(fields.len());
     for field in fields {
         match extract_attr_info(field) {
             Ok(Some(attr_info)) => attr_fields.push(attr_info),
@@ -326,7 +326,7 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                 builder.build()
             }
 
-            fn try_from_node(node: &::wacore_binary::node::Node) -> ::anyhow::Result<Self> {
+            fn try_from_node_ref(node: &::wacore_binary::node::NodeRef<'_>) -> ::anyhow::Result<Self> {
                 if node.tag != #tag {
                     return Err(::anyhow::anyhow!("expected <{}>, got <{}>", #tag, node.tag));
                 }
@@ -388,7 +388,7 @@ fn generate_empty_impl(name: &syn::Ident, tag: &str) -> proc_macro2::TokenStream
                 ::wacore_binary::builder::NodeBuilder::new(#tag).build()
             }
 
-            fn try_from_node(node: &::wacore_binary::node::Node) -> ::anyhow::Result<Self> {
+            fn try_from_node_ref(node: &::wacore_binary::node::NodeRef<'_>) -> ::anyhow::Result<Self> {
                 if node.tag != #tag {
                     return Err(::anyhow::anyhow!("expected <{}>, got <{}>", #tag, node.tag));
                 }
@@ -596,7 +596,7 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
         }
     };
 
-    let mut variant_infos = Vec::new();
+    let mut variant_infos = Vec::with_capacity(variants.len());
     let mut default_variant = None;
     let mut fallback_variant: Option<syn::Ident> = None;
     let mut seen_str_values: std::collections::HashMap<String, syn::Ident> =

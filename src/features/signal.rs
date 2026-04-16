@@ -3,17 +3,15 @@
 //! Encryption, decryption, session management, and participant node creation.
 
 use anyhow::{Result, anyhow};
-use prost::Message as ProtoMessage;
 use wacore::libsignal::protocol::{
     CiphertextMessage, PreKeySignalMessage, SignalMessage, UsePQRatchet, message_decrypt,
     message_encrypt,
 };
-use wacore::libsignal::store::sender_key_name::SenderKeyName;
 use wacore::message_processing::EncType;
 use wacore::messages::MessageUtils;
-use wacore::types::jid::JidExt;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::Node;
+use wacore::types::jid::{JidExt, make_sender_key_name};
+use wacore_binary::Jid;
+use wacore_binary::Node;
 
 use crate::client::Client;
 
@@ -38,9 +36,8 @@ impl<'a> Signal<'a> {
         // Resolve PN→LID to use the correct Signal session (matches send path)
         let encryption_jid = self.client.resolve_encryption_jid(jid).await;
         let signal_addr = encryption_jid.to_protocol_address();
-        let signal_addr_str = signal_addr.to_string();
 
-        let lock = self.client.session_lock_for(&signal_addr_str).await;
+        let lock = self.client.session_lock_for(signal_addr.as_str()).await;
         let _guard = lock.lock().await;
         let mut adapter = self.client.signal_adapter().await;
 
@@ -55,15 +52,14 @@ impl<'a> Signal<'a> {
         drop(_guard);
         self.client.flush_signal_cache().await?;
 
-        match encrypted {
-            CiphertextMessage::PreKeySignalMessage(msg) => {
-                Ok((EncType::PreKeyMessage, msg.serialized().to_vec()))
-            }
-            CiphertextMessage::SignalMessage(msg) => {
-                Ok((EncType::Message, msg.serialized().to_vec()))
-            }
-            _ => Err(anyhow!("unexpected ciphertext variant")),
-        }
+        let (_, is_prekey, bytes) = wacore::send::extract_ciphertext(encrypted)
+            .ok_or_else(|| anyhow!("unexpected ciphertext variant"))?;
+        let enc_type = if is_prekey {
+            EncType::PreKeyMessage
+        } else {
+            EncType::Message
+        };
+        Ok((enc_type, bytes.into_vec()))
     }
 
     /// Decrypt a Signal protocol message from a sender.
@@ -93,9 +89,8 @@ impl<'a> Signal<'a> {
 
         let encryption_jid = self.client.resolve_encryption_jid(jid).await;
         let signal_addr = encryption_jid.to_protocol_address();
-        let signal_addr_str = signal_addr.to_string();
 
-        let lock = self.client.session_lock_for(&signal_addr_str).await;
+        let lock = self.client.session_lock_for(signal_addr.as_str()).await;
         let _guard = lock.lock().await;
         let mut adapter = self.client.signal_adapter().await;
         let mut rng = rand::make_rng::<rand::rngs::StdRng>();
@@ -135,7 +130,7 @@ impl<'a> Signal<'a> {
     ) -> Result<(Option<Vec<u8>>, Vec<u8>)> {
         let own_jid = self.client.get_own_jid_for_group(group_jid).await?;
         let sender_addr = own_jid.to_protocol_address();
-        let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_addr.to_string());
+        let sender_key_name = make_sender_key_name(group_jid, &sender_addr);
 
         // Only create SKDM when no sender key exists (matches WA Web behavior)
         let device_store = self.client.persistence_manager.get_device_arc().await;
@@ -156,7 +151,7 @@ impl<'a> Signal<'a> {
                 wacore::send::create_sender_key_distribution_message_for_group(
                     &mut adapter.sender_key_store,
                     group_jid,
-                    &own_jid,
+                    &sender_addr,
                 )
                 .await?,
             )
@@ -167,7 +162,7 @@ impl<'a> Signal<'a> {
         let ciphertext = wacore::send::encrypt_group_message(
             &mut adapter.sender_key_store,
             group_jid,
-            &own_jid,
+            &sender_addr,
             plaintext,
             &mut rng,
         )
@@ -175,7 +170,7 @@ impl<'a> Signal<'a> {
 
         self.client.flush_signal_cache().await?;
 
-        Ok((skdm_bytes, ciphertext.serialized().to_vec()))
+        Ok((skdm_bytes, ciphertext.into_serialized().into_vec()))
     }
 
     /// Decrypt a group (sender-key) message.
@@ -191,10 +186,8 @@ impl<'a> Signal<'a> {
         sender_jid: &Jid,
         ciphertext: &[u8],
     ) -> Result<Vec<u8>> {
-        let sender_key_name = SenderKeyName::new(
-            group_jid.to_string(),
-            sender_jid.to_non_ad().to_protocol_address_string(),
-        );
+        let sender_key_name =
+            make_sender_key_name(group_jid, &sender_jid.to_non_ad().to_protocol_address());
 
         let mut adapter = self.client.signal_adapter().await;
 
@@ -238,9 +231,8 @@ impl<'a> Signal<'a> {
         for jid in jids {
             let resolved = self.client.resolve_encryption_jid(jid).await;
             let addr = resolved.to_protocol_address();
-            let addr_str = addr.to_string();
 
-            let lock = self.client.session_lock_for(&addr_str).await;
+            let lock = self.client.session_lock_for(addr.as_str()).await;
             let _guard = lock.lock().await;
 
             // WA Web removes session + identity together (deleteRemoteSession)
@@ -267,17 +259,14 @@ impl<'a> Signal<'a> {
         self.client.ensure_e2e_sessions(&device_jids).await?;
 
         // Acquire per-device session locks before encrypting (matches DM send path)
-        let lock_keys = self.client.build_session_lock_keys(&device_jids).await;
-        let mut session_mutexes = Vec::with_capacity(lock_keys.len());
-        for key in &lock_keys {
-            session_mutexes.push(self.client.session_lock_for(key).await);
-        }
+        let lock_jids = self.client.build_session_lock_keys(&device_jids).await;
+        let session_mutexes = self.client.session_mutexes_for(&lock_jids).await;
         let mut _session_guards = Vec::with_capacity(session_mutexes.len());
         for mutex in &session_mutexes {
             _session_guards.push(mutex.lock().await);
         }
 
-        let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
+        let plaintext = MessageUtils::encode_and_pad(message);
         let mut adapter = self.client.signal_adapter().await;
         let mediatype = wacore::send::media_type_from_message(message);
         let hide_decrypt_fail = wacore::send::should_hide_decrypt_fail(message);

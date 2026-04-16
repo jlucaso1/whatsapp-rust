@@ -2,7 +2,7 @@ pub mod keepalive;
 pub mod retry;
 
 use anyhow::Result;
-use wacore_binary::node::Node;
+use wacore_binary::{Node, NodeRef};
 
 /// Represents a type that maps to a WhatsApp Protocol node.
 pub trait ProtocolNode: Sized {
@@ -12,8 +12,15 @@ pub trait ProtocolNode: Sized {
     /// Convert the struct into a protocol `Node`.
     fn into_node(self) -> Node;
 
-    /// Parse a protocol `Node` into the struct.
-    fn try_from_node(node: &Node) -> Result<Self>;
+    /// Parse a `NodeRef` into the struct (zero-copy canonical path).
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self>;
+
+    /// Parse an owned `Node` into the struct.
+    ///
+    /// The default implementation borrows as a `NodeRef` and delegates.
+    fn try_from_node(node: &Node) -> Result<Self> {
+        Self::try_from_node_ref(&node.as_node_ref())
+    }
 }
 
 /// Trait for parsing a string enum from a `&str`.
@@ -91,13 +98,13 @@ macro_rules! define_simple_node {
                 $tag
             }
 
-            fn into_node(self) -> wacore_binary::node::Node {
+            fn into_node(self) -> wacore_binary::Node {
                 wacore_binary::builder::NodeBuilder::new($tag)
                     $(.attr($attr_name, self.$field.to_string()))*
                     .build()
             }
 
-            fn try_from_node(node: &wacore_binary::node::Node) -> anyhow::Result<Self> {
+            fn try_from_node_ref(node: &wacore_binary::NodeRef<'_>) -> anyhow::Result<Self> {
                 if node.tag != $tag {
                     return Err(anyhow::anyhow!("expected <{}>, got <{}>", $tag, node.tag));
                 }
@@ -143,11 +150,11 @@ macro_rules! define_empty_node {
                 $tag
             }
 
-            fn into_node(self) -> wacore_binary::node::Node {
+            fn into_node(self) -> wacore_binary::Node {
                 wacore_binary::builder::NodeBuilder::new($tag).build()
             }
 
-            fn try_from_node(node: &wacore_binary::node::Node) -> anyhow::Result<Self> {
+            fn try_from_node_ref(node: &wacore_binary::NodeRef<'_>) -> anyhow::Result<Self> {
                 if node.tag != $tag {
                     return Err(anyhow::anyhow!("expected <{}>, got <{}>", $tag, node.tag));
                 }

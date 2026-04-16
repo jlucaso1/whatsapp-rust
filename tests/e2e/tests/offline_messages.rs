@@ -66,8 +66,8 @@ async fn test_offline_message_ordering() -> anyhow::Result<()> {
             )
             .await?;
 
-        if let Event::Message(msg, _) = event {
-            let text = msg.conversation.unwrap();
+        if let Event::Message(msg, _) = &*event {
+            let text = msg.conversation.clone().unwrap();
             info!("Received: {text}");
             received.push(text);
         }

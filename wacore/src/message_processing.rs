@@ -5,7 +5,7 @@
 //! runtime (Tokio, bridge, etc.) without side effects.
 
 use crate::types::events::DecryptFailMode;
-use wacore_binary::node::Node;
+use wacore_binary::Node;
 use waproto::whatsapp as wa;
 
 // ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ pub fn categorize_enc_nodes<'a>(enc_nodes: &[&'a Node]) -> CategorizedEncNodes<'
         };
 
         let ciphertext: &[u8] = match &enc_node.content {
-            Some(wacore_binary::node::NodeContent::Bytes(b)) => b,
+            Some(wacore_binary::NodeContent::Bytes(b)) => b,
             _ => {
                 log::warn!("Enc node has no byte content, skipping");
                 continue;
@@ -273,11 +273,11 @@ pub fn process_decrypted_plaintext(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wacore_binary::node::{Attrs, Node, NodeContent, NodeValue};
+    use wacore_binary::{Attrs, Node, NodeContent, NodeValue};
 
     fn make_enc_node(enc_type: &str, content: &[u8]) -> Node {
         let mut attrs = Attrs::new();
-        attrs.insert("type", NodeValue::String(enc_type.to_string()));
+        attrs.insert("type", NodeValue::from(enc_type));
         Node::new("enc", attrs, Some(NodeContent::Bytes(content.to_vec())))
     }
 
@@ -289,15 +289,15 @@ mod tests {
         v: Option<u64>,
     ) -> Node {
         let mut attrs = Attrs::new();
-        attrs.insert("type", NodeValue::String(enc_type.to_string()));
+        attrs.insert("type", NodeValue::from(enc_type));
         if let Some(c) = count {
-            attrs.insert("count", NodeValue::String(c.to_string()));
+            attrs.insert("count", NodeValue::from(c.to_string()));
         }
         if let Some(df) = decrypt_fail {
-            attrs.insert("decrypt-fail", NodeValue::String(df.to_string()));
+            attrs.insert("decrypt-fail", NodeValue::from(df));
         }
         if let Some(ver) = v {
-            attrs.insert("v", NodeValue::String(ver.to_string()));
+            attrs.insert("v", NodeValue::from(ver.to_string()));
         }
         Node::new("enc", attrs, Some(NodeContent::Bytes(content.to_vec())))
     }
@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn test_categorize_missing_content() {
         let mut attrs = Attrs::new();
-        attrs.insert("type", NodeValue::String("msg".to_string()));
+        attrs.insert("type", NodeValue::from("msg"));
         let node = Node::new("enc", attrs, None);
         let nodes: Vec<&Node> = vec![&node];
 

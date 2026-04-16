@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 use wacore::libsignal::store::SessionStore;
 use wacore::types::jid::JidExt;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 use super::Client;
 use crate::types::events::{Event, OfflineSyncCompleted};
@@ -43,7 +43,7 @@ impl Client {
 
             self.core
                 .event_bus
-                .dispatch(&Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
+                .dispatch(Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
         }
     }
 
@@ -144,21 +144,35 @@ impl Client {
     /// Ensure E2E sessions exist for the given device JIDs.
     /// Waits for offline delivery, resolves LID mappings, then batches prekey fetches.
     pub(crate) async fn ensure_e2e_sessions(&self, device_jids: &[Jid]) -> Result<()> {
-        use wacore::types::jid::JidExt;
-
         if device_jids.is_empty() {
             return Ok(());
         }
-
         self.wait_for_offline_delivery_end().await;
         let resolved_jids = self.resolve_lid_mappings(device_jids).await;
+        self.ensure_sessions_inner(resolved_jids).await
+    }
+
+    /// Like `ensure_e2e_sessions` but skips `resolve_lid_mappings`. Use when the
+    /// caller already resolved JIDs to the correct namespace (e.g., after
+    /// alternate PN/LID key normalization in retry handling).
+    pub(crate) async fn ensure_e2e_sessions_resolved(&self, jids: &[Jid]) -> Result<()> {
+        if jids.is_empty() {
+            return Ok(());
+        }
+        self.wait_for_offline_delivery_end().await;
+        self.ensure_sessions_inner(jids.to_vec()).await
+    }
+
+    /// Core session-check + prekey-fetch logic shared by both entry points.
+    async fn ensure_sessions_inner(&self, jids: Vec<Jid>) -> Result<()> {
+        use wacore::types::jid::JidExt;
 
         let device_store = self.persistence_manager.get_device_arc().await;
-        let mut jids_needing_sessions = Vec::with_capacity(resolved_jids.len());
+        let mut jids_needing_sessions = Vec::with_capacity(jids.len());
 
         {
             let device_guard = device_store.read().await;
-            for jid in resolved_jids {
+            for jid in jids {
                 let signal_addr = jid.to_protocol_address();
                 // Check cache first (includes unflushed sessions), fall back to backend
                 match self
@@ -315,7 +329,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wacore_binary::jid::{DEFAULT_USER_SERVER, HIDDEN_USER_SERVER, JidExt};
+    use wacore_binary::{JidExt, Server};
 
     #[test]
     fn test_primary_phone_jid_creation_from_pn() {
@@ -323,7 +337,7 @@ mod tests {
         let primary_phone_jid = own_pn.with_device(0);
 
         assert_eq!(primary_phone_jid.user, "559999999999");
-        assert_eq!(primary_phone_jid.server, DEFAULT_USER_SERVER);
+        assert_eq!(primary_phone_jid.server, Server::Pn);
         assert_eq!(primary_phone_jid.device, 0);
         assert_eq!(primary_phone_jid.agent, 0);
         assert_eq!(primary_phone_jid.to_string(), "559999999999@s.whatsapp.net");
@@ -336,7 +350,7 @@ mod tests {
         let primary_phone_jid = own_pn.with_device(0);
 
         assert_eq!(primary_phone_jid.user, "559999999999");
-        assert_eq!(primary_phone_jid.server, DEFAULT_USER_SERVER);
+        assert_eq!(primary_phone_jid.server, Server::Pn);
         assert_eq!(primary_phone_jid.device, 0);
     }
 
@@ -358,7 +372,7 @@ mod tests {
         let primary_phone_jid = own_lid.with_device(0);
 
         assert_eq!(primary_phone_jid.user, "100000000000001");
-        assert_eq!(primary_phone_jid.server, HIDDEN_USER_SERVER);
+        assert_eq!(primary_phone_jid.server, Server::Lid);
         assert_eq!(primary_phone_jid.device, 0);
         assert!(!primary_phone_jid.is_ad());
     }
@@ -373,7 +387,7 @@ mod tests {
 
         let parsed: Jid = jid_string.parse().expect("JID should be parseable");
         assert_eq!(parsed.user, "559999999999");
-        assert_eq!(parsed.server, DEFAULT_USER_SERVER);
+        assert_eq!(parsed.server, Server::Pn);
         assert_eq!(parsed.device, 0);
     }
 
@@ -591,7 +605,7 @@ mod tests {
     #[test]
     fn test_session_establishment_lookup_normalization() {
         use std::collections::HashMap;
-        use wacore_binary::jid::Jid;
+        use wacore_binary::Jid;
 
         // Represents the bundle map returned by fetch_pre_keys
         // (keys are normalized by parsing logic as verified in wacore/src/prekeys.rs)

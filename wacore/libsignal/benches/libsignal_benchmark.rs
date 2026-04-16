@@ -176,6 +176,13 @@ impl SessionStore for InMemorySessionStore {
         Ok(self.sessions.get(address).cloned())
     }
 
+    async fn has_session(
+        &self,
+        address: &ProtocolAddress,
+    ) -> wacore_libsignal::protocol::error::Result<bool> {
+        Ok(self.sessions.contains_key(address))
+    }
+
     async fn store_session(
         &mut self,
         address: &ProtocolAddress,
@@ -211,7 +218,7 @@ impl SenderKeyStore for InMemorySenderKeyStore {
     }
 
     async fn load_sender_key(
-        &mut self,
+        &self,
         sender_key_name: &SenderKeyName,
     ) -> wacore_libsignal::protocol::error::Result<Option<SenderKeyRecord>> {
         Ok(self.sender_keys.get(sender_key_name).cloned())

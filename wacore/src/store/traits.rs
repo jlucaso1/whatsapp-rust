@@ -10,6 +10,7 @@
 use crate::appstate::hash::HashState;
 use crate::store::error::Result;
 use async_trait::async_trait;
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 use wacore_appstate::processor::AppStateMutationMAC;
 
@@ -87,8 +88,8 @@ pub trait SignalStore: Send + Sync {
     /// Store an identity key for a remote address.
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()>;
 
-    /// Load an identity key for a remote address.
-    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>>;
+    /// Load an identity key for a remote address (always 32 bytes).
+    async fn load_identity(&self, address: &str) -> Result<Option<[u8; 32]>>;
 
     /// Delete an identity key.
     async fn delete_identity(&self, address: &str) -> Result<()>;
@@ -96,7 +97,7 @@ pub trait SignalStore: Send + Sync {
     // --- Session Operations ---
 
     /// Get an encrypted session for an address.
-    async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>>;
+    async fn get_session(&self, address: &str) -> Result<Option<Bytes>>;
 
     /// Store an encrypted session.
     async fn put_session(&self, address: &str, session: &[u8]) -> Result<()>;
@@ -116,7 +117,7 @@ pub trait SignalStore: Send + Sync {
 
     /// Store multiple pre-keys in a single batch operation.
     /// Default implementation falls back to individual `store_prekey` calls.
-    async fn store_prekeys_batch(&self, keys: &[(u32, Vec<u8>)], uploaded: bool) -> Result<()> {
+    async fn store_prekeys_batch(&self, keys: &[(u32, Bytes)], uploaded: bool) -> Result<()> {
         for (id, record) in keys {
             self.store_prekey(*id, record, uploaded).await?;
         }
@@ -124,7 +125,19 @@ pub trait SignalStore: Send + Sync {
     }
 
     /// Load a pre-key by ID.
-    async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>>;
+    async fn load_prekey(&self, id: u32) -> Result<Option<Bytes>>;
+
+    /// Load multiple pre-keys by ID in a single batch operation.
+    /// Returns only the keys that exist.
+    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Bytes)>> {
+        let mut result = Vec::with_capacity(ids.len());
+        for &id in ids {
+            if let Some(record) = self.load_prekey(id).await? {
+                result.push((id, record));
+            }
+        }
+        Ok(result)
+    }
 
     /// Remove a pre-key.
     async fn remove_prekey(&self, id: u32) -> Result<()>;
