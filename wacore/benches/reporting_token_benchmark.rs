@@ -1,8 +1,8 @@
+use buffa::Message;
 use iai_callgrind::{
     Callgrind, FlamegraphConfig, LibraryBenchmarkConfig, library_benchmark,
     library_benchmark_group, main,
 };
-use prost::Message;
 use std::hint::black_box;
 use wacore::reporting_token::{
     MESSAGE_SECRET_SIZE, REPORTING_TOKEN_KEY_SIZE, calculate_reporting_token,

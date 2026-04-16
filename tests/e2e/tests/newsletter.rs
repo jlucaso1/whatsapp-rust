@@ -274,7 +274,7 @@ async fn test_newsletter_send_media_message() -> anyhow::Result<()> {
 
     // Build and send an image message
     let message = wa::Message {
-        image_message: Some(Box::new(wa::message::ImageMessage {
+        image_message: buffa::MessageField::some(wa::message::ImageMessage {
             url: Some(upload.url.clone()),
             direct_path: Some(upload.direct_path.clone()),
             media_key: Some(upload.media_key.to_vec()),
@@ -284,7 +284,7 @@ async fn test_newsletter_send_media_message() -> anyhow::Result<()> {
             mimetype: Some("image/jpeg".to_string()),
             caption: Some("Newsletter image test".to_string()),
             ..Default::default()
-        })),
+        }),
         ..Default::default()
     };
 
@@ -312,7 +312,7 @@ async fn test_newsletter_send_media_message() -> anyhow::Result<()> {
 
     if let Some(ref decoded) = msg.message {
         assert!(
-            decoded.image_message.is_some(),
+            decoded.image_message.is_set(),
             "decoded message should contain image_message"
         );
     }

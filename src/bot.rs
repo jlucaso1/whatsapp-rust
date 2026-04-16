@@ -504,7 +504,7 @@ impl<B, T, H, R> BotBuilder<B, T, H, R> {
     ///             tertiary: Some(0),
     ///             ..Default::default()
     ///         }),
-    ///         Some(PlatformType::Chrome),
+    ///         Some(PlatformType::CHROME),
     ///     )
     ///     .build()
     ///     .await?;
@@ -882,7 +882,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(http_client)
-            .with_device_props(Some(custom_os.clone()), Some(custom_version), None)
+            .with_device_props(Some(custom_os.clone()), Some(custom_version.clone()), None)
             .with_runtime(TokioRuntime)
             .build()
             .await
@@ -894,7 +894,10 @@ mod tests {
 
         // Verify the device props were overridden
         assert_eq!(device.device_props.os, Some(custom_os));
-        assert_eq!(device.device_props.version, Some(custom_version));
+        assert_eq!(
+            device.device_props.version.as_option(),
+            Some(&custom_version)
+        );
     }
 
     #[tokio::test]
@@ -923,8 +926,8 @@ mod tests {
         assert_eq!(device.device_props.os, Some(custom_os));
         // Version should be the default since we didn't override it
         assert_eq!(
-            device.device_props.version,
-            Some(wacore::store::Device::default_device_props_version())
+            device.device_props.version.as_option(),
+            Some(&wacore::store::Device::default_device_props_version())
         );
     }
 
@@ -945,7 +948,7 @@ mod tests {
             .with_backend(backend)
             .with_http_client(http_client)
             .with_transport_factory(transport)
-            .with_device_props(None, Some(custom_version), None)
+            .with_device_props(None, Some(custom_version.clone()), None)
             .with_runtime(TokioRuntime)
             .build()
             .await
@@ -956,7 +959,10 @@ mod tests {
         let device = persistence_manager.get_device_snapshot().await;
 
         // Verify only version was overridden, OS should be default ("rust")
-        assert_eq!(device.device_props.version, Some(custom_version));
+        assert_eq!(
+            device.device_props.version.as_option(),
+            Some(&custom_version)
+        );
         // OS should be the default since we didn't override it
         assert_eq!(
             device.device_props.os,
@@ -974,7 +980,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(http_client)
-            .with_device_props(None, None, Some(wa::device_props::PlatformType::Chrome))
+            .with_device_props(None, None, Some(wa::device_props::PlatformType::CHROME))
             .with_runtime(TokioRuntime)
             .build()
             .await
@@ -987,7 +993,7 @@ mod tests {
         // Verify platform type was set to Chrome
         assert_eq!(
             device.device_props.platform_type,
-            Some(wa::device_props::PlatformType::Chrome as i32)
+            Some(wa::device_props::PlatformType::CHROME)
         );
         // OS and version should remain default
         assert_eq!(
@@ -995,8 +1001,8 @@ mod tests {
             Some(wacore::store::Device::default_os().to_string())
         );
         assert_eq!(
-            device.device_props.version,
-            Some(wacore::store::Device::default_device_props_version())
+            device.device_props.version.as_option(),
+            Some(&wacore::store::Device::default_device_props_version())
         );
     }
 
@@ -1013,7 +1019,7 @@ mod tests {
             tertiary: Some(0),
             ..Default::default()
         };
-        let custom_platform = wa::device_props::PlatformType::Safari;
+        let custom_platform = wa::device_props::PlatformType::SAFARI;
 
         let bot = Bot::builder()
             .with_backend(backend)
@@ -1021,7 +1027,7 @@ mod tests {
             .with_http_client(http_client)
             .with_device_props(
                 Some(custom_os.clone()),
-                Some(custom_version),
+                Some(custom_version.clone()),
                 Some(custom_platform),
             )
             .with_runtime(TokioRuntime)
@@ -1035,11 +1041,11 @@ mod tests {
 
         // Verify all device props were overridden
         assert_eq!(device.device_props.os, Some(custom_os));
-        assert_eq!(device.device_props.version, Some(custom_version));
         assert_eq!(
-            device.device_props.platform_type,
-            Some(custom_platform as i32)
+            device.device_props.version.as_option(),
+            Some(&custom_version)
         );
+        assert_eq!(device.device_props.platform_type, Some(custom_platform));
     }
 
     #[tokio::test]

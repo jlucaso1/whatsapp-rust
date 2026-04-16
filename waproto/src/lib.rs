@@ -5,6 +5,13 @@
 
 #![allow(clippy::large_enum_variant)]
 pub mod whatsapp {
+    #![allow(
+        non_camel_case_types,
+        non_snake_case,
+        unreachable_patterns,
+        clippy::derivable_impls,
+        clippy::match_single_binding
+    )]
     #[rustfmt::skip]
     include!("whatsapp.rs");
 }

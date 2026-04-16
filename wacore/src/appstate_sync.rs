@@ -4,7 +4,7 @@ use std::sync::Arc;
 use anyhow::{Result, anyhow};
 use async_lock::Mutex;
 use async_trait::async_trait;
-use prost::Message;
+use buffa::Message;
 use thiserror::Error;
 
 use crate::appstate::hash::HashState;
@@ -110,17 +110,21 @@ impl AppStateProcessor {
         if pl.snapshot.is_none()
             && let Some(ext) = &pl.snapshot_ref
             && let Ok(data) = download(ext)
-            && let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice())
+            && let Ok(snapshot) = wa::SyncdSnapshot::decode_from_slice(data.as_slice())
         {
             pl.snapshot = Some(snapshot);
         }
 
         // Download external mutations for each patch (matches WhatsApp Web behavior)
         for patch in &mut pl.patches {
-            if let Some(ext) = &patch.external_mutations {
-                let patch_version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+            if let Some(ext) = patch.external_mutations.as_option() {
+                let patch_version = patch
+                    .version
+                    .as_option()
+                    .and_then(|v| v.version)
+                    .unwrap_or(0);
                 match download(ext) {
-                    Ok(data) => match wa::SyncdMutations::decode(data.as_slice()) {
+                    Ok(data) => match wa::SyncdMutations::decode_from_slice(data.as_slice()) {
                         Ok(ext_mutations) => {
                             log::trace!(
                                 target: "AppState",
@@ -170,7 +174,7 @@ impl AppStateProcessor {
         if pl.snapshot.is_none()
             && let Some(ext) = &pl.snapshot_ref
             && let Ok(data) = download(ext)
-            && let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice())
+            && let Ok(snapshot) = wa::SyncdSnapshot::decode_from_slice(data.as_slice())
         {
             pl.snapshot = Some(snapshot);
         }
@@ -178,10 +182,14 @@ impl AppStateProcessor {
         // Download external mutations for each patch (matches WhatsApp Web behavior)
         // WhatsApp Web: if (r.externalMutations) { n = yield downloadExternalPatch(e, r) }
         for patch in &mut pl.patches {
-            if let Some(ext) = &patch.external_mutations {
-                let patch_version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+            if let Some(ext) = patch.external_mutations.as_option() {
+                let patch_version = patch
+                    .version
+                    .as_option()
+                    .and_then(|v| v.version)
+                    .unwrap_or(0);
                 match download(ext) {
-                    Ok(data) => match wa::SyncdMutations::decode(data.as_slice()) {
+                    Ok(data) => match wa::SyncdMutations::decode_from_slice(data.as_slice()) {
                         Ok(ext_mutations) => {
                             log::trace!(
                                 target: "AppState",
@@ -270,7 +278,7 @@ impl AppStateProcessor {
                 && let Some(ext) = &pl.snapshot_ref
             {
                 match download(ext) {
-                    Ok(data) => match wa::SyncdSnapshot::decode(data.as_slice()) {
+                    Ok(data) => match wa::SyncdSnapshot::decode_from_slice(data.as_slice()) {
                         Ok(snapshot) => pl.snapshot = Some(snapshot),
                         Err(e) => {
                             log::warn!(target: "AppState", "Failed to decode external snapshot for {:?}: {e}", pl.name);
@@ -284,19 +292,27 @@ impl AppStateProcessor {
 
             // Download external mutations for each patch
             for patch in &mut pl.patches {
-                if let Some(ext) = &patch.external_mutations {
+                if let Some(ext) = patch.external_mutations.as_option() {
                     match download(ext) {
-                        Ok(data) => match wa::SyncdMutations::decode(data.as_slice()) {
+                        Ok(data) => match wa::SyncdMutations::decode_from_slice(data.as_slice()) {
                             Ok(ext_mutations) => {
                                 patch.mutations = ext_mutations.mutations;
                             }
                             Err(e) => {
-                                let v = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+                                let v = patch
+                                    .version
+                                    .as_option()
+                                    .and_then(|v| v.version)
+                                    .unwrap_or(0);
                                 log::warn!(target: "AppState", "Failed to decode external mutations for {:?} v{}: {e}", pl.name, v);
                             }
                         },
                         Err(e) => {
-                            let v = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+                            let v = patch
+                                .version
+                                .as_option()
+                                .and_then(|v| v.version)
+                                .unwrap_or(0);
                             log::warn!(target: "AppState", "Failed to download external mutations for {:?} v{}: {e}", pl.name, v);
                         }
                     }
@@ -372,8 +388,8 @@ impl AppStateProcessor {
             // Collect index MACs we need to look up (pre-allocate with upper bound)
             let mut need_db_lookup: Vec<Vec<u8>> = Vec::with_capacity(patch.mutations.len());
             for m in &patch.mutations {
-                if let Some(rec) = &m.record
-                    && let Some(ind) = &rec.index
+                if let Some(rec) = m.record.as_option()
+                    && let Some(ind) = rec.index.as_option()
                     && let Some(index_mac) = &ind.blob
                     && !need_db_lookup.iter().any(|v| v == index_mac)
                 {
@@ -486,8 +502,8 @@ impl AppStateProcessor {
         let mut db_prev: std::collections::HashMap<Vec<u8>, Vec<u8>> =
             std::collections::HashMap::new();
         for m in &mutations {
-            if let Some(rec) = &m.record
-                && let Some(ind) = &rec.index
+            if let Some(rec) = m.record.as_option()
+                && let Some(ind) = rec.index.as_option()
                 && let Some(index_mac) = &ind.blob
                 && let Some(mac) = self
                     .backend
@@ -512,8 +528,9 @@ impl AppStateProcessor {
         // Build the patch — matching whatsmeow: no Version or DeviceIndex fields
         let mut patch = wa::SyncdPatch {
             snapshot_mac: Some(snapshot_mac),
-            key_id: Some(wa::KeyId {
+            key_id: buffa::MessageField::some(wa::KeyId {
                 id: Some(key_id.clone()),
+                ..Default::default()
             }),
             mutations,
             ..Default::default()

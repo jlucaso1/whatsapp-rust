@@ -720,19 +720,18 @@ mod tests {
 
     /// Build a dummy key-index-list node for device IDs (used in test fixtures)
     fn build_test_key_index_list_node(device_ids: &[u16]) -> Node {
-        use prost::Message;
+        use buffa::Message;
         let valid_indexes: Vec<u32> = device_ids.iter().map(|&id| id as u32).collect();
-        let key_index = waproto::whatsapp::AdvKeyIndexList {
+        let key_index = waproto::whatsapp::ADVKeyIndexList {
             raw_id: Some(1),
             timestamp: Some(1000),
             current_index: Some(valid_indexes.iter().copied().max().unwrap_or(0)),
             valid_indexes,
-            account_type: None,
+            ..Default::default()
         };
-        let signed = waproto::whatsapp::AdvSignedKeyIndexList {
+        let signed = waproto::whatsapp::ADVSignedKeyIndexList {
             details: Some(key_index.encode_to_vec()),
-            account_signature: None,
-            account_signature_key: None,
+            ..Default::default()
         };
         NodeBuilder::new("key-index-list")
             .attr("ts", "1000")

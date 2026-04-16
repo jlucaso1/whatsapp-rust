@@ -24,6 +24,7 @@ async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
+buffa = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["now", "serde"] }
 ctr = { workspace = true }
@@ -38,7 +39,6 @@ itoa = { workspace = true }
 log = { workspace = true }
 md5 = "0.8.0"
 portable-atomic = { workspace = true }
-prost = { workspace = true }
 rand = { workspace = true }
 serde = { workspace = true }
 serde-big-array = { workspace = true }

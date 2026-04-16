@@ -4,7 +4,7 @@
 //! 1. Patches have external_mutations that need to be downloaded
 //! 2. REMOVE mutations reference entries we don't have locally (hasMissingRemove)
 
-use prost::Message;
+use buffa::Message;
 use wacore::appstate::WAPATCH_INTEGRITY;
 use wacore::appstate::hash::{HashState, generate_content_mac};
 use wacore::appstate::keys::expand_app_state_keys;
@@ -18,16 +18,30 @@ fn make_mutation(
     value_blob: Option<Vec<u8>>,
 ) -> wa::SyncdMutation {
     wa::SyncdMutation {
-        operation: Some(op as i32),
-        record: Some(wa::SyncdRecord {
-            index: Some(wa::SyncdIndex {
+        operation: Some(op),
+        record: wa::SyncdRecord {
+            index: wa::SyncdIndex {
                 blob: Some(index_mac),
-            }),
-            value: value_blob.map(|b| wa::SyncdValue { blob: Some(b) }),
-            key_id: Some(wa::KeyId {
+                ..Default::default()
+            }
+            .into(),
+            value: match value_blob {
+                Some(b) => wa::SyncdValue {
+                    blob: Some(b),
+                    ..Default::default()
+                }
+                .into(),
+                None => Default::default(),
+            },
+            key_id: wa::KeyId {
                 id: Some(key_id.to_vec()),
-            }),
-        }),
+                ..Default::default()
+            }
+            .into(),
+            ..Default::default()
+        }
+        .into(),
+        ..Default::default()
     }
 }
 
@@ -40,7 +54,7 @@ fn create_value_blob(
     let mut content = iv.to_vec();
     content.extend_from_slice(&ciphertext);
     let value_mac = generate_content_mac(
-        wa::syncd_mutation::SyncdOperation::Set,
+        wa::syncd_mutation::SyncdOperation::SET,
         &content,
         key_id,
         &keys.value_mac,
@@ -58,7 +72,7 @@ fn test_has_missing_remove_flag_set_on_remove_without_previous_value() {
 
     // Create a REMOVE mutation for an entry that doesn't exist locally
     let mutations = vec![make_mutation(
-        wa::syncd_mutation::SyncdOperation::Remove,
+        wa::syncd_mutation::SyncdOperation::REMOVE,
         key_id,
         index_mac,
         None,
@@ -86,7 +100,7 @@ fn test_has_missing_remove_flag_not_set_on_set_without_previous_value() {
 
     // Create a SET mutation (new entry, no previous value)
     let mutations = vec![make_mutation(
-        wa::syncd_mutation::SyncdOperation::Set,
+        wa::syncd_mutation::SyncdOperation::SET,
         key_id,
         index_mac,
         Some(value_blob),
@@ -110,7 +124,7 @@ fn test_has_missing_remove_flag_not_set_when_previous_value_exists() {
 
     // Create a REMOVE mutation for an entry that DOES exist locally
     let mutations = vec![make_mutation(
-        wa::syncd_mutation::SyncdOperation::Remove,
+        wa::syncd_mutation::SyncdOperation::REMOVE,
         key_id,
         index_mac.clone(),
         None,
@@ -148,7 +162,7 @@ fn test_lthash_diverges_on_missing_remove() {
 
     let mut state = HashState::default();
     let set_mutation = make_mutation(
-        wa::syncd_mutation::SyncdOperation::Set,
+        wa::syncd_mutation::SyncdOperation::SET,
         key_id,
         index_mac_1.clone(),
         Some(value_blob_1),
@@ -168,7 +182,7 @@ fn test_lthash_diverges_on_missing_remove() {
     // Now simulate a REMOVE for an entry we DON'T have (index_mac_2)
     let index_mac_2 = vec![2u8; 32];
     let remove_mutation = make_mutation(
-        wa::syncd_mutation::SyncdOperation::Remove,
+        wa::syncd_mutation::SyncdOperation::REMOVE,
         key_id,
         index_mac_2,
         None,
@@ -195,14 +209,14 @@ fn test_external_mutations_decode_from_syncd_mutations() {
     let keys = expand_app_state_keys(&master_key);
 
     let mutation1 = make_mutation(
-        wa::syncd_mutation::SyncdOperation::Set,
+        wa::syncd_mutation::SyncdOperation::SET,
         key_id,
         vec![1u8; 32],
         Some(create_value_blob(&keys, key_id)),
     );
 
     let mutation2 = make_mutation(
-        wa::syncd_mutation::SyncdOperation::Remove,
+        wa::syncd_mutation::SyncdOperation::REMOVE,
         key_id,
         vec![2u8; 32],
         None,
@@ -211,21 +225,22 @@ fn test_external_mutations_decode_from_syncd_mutations() {
     // Encode as SyncdMutations (what external_mutations downloads return)
     let syncd_mutations = wa::SyncdMutations {
         mutations: vec![mutation1, mutation2],
+        ..Default::default()
     };
 
     let encoded = syncd_mutations.encode_to_vec();
 
     // Decode back
-    let decoded = wa::SyncdMutations::decode(encoded.as_slice()).expect("should decode");
+    let decoded = wa::SyncdMutations::decode_from_slice(&encoded).expect("should decode");
 
     assert_eq!(decoded.mutations.len(), 2);
     assert_eq!(
         decoded.mutations[0].operation,
-        Some(wa::syncd_mutation::SyncdOperation::Set as i32)
+        Some(wa::syncd_mutation::SyncdOperation::SET)
     );
     assert_eq!(
         decoded.mutations[1].operation,
-        Some(wa::syncd_mutation::SyncdOperation::Remove as i32)
+        Some(wa::syncd_mutation::SyncdOperation::REMOVE)
     );
 }
 
@@ -247,17 +262,18 @@ fn test_validate_patch_macs_skips_on_has_missing_remove() {
 
     // Create a patch with a snapshot_mac that won't match our state
     let patch = wa::SyncdPatch {
-        version: Some(wa::SyncdVersion { version: Some(2) }),
-        mutations: vec![],
-        external_mutations: None,
+        version: wa::SyncdVersion {
+            version: Some(2),
+            ..Default::default()
+        }
+        .into(),
         snapshot_mac: Some(vec![0u8; 32]), // This won't match our computed MAC
-        patch_mac: None,
-        key_id: Some(wa::KeyId {
+        key_id: wa::KeyId {
             id: Some(key_id.to_vec()),
-        }),
-        exit_code: None,
-        device_index: None,
-        client_debug_data: None,
+            ..Default::default()
+        }
+        .into(),
+        ..Default::default()
     };
 
     // Without has_missing_remove, this would fail
@@ -293,7 +309,7 @@ fn test_mixed_set_and_remove_with_missing_remove() {
     let value_mac_known = value_blob_known[value_blob_known.len() - 32..].to_vec();
 
     let set_known = make_mutation(
-        wa::syncd_mutation::SyncdOperation::Set,
+        wa::syncd_mutation::SyncdOperation::SET,
         key_id,
         index_mac_known.clone(),
         Some(value_blob_known),
@@ -313,19 +329,19 @@ fn test_mixed_set_and_remove_with_missing_remove() {
 
     let mutations = vec![
         make_mutation(
-            wa::syncd_mutation::SyncdOperation::Set,
+            wa::syncd_mutation::SyncdOperation::SET,
             key_id,
             index_mac_new,
             Some(value_blob_new),
         ),
         make_mutation(
-            wa::syncd_mutation::SyncdOperation::Remove,
+            wa::syncd_mutation::SyncdOperation::REMOVE,
             key_id,
             index_mac_known.clone(),
             None,
         ),
         make_mutation(
-            wa::syncd_mutation::SyncdOperation::Remove,
+            wa::syncd_mutation::SyncdOperation::REMOVE,
             key_id,
             index_mac_unknown,
             None,

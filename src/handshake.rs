@@ -1,7 +1,7 @@
 use crate::socket::NoiseSocket;
 use crate::transport::{Transport, TransportEvent};
+use buffa::Message;
 use log::{debug, info, warn};
-use prost::Message;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;

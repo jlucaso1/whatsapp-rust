@@ -269,14 +269,14 @@ impl PreKeyStore for Device {
         &self,
         prekey_id: u32,
     ) -> Result<Option<PreKeyRecordStructure>, StoreError> {
-        use prost::Message;
+        use buffa::Message;
         use wacore::libsignal::protocol::KeyPair;
         use wacore::libsignal::store::record_helpers::new_pre_key_record;
 
         match self.backend.load_prekey(prekey_id).await {
             Ok(Some(bytes)) => {
                 // Try new format first (protobuf-encoded PreKeyRecordStructure)
-                if let Ok(record) = PreKeyRecordStructure::decode(bytes.as_ref()) {
+                if let Ok(record) = PreKeyRecordStructure::decode_from_slice(bytes.as_ref()) {
                     return Ok(Some(record));
                 }
 
@@ -304,7 +304,7 @@ impl PreKeyStore for Device {
         record: PreKeyRecordStructure,
         uploaded: bool,
     ) -> Result<(), StoreError> {
-        use prost::Message;
+        use buffa::Message;
         let bytes = record.encode_to_vec();
         self.backend
             .store_prekey(prekey_id, &bytes, uploaded)

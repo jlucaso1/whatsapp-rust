@@ -9,13 +9,14 @@ description = "Protocol Buffers definitions for WhatsApp"
 
 [features]
 default = []
-generate = ["dep:prost-build"]
+generate = ["dep:buffa-build"]
 serde-deserialize = []
 serde-snake-case = ["serde-deserialize"]
 
 [dependencies]
-prost = { workspace = true, features = ["derive"] }
+buffa = { workspace = true }
+bytes = { workspace = true }
 serde = { workspace = true }
 
 [build-dependencies]
-prost-build = { workspace = true, optional = true }
+buffa-build = { workspace = true, optional = true }

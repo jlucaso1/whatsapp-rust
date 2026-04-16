@@ -1,11 +1,11 @@
 //! Full send/receive pipeline benchmarks using real `prepare_*_stanza` functions.
 
 use async_trait::async_trait;
+use buffa::Message as ProtoMessage;
 use iai_callgrind::{
     Callgrind, FlamegraphConfig, LibraryBenchmarkConfig, library_benchmark,
     library_benchmark_group, main,
 };
-use prost::Message as ProtoMessage;
 use std::collections::HashMap;
 use std::hint::black_box;
 use wacore::client::context::{GroupInfo, SendContextResolver};

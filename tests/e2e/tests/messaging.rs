@@ -93,15 +93,15 @@ async fn test_message_revoke() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(msg, _) if msg.protocol_message.is_some()),
+            |e| matches!(e, Event::Message(msg, _) if msg.protocol_message.is_set()),
         )
         .await?;
 
     if let Event::Message(msg, _) = &*event {
-        let proto = msg.protocol_message.as_ref().unwrap();
+        let proto = msg.protocol_message.as_option().unwrap();
         assert_eq!(
-            proto.r#type(),
-            wa::message::protocol_message::Type::Revoke,
+            proto.r#type,
+            Some(wa::message::protocol_message::Type::REVOKE),
             "Should be a revoke protocol message"
         );
     }

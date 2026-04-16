@@ -1,7 +1,7 @@
 use crate::libsignal::crypto::CryptographicHash;
 use anyhow::{Result, anyhow};
 use base64::Engine as _;
-use prost::Message as ProtoMessage;
+use buffa::Message as ProtoMessage;
 use waproto::whatsapp as wa;
 
 pub struct MessageUtils;
@@ -23,8 +23,8 @@ impl MessageUtils {
     /// Encode + pad in a single pre-sized allocation.
     pub fn encode_and_pad(msg: &wa::Message) -> Vec<u8> {
         let pad = Self::random_pad_len();
-        let mut buf = Vec::with_capacity(msg.encoded_len() + pad as usize);
-        msg.encode(&mut buf).expect("encode into pre-sized Vec");
+        let mut buf = Vec::with_capacity(msg.compute_size() as usize + pad as usize);
+        msg.encode(&mut buf);
         buf.resize(buf.len() + pad as usize, pad);
         buf
     }
@@ -78,7 +78,7 @@ impl MessageUtils {
 /// runtime-independent portion of `handle_decrypted_plaintext`.
 pub fn decode_plaintext(padded_plaintext: &[u8], padding_version: u8) -> Result<wa::Message> {
     let plaintext_slice = MessageUtils::unpad_message_ref(padded_plaintext, padding_version)?;
-    wa::Message::decode(plaintext_slice)
+    wa::Message::decode_from_slice(plaintext_slice)
         .map_err(|e| anyhow::anyhow!("Failed to decode decrypted plaintext: {e}"))
 }
 
@@ -94,11 +94,12 @@ pub fn unwrap_device_sent(mut msg: wa::Message) -> wa::Message {
         if let Some(mut inner) = dsm.message.take() {
             inner.message_context_info = crate::proto_helpers::merge_dsm_context(
                 inner.message_context_info.take(),
-                msg.message_context_info.as_ref(),
-            );
-            return *inner;
+                msg.message_context_info.as_option(),
+            )
+            .into();
+            return inner;
         }
-        msg.device_sent_message = Some(dsm);
+        msg.device_sent_message = buffa::MessageField::some(dsm);
     }
     msg
 }
@@ -110,33 +111,40 @@ pub fn unwrap_device_sent(mut msg: wa::Message) -> wa::Message {
 /// `pkmsg` enc node.  We must process it (store the sender key) but should
 /// not surface it as a user event.
 pub fn is_sender_key_distribution_only(msg: &wa::Message) -> bool {
-    if msg.sender_key_distribution_message.is_none()
+    if msg.sender_key_distribution_message.is_unset()
         && msg
             .fast_ratchet_key_sender_key_distribution_message
-            .is_none()
+            .is_unset()
     {
         return false;
     }
 
     // Fast path: most common user-visible fields (avoids clone for the typical case).
     if msg.conversation.is_some()
-        || msg.extended_text_message.is_some()
-        || msg.image_message.is_some()
-        || msg.video_message.is_some()
-        || msg.audio_message.is_some()
-        || msg.document_message.is_some()
-        || msg.reaction_message.is_some()
-        || msg.protocol_message.is_some()
+        || msg.extended_text_message.is_set()
+        || msg.image_message.is_set()
+        || msg.video_message.is_set()
+        || msg.audio_message.is_set()
+        || msg.document_message.is_set()
+        || msg.reaction_message.is_set()
+        || msg.protocol_message.is_set()
+        || msg.sticker_message.is_set()
+        || msg.contact_message.is_set()
+        || msg.location_message.is_set()
+        || msg.live_location_message.is_set()
     {
         return false;
     }
 
-    // Slow path: clone and compare to default to catch all current and future fields.
+    // Slow path: encode-and-compare to catch all current and future fields.
+    // buffa's MessageField PartialEq treats set-to-default as equal to unset,
+    // but protobuf wire format distinguishes them, so byte comparison is correct.
+    use buffa::Message;
     let mut stripped = msg.clone();
-    stripped.sender_key_distribution_message = None;
-    stripped.fast_ratchet_key_sender_key_distribution_message = None;
-    stripped.message_context_info = None;
-    stripped == wa::Message::default()
+    stripped.sender_key_distribution_message = Default::default();
+    stripped.fast_ratchet_key_sender_key_distribution_message = Default::default();
+    stripped.message_context_info = Default::default();
+    stripped.encode_to_vec() == wa::Message::default().encode_to_vec()
 }
 
 /// Parse a message stanza into a `MessageInfo` struct.

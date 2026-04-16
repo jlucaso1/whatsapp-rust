@@ -10,7 +10,7 @@ use crate::reporting_token::{
 use crate::types::jid::JidExt;
 use crate::types::jid::make_sender_key_name;
 use anyhow::{Result, anyhow};
-use prost::Message as ProtoMessage;
+use buffa::Message as ProtoMessage;
 use rand::{CryptoRng, Rng};
 use std::collections::HashSet;
 use wacore_binary::Node;
@@ -52,10 +52,10 @@ fn unwrap_message(msg: &wa::Message) -> &wa::Message {
     macro_rules! try_unwrap {
         ($($field:ident),+ $(,)?) => {
             $(
-                if let Some(ref w) = msg.$field {
-                    if let Some(ref inner) = w.message {
-                        return unwrap_message(inner);
-                    }
+                if msg.$field.is_set()
+                    && msg.$field.message.is_set()
+                {
+                    return unwrap_message(&msg.$field.message);
                 }
             )+
         };
@@ -71,10 +71,8 @@ fn unwrap_message(msg: &wa::Message) -> &wa::Message {
         associated_child_message,
         poll_creation_option_image_message,
     );
-    if let Some(ref dsm) = msg.device_sent_message
-        && let Some(ref inner) = dsm.message
-    {
-        return unwrap_message(inner);
+    if msg.device_sent_message.is_set() && msg.device_sent_message.message.is_set() {
+        return unwrap_message(&msg.device_sent_message.message);
     }
     msg
 }
@@ -83,51 +81,53 @@ fn unwrap_message(msg: &wa::Message) -> &wa::Message {
 pub fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
     let msg = unwrap_message(msg);
 
-    if msg.reaction_message.is_some() || msg.enc_reaction_message.is_some() {
+    if msg.reaction_message.is_set() || msg.enc_reaction_message.is_set() {
         return stanza::MSG_TYPE_REACTION;
     }
-    if msg.event_message.is_some() || msg.enc_event_response_message.is_some() {
+    if msg.event_message.is_set() || msg.enc_event_response_message.is_set() {
         return stanza::MSG_TYPE_EVENT;
     }
-    if let Some(ref sec) = msg.secret_encrypted_message {
+    if msg.secret_encrypted_message.is_set() {
         use wa::message::secret_encrypted_message::SecretEncType;
-        match SecretEncType::try_from(sec.secret_enc_type.unwrap_or(0)) {
-            Ok(SecretEncType::EventEdit) => return stanza::MSG_TYPE_EVENT,
-            Ok(SecretEncType::MessageEdit) => return stanza::MSG_TYPE_TEXT,
-            Ok(SecretEncType::PollEdit) => return stanza::MSG_TYPE_POLL,
+        let sec = &*msg.secret_encrypted_message;
+        match sec.secret_enc_type {
+            Some(SecretEncType::EVENT_EDIT) => return stanza::MSG_TYPE_EVENT,
+            Some(SecretEncType::MESSAGE_EDIT) => return stanza::MSG_TYPE_TEXT,
+            Some(SecretEncType::POLL_EDIT) => return stanza::MSG_TYPE_POLL,
             _ => {}
         }
     }
-    if msg.poll_creation_message.is_some()
-        || msg.poll_creation_message_v2.is_some()
-        || msg.poll_creation_message_v3.is_some()
-        || msg.poll_creation_message_v5.is_some()
-        || msg.poll_update_message.is_some()
+    if msg.poll_creation_message.is_set()
+        || msg.poll_creation_message_v2.is_set()
+        || msg.poll_creation_message_v3.is_set()
+        || msg.poll_creation_message_v5.is_set()
+        || msg.poll_update_message.is_set()
     {
         return stanza::MSG_TYPE_POLL;
     }
     if msg.conversation.is_some()
-        || msg.protocol_message.is_some()
-        || msg.keep_in_chat_message.is_some()
-        || msg.edited_message.is_some()
-        || msg.pin_in_chat_message.is_some()
-        || msg.interactive_message.is_some()
-        || msg.template_button_reply_message.is_some()
-        || msg.request_phone_number_message.is_some()
-        || msg.enc_comment_message.is_some()
-        || msg.newsletter_admin_invite_message.is_some()
-        || msg.newsletter_follower_invite_message_v2.is_some()
-        || msg.message_history_notice.is_some()
+        || msg.protocol_message.is_set()
+        || msg.keep_in_chat_message.is_set()
+        || msg.edited_message.is_set()
+        || msg.pin_in_chat_message.is_set()
+        || msg.interactive_message.is_set()
+        || msg.template_button_reply_message.is_set()
+        || msg.request_phone_number_message.is_set()
+        || msg.enc_comment_message.is_set()
+        || msg.newsletter_admin_invite_message.is_set()
+        || msg.newsletter_follower_invite_message_v2.is_set()
+        || msg.message_history_notice.is_set()
     {
         return stanza::MSG_TYPE_TEXT;
     }
     // pollResultSnapshotMessage maps to "text" by default in WA Web
     // (gated behind isPollResultSnapshotPollTypeEnvelopeEnabled for "poll")
-    if msg.poll_result_snapshot_message.is_some() || msg.poll_result_snapshot_message_v3.is_some() {
+    if msg.poll_result_snapshot_message.is_set() || msg.poll_result_snapshot_message_v3.is_set() {
         return stanza::MSG_TYPE_TEXT;
     }
-    if let Some(ref ext) = msg.extended_text_message {
-        if ext
+    if msg.extended_text_message.is_set() {
+        if msg
+            .extended_text_message
             .matched_text
             .as_ref()
             .is_some_and(|t| !t.trim().is_empty())
@@ -144,60 +144,61 @@ pub fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
 pub fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
     let msg = unwrap_message(msg);
 
-    if msg.image_message.is_some() {
+    if msg.image_message.is_set() {
         return Some("image");
     }
-    if let Some(ref vid) = msg.video_message {
-        return if vid.gif_playback == Some(true) {
+    if msg.video_message.is_set() {
+        return if msg.video_message.gif_playback == Some(true) {
             Some("gif")
         } else {
             Some("video")
         };
     }
-    if msg.ptv_message.is_some() {
+    if msg.ptv_message.is_set() {
         return Some("ptv");
     }
-    if let Some(ref audio) = msg.audio_message {
-        return if audio.ptt == Some(true) {
+    if msg.audio_message.is_set() {
+        return if msg.audio_message.ptt == Some(true) {
             Some("ptt")
         } else {
             Some("audio")
         };
     }
-    if msg.document_message.is_some() {
+    if msg.document_message.is_set() {
         return Some("document");
     }
-    if msg.sticker_message.is_some() {
+    if msg.sticker_message.is_set() {
         return Some("sticker");
     }
-    if msg.sticker_pack_message.is_some() {
+    if msg.sticker_pack_message.is_set() {
         return Some("sticker_pack");
     }
-    if let Some(ref loc) = msg.location_message {
-        return if loc.is_live == Some(true) {
+    if msg.location_message.is_set() {
+        return if msg.location_message.is_live == Some(true) {
             Some("livelocation")
         } else {
             Some("location")
         };
     }
-    if msg.live_location_message.is_some() {
+    if msg.live_location_message.is_set() {
         return Some("livelocation");
     }
-    if msg.contact_message.is_some() {
+    if msg.contact_message.is_set() {
         return Some("vcard");
     }
-    if msg.contacts_array_message.is_some() {
+    if msg.contacts_array_message.is_set() {
         return Some("contact_array");
     }
-    if let Some(ref ext) = msg.extended_text_message
-        && ext
+    if msg.extended_text_message.is_set()
+        && msg
+            .extended_text_message
             .matched_text
             .as_ref()
             .is_some_and(|t| !t.trim().is_empty())
     {
         return Some("url");
     }
-    if msg.group_invite_message.is_some() {
+    if msg.group_invite_message.is_set() {
         return Some("url");
     }
     None
@@ -211,36 +212,35 @@ pub fn should_hide_decrypt_fail(msg: &wa::Message) -> bool {
     use wa::message::protocol_message::Type as ProtocolType;
     use wa::message::secret_encrypted_message::SecretEncType;
 
-    msg.reaction_message.is_some()
-        || msg.enc_reaction_message.is_some()
-        || msg.pin_in_chat_message.is_some()
-        || msg.edited_message.is_some()
-        || msg.keep_in_chat_message.is_some()
-        || msg.enc_event_response_message.is_some()
-        || msg
-            .poll_update_message
-            .as_ref()
-            .is_some_and(|p| p.vote.is_some())
-        || msg.message_history_notice.is_some()
-        || msg.secret_encrypted_message.as_ref().is_some_and(|s| {
+    msg.reaction_message.is_set()
+        || msg.enc_reaction_message.is_set()
+        || msg.pin_in_chat_message.is_set()
+        || msg.edited_message.is_set()
+        || msg.keep_in_chat_message.is_set()
+        || msg.enc_event_response_message.is_set()
+        || (msg.poll_update_message.is_set() && msg.poll_update_message.vote.is_set())
+        || msg.message_history_notice.is_set()
+        || msg.secret_encrypted_message.as_option().is_some_and(|s| {
             matches!(
-                SecretEncType::try_from(s.secret_enc_type.unwrap_or(0)),
-                Ok(SecretEncType::EventEdit | SecretEncType::PollEdit)
+                s.secret_enc_type,
+                Some(SecretEncType::EVENT_EDIT | SecretEncType::POLL_EDIT)
             )
         })
         || msg
             .bot_invoke_message
-            .as_ref()
-            .and_then(|b| b.message.as_ref())
-            .and_then(|m| m.protocol_message.as_ref())
-            .is_some_and(|p| p.r#type == Some(ProtocolType::RequestWelcomeMessage as i32))
-        || msg.protocol_message.as_ref().is_some_and(|p| {
+            .as_option()
+            .and_then(|b| b.message.as_option())
+            .and_then(|m| m.protocol_message.as_option())
+            .is_some_and(|p| p.r#type == Some(ProtocolType::REQUEST_WELCOME_MESSAGE))
+        || msg.protocol_message.as_option().is_some_and(|p| {
             matches!(
                 p.r#type,
-                Some(t) if t == ProtocolType::EphemeralSyncResponse as i32
-                    || t == ProtocolType::RequestWelcomeMessage as i32
-                    || t == ProtocolType::GroupMemberLabelChange as i32
-            ) || p.edited_message.is_some()
+                Some(
+                    ProtocolType::EPHEMERAL_SYNC_RESPONSE
+                        | ProtocolType::REQUEST_WELCOME_MESSAGE
+                        | ProtocolType::GROUP_MEMBER_LABEL_CHANGE
+                )
+            ) || p.edited_message.is_set()
         })
 }
 
@@ -696,7 +696,7 @@ pub async fn prepare_dm_stanza<
     resolver: &dyn SendContextResolver,
     own_jid: &Jid,
     own_lid: Option<&Jid>,
-    account: Option<&wa::AdvSignedDeviceIdentity>,
+    account: Option<&wa::ADVSignedDeviceIdentity>,
     to_jid: Jid,
     message: &wa::Message,
     request_id: String,
@@ -727,11 +727,12 @@ pub async fn prepare_dm_stanza<
     };
 
     let dsm = wa::Message {
-        device_sent_message: Some(Box::new(DeviceSentMessage {
+        device_sent_message: buffa::MessageField::some(DeviceSentMessage {
             destination_jid: Some(to_jid.to_string()),
-            message: Some(Box::new(message_for_encryption)),
+            message: buffa::MessageField::some(message_for_encryption),
             phash: None, // WA Web only sets DSM phash for groups
-        })),
+            ..Default::default()
+        }),
         ..Default::default()
     };
 
@@ -873,7 +874,7 @@ pub async fn prepare_dm_retry_stanza<S, I>(
     message: &wa::Message,
     message_id: String,
     retry_count: u8,
-    account: Option<&wa::AdvSignedDeviceIdentity>,
+    account: Option<&wa::ADVSignedDeviceIdentity>,
 ) -> Result<Node>
 where
     S: crate::libsignal::protocol::SessionStore,
@@ -937,7 +938,7 @@ pub async fn prepare_group_retry_stanza<S, I>(
     message: &wa::Message,
     message_id: String,
     retry_count: u8,
-    account: Option<&wa::AdvSignedDeviceIdentity>,
+    account: Option<&wa::ADVSignedDeviceIdentity>,
     addressing_mode: crate::types::message::AddressingMode,
 ) -> Result<Node>
 where
@@ -1012,7 +1013,7 @@ pub async fn prepare_group_stanza<
     group_info: &mut GroupInfo,
     own_jid: &Jid,
     own_lid: &Jid,
-    account: Option<&wa::AdvSignedDeviceIdentity>,
+    account: Option<&wa::ADVSignedDeviceIdentity>,
     to_jid: Jid,
     message: &wa::Message,
     request_id: String,
@@ -1188,10 +1189,13 @@ pub async fn prepare_group_stanza<
         .await?;
 
         let skdm_wrapper_msg = wa::Message {
-            sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
-                group_id: Some(to_jid.to_string()),
-                axolotl_sender_key_distribution_message: Some(axolotl_skdm_bytes),
-            }),
+            sender_key_distribution_message: buffa::MessageField::some(
+                wa::message::SenderKeyDistributionMessage {
+                    group_id: Some(to_jid.to_string()),
+                    axolotl_sender_key_distribution_message: Some(axolotl_skdm_bytes),
+                    ..Default::default()
+                },
+            ),
             ..Default::default()
         };
         let skdm_plaintext_to_encrypt = MessageUtils::encode_and_pad(&skdm_wrapper_msg);
@@ -2480,7 +2484,7 @@ mod tests {
         async fn dm_retry_pkmsg_with_account_has_device_identity() {
             let (mut ss, mut is, jid) = setup_session().await;
             let requester: Jid = jid.to_string().parse().unwrap();
-            let acc = wa::AdvSignedDeviceIdentity {
+            let acc = wa::ADVSignedDeviceIdentity {
                 details: Some(b"t".to_vec()),
                 ..Default::default()
             };
@@ -2516,7 +2520,7 @@ mod tests {
             let (mut ss, mut is, jid) = setup_session().await;
             let group: Jid = "120363098765432100@g.us".parse().unwrap();
             let p: Jid = jid.to_string().parse().unwrap();
-            let acc = wa::AdvSignedDeviceIdentity {
+            let acc = wa::ADVSignedDeviceIdentity {
                 details: Some(b"t".to_vec()),
                 ..Default::default()
             };
@@ -2568,7 +2572,7 @@ mod tests {
                 &wa::Message::default(),
                 "m2".into(),
                 3,
-                Some(&wa::AdvSignedDeviceIdentity::default()),
+                Some(&wa::ADVSignedDeviceIdentity::default()),
                 AddressingMode::Lid,
             )
             .await
@@ -2600,7 +2604,7 @@ mod tests {
         #[test]
         fn reaction() {
             let msg = wa::Message {
-                reaction_message: Some(Default::default()),
+                reaction_message: buffa::MessageField::some(Default::default()),
                 ..Default::default()
             };
             assert!(should_hide_decrypt_fail(&msg));
@@ -2609,7 +2613,7 @@ mod tests {
         #[test]
         fn pin() {
             let msg = wa::Message {
-                pin_in_chat_message: Some(Default::default()),
+                pin_in_chat_message: buffa::MessageField::some(Default::default()),
                 ..Default::default()
             };
             assert!(should_hide_decrypt_fail(&msg));
@@ -2618,8 +2622,8 @@ mod tests {
         #[test]
         fn poll_vote() {
             let msg = wa::Message {
-                poll_update_message: Some(wa::message::PollUpdateMessage {
-                    vote: Some(Default::default()),
+                poll_update_message: buffa::MessageField::some(wa::message::PollUpdateMessage {
+                    vote: buffa::MessageField::some(Default::default()),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -2630,7 +2634,7 @@ mod tests {
         #[test]
         fn poll_update_without_vote() {
             let msg = wa::Message {
-                poll_update_message: Some(Default::default()),
+                poll_update_message: buffa::MessageField::some(Default::default()),
                 ..Default::default()
             };
             assert!(!should_hide_decrypt_fail(&msg));
@@ -2639,12 +2643,13 @@ mod tests {
         #[test]
         fn reaction_inside_ephemeral_wrapper() {
             let msg = wa::Message {
-                ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
-                    message: Some(Box::new(wa::Message {
-                        reaction_message: Some(Default::default()),
+                ephemeral_message: buffa::MessageField::some(wa::message::FutureProofMessage {
+                    message: buffa::MessageField::some(wa::Message {
+                        reaction_message: buffa::MessageField::some(Default::default()),
                         ..Default::default()
-                    })),
-                })),
+                    }),
+                    ..Default::default()
+                }),
                 ..Default::default()
             };
             assert!(should_hide_decrypt_fail(&msg));

@@ -1,6 +1,6 @@
 use crate::error::NoiseError;
 use crate::state::{NoiseCipher, NoiseState};
-use prost::Message;
+use buffa::Message;
 use thiserror::Error;
 use wacore_libsignal::protocol::{KeyPair, PrivateKey, PublicKey};
 use waproto::whatsapp::cert_chain::noise_certificate;
@@ -16,10 +16,8 @@ pub const WA_CERT_PUB_KEY: [u8; 32] = [
 
 #[derive(Debug, Error)]
 pub enum HandshakeError {
-    #[error("Protobuf encoding/decoding error: {0}")]
-    Proto(#[from] prost::EncodeError),
     #[error("Protobuf decoding error: {0}")]
-    ProtoDecode(#[from] prost::DecodeError),
+    ProtoDecode(#[from] buffa::DecodeError),
     #[error("Handshake response is missing required parts")]
     IncompleteResponse,
     #[error("Crypto operation failed: {0}")]
@@ -47,7 +45,7 @@ impl HandshakeUtils {
     /// Creates a ClientHello message with the given ephemeral key
     pub fn build_client_hello(ephemeral_key: &[u8]) -> HandshakeMessage {
         HandshakeMessage {
-            client_hello: Some(wa::handshake_message::ClientHello {
+            client_hello: buffa::MessageField::some(wa::handshake_message::ClientHello {
                 ephemeral: Some(ephemeral_key.to_vec()),
                 ..Default::default()
             }),
@@ -57,19 +55,23 @@ impl HandshakeUtils {
 
     /// Extracts server handshake data from ServerHello response
     pub fn parse_server_hello(response_bytes: &[u8]) -> Result<(Vec<u8>, Vec<u8>, Vec<u8>)> {
-        let handshake_response = HandshakeMessage::decode(response_bytes)?;
-        let server_hello = handshake_response
+        let handshake_response = HandshakeMessage::decode_from_slice(response_bytes)?;
+        let mut server_hello = handshake_response
             .server_hello
+            .into_option()
             .ok_or(HandshakeError::IncompleteResponse)?;
 
         let server_ephemeral = server_hello
             .ephemeral
+            .take()
             .ok_or(HandshakeError::IncompleteResponse)?;
         let server_static_ciphertext = server_hello
             .r#static
+            .take()
             .ok_or(HandshakeError::IncompleteResponse)?;
         let certificate_ciphertext = server_hello
             .payload
+            .take()
             .ok_or(HandshakeError::IncompleteResponse)?;
 
         if server_ephemeral.len() != 32 {
@@ -89,13 +91,15 @@ impl HandshakeUtils {
 
     /// Verifies the server's certificate chain
     pub fn verify_server_cert(cert_decrypted: &[u8], static_decrypted: &[u8; 32]) -> Result<()> {
-        let cert_chain = CertChain::decode(cert_decrypted)?;
+        let cert_chain = CertChain::decode_from_slice(cert_decrypted)?;
 
         let intermediate = cert_chain
             .intermediate
+            .into_option()
             .ok_or_else(|| HandshakeError::CertVerification("Missing intermediate cert".into()))?;
         let leaf = cert_chain
             .leaf
+            .into_option()
             .ok_or_else(|| HandshakeError::CertVerification("Missing leaf cert".into()))?;
 
         // Unmarshal details and perform further checks
@@ -103,17 +107,16 @@ impl HandshakeUtils {
             HandshakeError::CertVerification("Missing intermediate details".into())
         })?;
         let intermediate_details =
-            noise_certificate::Details::decode(intermediate_details_bytes.as_slice())?;
+            noise_certificate::Details::decode_from_slice(intermediate_details_bytes.as_slice())?;
 
-        if i64::from(intermediate_details.issuer_serial()) != WA_CERT_ISSUER_SERIAL {
+        let issuer_serial = intermediate_details.issuer_serial.unwrap_or(0);
+        if i64::from(issuer_serial) != WA_CERT_ISSUER_SERIAL {
             return Err(HandshakeError::CertVerification(format!(
-                "Unexpected intermediate issuer serial: got {}, expected {}",
-                intermediate_details.issuer_serial(),
-                WA_CERT_ISSUER_SERIAL
+                "Unexpected intermediate issuer serial: got {issuer_serial}, expected {WA_CERT_ISSUER_SERIAL}",
             )));
         }
 
-        let intermediate_pk_bytes = intermediate_details.key();
+        let intermediate_pk_bytes = intermediate_details.key.as_deref().unwrap_or(&[]);
         if intermediate_pk_bytes.is_empty() {
             return Err(HandshakeError::CertVerification(
                 "Intermediate details missing key".into(),
@@ -129,18 +132,18 @@ impl HandshakeUtils {
             .details
             .as_ref()
             .ok_or_else(|| HandshakeError::CertVerification("Missing leaf details".into()))?;
-        let leaf_details = noise_certificate::Details::decode(leaf_details_bytes.as_slice())?;
+        let leaf_details =
+            noise_certificate::Details::decode_from_slice(leaf_details_bytes.as_slice())?;
 
-        if leaf_details.issuer_serial() != intermediate_details.serial() {
+        if leaf_details.issuer_serial != intermediate_details.serial {
             return Err(HandshakeError::CertVerification(format!(
-                "Leaf issuer serial mismatch: got {}, expected {}",
-                leaf_details.issuer_serial(),
-                intermediate_details.serial()
+                "Leaf issuer serial mismatch: got {:?}, expected {:?}",
+                leaf_details.issuer_serial, intermediate_details.serial
             )));
         }
 
         // Finally, check if the leaf cert's key matches the server's static key
-        if leaf_details.key() != static_decrypted {
+        if leaf_details.key.as_deref().unwrap_or(&[]) != static_decrypted {
             return Err(HandshakeError::CertVerification(
                 "Cert key does not match decrypted static key".into(),
             ));
@@ -154,7 +157,7 @@ impl HandshakeUtils {
         encrypted_payload: Vec<u8>,
     ) -> HandshakeMessage {
         HandshakeMessage {
-            client_finish: Some(wa::handshake_message::ClientFinish {
+            client_finish: buffa::MessageField::some(wa::handshake_message::ClientFinish {
                 r#static: Some(encrypted_pubkey),
                 payload: Some(encrypted_payload),
                 ..Default::default()
@@ -286,9 +289,7 @@ impl HandshakeState {
     pub fn build_client_hello(&self) -> Result<Vec<u8>> {
         let client_hello =
             HandshakeUtils::build_client_hello(self.ephemeral_kp.public_key.public_key_bytes());
-        let mut buf = Vec::new();
-        client_hello.encode(&mut buf)?;
-        Ok(buf)
+        Ok(client_hello.encode_to_vec())
     }
 
     pub fn read_server_hello_and_build_client_finish(
@@ -337,9 +338,7 @@ impl HandshakeState {
         let client_finish =
             HandshakeUtils::build_client_finish(encrypted_pubkey, encrypted_payload);
 
-        let mut buf = Vec::new();
-        client_finish.encode(&mut buf)?;
-        Ok(buf)
+        Ok(client_finish.encode_to_vec())
     }
 
     pub fn finish(self) -> Result<(NoiseCipher, NoiseCipher)> {

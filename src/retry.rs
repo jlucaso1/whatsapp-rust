@@ -1,8 +1,8 @@
 use crate::client::Client;
 use crate::message::RetryReason;
 use crate::types::events::Receipt;
+use buffa::Message;
 use log::{debug, info, warn};
-use prost::Message;
 use wacore::types::message::MessageCategory;
 
 use scopeguard;
@@ -2112,10 +2112,10 @@ mod tests {
         .await;
 
         let msg = wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some("status text".to_string()),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
@@ -2141,7 +2141,7 @@ mod tests {
                     .unwrap()
                     .0
                     .extended_text_message
-                    .as_ref()
+                    .as_option()
                     .unwrap()
                     .text
                     .as_deref(),

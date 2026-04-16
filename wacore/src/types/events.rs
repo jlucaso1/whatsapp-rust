@@ -1,9 +1,9 @@
 use crate::stanza::BusinessSubscription;
 use crate::types::message::MessageInfo;
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
+use buffa::Message;
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
-use prost::Message;
 use serde::Serialize;
 use std::fmt;
 use std::sync::{Arc, OnceLock, RwLock};
@@ -86,7 +86,7 @@ impl LazyHistorySync {
     pub fn get(&self) -> Option<&wa::HistorySync> {
         self.parsed
             .get_or_init(|| {
-                wa::HistorySync::decode(&self.raw_bytes[..])
+                wa::HistorySync::decode_from_slice(&self.raw_bytes[..])
                     .ok()
                     .map(Box::new)
             })
@@ -901,13 +901,13 @@ pub struct DeleteMessageForMeUpdate {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use prost::Message;
+    use buffa::Message;
     use waproto::whatsapp as wa;
 
     /// Build a HistorySync proto with conversations and encode it.
     fn make_history_sync_bytes(conversations: Vec<wa::Conversation>) -> Vec<u8> {
         let hs = wa::HistorySync {
-            sync_type: wa::history_sync::HistorySyncType::InitialBootstrap as i32,
+            sync_type: wa::history_sync::HistorySyncType::INITIAL_BOOTSTRAP,
             conversations,
             ..Default::default()
         };
@@ -963,7 +963,7 @@ mod tests {
         assert_eq!(lazy.raw_bytes(), &raw[..]);
 
         // Consumer can partial-decode from raw_bytes
-        let decoded = wa::HistorySync::decode(lazy.raw_bytes()).expect("should decode");
+        let decoded = wa::HistorySync::decode_from_slice(lazy.raw_bytes()).expect("should decode");
         assert_eq!(decoded.conversations[0].id, "raw@s.whatsapp.net");
     }
 
@@ -986,14 +986,17 @@ mod tests {
         let conv = wa::Conversation {
             id: "chat@s.whatsapp.net".to_string(),
             messages: vec![wa::HistorySyncMsg {
-                message: Some(wa::WebMessageInfo {
+                message: wa::WebMessageInfo {
                     key: wa::MessageKey {
                         id: Some("msg-0".to_string()),
                         ..Default::default()
-                    },
+                    }
+                    .into(),
                     ..Default::default()
-                }),
+                }
+                .into(),
                 msg_order_id: Some(0),
+                ..Default::default()
             }],
             ..Default::default()
         };
@@ -1005,7 +1008,7 @@ mod tests {
         assert_eq!(
             hs.conversations[0].messages[0]
                 .message
-                .as_ref()
+                .as_option()
                 .unwrap()
                 .key
                 .id

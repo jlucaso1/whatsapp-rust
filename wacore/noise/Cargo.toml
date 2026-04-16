@@ -13,10 +13,10 @@ crate-type = ["rlib"]
 [dependencies]
 aes-gcm = { workspace = true }
 anyhow = { workspace = true }
+buffa = { workspace = true }
 bytes = { workspace = true }
 hkdf = { workspace = true }
 log = { workspace = true }
-prost = { workspace = true }
 rand = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }

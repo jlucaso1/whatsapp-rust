@@ -59,8 +59,8 @@ macro_rules! for_each_context_info_message {
 macro_rules! for_each_context_info_impl {
     ($msg:expr, $ctx:ident, $body:block, $($field:ident),+ $(,)?) => {
         $(
-            if let Some(ref mut m) = $msg.$field {
-                if let Some(ref mut $ctx) = m.context_info $body
+            if let Some(m) = $msg.$field.as_option_mut() {
+                if let Some($ctx) = m.context_info.as_option_mut() $body
             }
         )+
     };
@@ -78,8 +78,8 @@ macro_rules! set_context_info_impl {
     ($msg:expr, $ctx:expr, $($field:ident),+ $(,)?) => {{
         let ctx = $ctx;
         $(
-            if let Some(ref mut m) = $msg.$field {
-                m.context_info = Some(ctx);
+            if let Some(m) = $msg.$field.as_option_mut() {
+                m.context_info = buffa::MessageField::some(ctx);
                 return true;
             }
         )+
@@ -129,10 +129,10 @@ pub trait MessageExt {
     /// use wacore::proto_helpers::MessageExt;
     ///
     /// let mut reply = wa::Message {
-    ///     image_message: Some(Box::new(wa::message::ImageMessage {
+    ///     image_message: buffa::MessageField::some(wa::message::ImageMessage {
     ///         // ... image data
     ///         ..Default::default()
-    ///     })),
+    ///     }),
     ///     ..Default::default()
     /// };
     ///
@@ -159,45 +159,33 @@ pub trait MessageExt {
 impl MessageExt for wa::Message {
     fn get_base_message(&self) -> &wa::Message {
         let mut current = self;
-        if let Some(msg) = self
-            .device_sent_message
-            .as_ref()
-            .and_then(|m| m.message.as_ref())
+        if let Some(dsm) = self.device_sent_message.as_option()
+            && let Some(msg) = dsm.message.as_option()
         {
             current = msg;
         }
-        if let Some(msg) = current
-            .ephemeral_message
-            .as_ref()
-            .and_then(|m| m.message.as_ref())
+        if let Some(wrapper) = current.ephemeral_message.as_option()
+            && let Some(msg) = wrapper.message.as_option()
         {
             current = msg;
         }
-        if let Some(msg) = current
-            .view_once_message
-            .as_ref()
-            .and_then(|m| m.message.as_ref())
+        if let Some(wrapper) = current.view_once_message.as_option()
+            && let Some(msg) = wrapper.message.as_option()
         {
             current = msg;
         }
-        if let Some(msg) = current
-            .view_once_message_v2
-            .as_ref()
-            .and_then(|m| m.message.as_ref())
+        if let Some(wrapper) = current.view_once_message_v2.as_option()
+            && let Some(msg) = wrapper.message.as_option()
         {
             current = msg;
         }
-        if let Some(msg) = current
-            .document_with_caption_message
-            .as_ref()
-            .and_then(|m| m.message.as_ref())
+        if let Some(wrapper) = current.document_with_caption_message.as_option()
+            && let Some(msg) = wrapper.message.as_option()
         {
             current = msg;
         }
-        if let Some(msg) = current
-            .edited_message
-            .as_ref()
-            .and_then(|m| m.message.as_ref())
+        if let Some(wrapper) = current.edited_message.as_option()
+            && let Some(msg) = wrapper.message.as_option()
         {
             current = msg;
         }
@@ -209,9 +197,9 @@ impl MessageExt for wa::Message {
             ($field:ident) => {
                 if let Some(mut wrapper) = self.$field.take() {
                     if let Some(msg) = wrapper.message.take() {
-                        self = *msg;
+                        self = msg;
                     } else {
-                        self.$field = Some(wrapper);
+                        self.$field = buffa::MessageField::some(wrapper);
                     }
                 }
             };
@@ -227,22 +215,22 @@ impl MessageExt for wa::Message {
     }
 
     fn is_ephemeral(&self) -> bool {
-        self.ephemeral_message.is_some()
+        self.ephemeral_message.is_set()
     }
 
     fn is_view_once(&self) -> bool {
-        self.view_once_message.is_some() || self.view_once_message_v2.is_some()
+        self.view_once_message.is_set() || self.view_once_message_v2.is_set()
     }
 
     fn get_caption(&self) -> Option<&str> {
         let base = self.get_base_message();
-        if let Some(msg) = &base.image_message {
+        if let Some(msg) = base.image_message.as_option() {
             return msg.caption.as_deref();
         }
-        if let Some(msg) = &base.video_message {
+        if let Some(msg) = base.video_message.as_option() {
             return msg.caption.as_deref();
         }
-        if let Some(msg) = &base.document_message {
+        if let Some(msg) = base.document_message.as_option() {
             return msg.caption.as_deref();
         }
         None
@@ -255,7 +243,7 @@ impl MessageExt for wa::Message {
         {
             return Some(text);
         }
-        if let Some(ext_text) = &base.extended_text_message
+        if let Some(ext_text) = base.extended_text_message.as_option()
             && let Some(text) = &ext_text.text
         {
             return Some(text);
@@ -270,15 +258,15 @@ impl MessageExt for wa::Message {
     }
 
     fn set_context_info(&mut self, context: wa::ContextInfo) -> bool {
-        set_context_info_on_message!(self, Box::new(context))
+        set_context_info_on_message!(self, context)
     }
 
     fn get_ephemeral_expiration(&self) -> Option<u32> {
         macro_rules! check {
             ($($field:ident),+ $(,)?) => {
                 $(
-                    if let Some(ref m) = self.$field {
-                        if let Some(ref ctx) = m.context_info {
+                    if let Some(m) = self.$field.as_option() {
+                        if let Some(ctx) = m.context_info.as_option() {
                             if let Some(exp) = ctx.expiration {
                                 if exp > 0 {
                                     return Some(exp);
@@ -300,8 +288,8 @@ impl MessageExt for wa::Message {
         macro_rules! try_set {
             ($($field:ident),+ $(,)?) => {
                 $(
-                    if let Some(ref mut m) = self.$field {
-                        let ctx = m.context_info.get_or_insert_with(|| Box::new(wa::ContextInfo::default()));
+                    if let Some(m) = self.$field.as_option_mut() {
+                        let ctx = m.context_info.get_or_insert_default();
                         ctx.expiration = Some(expiration);
                         return true;
                     }
@@ -333,7 +321,7 @@ pub(crate) fn strip_nested_context_info(msg: &mut wa::Message) {
 
         if !is_bot {
             // Break the nested quote chain.
-            ctx.quoted_message = None;
+            ctx.quoted_message = Default::default();
             ctx.stanza_id = None;
             ctx.remote_jid = None;
             ctx.participant = None;
@@ -348,8 +336,8 @@ pub(crate) fn strip_nested_context_info(msg: &mut wa::Message) {
     macro_rules! recurse_into_wrapper {
         ($($wrapper:ident),+ $(,)?) => {
             $(
-                if let Some(ref mut wrapper) = msg.$wrapper {
-                    if let Some(ref mut inner) = wrapper.message {
+                if let Some(wrapper) = msg.$wrapper.as_option_mut() {
+                    if let Some(inner) = wrapper.message.as_option_mut() {
                         strip_nested_context_info(inner);
                     }
                 }
@@ -365,8 +353,8 @@ pub(crate) fn strip_nested_context_info(msg: &mut wa::Message) {
     );
 
     // device_sent_message also contains a nested message.
-    if let Some(ref mut wrapper) = msg.device_sent_message
-        && let Some(ref mut inner) = wrapper.message
+    if let Some(wrapper) = msg.device_sent_message.as_option_mut()
+        && let Some(inner) = wrapper.message.as_option_mut()
     {
         strip_nested_context_info(inner);
     }
@@ -391,13 +379,13 @@ pub fn merge_dsm_context(
         (None, None) => None,
         (Some(mut inner), None) => {
             // limit_sharing_v2 always comes from outer; clear it when outer is absent
-            inner.limit_sharing_v2 = None;
+            inner.limit_sharing_v2 = Default::default();
             Some(inner)
         }
         (None, Some(outer)) => Some(wa::MessageContextInfo {
             message_secret: outer.message_secret.clone(),
             message_association: outer.message_association.clone(),
-            limit_sharing_v2: outer.limit_sharing_v2,
+            limit_sharing_v2: outer.limit_sharing_v2.clone(),
             thread_id: outer.thread_id.clone(),
             bot_metadata: outer.bot_metadata.clone(),
             ..Default::default()
@@ -406,15 +394,15 @@ pub fn merge_dsm_context(
             if inner.message_secret.is_none() {
                 inner.message_secret = outer.message_secret.clone();
             }
-            if inner.message_association.is_none() {
+            if inner.message_association.is_unset() {
                 inner.message_association = outer.message_association.clone();
             }
             // limit_sharing_v2: always from outer (WA Web unconditionally overrides)
-            inner.limit_sharing_v2 = outer.limit_sharing_v2;
+            inner.limit_sharing_v2 = outer.limit_sharing_v2.clone();
             if inner.thread_id.is_empty() {
                 inner.thread_id = outer.thread_id.clone();
             }
-            if inner.bot_metadata.is_none() {
+            if inner.bot_metadata.is_unset() {
                 inner.bot_metadata = outer.bot_metadata.clone();
             }
             Some(inner)
@@ -444,11 +432,11 @@ pub fn merge_dsm_context(
 /// );
 ///
 /// let reply = wa::Message {
-///     extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+///     extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
 ///         text: Some("My reply".to_string()),
-///         context_info: Some(Box::new(context)),
+///         context_info: buffa::MessageField::some(context),
 ///         ..Default::default()
-///     })),
+///     }),
 ///     ..Default::default()
 /// };
 /// ```
@@ -460,7 +448,7 @@ pub fn build_quote_context(
     wa::ContextInfo {
         stanza_id: Some(message_id.into()),
         participant: Some(sender_jid.into()),
-        quoted_message: Some(quoted_message.prepare_for_quote()),
+        quoted_message: buffa::MessageField::from_box(quoted_message.prepare_for_quote()),
         ..Default::default()
     }
 }
@@ -468,7 +456,7 @@ pub fn build_quote_context(
 /// Builds a quote ContextInfo matching WA Web's EProtoGenerator + getQuotedParticipantForContextInfo.
 ///
 /// Sets `remote_jid` (required by iOS to scope the quote) and resolves `participant`
-/// based on chat type (newsletter → channel JID, otherwise → sender JID).
+/// based on chat type (newsletter -> channel JID, otherwise -> sender JID).
 pub fn build_quote_context_with_info(
     message_id: impl Into<String>,
     sender_jid: &Jid,
@@ -489,7 +477,7 @@ pub fn build_quote_context_with_info(
         stanza_id: Some(message_id.into()),
         participant: Some(participant),
         remote_jid: Some(remote_jid),
-        quoted_message: Some(quoted_message.prepare_for_quote()),
+        quoted_message: buffa::MessageField::from_box(quoted_message.prepare_for_quote()),
         ..Default::default()
     }
 }
@@ -505,19 +493,20 @@ pub fn wrap_as_album_child(
     // WA Web's outgoing association (ProtoUtils.js function m) only sets
     // associationType + parentMessageKey, not messageIndex.
     let association = wa::MessageAssociation {
-        association_type: Some(wa::message_association::AssociationType::MediaAlbum as i32),
-        parent_message_key: Some(parent_key),
-        message_index: None,
+        association_type: Some(wa::message_association::AssociationType::MEDIA_ALBUM),
+        parent_message_key: buffa::MessageField::some(parent_key),
+        ..Default::default()
     };
 
     let mut outer_context = existing_context.unwrap_or_default();
-    outer_context.message_association = Some(association);
+    outer_context.message_association = buffa::MessageField::some(association);
 
     wa::Message {
-        associated_child_message: Some(Box::new(wa::message::FutureProofMessage {
-            message: Some(Box::new(inner_message)),
-        })),
-        message_context_info: Some(outer_context),
+        associated_child_message: buffa::MessageField::some(wa::message::FutureProofMessage {
+            message: buffa::MessageField::some(inner_message),
+            ..Default::default()
+        }),
+        message_context_info: buffa::MessageField::some(outer_context),
         ..Default::default()
     }
 }
@@ -547,7 +536,7 @@ impl ConversationExt for wa::Conversation {
         use wa::group_participant::Rank;
         self.participant
             .iter()
-            .filter(|p| matches!(p.rank(), Rank::Admin | Rank::Superadmin))
+            .filter(|p| matches!(p.rank, Some(Rank::ADMIN) | Some(Rank::SUPERADMIN)))
             .filter_map(|p| Jid::from_str(&p.user_jid).ok())
             .collect()
     }
@@ -571,9 +560,9 @@ mod tests {
     /// Creates a message with mentions in context_info.
     fn create_message_with_mentions() -> wa::Message {
         wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some("Hello @user1 @user2".to_string()),
-                context_info: Some(Box::new(wa::ContextInfo {
+                context_info: buffa::MessageField::some(wa::ContextInfo {
                     mentioned_jid: vec![
                         "111111@s.whatsapp.net".to_string(),
                         "222222@s.whatsapp.net".to_string(),
@@ -581,11 +570,12 @@ mod tests {
                     group_mentions: vec![wa::GroupMention {
                         group_jid: Some("120363012345@g.us".to_string()),
                         group_subject: Some("Test Group".to_string()),
+                        ..Default::default()
                     }],
                     ..Default::default()
-                })),
+                }),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         }
     }
@@ -596,16 +586,16 @@ mod tests {
         use wa::message::extended_text_message::{FontType, PreviewType};
 
         let original = wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some("Hello @user1 @user2".to_string()),
                 matched_text: Some("https://example.com".to_string()),
                 description: Some("Example description".to_string()),
                 title: Some("Example Title".to_string()),
                 text_argb: Some(0xFFFFFF),
                 background_argb: Some(0x000000),
-                font: Some(FontType::SystemBold.into()),
-                preview_type: Some(PreviewType::Video.into()),
-                context_info: Some(Box::new(wa::ContextInfo {
+                font: Some(FontType::SYSTEM_BOLD),
+                preview_type: Some(PreviewType::VIDEO),
+                context_info: buffa::MessageField::some(wa::ContextInfo {
                     mentioned_jid: vec![
                         "111111@s.whatsapp.net".to_string(),
                         "222222@s.whatsapp.net".to_string(),
@@ -613,26 +603,27 @@ mod tests {
                     group_mentions: vec![wa::GroupMention {
                         group_jid: Some("120363012345@g.us".to_string()),
                         group_subject: Some("Test Group".to_string()),
+                        ..Default::default()
                     }],
                     // Other context_info fields that should be preserved
                     is_forwarded: Some(true),
                     forwarding_score: Some(5),
                     ..Default::default()
-                })),
+                }),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
-        let ext = original.extended_text_message.as_ref().unwrap();
-        let ctx = ext.context_info.as_ref().unwrap();
+        let ext = original.extended_text_message.as_option().unwrap();
+        let ctx = ext.context_info.as_option().unwrap();
         assert_eq!(ctx.mentioned_jid.len(), 2);
         assert_eq!(ctx.group_mentions.len(), 1);
 
         let prepared = original.prepare_for_quote();
 
-        let ext = prepared.extended_text_message.as_ref().unwrap();
-        let ctx = ext.context_info.as_ref().unwrap();
+        let ext = prepared.extended_text_message.as_option().unwrap();
+        let ctx = ext.context_info.as_option().unwrap();
         assert!(
             ctx.mentioned_jid.is_empty(),
             "mentioned_jid should be empty after prepare_for_quote"
@@ -643,7 +634,7 @@ mod tests {
         );
 
         assert!(
-            ctx.quoted_message.is_none(),
+            ctx.quoted_message.is_unset(),
             "quoted_message should be None after prepare_for_quote"
         );
         assert!(
@@ -665,8 +656,8 @@ mod tests {
         assert_eq!(ext.title.as_deref(), Some("Example Title"));
         assert_eq!(ext.text_argb, Some(0xFFFFFF));
         assert_eq!(ext.background_argb, Some(0x000000));
-        assert_eq!(ext.font(), FontType::SystemBold);
-        assert_eq!(ext.preview_type(), PreviewType::Video);
+        assert_eq!(ext.font, Some(FontType::SYSTEM_BOLD));
+        assert_eq!(ext.preview_type, Some(PreviewType::VIDEO));
 
         assert_eq!(ctx.is_forwarded, Some(true));
         assert_eq!(ctx.forwarding_score, Some(5));
@@ -676,7 +667,7 @@ mod tests {
     #[test]
     fn test_prepare_for_quote_preserves_media_fields() {
         let original = wa::Message {
-            image_message: Some(Box::new(wa::message::ImageMessage {
+            image_message: buffa::MessageField::some(wa::message::ImageMessage {
                 url: Some("https://mmg.whatsapp.net/...".to_string()),
                 mimetype: Some("image/jpeg".to_string()),
                 caption: Some("Check out this image!".to_string()),
@@ -686,19 +677,19 @@ mod tests {
                 width: Some(1920),
                 media_key: Some(vec![5, 6, 7, 8]),
                 direct_path: Some("/v/t62.1234-5/...".to_string()),
-                context_info: Some(Box::new(wa::ContextInfo {
+                context_info: buffa::MessageField::some(wa::ContextInfo {
                     mentioned_jid: vec!["someone@s.whatsapp.net".to_string()],
                     ..Default::default()
-                })),
+                }),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
         let prepared = original.prepare_for_quote();
 
-        let img = prepared.image_message.as_ref().unwrap();
-        let ctx = img.context_info.as_ref().unwrap();
+        let img = prepared.image_message.as_option().unwrap();
+        let ctx = img.context_info.as_option().unwrap();
 
         assert!(ctx.mentioned_jid.is_empty());
 
@@ -717,33 +708,33 @@ mod tests {
     #[test]
     fn test_prepare_for_quote_breaks_quote_chain() {
         let original = wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some("This is a reply".to_string()),
-                context_info: Some(Box::new(wa::ContextInfo {
+                context_info: buffa::MessageField::some(wa::ContextInfo {
                     stanza_id: Some("original-msg-id".to_string()),
                     participant: Some("original-sender@s.whatsapp.net".to_string()),
                     remote_jid: Some("chat@s.whatsapp.net".to_string()),
-                    quoted_message: Some(Box::new(wa::Message {
+                    quoted_message: buffa::MessageField::some(wa::Message {
                         conversation: Some("The original message".to_string()),
                         ..Default::default()
-                    })),
+                    }),
                     mentioned_jid: vec!["user@s.whatsapp.net".to_string()],
                     is_forwarded: Some(true),
                     forwarding_score: Some(3),
                     ..Default::default()
-                })),
+                }),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
         let prepared = original.prepare_for_quote();
 
-        let ext = prepared.extended_text_message.as_ref().unwrap();
-        let ctx = ext.context_info.as_ref().unwrap();
+        let ext = prepared.extended_text_message.as_option().unwrap();
+        let ctx = ext.context_info.as_option().unwrap();
 
         assert!(
-            ctx.quoted_message.is_none(),
+            ctx.quoted_message.is_unset(),
             "quoted_message should be None (quote chain broken)"
         );
         assert!(
@@ -781,10 +772,10 @@ mod tests {
     #[test]
     fn test_set_context_info_extended_text() {
         let mut msg = wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some("Reply text".to_string()),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
@@ -796,8 +787,8 @@ mod tests {
 
         assert!(msg.set_context_info(context));
 
-        let ext = msg.extended_text_message.as_ref().unwrap();
-        let ctx = ext.context_info.as_ref().unwrap();
+        let ext = msg.extended_text_message.as_option().unwrap();
+        let ctx = ext.context_info.as_option().unwrap();
         assert_eq!(ctx.stanza_id.as_deref(), Some("test-id"));
         assert_eq!(ctx.participant.as_deref(), Some("sender@s.whatsapp.net"));
     }
@@ -806,10 +797,10 @@ mod tests {
     #[test]
     fn test_set_context_info_image() {
         let mut msg = wa::Message {
-            image_message: Some(Box::new(wa::message::ImageMessage {
+            image_message: buffa::MessageField::some(wa::message::ImageMessage {
                 caption: Some("Image caption".to_string()),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
@@ -820,10 +811,10 @@ mod tests {
 
         assert!(msg.set_context_info(context));
 
-        let img = msg.image_message.as_ref().unwrap();
-        assert!(img.context_info.is_some());
+        let img = msg.image_message.as_option().unwrap();
+        assert!(img.context_info.is_set());
         assert_eq!(
-            img.context_info.as_ref().unwrap().stanza_id.as_deref(),
+            img.context_info.as_option().unwrap().stanza_id.as_deref(),
             Some("img-id")
         );
     }
@@ -832,12 +823,12 @@ mod tests {
     #[test]
     fn test_set_context_info_location() {
         let mut msg = wa::Message {
-            location_message: Some(Box::new(wa::message::LocationMessage {
+            location_message: buffa::MessageField::some(wa::message::LocationMessage {
                 degrees_latitude: Some(40.7128),
                 degrees_longitude: Some(-74.0060),
                 name: Some("New York".to_string()),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
@@ -848,8 +839,8 @@ mod tests {
 
         assert!(msg.set_context_info(context));
 
-        let loc = msg.location_message.as_ref().unwrap();
-        assert!(loc.context_info.is_some());
+        let loc = msg.location_message.as_option().unwrap();
+        assert!(loc.context_info.is_set());
     }
 
     /// Test: set_context_info returns false for unsupported message types
@@ -881,9 +872,9 @@ mod tests {
             Some("1234567890@s.whatsapp.net")
         );
 
-        let quoted = context.quoted_message.as_ref().unwrap();
-        let ext = quoted.extended_text_message.as_ref().unwrap();
-        let quoted_ctx = ext.context_info.as_ref().unwrap();
+        let quoted = context.quoted_message.as_option().unwrap();
+        let ext = quoted.extended_text_message.as_option().unwrap();
+        let quoted_ctx = ext.context_info.as_option().unwrap();
         assert!(
             quoted_ctx.mentioned_jid.is_empty(),
             "Quoted message mentions should be stripped"
@@ -894,9 +885,10 @@ mod tests {
     #[test]
     fn test_prepare_for_quote_ephemeral() {
         let ephemeral_msg = wa::Message {
-            ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
-                message: Some(Box::new(create_message_with_mentions())),
-            })),
+            ephemeral_message: buffa::MessageField::some(wa::message::FutureProofMessage {
+                message: buffa::MessageField::some(create_message_with_mentions()),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
@@ -904,13 +896,13 @@ mod tests {
 
         let inner = prepared
             .ephemeral_message
-            .as_ref()
+            .as_option()
             .unwrap()
             .message
-            .as_ref()
+            .as_option()
             .unwrap();
-        let ext = inner.extended_text_message.as_ref().unwrap();
-        let ctx = ext.context_info.as_ref().unwrap();
+        let ext = inner.extended_text_message.as_option().unwrap();
+        let ctx = ext.context_info.as_option().unwrap();
 
         assert!(
             ctx.mentioned_jid.is_empty(),
@@ -922,18 +914,19 @@ mod tests {
     #[test]
     fn test_prepare_for_quote_view_once() {
         let view_once_msg = wa::Message {
-            view_once_message: Some(Box::new(wa::message::FutureProofMessage {
-                message: Some(Box::new(wa::Message {
-                    image_message: Some(Box::new(wa::message::ImageMessage {
-                        context_info: Some(Box::new(wa::ContextInfo {
+            view_once_message: buffa::MessageField::some(wa::message::FutureProofMessage {
+                message: buffa::MessageField::some(wa::Message {
+                    image_message: buffa::MessageField::some(wa::message::ImageMessage {
+                        context_info: buffa::MessageField::some(wa::ContextInfo {
                             mentioned_jid: vec!["someone@s.whatsapp.net".to_string()],
                             ..Default::default()
-                        })),
+                        }),
                         ..Default::default()
-                    })),
+                    }),
                     ..Default::default()
-                })),
-            })),
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
@@ -941,13 +934,13 @@ mod tests {
 
         let inner = prepared
             .view_once_message
-            .as_ref()
+            .as_option()
             .unwrap()
             .message
-            .as_ref()
+            .as_option()
             .unwrap();
-        let img = inner.image_message.as_ref().unwrap();
-        let ctx = img.context_info.as_ref().unwrap();
+        let img = inner.image_message.as_option().unwrap();
+        let ctx = img.context_info.as_option().unwrap();
 
         assert!(
             ctx.mentioned_jid.is_empty(),
@@ -959,37 +952,41 @@ mod tests {
     #[test]
     fn test_prepare_for_quote_device_sent_message() {
         let device_sent_msg = wa::Message {
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
                 destination_jid: Some("1234567890@s.whatsapp.net".to_string()),
-                message: Some(Box::new(wa::Message {
-                    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
-                        text: Some("Message from other device".to_string()),
-                        context_info: Some(Box::new(wa::ContextInfo {
-                            mentioned_jid: vec![
-                                "user1@s.whatsapp.net".to_string(),
-                                "user2@s.whatsapp.net".to_string(),
-                            ],
-                            group_mentions: vec![wa::GroupMention {
-                                group_jid: Some("group@g.us".to_string()),
-                                group_subject: Some("Group Name".to_string()),
-                            }],
+                message: buffa::MessageField::some(wa::Message {
+                    extended_text_message: buffa::MessageField::some(
+                        wa::message::ExtendedTextMessage {
+                            text: Some("Message from other device".to_string()),
+                            context_info: buffa::MessageField::some(wa::ContextInfo {
+                                mentioned_jid: vec![
+                                    "user1@s.whatsapp.net".to_string(),
+                                    "user2@s.whatsapp.net".to_string(),
+                                ],
+                                group_mentions: vec![wa::GroupMention {
+                                    group_jid: Some("group@g.us".to_string()),
+                                    group_subject: Some("Group Name".to_string()),
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            }),
                             ..Default::default()
-                        })),
-                        ..Default::default()
-                    })),
+                        },
+                    ),
                     ..Default::default()
-                })),
+                }),
                 phash: Some("somephash".to_string()),
-            })),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
         let prepared = device_sent_msg.prepare_for_quote();
 
-        let wrapper = prepared.device_sent_message.as_ref().unwrap();
-        let inner = wrapper.message.as_ref().unwrap();
-        let ext = inner.extended_text_message.as_ref().unwrap();
-        let ctx = ext.context_info.as_ref().unwrap();
+        let wrapper = prepared.device_sent_message.as_option().unwrap();
+        let inner = wrapper.message.as_option().unwrap();
+        let ext = inner.extended_text_message.as_option().unwrap();
+        let ctx = ext.context_info.as_option().unwrap();
 
         assert!(
             ctx.mentioned_jid.is_empty(),
@@ -1012,23 +1009,27 @@ mod tests {
     #[test]
     fn test_prepare_for_quote_edited_message() {
         let edited_msg = wa::Message {
-            edited_message: Some(Box::new(wa::message::FutureProofMessage {
-                message: Some(Box::new(wa::Message {
-                    extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
-                        text: Some("Edited message text".to_string()),
-                        context_info: Some(Box::new(wa::ContextInfo {
-                            mentioned_jid: vec!["mentioned@s.whatsapp.net".to_string()],
-                            group_mentions: vec![wa::GroupMention {
-                                group_jid: Some("editedgroup@g.us".to_string()),
-                                group_subject: Some("Edited Group".to_string()),
-                            }],
+            edited_message: buffa::MessageField::some(wa::message::FutureProofMessage {
+                message: buffa::MessageField::some(wa::Message {
+                    extended_text_message: buffa::MessageField::some(
+                        wa::message::ExtendedTextMessage {
+                            text: Some("Edited message text".to_string()),
+                            context_info: buffa::MessageField::some(wa::ContextInfo {
+                                mentioned_jid: vec!["mentioned@s.whatsapp.net".to_string()],
+                                group_mentions: vec![wa::GroupMention {
+                                    group_jid: Some("editedgroup@g.us".to_string()),
+                                    group_subject: Some("Edited Group".to_string()),
+                                    ..Default::default()
+                                }],
+                                ..Default::default()
+                            }),
                             ..Default::default()
-                        })),
-                        ..Default::default()
-                    })),
+                        },
+                    ),
                     ..Default::default()
-                })),
-            })),
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
@@ -1036,13 +1037,13 @@ mod tests {
 
         let inner = prepared
             .edited_message
-            .as_ref()
+            .as_option()
             .unwrap()
             .message
-            .as_ref()
+            .as_option()
             .unwrap();
-        let ext = inner.extended_text_message.as_ref().unwrap();
-        let ctx = ext.context_info.as_ref().unwrap();
+        let ext = inner.extended_text_message.as_option().unwrap();
+        let ctx = ext.context_info.as_option().unwrap();
 
         assert!(
             ctx.mentioned_jid.is_empty(),
@@ -1060,37 +1061,38 @@ mod tests {
     #[test]
     fn test_prepare_for_quote_nested_wrappers() {
         let nested_wrapper_msg = wa::Message {
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
                 destination_jid: Some("dest@s.whatsapp.net".to_string()),
-                message: Some(Box::new(wa::Message {
-                    ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
-                        message: Some(Box::new(wa::Message {
-                            image_message: Some(Box::new(wa::message::ImageMessage {
+                message: buffa::MessageField::some(wa::Message {
+                    ephemeral_message: buffa::MessageField::some(wa::message::FutureProofMessage {
+                        message: buffa::MessageField::some(wa::Message {
+                            image_message: buffa::MessageField::some(wa::message::ImageMessage {
                                 caption: Some("Nested image".to_string()),
-                                context_info: Some(Box::new(wa::ContextInfo {
+                                context_info: buffa::MessageField::some(wa::ContextInfo {
                                     mentioned_jid: vec!["deep@s.whatsapp.net".to_string()],
                                     ..Default::default()
-                                })),
+                                }),
                                 ..Default::default()
-                            })),
+                            }),
                             ..Default::default()
-                        })),
-                    })),
+                        }),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                })),
+                }),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
         let prepared = nested_wrapper_msg.prepare_for_quote();
 
-        let device_sent = prepared.device_sent_message.as_ref().unwrap();
-        let device_inner = device_sent.message.as_ref().unwrap();
-        let ephemeral = device_inner.ephemeral_message.as_ref().unwrap();
-        let ephemeral_inner = ephemeral.message.as_ref().unwrap();
-        let img = ephemeral_inner.image_message.as_ref().unwrap();
-        let ctx = img.context_info.as_ref().unwrap();
+        let device_sent = prepared.device_sent_message.as_option().unwrap();
+        let device_inner = device_sent.message.as_option().unwrap();
+        let ephemeral = device_inner.ephemeral_message.as_option().unwrap();
+        let ephemeral_inner = ephemeral.message.as_option().unwrap();
+        let img = ephemeral_inner.image_message.as_option().unwrap();
+        let ctx = img.context_info.as_option().unwrap();
 
         assert!(
             ctx.mentioned_jid.is_empty(),
@@ -1105,27 +1107,27 @@ mod tests {
     fn test_set_context_info_various_types() {
         let test_cases: Vec<wa::Message> = vec![
             wa::Message {
-                video_message: Some(Box::default()),
+                video_message: buffa::MessageField::some(Default::default()),
                 ..Default::default()
             },
             wa::Message {
-                audio_message: Some(Box::default()),
+                audio_message: buffa::MessageField::some(Default::default()),
                 ..Default::default()
             },
             wa::Message {
-                document_message: Some(Box::default()),
+                document_message: buffa::MessageField::some(Default::default()),
                 ..Default::default()
             },
             wa::Message {
-                sticker_message: Some(Box::default()),
+                sticker_message: buffa::MessageField::some(Default::default()),
                 ..Default::default()
             },
             wa::Message {
-                contact_message: Some(Box::default()),
+                contact_message: buffa::MessageField::some(Default::default()),
                 ..Default::default()
             },
             wa::Message {
-                poll_creation_message: Some(Box::default()),
+                poll_creation_message: buffa::MessageField::some(Default::default()),
                 ..Default::default()
             },
         ];
@@ -1146,36 +1148,36 @@ mod tests {
     #[test]
     fn test_prepare_for_quote_preserves_bot_quote_chain() {
         let msg = wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some("Bot reply".to_string()),
-                context_info: Some(Box::new(wa::ContextInfo {
+                context_info: buffa::MessageField::some(wa::ContextInfo {
                     // Bot JID - starts with 1313555
                     participant: Some("131355512345@s.whatsapp.net".to_string()),
                     stanza_id: Some("bot-msg-id".to_string()),
                     remote_jid: Some("chat@g.us".to_string()),
-                    quoted_message: Some(Box::new(wa::Message {
+                    quoted_message: buffa::MessageField::some(wa::Message {
                         conversation: Some("Original user message".to_string()),
                         ..Default::default()
-                    })),
+                    }),
                     mentioned_jid: vec!["user@s.whatsapp.net".to_string()],
                     ..Default::default()
-                })),
+                }),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
         let prepared = msg.prepare_for_quote();
         let ctx = prepared
             .extended_text_message
-            .as_ref()
+            .as_option()
             .unwrap()
             .context_info
-            .as_ref()
+            .as_option()
             .unwrap();
 
         assert!(
-            ctx.quoted_message.is_some(),
+            ctx.quoted_message.is_set(),
             "Bot quote chain should be preserved"
         );
         assert!(ctx.stanza_id.is_some(), "Bot stanza_id should be preserved");
@@ -1198,34 +1200,34 @@ mod tests {
     #[test]
     fn test_prepare_for_quote_preserves_bot_server_quote_chain() {
         let msg = wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some("Bot reply".to_string()),
-                context_info: Some(Box::new(wa::ContextInfo {
+                context_info: buffa::MessageField::some(wa::ContextInfo {
                     // Bot JID with @bot server
                     participant: Some("mybot@bot".to_string()),
                     stanza_id: Some("bot-msg-id".to_string()),
-                    quoted_message: Some(Box::new(wa::Message {
+                    quoted_message: buffa::MessageField::some(wa::Message {
                         conversation: Some("Original".to_string()),
                         ..Default::default()
-                    })),
+                    }),
                     ..Default::default()
-                })),
+                }),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
         let prepared = msg.prepare_for_quote();
         let ctx = prepared
             .extended_text_message
-            .as_ref()
+            .as_option()
             .unwrap()
             .context_info
-            .as_ref()
+            .as_option()
             .unwrap();
 
         assert!(
-            ctx.quoted_message.is_some(),
+            ctx.quoted_message.is_set(),
             "Bot (@bot server) quote chain should be preserved"
         );
     }
@@ -1285,31 +1287,36 @@ mod tests {
     #[test]
     fn test_into_base_message_unwraps_device_sent_reaction() {
         let msg = wa::Message {
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
                 destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
-                message: Some(Box::new(wa::Message {
-                    reaction_message: Some(wa::message::ReactionMessage {
+                message: buffa::MessageField::some(wa::Message {
+                    reaction_message: buffa::MessageField::some(wa::message::ReactionMessage {
                         text: Some("\u{2764}".to_string()),
                         ..Default::default()
                     }),
                     ..Default::default()
-                })),
-                phash: None,
-            })),
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
         let unwrapped = msg.into_base_message();
         assert!(
-            unwrapped.device_sent_message.is_none(),
+            unwrapped.device_sent_message.is_unset(),
             "device_sent_message wrapper should be removed"
         );
         assert!(
-            unwrapped.reaction_message.is_some(),
+            unwrapped.reaction_message.is_set(),
             "reaction_message should be accessible after unwrapping"
         );
         assert_eq!(
-            unwrapped.reaction_message.as_ref().unwrap().text.as_deref(),
+            unwrapped
+                .reaction_message
+                .as_option()
+                .unwrap()
+                .text
+                .as_deref(),
             Some("\u{2764}")
         );
     }
@@ -1318,19 +1325,20 @@ mod tests {
     #[test]
     fn test_into_base_message_unwraps_nested_dsm_ephemeral() {
         let msg = wa::Message {
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
                 destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
-                message: Some(Box::new(wa::Message {
-                    ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
-                        message: Some(Box::new(wa::Message {
+                message: buffa::MessageField::some(wa::Message {
+                    ephemeral_message: buffa::MessageField::some(wa::message::FutureProofMessage {
+                        message: buffa::MessageField::some(wa::Message {
                             conversation: Some("secret".to_string()),
                             ..Default::default()
-                        })),
-                    })),
+                        }),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                })),
-                phash: None,
-            })),
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
@@ -1358,18 +1366,17 @@ mod tests {
     #[test]
     fn test_into_base_message_empty_dsm() {
         let msg = wa::Message {
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
                 destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
-                message: None,
-                phash: None,
-            })),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
         let unwrapped = msg.into_base_message();
         // With no inner message the wrapper is preserved
         assert!(
-            unwrapped.device_sent_message.is_some(),
+            unwrapped.device_sent_message.is_set(),
             "empty DSM wrapper should be preserved"
         );
         assert!(unwrapped.conversation.is_none());
@@ -1396,7 +1403,7 @@ mod tests {
     fn test_merge_dsm_context_outer_only() {
         let outer = wa::MessageContextInfo {
             message_secret: Some(vec![4, 5, 6]),
-            limit_sharing_v2: Some(wa::LimitSharing::default()),
+            limit_sharing_v2: buffa::MessageField::some(wa::LimitSharing::default()),
             ..Default::default()
         };
         let result = merge_dsm_context(None, Some(&outer)).unwrap();
@@ -1406,7 +1413,7 @@ mod tests {
             "message_secret should come from outer when inner is None"
         );
         assert!(
-            result.limit_sharing_v2.is_some(),
+            result.limit_sharing_v2.is_set(),
             "limit_sharing_v2 should come from outer"
         );
     }
@@ -1456,28 +1463,27 @@ mod tests {
             ..Default::default()
         };
         let inner = wa::MessageContextInfo {
-            limit_sharing_v2: Some(inner_ls),
+            limit_sharing_v2: buffa::MessageField::some(inner_ls),
             ..Default::default()
         };
         let outer = wa::MessageContextInfo {
-            limit_sharing_v2: Some(outer_ls),
+            limit_sharing_v2: buffa::MessageField::some(outer_ls),
             ..Default::default()
         };
         let result = merge_dsm_context(Some(inner), Some(&outer)).unwrap();
-        assert_eq!(
-            result.limit_sharing_v2,
-            Some(outer_ls),
+        assert!(
+            result.limit_sharing_v2.is_set(),
             "limit_sharing_v2 should always come from outer"
         );
 
         // When outer is None, inner's limit_sharing_v2 should be cleared
         let inner_with_ls = wa::MessageContextInfo {
-            limit_sharing_v2: Some(wa::LimitSharing::default()),
+            limit_sharing_v2: buffa::MessageField::some(wa::LimitSharing::default()),
             ..Default::default()
         };
         let result = merge_dsm_context(Some(inner_with_ls), None).unwrap();
-        assert_eq!(
-            result.limit_sharing_v2, None,
+        assert!(
+            result.limit_sharing_v2.is_unset(),
             "limit_sharing_v2 should be cleared when outer is None"
         );
     }
@@ -1485,7 +1491,7 @@ mod tests {
     #[test]
     fn test_merge_dsm_context_thread_id_fallback() {
         let outer = wa::MessageContextInfo {
-            thread_id: vec![wa::ThreadId::default()],
+            thread_id: vec![wa::ThreadID::default()],
             ..Default::default()
         };
         // Inner has empty thread_id → should fall back to outer
@@ -1499,7 +1505,7 @@ mod tests {
 
         // Inner has non-empty thread_id → should keep inner
         let inner_filled = wa::MessageContextInfo {
-            thread_id: vec![wa::ThreadId::default(), wa::ThreadId::default()],
+            thread_id: vec![wa::ThreadID::default(), wa::ThreadID::default()],
             ..Default::default()
         };
         let result = merge_dsm_context(Some(inner_filled), Some(&outer)).unwrap();
@@ -1527,7 +1533,7 @@ mod tests {
             Some("551199887766@s.whatsapp.net")
         );
         assert_eq!(ctx.remote_jid.as_deref(), Some("120363098765432100@g.us"));
-        assert!(ctx.quoted_message.is_some());
+        assert!(ctx.quoted_message.is_set());
         assert!(ctx.mentioned_jid.is_empty());
     }
 
@@ -1579,8 +1585,14 @@ mod tests {
         let ctx = build_quote_context_with_info("msg-id", &sender, &group, &msg);
 
         // The quoted message's nested context_info should have mentions stripped
-        let quoted = ctx.quoted_message.unwrap();
-        let inner_ctx = quoted.extended_text_message.unwrap().context_info.unwrap();
+        let quoted = ctx.quoted_message.into_option().unwrap();
+        let inner_ctx = quoted
+            .extended_text_message
+            .into_option()
+            .unwrap()
+            .context_info
+            .into_option()
+            .unwrap();
         assert!(inner_ctx.mentioned_jid.is_empty());
         assert!(inner_ctx.group_mentions.is_empty());
         // The outer context should have no mentions
@@ -1592,34 +1604,37 @@ mod tests {
             remote_jid: Some("5511999999999@s.whatsapp.net".to_string()),
             from_me: Some(true),
             id: Some("PARENT_MSG_ID".to_string()),
-            participant: None,
+            ..Default::default()
         }
     }
 
     #[test]
     fn test_wrap_as_album_child_basic() {
         let inner = wa::Message {
-            image_message: Some(Box::new(wa::message::ImageMessage {
+            image_message: buffa::MessageField::some(wa::message::ImageMessage {
                 url: Some("https://mmg.whatsapp.net/test".to_string()),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
         let wrapped = wrap_as_album_child(inner, sample_parent_key());
 
-        let future_proof = wrapped.associated_child_message.as_ref().unwrap();
-        let inner_msg = future_proof.message.as_ref().unwrap();
-        assert!(inner_msg.image_message.is_some());
-        assert!(inner_msg.message_context_info.is_none());
+        let future_proof = wrapped.associated_child_message.as_option().unwrap();
+        let inner_msg = future_proof.message.as_option().unwrap();
+        assert!(inner_msg.image_message.is_set());
+        assert!(inner_msg.message_context_info.is_unset());
 
-        let ctx = wrapped.message_context_info.as_ref().unwrap();
-        let assoc = ctx.message_association.as_ref().unwrap();
+        let ctx = wrapped.message_context_info.as_option().unwrap();
+        let assoc = ctx.message_association.as_option().unwrap();
         assert_eq!(
             assoc.association_type,
-            Some(wa::message_association::AssociationType::MediaAlbum as i32)
+            Some(wa::message_association::AssociationType::MEDIA_ALBUM)
         );
-        assert_eq!(assoc.parent_message_key, Some(sample_parent_key()));
+        assert_eq!(
+            assoc.parent_message_key.as_option(),
+            Some(&sample_parent_key())
+        );
         assert_eq!(assoc.message_index, None);
     }
 
@@ -1627,11 +1642,11 @@ mod tests {
     fn test_wrap_as_album_child_lifts_existing_context() {
         let secret = vec![1u8; 32];
         let inner = wa::Message {
-            video_message: Some(Box::new(wa::message::VideoMessage {
+            video_message: buffa::MessageField::some(wa::message::VideoMessage {
                 url: Some("https://mmg.whatsapp.net/vid".to_string()),
                 ..Default::default()
-            })),
-            message_context_info: Some(wa::MessageContextInfo {
+            }),
+            message_context_info: buffa::MessageField::some(wa::MessageContextInfo {
                 message_secret: Some(secret.clone()),
                 ..Default::default()
             }),
@@ -1640,8 +1655,8 @@ mod tests {
 
         let wrapped = wrap_as_album_child(inner, sample_parent_key());
 
-        let ctx = wrapped.message_context_info.as_ref().unwrap();
+        let ctx = wrapped.message_context_info.as_option().unwrap();
         assert_eq!(ctx.message_secret.as_deref(), Some(secret.as_slice()));
-        assert!(ctx.message_association.is_some());
+        assert!(ctx.message_association.is_set());
     }
 }

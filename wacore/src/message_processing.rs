@@ -241,25 +241,29 @@ pub fn process_decrypted_plaintext(
     let original_msg = crate::messages::decode_plaintext(padded_plaintext, padding_version)?;
 
     // Validate DSM presence against sender identity
-    let has_invalid_dsm = original_msg.device_sent_message.is_some() && !is_from_me;
+    let has_invalid_dsm = original_msg.device_sent_message.is_set() && !is_from_me;
 
     // Unwrap DeviceSentMessage wrapper
     let msg = crate::messages::unwrap_device_sent(original_msg);
 
     // Extract SKDM
-    let skdm = msg.sender_key_distribution_message.clone();
+    let skdm = msg.sender_key_distribution_message.as_option().cloned();
 
     // Check if SKDM-only
     let is_skdm_only = crate::messages::is_sender_key_distribution_only(&msg);
 
     // Extract protocol message info
-    let protocol_message = msg.protocol_message.as_ref().map(|pm| ProtocolMessageInfo {
-        history_sync_notification: pm.history_sync_notification.clone(),
-        app_state_sync_key_share: pm.app_state_sync_key_share.clone(),
-        peer_data_operation_request_response: pm
-            .peer_data_operation_request_response_message
-            .clone(),
-    });
+    let protocol_message = msg
+        .protocol_message
+        .as_option()
+        .map(|pm| ProtocolMessageInfo {
+            history_sync_notification: pm.history_sync_notification.as_option().cloned(),
+            app_state_sync_key_share: pm.app_state_sync_key_share.as_option().cloned(),
+            peer_data_operation_request_response: pm
+                .peer_data_operation_request_response_message
+                .as_option()
+                .cloned(),
+        });
 
     Ok(DecryptedMessageResult {
         message: msg,
@@ -455,7 +459,7 @@ mod tests {
 
     #[test]
     fn test_process_decrypted_plaintext_simple() {
-        use prost::Message as ProtoMessage;
+        use buffa::Message as ProtoMessage;
 
         // Create a simple text message
         let msg = wa::Message {
@@ -475,14 +479,17 @@ mod tests {
 
     #[test]
     fn test_process_decrypted_plaintext_with_skdm() {
-        use prost::Message as ProtoMessage;
+        use buffa::Message as ProtoMessage;
 
         let msg = wa::Message {
             conversation: Some("hello".to_string()),
-            sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
-                group_id: Some("group@g.us".to_string()),
-                axolotl_sender_key_distribution_message: Some(vec![1, 2, 3]),
-            }),
+            sender_key_distribution_message: buffa::MessageField::some(
+                wa::message::SenderKeyDistributionMessage {
+                    group_id: Some("group@g.us".to_string()),
+                    axolotl_sender_key_distribution_message: Some(vec![1, 2, 3]),
+                    ..Default::default()
+                },
+            ),
             ..Default::default()
         };
         let plaintext = msg.encode_to_vec();
@@ -495,13 +502,16 @@ mod tests {
 
     #[test]
     fn test_process_decrypted_plaintext_skdm_only() {
-        use prost::Message as ProtoMessage;
+        use buffa::Message as ProtoMessage;
 
         let msg = wa::Message {
-            sender_key_distribution_message: Some(wa::message::SenderKeyDistributionMessage {
-                group_id: Some("group@g.us".to_string()),
-                axolotl_sender_key_distribution_message: Some(vec![1, 2, 3]),
-            }),
+            sender_key_distribution_message: buffa::MessageField::some(
+                wa::message::SenderKeyDistributionMessage {
+                    group_id: Some("group@g.us".to_string()),
+                    axolotl_sender_key_distribution_message: Some(vec![1, 2, 3]),
+                    ..Default::default()
+                },
+            ),
             ..Default::default()
         };
         let plaintext = msg.encode_to_vec();
@@ -514,16 +524,16 @@ mod tests {
 
     #[test]
     fn test_process_decrypted_plaintext_invalid_dsm() {
-        use prost::Message as ProtoMessage;
+        use buffa::Message as ProtoMessage;
 
         let msg = wa::Message {
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
-                message: Some(Box::new(wa::Message {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
+                message: buffa::MessageField::some(wa::Message {
                     conversation: Some("inner".to_string()),
                     ..Default::default()
-                })),
+                }),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
         let plaintext = msg.encode_to_vec();
@@ -538,16 +548,16 @@ mod tests {
 
     #[test]
     fn test_process_decrypted_plaintext_valid_dsm() {
-        use prost::Message as ProtoMessage;
+        use buffa::Message as ProtoMessage;
 
         let msg = wa::Message {
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
-                message: Some(Box::new(wa::Message {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
+                message: buffa::MessageField::some(wa::Message {
                     conversation: Some("self-sent".to_string()),
                     ..Default::default()
-                })),
+                }),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
         let plaintext = msg.encode_to_vec();

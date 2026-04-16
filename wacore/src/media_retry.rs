@@ -13,8 +13,8 @@
 use aes_gcm::Aes256Gcm;
 use aes_gcm::aead::{Aead, KeyInit, Payload};
 use anyhow::{Result, anyhow};
+use buffa::Message;
 use hkdf::Hkdf;
-use prost::Message;
 use rand::Rng;
 use sha2::Sha256;
 use wacore_binary::Jid;
@@ -74,6 +74,7 @@ pub fn encrypt_media_retry_receipt(
 
     let receipt = wa::ServerErrorReceipt {
         stanza_id: Some(stanza_id.to_string()),
+        ..Default::default()
     };
     let plaintext = receipt.encode_to_vec();
 
@@ -114,7 +115,7 @@ pub fn decrypt_media_retry_notification(
         )
         .map_err(|e| anyhow!("AES-GCM decrypt failed: {e}"))?;
 
-    wa::MediaRetryNotification::decode(plaintext.as_slice())
+    wa::MediaRetryNotification::decode_from_slice(plaintext.as_slice())
         .map_err(|e| anyhow!("protobuf decode failed: {e}"))
 }
 
@@ -221,16 +222,18 @@ pub fn parse_media_retry_notification(
     }
 
     // Check result enum
-    let result_type = notification.result.unwrap_or(0);
-    match wa::media_retry_notification::ResultType::try_from(result_type) {
-        Ok(wa::media_retry_notification::ResultType::Success) => {
+    let result_type = notification
+        .result
+        .unwrap_or(wa::media_retry_notification::ResultType::GENERAL_ERROR);
+    match result_type {
+        wa::media_retry_notification::ResultType::SUCCESS => {
             let direct_path = notification
                 .direct_path
                 .ok_or_else(|| anyhow!("SUCCESS result but no directPath"))?;
             Ok(MediaRetryResult::Success { direct_path })
         }
-        Ok(wa::media_retry_notification::ResultType::NotFound) => Ok(MediaRetryResult::NotFound),
-        Ok(wa::media_retry_notification::ResultType::DecryptionError) => {
+        wa::media_retry_notification::ResultType::NOT_FOUND => Ok(MediaRetryResult::NotFound),
+        wa::media_retry_notification::ResultType::DECRYPTION_ERROR => {
             Ok(MediaRetryResult::DecryptionError)
         }
         _ => Ok(MediaRetryResult::GeneralError),
