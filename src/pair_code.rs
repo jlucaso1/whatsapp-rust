@@ -229,10 +229,14 @@ pub(crate) async fn handle_pair_code_notification(
     client: &Arc<Client>,
     node: &NodeRef<'_>,
 ) -> bool {
-    // Check if this is a link_code_companion_reg notification
-    let Some(reg_node) = node.get_optional_child_by_tag(&["link_code_companion_reg"]) else {
-        return false;
-    };
+    // The data fields may be wrapped in a child <link_code_companion_reg> node,
+    // or they may be direct children of the notification node itself (when the
+    // notification type="link_code_companion_reg"). Observed in the wild that
+    // the server sometimes omits the wrapper; without this fallback the
+    // pair-code flow silently hangs on the first attempt.
+    let reg_node = node
+        .get_optional_child_by_tag(&["link_code_companion_reg"])
+        .unwrap_or(node);
 
     // Extract primary's wrapped ephemeral public key (80 bytes: salt + iv + encrypted key)
     let primary_wrapped_ephemeral = match reg_node
