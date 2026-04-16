@@ -86,6 +86,11 @@ fn main() -> std::io::Result<()> {
                 ".whatsapp.SenderKeyStateStructure.SenderSigningKey.private",
                 "#[serde(skip)]",
             )
+            // We control both encoder and decoder — no need to preserve
+            // unknown fields. Disabling removes __buffa_unknown_fields from
+            // every struct, eliminating allocation/drop overhead in nested
+            // types like SessionStructure (chains × message keys).
+            .preserve_unknown_fields(false)
             // Generate view types for zero-copy decoding.
             .generate_views(true)
             // Output to src/ so generated code is version-controlled.

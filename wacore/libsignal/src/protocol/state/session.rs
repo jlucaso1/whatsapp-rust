@@ -540,7 +540,6 @@ impl SessionState {
             needs_refresh: _needs_refresh,
             pending_key_exchange: _pending_key_exchange,
             __buffa_cached_size: _,
-            __buffa_unknown_fields: _,
         } = &self.session;
 
         self.session.pending_pre_key = MessageField::none();
