@@ -10,7 +10,8 @@ pub mod whatsapp {
         non_snake_case,
         unreachable_patterns,
         clippy::derivable_impls,
-        clippy::match_single_binding
+        clippy::match_single_binding,
+        clippy::needless_else
     )]
     #[rustfmt::skip]
     include!("whatsapp.rs");

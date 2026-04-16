@@ -6,6 +6,7 @@
 use std::result::Result;
 use std::sync::Arc;
 
+use buffa::view::MessageView;
 use buffa::{Message, MessageField};
 use subtle::ConstantTimeEq;
 
@@ -602,23 +603,28 @@ impl SessionRecord {
     }
 
     pub fn deserialize(bytes: &[u8]) -> Result<Self, SignalProtocolError> {
-        let mut record = RecordStructure::decode_from_slice(bytes)
+        use waproto::whatsapp::RecordStructureView;
+
+        // Decode to a zero-copy view first, then only convert sessions we
+        // actually keep to owned. Excess previous_sessions beyond
+        // ARCHIVED_STATES_MAX_LENGTH are never fully allocated.
+        let view = RecordStructureView::decode_view(bytes)
             .map_err(|_| InvalidSessionError("failed to decode session record protobuf"))?;
 
-        // OPTIMIZATION: Aggressively prune previous_sessions on load.
-        // This avoids deserializing and keeping in memory more sessions than needed.
-        // The constant ARCHIVED_STATES_MAX_LENGTH (40) defines the maximum we ever use,
-        // so any sessions beyond that are wasted memory and CPU cycles.
-        if record.previous_sessions.len() > consts::ARCHIVED_STATES_MAX_LENGTH {
-            // Keep only the most recent sessions (at the front of the vec)
-            record
-                .previous_sessions
-                .truncate(consts::ARCHIVED_STATES_MAX_LENGTH);
-        }
+        let limit = consts::ARCHIVED_STATES_MAX_LENGTH;
+        let previous_sessions: Vec<SessionStructure> = view
+            .previous_sessions
+            .iter()
+            .take(limit)
+            .map(|sv| sv.to_owned_message())
+            .collect();
 
         Ok(Self {
-            current_session: record.current_session.into_option().map(|s| s.into()),
-            previous_sessions: Arc::new(record.previous_sessions),
+            current_session: view
+                .current_session
+                .as_option()
+                .map(|sv| sv.to_owned_message().into()),
+            previous_sessions: Arc::new(previous_sessions),
         })
     }
 
