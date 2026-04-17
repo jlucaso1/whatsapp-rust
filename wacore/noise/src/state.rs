@@ -47,7 +47,12 @@ impl NoiseCipher {
     /// Encrypts plaintext in-place within the provided buffer: on entry `buffer`
     /// holds the plaintext; on return it holds ciphertext + 16-byte tag.
     /// Preserves the buffer's allocated capacity across calls.
-    pub fn encrypt_in_place_with_counter(&self, counter: u32, buffer: &mut Vec<u8>) -> Result<()> {
+    /// Accepts any [`NoiseBuffer`] (`Vec<u8>` or `bytes::BytesMut`).
+    pub fn encrypt_in_place_with_counter<B: NoiseBuffer>(
+        &self,
+        counter: u32,
+        buffer: &mut B,
+    ) -> Result<()> {
         let iv = generate_iv(counter);
         aes_256_gcm_encrypt_in_place(&self.key, &iv, b"", buffer)
             .map_err(|e| NoiseError::CryptoError(format!("{e}")))

@@ -72,6 +72,13 @@ pub fn aes_256_gcm_encrypt_in_place<B: GcmInPlaceBuffer>(
 
 /// In-place AES-256-GCM open. On entry `buffer` holds `ciphertext || tag`; on
 /// success it holds plaintext (length shrunk by 16).
+///
+/// On authentication failure ([`CryptoProviderError::AuthFailed`]) the buffer
+/// is left in an **indeterminate** state: its length is unchanged but the
+/// first `buffer.len() - 16` bytes contain the CTR-XOR output (pseudo-
+/// plaintext derived from forged ciphertext) rather than the original
+/// ciphertext. Callers **must not** reuse the buffer contents — discard or
+/// reinitialize it, and treat the session as compromised.
 #[inline]
 pub fn aes_256_gcm_decrypt_in_place<B: GcmInPlaceBuffer>(
     key: &[u8; 32],
