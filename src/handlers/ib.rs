@@ -165,8 +165,9 @@ async fn handle_ib_impl(client: Arc<Client>, node: &wacore_binary::NodeRef<'_>) 
                 client.complete_offline_sync(count);
 
                 let client_clone = Arc::clone(&client);
-                // Per-connection: the offline flush is tied to THIS connection's
-                // sync. A reconnect starts a new flush; the old task should exit.
+                // Per-connection: the offline flush is tied to THIS connection.
+                // A reconnect fires the per-connection signal; the old task exits
+                // and the new connection spawns a fresh flush.
                 let shutdown = client_clone.connection_shutdown_signal();
                 client
                     .runtime

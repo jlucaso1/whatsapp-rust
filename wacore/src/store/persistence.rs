@@ -133,12 +133,11 @@ impl PersistenceManager {
         }
     }
 
-    /// Self-terminates on `shutdown.notify(...)` after a final flush.
-    /// Caller must keep the returned `AbortHandle` — dropping it aborts the task.
-    ///
-    /// A notify that fires between `spawn` and the first `listen()` inside the
-    /// loop is missed; the interval tick (or the `AbortHandle` drop) bounds the
-    /// delay so no state is lost.
+    /// Spawn the background saver. Wakes on `save_notify`, the interval tick,
+    /// or the `shutdown` signal; runs a final flush before exiting on shutdown.
+    /// Caller must keep the returned [`AbortHandle`] to control the task's
+    /// lifetime (dropping it aborts). [`ShutdownSignal`] is sticky so a
+    /// notify that races the task's first listen is still observed.
     pub fn run_background_saver(
         self: Arc<Self>,
         runtime: Arc<dyn Runtime>,
@@ -150,9 +149,9 @@ impl PersistenceManager {
         drop(self); // Release strong ref; caller's Arc keeps it alive
         debug!("Background saver task started with interval {interval:?}");
         runtime.spawn(Box::pin(async move {
-            // Flush any state dirtied during construction before the first wait,
-            // covering the window where save_notify fires between PM creation
-            // and the first listener registration.
+            // Flush state dirtied during construction. save_notify is
+            // edge-triggered so pre-spawn writes rely on the dirty flag
+            // rather than a missed notification.
             if let Some(this) = weak.upgrade()
                 && let Err(e) = this.save_to_disk().await
             {

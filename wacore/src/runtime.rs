@@ -144,7 +144,7 @@ impl ShutdownNotifier {
         self.inner.event.notify(usize::MAX);
     }
 
-    pub fn is_fired(&self) -> bool {
+    fn is_fired(&self) -> bool {
         self.inner.fired.load(std::sync::atomic::Ordering::SeqCst)
     }
 
@@ -202,13 +202,14 @@ impl ShutdownSignal {
 }
 
 /// Wait for shutdown, resolving when `ShutdownNotifier::notify` has been
-/// called. If the notifier has been dropped the returned future never
-/// resolves, so it composes in `futures::select!` against other exit
-/// conditions.
+/// called. Stays `Pending` if the notifier has been dropped (or if the signal
+/// was built via [`ShutdownSignal::never`]); pair with another exit condition
+/// in `futures::select!`.
 ///
 /// The listener is registered BEFORE the sticky-flag load so a notify that
 /// races the subscription either sets the flag we then observe or wakes the
-/// listener we just registered. Don't delay calling this into the select arm.
+/// listener we just registered. Call this directly inside the select arm, not
+/// earlier in the function, to keep the race window closed.
 pub fn wait_for_shutdown(signal: &ShutdownSignal) -> impl Future<Output = ()> + use<> {
     let (fired, listener) = match signal.inner.upgrade() {
         Some(inner) => {

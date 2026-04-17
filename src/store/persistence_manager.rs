@@ -136,12 +136,15 @@ impl PersistenceManager {
         }
     }
 
-    /// Self-terminates on `shutdown.notify(...)` after a final flush.
-    /// Caller must keep the returned `AbortHandle` — dropping it aborts the task.
+    /// Spawn the background saver. The task wakes on `save_notify`, the
+    /// interval tick, or the `shutdown` signal; runs `save_to_disk` after
+    /// each wake (no-op when the dirty flag is clear); and performs a final
+    /// flush before exiting on shutdown.
     ///
-    /// A notify that fires between `spawn` and the first `listen()` inside the
-    /// loop is missed. The worst-case recovery is one interval tick (plus the
-    /// `AbortHandle` drop path) so no state is lost.
+    /// Caller must keep the returned [`AbortHandle`] — dropping it aborts
+    /// the task. [`ShutdownSignal`] is sticky (see [`ShutdownNotifier`]):
+    /// a notify that races the task's first [`listen()`](event_listener::Event::listen)
+    /// is observed via the flag on the first iteration, so no data is stranded.
     pub fn run_background_saver(
         self: Arc<Self>,
         runtime: Arc<dyn Runtime>,
@@ -157,11 +160,10 @@ impl PersistenceManager {
         runtime.spawn(Box::pin(async move {
             let mut consecutive_failures: u32 = 0;
 
-            // Flush any state dirtied during construction before the first wait.
-            // The saver is started after Client::new_with_cache_config in bot.rs,
-            // so save_notify fires from SetDeviceProps etc. happen before the first
-            // listener is registered and would otherwise be missed until the next
-            // interval tick.
+            // Flush any state dirtied during construction. save_notify is
+            // edge-triggered and fires from SetDeviceProps etc. before Bot::build
+            // spawns this task, so the dirty flag is our sticky catch for
+            // pre-spawn writes.
             if let Some(this) = weak.upgrade()
                 && let Err(e) = this.save_to_disk().await
             {
