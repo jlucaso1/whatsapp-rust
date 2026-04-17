@@ -2,6 +2,7 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use crate::types::events::{Event, OfflineSyncPreview};
 use async_trait::async_trait;
+use futures::FutureExt;
 use log::{debug, info, warn};
 use std::sync::Arc;
 use wacore::appstate::patch_decode::WAPatchName;
@@ -168,11 +169,18 @@ async fn handle_ib_impl(client: Arc<Client>, node: &wacore_binary::NodeRef<'_>) 
                     .runtime
                     .spawn(Box::pin(async move {
                         // WA Web: OFFLINE_DEVICE_SYNC_DELAY = 2000ms
-                        client_clone
-                            .runtime
-                            .sleep(std::time::Duration::from_secs(2))
-                            .await;
-                        client_clone.flush_pending_device_sync().await;
+                        let shutdown = client_clone.shutdown_signal().upgrade().map(|e| e.listen());
+                        futures::select! {
+                            _ = client_clone.runtime.sleep(std::time::Duration::from_secs(2)).fuse() => {
+                                client_clone.flush_pending_device_sync().await;
+                            }
+                            _ = async {
+                                match shutdown {
+                                    Some(l) => l.await,
+                                    None => std::future::pending::<()>().await,
+                                }
+                            }.fuse() => {}
+                        }
                     }))
                     .detach();
             }

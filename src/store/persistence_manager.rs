@@ -5,10 +5,10 @@ use async_lock::RwLock;
 use event_listener::Event;
 use futures::FutureExt;
 use log::{debug, error};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
-use wacore::runtime::Runtime;
+use wacore::runtime::{AbortHandle, Runtime};
 
 pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
@@ -136,50 +136,64 @@ impl PersistenceManager {
         }
     }
 
-    pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
+    /// Self-terminates on `shutdown.notify(...)` after a final flush.
+    /// Caller must keep the returned `AbortHandle` — dropping it aborts the task.
+    pub fn run_background_saver(
+        self: Arc<Self>,
+        runtime: Arc<dyn Runtime>,
+        interval: Duration,
+        shutdown: Weak<Event>,
+    ) -> AbortHandle {
         const MAX_CONSECUTIVE_FAILURES: u32 = 10;
 
         let rt = runtime.clone();
         let weak = Arc::downgrade(&self);
         drop(self);
-        runtime
-            .spawn(Box::pin(async move {
-                let mut consecutive_failures: u32 = 0;
-                loop {
-                    let Some(this) = weak.upgrade() else {
-                        debug!("PersistenceManager dropped, exiting background saver.");
-                        return;
-                    };
-                    let listener = this.save_notify.listen();
-                    drop(this);
+        runtime.spawn(Box::pin(async move {
+            let mut consecutive_failures: u32 = 0;
+            loop {
+                let Some(this) = weak.upgrade() else { return };
+                let save_listener = this.save_notify.listen();
+                let shutdown_listener = shutdown.upgrade().map(|e| e.listen());
+                drop(this);
 
-                    futures::select! {
-                        _ = listener.fuse() => {}
-                        _ = rt.sleep(interval).fuse() => {}
-                    }
-
-                    let Some(this) = weak.upgrade() else {
-                        debug!("PersistenceManager dropped, exiting background saver.");
-                        return;
-                    };
-                    if let Err(e) = this.save_to_disk().await {
-                        consecutive_failures += 1;
-                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                            this.saver_halted.store(true, Ordering::Release);
-                            error!(
-                                "Background saver: {consecutive_failures} consecutive flush failures, \
-                                 halting to prevent silent data loss. Last error: {e}"
-                            );
-                            return;
+                let mut should_exit = false;
+                futures::select! {
+                    _ = save_listener.fuse() => {}
+                    _ = rt.sleep(interval).fuse() => {}
+                    _ = async {
+                        match shutdown_listener {
+                            Some(l) => l.await,
+                            None => std::future::pending::<()>().await,
                         }
-                        error!("Background saver flush failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {e}");
-                    } else {
-                        consecutive_failures = 0;
+                    }.fuse() => {
+                        should_exit = true;
                     }
                 }
-            }))
-            .detach();
-        debug!("Background saver task started with interval {interval:?}");
+
+                let Some(this) = weak.upgrade() else { return };
+                if let Err(e) = this.save_to_disk().await {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                        this.saver_halted.store(true, Ordering::Release);
+                        error!(
+                            "Background saver: {consecutive_failures} consecutive flush failures, \
+                             halting to prevent silent data loss. Last error: {e}"
+                        );
+                        return;
+                    }
+                    error!(
+                        "Background saver flush failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {e}"
+                    );
+                } else {
+                    consecutive_failures = 0;
+                }
+
+                if should_exit {
+                    return;
+                }
+            }
+        }))
     }
 }
 
