@@ -6,7 +6,7 @@ use anyhow::{Result, anyhow};
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
 
-use crate::libsignal::crypto::{Aes256GcmDecryption, Aes256GcmEncryption};
+use crate::libsignal::crypto::{aes_256_gcm_decrypt, aes_256_gcm_encrypt};
 
 const GCM_IV_SIZE: usize = 12;
 const GCM_TAG_SIZE: usize = 16;
@@ -78,12 +78,9 @@ pub fn encrypt_poll_vote(
 
     let aad = build_vote_aad(stanza_id, voter_jid);
 
-    let mut payload = plaintext;
-    let mut enc = Aes256GcmEncryption::new(encryption_key, &iv, &aad)
-        .map_err(|e| anyhow!("AES-GCM init failed: {e}"))?;
-    enc.encrypt(&mut payload);
-    let tag = enc.compute_tag();
-    payload.extend_from_slice(&tag);
+    let mut payload = Vec::with_capacity(plaintext.len() + GCM_TAG_SIZE);
+    aes_256_gcm_encrypt(encryption_key, &iv, &aad, &plaintext, &mut payload)
+        .map_err(|e| anyhow!("AES-GCM encrypt failed: {e}"))?;
 
     Ok((payload, iv))
 }
@@ -98,12 +95,9 @@ pub fn decrypt_poll_vote(
 ) -> Result<Vec<Vec<u8>>> {
     use prost::Message as _;
 
-    if iv.len() != GCM_IV_SIZE {
-        return Err(anyhow!(
-            "Invalid IV size: expected {GCM_IV_SIZE}, got {}",
-            iv.len()
-        ));
-    }
+    let nonce: &[u8; GCM_IV_SIZE] = iv
+        .try_into()
+        .map_err(|_| anyhow!("Invalid IV size: expected {GCM_IV_SIZE}, got {}", iv.len()))?;
 
     if enc_payload.len() < GCM_TAG_SIZE {
         return Err(anyhow!(
@@ -112,14 +106,10 @@ pub fn decrypt_poll_vote(
         ));
     }
 
-    let (ciphertext, tag) = enc_payload.split_at(enc_payload.len() - GCM_TAG_SIZE);
     let aad = build_vote_aad(stanza_id, voter_jid);
 
-    let mut plaintext = ciphertext.to_vec();
-    let mut dec = Aes256GcmDecryption::new(encryption_key, iv, &aad)
-        .map_err(|e| anyhow!("AES-GCM init failed: {e}"))?;
-    dec.decrypt(&mut plaintext);
-    dec.verify_tag(tag)
+    let mut plaintext = Vec::with_capacity(enc_payload.len().saturating_sub(GCM_TAG_SIZE));
+    aes_256_gcm_decrypt(encryption_key, nonce, &aad, enc_payload, &mut plaintext)
         .map_err(|_| anyhow!("Poll vote GCM tag verification failed"))?;
 
     let vote_msg = waproto::whatsapp::message::PollVoteMessage::decode(&plaintext[..])?;

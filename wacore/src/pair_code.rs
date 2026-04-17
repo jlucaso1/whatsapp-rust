@@ -20,10 +20,9 @@
 //! - Bundle encryption: AES-256-GCM after HKDF key derivation
 
 use crate::StringEnum;
+use crate::libsignal::crypto::aes_256_gcm_encrypt;
 use crate::libsignal::protocol::{KeyPair, PublicKey};
 use aes::cipher::{KeyIvInit, StreamCipher};
-use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::{Aead, KeyInit};
 use ctr::Ctr128BE;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
@@ -468,18 +467,12 @@ impl PairCodeUtils {
         let mut iv = [0u8; 12];
         rand::make_rng::<rand::rngs::StdRng>().fill(&mut iv);
 
-        // AES-GCM encrypt the bundle
-        let cipher = Aes256Gcm::new_from_slice(&enc_key)
-            .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM init failed: {e}")))?;
-        let encrypted_bundle = cipher
-            .encrypt((&iv).into(), bundle.as_slice())
-            .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM encryption failed: {e}")))?;
-
         // Wrapped bundle = salt (32) + iv (12) + encrypted_bundle (96 + 16 = 112)
-        let mut wrapped_bundle = Vec::with_capacity(32 + 12 + encrypted_bundle.len());
+        let mut wrapped_bundle = Vec::with_capacity(32 + 12 + bundle.len() + 16);
         wrapped_bundle.extend_from_slice(&key_bundle_salt);
         wrapped_bundle.extend_from_slice(&iv);
-        wrapped_bundle.extend_from_slice(&encrypted_bundle);
+        aes_256_gcm_encrypt(&enc_key, &iv, b"", &bundle, &mut wrapped_bundle)
+            .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM encryption failed: {e}")))?;
 
         Ok((wrapped_bundle, new_adv_secret))
     }
