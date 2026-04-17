@@ -304,7 +304,7 @@ pub struct Client {
     /// Uses an AtomicBool instead of probing the noise_socket mutex to avoid
     /// TOCTOU races where `try_lock()` fails due to contention, not disconnection.
     is_connected: Arc<AtomicBool>,
-    pub(crate) shutdown_notifier: Arc<event_listener::Event>,
+    pub(crate) shutdown_notifier: wacore::runtime::ShutdownNotifier,
     /// Timestamp (ms since UNIX epoch) of the last received WebSocket data.
     /// Updated on every `DataReceived` transport event.
     /// WA Web: `parseAndHandleStanza` → `deadSocketTimer.cancel()`.
@@ -491,7 +491,7 @@ pub struct Client {
 
 impl Client {
     pub fn shutdown_signal(&self) -> wacore::runtime::ShutdownSignal {
-        wacore::runtime::ShutdownSignal::from_weak(Arc::downgrade(&self.shutdown_notifier))
+        self.shutdown_notifier.subscribe()
     }
 
     /// Read the current semaphore generation and Arc atomically under the mutex.
@@ -644,7 +644,7 @@ impl Client {
             is_connecting: Arc::new(AtomicBool::new(false)),
             is_running: Arc::new(AtomicBool::new(false)),
             is_connected: Arc::new(AtomicBool::new(false)),
-            shutdown_notifier: Arc::new(event_listener::Event::new()),
+            shutdown_notifier: wacore::runtime::ShutdownNotifier::new(),
             last_data_received_ms: Arc::new(AtomicU64::new(0)),
             last_data_sent_ms: Arc::new(AtomicU64::new(0)),
 
@@ -1167,7 +1167,7 @@ impl Client {
         info!("Disconnecting client intentionally.");
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
-        self.shutdown_notifier.notify(usize::MAX);
+        self.shutdown_notifier.notify();
 
         // Flush dirty device state before tearing down the connection.
         if let Err(e) = self.persistence_manager.flush().await {
@@ -1235,7 +1235,7 @@ impl Client {
         // Signal the keepalive loop (and any other tasks) to exit promptly.
         // Without this, a stale keepalive loop can overlap with the next one
         // after reconnect, causing duplicate pings.
-        self.shutdown_notifier.notify(usize::MAX);
+        self.shutdown_notifier.notify();
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
@@ -1650,7 +1650,7 @@ impl Client {
             } else {
                 warn!("Received <xmlstreamend/>, treating as disconnect.");
             }
-            self.shutdown_notifier.notify(usize::MAX);
+            self.shutdown_notifier.notify();
             return;
         }
 
@@ -3125,12 +3125,12 @@ impl Client {
         }
 
         info!("Notifying shutdown from stream error handler");
-        self.shutdown_notifier.notify(usize::MAX);
+        self.shutdown_notifier.notify();
     }
 
     pub(crate) async fn handle_connect_failure(&self, node: &wacore_binary::NodeRef<'_>) {
         self.expected_disconnect.store(true, Ordering::Relaxed);
-        self.shutdown_notifier.notify(usize::MAX);
+        self.shutdown_notifier.notify();
 
         let mut attrs = node.attrs();
         let reason_code = attrs.optional_u64("reason").unwrap_or(0) as i32;

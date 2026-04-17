@@ -112,36 +112,119 @@ impl Drop for AbortHandle {
     }
 }
 
-/// Subscribe-side handle for a shutdown notifier.
-///
-/// Wraps the notifier so the concrete `event_listener` type stays out of the
-/// public API. Clone is cheap (wraps a `Weak`); the handle does not extend
-/// the notifier's lifetime, so the task owning the notifier is free to drop it.
-#[derive(Clone)]
-pub struct ShutdownSignal(std::sync::Weak<event_listener::Event>);
+/// Publish-side owner of a shutdown notifier. Exposes `notify()` which sets
+/// a sticky flag before waking listeners so a late subscriber still observes
+/// the shutdown (event_listener notifications are edge-triggered).
+pub struct ShutdownNotifier {
+    inner: std::sync::Arc<ShutdownInner>,
+}
 
-impl ShutdownSignal {
-    /// Subscribers build a `ShutdownSignal` from a downgraded notifier.
-    pub fn from_weak(weak: std::sync::Weak<event_listener::Event>) -> Self {
-        Self(weak)
+struct ShutdownInner {
+    // SeqCst ensures publishers always set `fired` before `event.notify` and
+    // subscribers always register `listen` before loading `fired`; combined,
+    // a listener either sees the flag or is guaranteed to be woken by notify.
+    fired: std::sync::atomic::AtomicBool,
+    event: event_listener::Event,
+}
+
+impl ShutdownNotifier {
+    pub fn new() -> Self {
+        Self {
+            inner: std::sync::Arc::new(ShutdownInner {
+                fired: std::sync::atomic::AtomicBool::new(false),
+                event: event_listener::Event::new(),
+            }),
+        }
     }
 
-    /// Inert handle whose listener never fires. Useful for tests or callers
-    /// that don't wire a real notifier.
-    pub fn never() -> Self {
-        Self(std::sync::Weak::new())
+    pub fn notify(&self) {
+        self.inner
+            .fired
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.inner.event.notify(usize::MAX);
+    }
+
+    pub fn is_fired(&self) -> bool {
+        self.inner.fired.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Sticky-aware listener: registers the event listener BEFORE reading the
+    /// flag so a notify that races this call either sets the flag we observe
+    /// or wakes the listener we just registered. Returned future is 'static
+    /// so it can be stored in `let` bindings and composed in `select!`.
+    pub fn listen(&self) -> impl Future<Output = ()> + use<> {
+        let listener = self.inner.event.listen();
+        let fired = self.is_fired();
+        async move {
+            if fired {
+                return;
+            }
+            listener.await;
+        }
+    }
+
+    pub fn subscribe(&self) -> ShutdownSignal {
+        ShutdownSignal {
+            inner: std::sync::Arc::downgrade(&self.inner),
+        }
     }
 }
 
-/// Wait for shutdown, resolving when the notifier fires. If the notifier has
-/// been dropped the returned future never resolves, so it composes in
-/// `futures::select!` against other exit conditions.
+impl Default for ShutdownNotifier {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Subscribe-side handle. Clone is cheap (wraps `Weak`); does not extend the
+/// notifier's lifetime.
+#[derive(Clone)]
+pub struct ShutdownSignal {
+    inner: std::sync::Weak<ShutdownInner>,
+}
+
+impl ShutdownSignal {
+    /// Inert handle whose listener never fires. Useful for tests or callers
+    /// that don't wire a real notifier.
+    pub fn never() -> Self {
+        Self {
+            inner: std::sync::Weak::new(),
+        }
+    }
+
+    /// Cheap synchronous probe without awaiting. Returns false if the notifier
+    /// has been dropped.
+    pub fn is_fired(&self) -> bool {
+        self.inner
+            .upgrade()
+            .is_some_and(|i| i.fired.load(std::sync::atomic::Ordering::SeqCst))
+    }
+}
+
+/// Wait for shutdown, resolving when `ShutdownNotifier::notify` has been
+/// called. If the notifier has been dropped the returned future never
+/// resolves, so it composes in `futures::select!` against other exit
+/// conditions.
 ///
-/// `listen()` runs synchronously at call time so the subscription is registered
-/// before any observable notify; don't delay calling this into the select arm.
+/// The listener is registered BEFORE the sticky-flag load so a notify that
+/// races the subscription either sets the flag we then observe or wakes the
+/// listener we just registered. Don't delay calling this into the select arm.
 pub fn wait_for_shutdown(signal: &ShutdownSignal) -> impl Future<Output = ()> + use<> {
-    let listener = signal.0.upgrade().map(|e| e.listen());
+    let (fired, listener) = match signal.inner.upgrade() {
+        Some(inner) => {
+            let listener = inner.event.listen();
+            // Load AFTER listen so a notify that happens between the two
+            // paths is caught — either the listener wakes or we read the
+            // flag set by the publisher.
+            let fired = inner.fired.load(std::sync::atomic::Ordering::SeqCst);
+            (fired, Some(listener))
+        }
+        None => (false, None),
+    };
     async move {
+        if fired {
+            return;
+        }
         match listener {
             Some(l) => l.await,
             None => std::future::pending::<()>().await,
@@ -201,4 +284,56 @@ pub async fn blocking<T: Send + 'static>(
 #[cfg(target_arch = "wasm32")]
 pub async fn blocking<T: 'static>(_rt: &dyn Runtime, f: impl FnOnce() -> T + 'static) -> T {
     f()
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod shutdown_tests {
+    use super::{ShutdownNotifier, ShutdownSignal, wait_for_shutdown};
+    use futures::FutureExt;
+    use futures::executor::block_on;
+
+    // Regression guard against CodeRabbit's critical finding on PR #560:
+    // event_listener notifications are edge-triggered, so a `notify()` fired
+    // before a subscriber calls `listen()` would be lost without the sticky
+    // flag. Verify that notify -> subscribe -> wait_for_shutdown still
+    // resolves immediately.
+    #[test]
+    fn wait_for_shutdown_catches_notify_fired_before_subscribe() {
+        let notifier = ShutdownNotifier::new();
+        notifier.notify();
+
+        let signal = notifier.subscribe();
+        block_on(wait_for_shutdown(&signal));
+    }
+
+    // Same guard for the publisher-side listen() helper.
+    #[test]
+    fn notifier_listen_catches_notify_fired_before_listen() {
+        let notifier = ShutdownNotifier::new();
+        notifier.notify();
+
+        block_on(notifier.listen());
+    }
+
+    // Guard the ordered path: listener registered first, notify after.
+    // Must resolve through the normal event-listener wakeup (not the sticky
+    // flag fast-path, which only fires when the flag is set before listen).
+    #[test]
+    fn wait_for_shutdown_wakes_on_notify_after_subscribe() {
+        let notifier = ShutdownNotifier::new();
+        let signal = notifier.subscribe();
+        let fut = wait_for_shutdown(&signal);
+
+        notifier.notify();
+        block_on(fut);
+    }
+
+    // never() must never resolve. Poll once manually and assert Pending.
+    #[test]
+    fn wait_for_shutdown_never_stays_pending() {
+        let signal = ShutdownSignal::never();
+        let mut fut = Box::pin(wait_for_shutdown(&signal).fuse());
+        let mut ctx = futures::task::Context::from_waker(futures::task::noop_waker_ref());
+        assert!(fut.as_mut().poll_unpin(&mut ctx).is_pending());
+    }
 }

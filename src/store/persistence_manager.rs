@@ -282,8 +282,8 @@ mod tests {
                 .expect("pm init"),
         );
 
-        let shutdown_event = Arc::new(Event::new());
-        let shutdown_signal = ShutdownSignal::from_weak(Arc::downgrade(&shutdown_event));
+        let notifier = wacore::runtime::ShutdownNotifier::new();
+        let shutdown_signal = notifier.subscribe();
 
         let runtime: Arc<dyn Runtime> = Arc::new(TokioRuntime);
         // Interval far in the future so only shutdown can wake the saver.
@@ -299,7 +299,7 @@ mod tests {
         })
         .await;
 
-        shutdown_event.notify(usize::MAX);
+        notifier.notify();
 
         let deadline = Instant::now() + Duration::from_secs(2);
         loop {
