@@ -176,7 +176,18 @@ impl PersistenceManager {
                 };
 
                 let Some(this) = weak.upgrade() else { return };
-                if let Err(e) = this.save_to_disk().await {
+                let flush_result = this.save_to_disk().await;
+
+                // On the shutdown path the task is terminating either way; a failed
+                // final flush should not permanently flag the store as halted.
+                if should_exit {
+                    if let Err(e) = flush_result {
+                        error!("Background saver: final flush on shutdown failed: {e}");
+                    }
+                    return;
+                }
+
+                if let Err(e) = flush_result {
                     consecutive_failures += 1;
                     if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
                         this.saver_halted.store(true, Ordering::Release);
@@ -191,10 +202,6 @@ impl PersistenceManager {
                     );
                 } else {
                     consecutive_failures = 0;
-                }
-
-                if should_exit {
-                    return;
                 }
             }
         }))
