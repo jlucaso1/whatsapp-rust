@@ -1848,10 +1848,11 @@ mod tests {
         let resolved_jid = Jid::lid_device("100000000000199".to_string(), 17);
         let signal_address = resolved_jid.to_protocol_address();
 
+        let session_bytes = valid_serialized_session(5555, vec![0xDD; 32]);
         client
             .persistence_manager
             .backend()
-            .put_session(signal_address.as_str(), b"fake-session-record")
+            .put_session(signal_address.as_str(), &session_bytes)
             .await
             .unwrap();
 
