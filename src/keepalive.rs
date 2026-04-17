@@ -91,11 +91,15 @@ impl Client {
         let mut error_count = 0u32;
         let mut cleanup_counter = 0u32;
         let sent_msg_ttl = self.cache_config.sent_message_ttl_secs;
+        // Capture the per-connection signal once — re-subscribing each iteration
+        // would let a racing reset_connection_shutdown swap the underlying
+        // notifier mid-loop and strand this task on the next connection's signal.
+        let shutdown_signal = self.connection_shutdown_signal();
 
         loop {
-            // Register the shutdown listener BEFORE calculating the sleep
-            // duration so we never miss a notification between loop iterations.
-            let shutdown = self.shutdown_notifier.listen();
+            // Fresh listener each iteration (event_listener is edge-triggered);
+            // the Weak underneath stays pinned to this connection's notifier.
+            let shutdown = wacore::runtime::wait_for_shutdown(&shutdown_signal);
 
             let interval_ms = rand::make_rng::<rand::rngs::StdRng>().random_range(
                 KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis(),
