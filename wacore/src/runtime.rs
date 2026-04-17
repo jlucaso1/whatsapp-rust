@@ -165,7 +165,7 @@ impl ShutdownNotifier {
 
     pub fn subscribe(&self) -> ShutdownSignal {
         ShutdownSignal {
-            inner: std::sync::Arc::downgrade(&self.inner),
+            inner: Some(std::sync::Arc::clone(&self.inner)),
         }
     }
 }
@@ -176,42 +176,43 @@ impl Default for ShutdownNotifier {
     }
 }
 
-/// Subscribe-side handle. Clone is cheap (wraps `Weak`); does not extend the
-/// notifier's lifetime.
+/// Subscribe-side handle. Clone is cheap (atomic ref-count). Holds a strong
+/// `Arc` to the notifier's inner so the sticky flag and event survive across
+/// a publisher-side replacement (e.g. `Mutex<ShutdownNotifier>` swapped on
+/// reconnect). Long-lived tasks must capture the signal once at startup; if
+/// they re-subscribed each loop iteration a racing swap could strand them on
+/// a fresh notifier that was never fired.
 #[derive(Clone)]
 pub struct ShutdownSignal {
-    inner: std::sync::Weak<ShutdownInner>,
+    // None for `never()` — always Pending, always not-fired.
+    inner: Option<std::sync::Arc<ShutdownInner>>,
 }
 
 impl ShutdownSignal {
     /// Inert handle whose listener never fires. Useful for tests or callers
     /// that don't wire a real notifier.
     pub fn never() -> Self {
-        Self {
-            inner: std::sync::Weak::new(),
-        }
+        Self { inner: None }
     }
 
-    /// Cheap synchronous probe without awaiting. Returns false if the notifier
-    /// has been dropped.
+    /// Cheap synchronous probe without awaiting.
     pub fn is_fired(&self) -> bool {
         self.inner
-            .upgrade()
+            .as_ref()
             .is_some_and(|i| i.fired.load(std::sync::atomic::Ordering::SeqCst))
     }
 }
 
 /// Wait for shutdown, resolving when `ShutdownNotifier::notify` has been
-/// called. Stays `Pending` if the notifier has been dropped (or if the signal
-/// was built via [`ShutdownSignal::never`]); pair with another exit condition
-/// in `futures::select!`.
+/// called. Stays `Pending` for signals built via [`ShutdownSignal::never`];
+/// pair with another exit condition in `futures::select!`.
 ///
 /// The listener is registered BEFORE the sticky-flag load so a notify that
 /// races the subscription either sets the flag we then observe or wakes the
 /// listener we just registered. Call this directly inside the select arm, not
 /// earlier in the function, to keep the race window closed.
 pub fn wait_for_shutdown(signal: &ShutdownSignal) -> impl Future<Output = ()> + use<> {
-    let (fired, listener) = match signal.inner.upgrade() {
+    let (fired, listener) = match signal.inner.as_ref() {
         Some(inner) => {
             let listener = inner.event.listen();
             // Load AFTER listen so a notify that happens between the two
@@ -336,5 +337,23 @@ mod shutdown_tests {
         let mut fut = Box::pin(wait_for_shutdown(&signal).fuse());
         let mut ctx = futures::task::Context::from_waker(futures::task::noop_waker_ref());
         assert!(fut.as_mut().poll_unpin(&mut ctx).is_pending());
+    }
+
+    // Captured signal must survive the publisher being dropped — tasks that
+    // hold the signal across a Mutex<ShutdownNotifier> swap need to still see
+    // the notify that fired before the swap. With Weak<Inner> the Arc would
+    // die on swap and subsequent wait_for_shutdown calls would pend forever.
+    #[test]
+    fn captured_signal_observes_fire_after_notifier_dropped() {
+        let notifier = ShutdownNotifier::new();
+        let signal = notifier.subscribe();
+        notifier.notify();
+        drop(notifier);
+
+        assert!(
+            signal.is_fired(),
+            "Signal must remain fired after the publisher was dropped"
+        );
+        block_on(wait_for_shutdown(&signal));
     }
 }

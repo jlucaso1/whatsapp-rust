@@ -5920,6 +5920,26 @@ mod tests {
         );
     }
 
+    // Capture-once regression guard: a ShutdownSignal captured before a reset
+    // must keep observing the pre-reset fired state. Without this, a
+    // reconnect after the old notifier is replaced in the Mutex would
+    // strand long-lived tasks (e.g. keepalive) on a new notifier they
+    // never registered for. See keepalive_loop which captures its signal
+    // once at task startup.
+    #[tokio::test]
+    async fn captured_signal_keeps_observing_old_notifier_after_reset() {
+        let client = crate::test_utils::create_test_client().await;
+
+        let captured = client.connection_shutdown_signal();
+        client.notify_connection_shutdown();
+        client.reset_connection_shutdown();
+
+        assert!(
+            captured.is_fired(),
+            "captured signal must retain the pre-reset notifier's fired state"
+        );
+    }
+
     // Terminal disconnect() must also wake per-connection subscribers via
     // cleanup_connection_state, so keepalive/request/read loop exit promptly.
     #[tokio::test]
