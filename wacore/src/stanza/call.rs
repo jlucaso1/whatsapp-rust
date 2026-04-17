@@ -59,6 +59,21 @@ pub fn parse_call_stanza(node: &NodeRef<'_>) -> Result<Option<IncomingCall>> {
     }))
 }
 
+fn parse_audio_codec(node: &NodeRef<'_>) -> Result<CallAudioCodec> {
+    let mut a = node.attrs();
+    let enc = a
+        .required_string("enc")
+        .map_err(|e| anyhow!("<audio> missing 'enc': {e}"))?
+        .into_owned();
+    let rate_raw = a
+        .optional_u64("rate")
+        .ok_or_else(|| anyhow!("<audio enc={enc}> missing or invalid 'rate'"))?;
+    let rate = u32::try_from(rate_raw)
+        .map_err(|_| anyhow!("<audio enc={enc}> 'rate'={rate_raw} overflows u32"))?;
+    a.finish().map_err(|e| anyhow!("<audio> attrs: {e}"))?;
+    Ok(CallAudioCodec { enc, rate })
+}
+
 fn parse_action(node: &NodeRef<'_>) -> Result<CallAction> {
     let mut attrs = node.attrs();
     let call_id = attrs
@@ -87,19 +102,11 @@ fn parse_action(node: &NodeRef<'_>) -> Result<CallAction> {
 
             let children = node.children().unwrap_or_default();
             let is_video = children.iter().any(|c| c.tag == "video");
-            let audio: Vec<CallAudioCodec> = children
+            let audio = children
                 .iter()
                 .filter(|c| c.tag == "audio")
-                .filter_map(|c| {
-                    let mut a = c.attrs();
-                    let enc = a.optional_string("enc")?.into_owned();
-                    let rate = a
-                        .optional_u64("rate")
-                        .and_then(|r| u32::try_from(r).ok())
-                        .unwrap_or(0);
-                    Some(CallAudioCodec { enc, rate })
-                })
-                .collect();
+                .map(parse_audio_codec)
+                .collect::<Result<Vec<_>>>()?;
 
             CallAction::Offer {
                 call_id,
@@ -392,6 +399,42 @@ mod tests {
             .children([NodeBuilder::new("surprise").build()])
             .build();
         assert!(parse_call_stanza(&as_ref(&node)).unwrap().is_none());
+    }
+
+    #[test]
+    fn malformed_audio_missing_enc_errors() {
+        let node = base_call_builder()
+            .children([offer_builder_base()
+                .children([NodeBuilder::new("audio").attr("rate", "16000").build()])
+                .build()])
+            .build();
+
+        assert!(parse_call_stanza(&as_ref(&node)).is_err());
+    }
+
+    #[test]
+    fn malformed_audio_missing_rate_errors() {
+        let node = base_call_builder()
+            .children([offer_builder_base()
+                .children([NodeBuilder::new("audio").attr("enc", "opus").build()])
+                .build()])
+            .build();
+
+        assert!(parse_call_stanza(&as_ref(&node)).is_err());
+    }
+
+    #[test]
+    fn malformed_audio_rate_overflow_errors() {
+        let node = base_call_builder()
+            .children([offer_builder_base()
+                .children([NodeBuilder::new("audio")
+                    .attr("enc", "opus")
+                    .attr("rate", "4294967296") // u32::MAX + 1
+                    .build()])
+                .build()])
+            .build();
+
+        assert!(parse_call_stanza(&as_ref(&node)).is_err());
     }
 
     #[test]
