@@ -149,6 +149,7 @@ impl PersistenceManager {
         let rt = runtime.clone();
         let weak = Arc::downgrade(&self);
         drop(self);
+        debug!("Background saver started (interval {interval:?})");
         runtime.spawn(Box::pin(async move {
             let mut consecutive_failures: u32 = 0;
 
@@ -165,7 +166,10 @@ impl PersistenceManager {
             }
 
             loop {
-                let Some(this) = weak.upgrade() else { return };
+                let Some(this) = weak.upgrade() else {
+                    debug!("PersistenceManager dropped, exiting background saver.");
+                    return;
+                };
                 let save_listener = this.save_notify.listen();
                 drop(this);
 
@@ -175,14 +179,22 @@ impl PersistenceManager {
                     _ = wait_for_shutdown(&shutdown).fuse() => true,
                 };
 
-                let Some(this) = weak.upgrade() else { return };
+                let Some(this) = weak.upgrade() else {
+                    debug!("PersistenceManager dropped, exiting background saver.");
+                    return;
+                };
                 let flush_result = this.save_to_disk().await;
 
                 // On the shutdown path the task is terminating either way; a failed
                 // final flush should not permanently flag the store as halted.
                 if should_exit {
-                    if let Err(e) = flush_result {
-                        error!("Background saver: final flush on shutdown failed: {e}");
+                    match &flush_result {
+                        Err(e) => {
+                            error!("Background saver: final flush on shutdown failed: {e}");
+                        }
+                        Ok(()) => {
+                            debug!("Background saver received shutdown; final flush complete.");
+                        }
                     }
                     return;
                 }
