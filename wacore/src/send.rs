@@ -1424,6 +1424,24 @@ pub fn ensure_status_participants(
     stanza
 }
 
+/// Build a `Message.ProtocolMessage` for `GROUP_MEMBER_LABEL_CHANGE`.
+///
+/// Sent via the standard E2EE fanout, not an IQ. Empty `label` clears.
+/// `ts_secs` is unix seconds, matching WA Web's `unixTime()`.
+pub fn build_member_label_message(label: String, ts_secs: i64) -> wa::Message {
+    wa::Message {
+        protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+            r#type: Some(wa::message::protocol_message::Type::GroupMemberLabelChange as i32),
+            member_label: Some(wa::MemberLabel {
+                label: Some(label),
+                label_timestamp: Some(ts_secs),
+            }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1431,6 +1449,49 @@ mod tests {
     use crate::libsignal::protocol::{IdentityKeyPair, KeyPair, PreKeyBundle};
     use std::collections::HashMap;
     use wacore_binary::Jid;
+
+    #[test]
+    fn build_member_label_message_sets_fields() {
+        let msg = build_member_label_message("VIP".to_string(), 1_766_847_151);
+        let pm = msg.protocol_message.as_ref().expect("protocol_message set");
+        assert_eq!(
+            pm.r#type,
+            Some(wa::message::protocol_message::Type::GroupMemberLabelChange as i32)
+        );
+        let ml = pm.member_label.as_ref().expect("member_label set");
+        assert_eq!(ml.label.as_deref(), Some("VIP"));
+        assert_eq!(ml.label_timestamp, Some(1_766_847_151));
+        assert!(
+            pm.key.is_none(),
+            "MessageKey must NOT be set (WA Web parity)"
+        );
+    }
+
+    #[test]
+    fn build_member_label_message_clear_uses_empty_string() {
+        let msg = build_member_label_message(String::new(), 1);
+        let ml = msg
+            .protocol_message
+            .as_ref()
+            .unwrap()
+            .member_label
+            .as_ref()
+            .unwrap();
+        assert_eq!(ml.label.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn build_member_label_message_preserves_unicode() {
+        let msg = build_member_label_message("🚀 BOT".to_string(), 2);
+        let ml = msg
+            .protocol_message
+            .as_ref()
+            .unwrap()
+            .member_label
+            .as_ref()
+            .unwrap();
+        assert_eq!(ml.label.as_deref(), Some("🚀 BOT"));
+    }
 
     /// Mock implementation of SendContextResolver for testing
     struct MockSendContextResolver {

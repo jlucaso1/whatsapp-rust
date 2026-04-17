@@ -13,7 +13,7 @@ use wacore::iq::groups::{
     SetMemberAddModeIq, SetNoFrequentlyForwardedIq, normalize_participants,
 };
 use wacore::types::message::AddressingMode;
-use wacore_binary::Jid;
+use wacore_binary::{Jid, JidExt as _};
 
 use wacore::iq::groups::BatchGroupInfoResult as RawBatchResult;
 pub use wacore::iq::groups::{
@@ -723,6 +723,26 @@ impl<'a> Groups<'a> {
         }
 
         Ok(())
+    }
+
+    /// Set or clear the bot's per-group member label. Empty clears.
+    ///
+    /// WA Web sends this as a `ProtocolMessage` over the normal message path,
+    /// not as an IQ.
+    pub async fn update_member_label(
+        &self,
+        group_jid: &Jid,
+        label: impl Into<String>,
+    ) -> Result<(), anyhow::Error> {
+        if !group_jid.is_group() {
+            return Err(anyhow::anyhow!(
+                "update_member_label requires a group JID, got {group_jid}"
+            ));
+        }
+        let msg = wacore::send::build_member_label_message(label.into(), wacore::time::now_secs());
+        self.client
+            .send_message_impl(group_jid.clone(), &msg, None, false, false, None, vec![])
+            .await
     }
 
     async fn resolve_participant_tokens(&self, jids: &[Jid]) -> Vec<GroupParticipantOptions> {
