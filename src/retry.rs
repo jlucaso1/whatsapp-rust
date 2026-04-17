@@ -311,59 +311,6 @@ impl Client {
                 .as_ref()
                 .is_some_and(|our_lid| info.requester.is_same_user_as(our_lid));
 
-        // Process key bundle to establish a pairwise session for the retry.
-        // Needed for both DMs and groups (group retries use pairwise, not sender key).
-        // Status broadcasts skip this — they can't resend and only mark for next send.
-        if !info.chat.is_status_broadcast() {
-            // Try to process key bundle if present
-            let key_bundle_result = self
-                .process_retry_key_bundle(nr, &resolved_jid, is_peer)
-                .await;
-
-            if let Err(e) = &key_bundle_result {
-                warn!(
-                    "Failed to process key bundle from retry receipt: {}. Checking for reg ID mismatch.",
-                    e
-                );
-
-                // WhatsApp Web behavior: If no key bundle but registration ID differs from stored
-                // session, delete the session to force re-establishment.
-                // This handles the case where the requester reinstalled but didn't include keys.
-                if let Some(received_reg_id) = extract_registration_id_from_node_ref(nr) {
-                    let signal_address = resolved_jid.to_protocol_address();
-                    let device_store = self.persistence_manager.get_device_arc().await;
-                    let device_guard = device_store.read().await;
-
-                    // Read session through cache to get consistent state
-                    let session = self
-                        .signal_cache
-                        .peek_session(&signal_address, &*device_guard.backend)
-                        .await
-                        .ok()
-                        .flatten();
-                    drop(device_guard);
-
-                    if let Some(session) = session
-                        && let Ok(stored_reg_id) = session.remote_registration_id()
-                        && stored_reg_id != 0
-                        && stored_reg_id != received_reg_id
-                    {
-                        info!(
-                            "Registration ID mismatch for {} (stored: {}, received: {}). \
-                             Deleting session since no key bundle provided.",
-                            signal_address, stored_reg_id, received_reg_id
-                        );
-                        let lock = self.session_lock_for(signal_address.as_str()).await;
-                        let _guard = lock.lock().await;
-                        self.signal_cache.delete_session(&signal_address).await;
-                        drop(_guard);
-                        self.flush_signal_cache_logged("reg ID mismatch session deletion", None)
-                            .await;
-                    }
-                }
-            }
-        }
-
         // Fetch group info (cache-first, server on miss) — used for SKDM rotation + addressing_mode.
         // Without this, a cold cache would silently default to PN semantics for LID groups.
         let cached_group_info = if info.chat.is_group() {
@@ -382,103 +329,78 @@ impl Client {
             None
         };
 
-        if is_group_or_status {
+        // WA Web rotateKey: unknown device (not in participant list, not LID) →
+        // force full sender key rotation by clearing all sender key device tracking.
+        // This is separate from updateLocalSignalSession and specific to group retries.
+        if is_group_or_status && !info.requester.is_lid() && !info.chat.is_status_broadcast() {
             let group_jid = info.chat.to_string();
+            let is_known_participant = cached_group_info
+                .as_ref()
+                .is_some_and(|g| g.participants.iter().any(|p| p.user == info.requester.user));
 
-            // WA Web rotateKey: unknown device (not in participant list, not LID) →
-            // force full sender key rotation by clearing all sender key device tracking.
-            if !info.requester.is_lid() && !info.chat.is_status_broadcast() {
-                // If we can't verify membership (no cached group info), treat
-                // as unknown and trigger rotation (matches WA Web where the
-                // device wouldn't be in the senderKey map → rotateKey=true)
-                let is_known_participant = cached_group_info
-                    .as_ref()
-                    .is_some_and(|g| g.participants.iter().any(|p| p.user == info.requester.user));
-
-                if !is_known_participant {
-                    log::warn!(
-                        "Unknown device {} in group {} — forcing full sender key rotation \
-                         (matches WA Web's rotateKey behavior)",
-                        info.requester,
-                        group_jid
-                    );
-
-                    // WA Web: deleteGroupSenderKeyInfo(groupWid, ownWid)
-                    // Delete our own sender key for forward secrecy.
-                    // When addressing mode is known, delete only that namespace.
-                    // When unknown (group info unavailable), delete both PN and LID
-                    // to ensure the active key is removed regardless of mode.
-                    let addressing_mode = cached_group_info.as_ref().map(|g| g.addressing_mode);
-
-                    let jids_to_delete: Vec<_> = match addressing_mode {
-                        Some(wacore::types::message::AddressingMode::Lid) => {
-                            device_snapshot.lid.as_ref().into_iter().collect()
-                        }
-                        Some(wacore::types::message::AddressingMode::Pn) => {
-                            device_snapshot.pn.as_ref().into_iter().collect()
-                        }
-                        None => {
-                            // Can't determine mode — delete both namespaces
-                            device_snapshot
-                                .lid
-                                .as_ref()
-                                .into_iter()
-                                .chain(device_snapshot.pn.as_ref())
-                                .collect()
-                        }
-                    };
-
-                    for own_jid in jids_to_delete {
-                        use wacore::libsignal::store::sender_key_name::SenderKeyName;
-                        let sk_name = SenderKeyName::from_parts(
-                            &group_jid,
-                            own_jid.to_protocol_address().as_str(),
-                        );
-                        self.signal_cache
-                            .delete_sender_key(sk_name.cache_key())
-                            .await;
-                    }
-
-                    // Clear DB first, then invalidate cache. This order prevents
-                    // a concurrent resolve_skdm_targets from reading stale DB rows
-                    // and re-inserting them into cache after invalidation.
-                    if let Err(e) = self
-                        .persistence_manager
-                        .clear_sender_key_devices(&group_jid)
-                        .await
-                    {
-                        log::warn!("Failed to clear sender key devices for rotation: {}", e);
-                    }
-                    self.sender_key_device_cache.invalidate(&group_jid).await;
-                }
-            }
-
-            // Mark this device as needing fresh SKDM (filters out own devices internally)
-            if let Err(e) = self
-                .mark_forget_sender_key(&group_jid, std::slice::from_ref(&info.requester))
-                .await
-            {
+            if !is_known_participant {
                 log::warn!(
-                    "Failed to mark sender key forget for {} in {}: {}",
+                    "Unknown device {} in group {} — forcing full sender key rotation \
+                     (matches WA Web's rotateKey behavior)",
                     info.requester,
-                    group_jid,
-                    e
+                    group_jid
                 );
-            } else {
-                let chat_type = if info.chat.is_status_broadcast() {
-                    "status broadcast"
-                } else {
-                    "group"
+
+                // WA Web: deleteGroupSenderKeyInfo(groupWid, ownWid) — delete our own
+                // sender key for forward secrecy. When addressing mode is known,
+                // delete only that namespace; otherwise both.
+                let addressing_mode = cached_group_info.as_ref().map(|g| g.addressing_mode);
+                let jids_to_delete: Vec<_> = match addressing_mode {
+                    Some(wacore::types::message::AddressingMode::Lid) => {
+                        device_snapshot.lid.as_ref().into_iter().collect()
+                    }
+                    Some(wacore::types::message::AddressingMode::Pn) => {
+                        device_snapshot.pn.as_ref().into_iter().collect()
+                    }
+                    None => device_snapshot
+                        .lid
+                        .as_ref()
+                        .into_iter()
+                        .chain(device_snapshot.pn.as_ref())
+                        .collect(),
                 };
-                info!(
-                    "Marked {} for fresh SKDM in {} {} due to retry receipt",
-                    info.requester, chat_type, group_jid
-                );
+
+                for own_jid in jids_to_delete {
+                    use wacore::libsignal::store::sender_key_name::SenderKeyName;
+                    let sk_name = SenderKeyName::from_parts(
+                        &group_jid,
+                        own_jid.to_protocol_address().as_str(),
+                    );
+                    self.signal_cache
+                        .delete_sender_key(sk_name.cache_key())
+                        .await;
+                }
+
+                // DB first, then cache invalidate — prevents a concurrent
+                // resolve_skdm_targets from reviving stale cache entries.
+                if let Err(e) = self
+                    .persistence_manager
+                    .clear_sender_key_devices(&group_jid)
+                    .await
+                {
+                    log::warn!("Failed to clear sender key devices for rotation: {}", e);
+                }
+                self.sender_key_device_cache.invalidate(&group_jid).await;
             }
-        } else {
-            self.delete_dm_retry_session_target(&resolved_jid, &message_id, retry_count)
-                .await?;
         }
+
+        // Mirror WAWebUpdateLocalSignalSession for all chat types: markForgetSenderKey
+        // (group/status) + processKeyBundle + regId-mismatch delete + base-key logic.
+        // Must run before ensureE2ESessions so any session deletion here is rebuilt there.
+        self.update_local_signal_session(
+            &info,
+            &resolved_jid,
+            &message_id,
+            retry_count,
+            nr,
+            is_peer,
+        )
+        .await;
 
         // Status broadcasts can't resend (requires explicit recipient list).
         // Participant already marked for fresh SKDM above; next status send includes them.
@@ -569,91 +491,187 @@ impl Client {
         Ok(())
     }
 
-    async fn delete_dm_retry_session_target(
+    /// Mirrors WAWebUpdateLocalSignalSession (`WAWeb/Update/LocalSignalSession.js`).
+    /// Runs before ensureE2ESessions + sendRetry for all chat types (DM, group,
+    /// status). Order and semantics match the WA Web implementation:
+    ///   1. markForgetSenderKey for group/status (participant needs fresh SKDM)
+    ///   2. processKeyBundle if `<keys>` present
+    ///   3. If no bundle AND stored regId differs → delete session
+    ///   4. retry == 2 → save current base key, return (no delete)
+    ///   5. retry > 2 AND same base key → delete session (force re-establish)
+    ///
+    /// Unlike the previous DM-only path, this does NOT unconditionally delete
+    /// the session on every retry — WA Web preserves it on retry==1 and on
+    /// retry>2 when the base key already changed (session was regenerated
+    /// legitimately). The subsequent `ensure_e2e_sessions_resolved` call in
+    /// `handle_retry_receipt` rebuilds any session this function deleted.
+    async fn update_local_signal_session(
         &self,
-        device_jid: &Jid,
+        info: &RetryChatInfo,
+        resolved_jid: &Jid,
         message_id: &str,
         retry_count: u8,
-    ) -> Result<(), anyhow::Error> {
-        // Base key collision detection prevents stale-session retry loops.
-        let signal_address = device_jid.to_protocol_address();
-        let device_store = self.persistence_manager.get_device_arc().await;
-
-        // Check for base key collision before deleting the session.
-        // Read session through cache for consistent state.
-        {
-            let device_guard = device_store.read().await;
-            let session = self
-                .signal_cache
-                .peek_session(&signal_address, &*device_guard.backend)
+        node: &NodeRef<'_>,
+        is_peer: bool,
+    ) {
+        // 1. markForgetSenderKey (WA Web L33-38). Rust unifies group and status
+        //    under a single storage (chat JID as the key) — markForgetSenderKey
+        //    handles both `@g.us` and `status@broadcast` as opaque group_jid.
+        if info.chat.is_group() || info.chat.is_status_broadcast() {
+            let group_jid = info.chat.to_string();
+            match self
+                .mark_forget_sender_key(&group_jid, std::slice::from_ref(&info.requester))
                 .await
-                .ok()
-                .flatten();
-
-            if let Some(session) = session
-                && let Ok(current_base_key) = session.alice_base_key()
             {
-                let addr_str = signal_address.as_str();
-                if retry_count == MIN_RETRY_FOR_BASE_KEY_CHECK {
-                    // Save retry #2's base key so later retries can prove regeneration happened.
-                    if let Err(e) = device_guard
-                        .backend
-                        .save_base_key(addr_str, message_id, current_base_key)
-                        .await
-                    {
-                        warn!("Failed to save base key for {}: {}", signal_address, e);
+                Ok(()) => {
+                    let chat_type = if info.chat.is_status_broadcast() {
+                        "status broadcast"
                     } else {
-                        info!(
-                            "Saved base key for {} at retry #{} for collision detection",
-                            signal_address, retry_count
-                        );
-                    }
-                } else if retry_count > MIN_RETRY_FOR_BASE_KEY_CHECK {
-                    // An unchanged base key means we never rebuilt the session.
-                    match device_guard
-                        .backend
-                        .has_same_base_key(addr_str, message_id, current_base_key)
-                        .await
-                    {
-                        Ok(true) => {
-                            // Collision detected! We haven't regenerated our session.
-                            warn!(
-                                "Base key collision detected for {} at retry #{}. \
-                                 Session hasn't been regenerated. Forcing fresh session.",
-                                signal_address, retry_count
-                            );
-                            // Clean up base key entry since we're deleting the session
-                            let _ = device_guard
-                                .backend
-                                .delete_base_key(addr_str, message_id)
-                                .await;
-                        }
-                        Ok(false) => {
-                            // Base key changed, session was regenerated - good!
-                            info!(
-                                "Base key changed for {} at retry #{} - session regenerated",
-                                signal_address, retry_count
-                            );
-                            // Clean up old base key entry
-                            let _ = device_guard
-                                .backend
-                                .delete_base_key(addr_str, message_id)
-                                .await;
-                        }
-                        Err(e) => {
-                            warn!("Failed to check base key for {}: {}", signal_address, e);
-                        }
-                    }
+                        "group"
+                    };
+                    info!(
+                        "Marked {} for fresh SKDM in {} {} due to retry receipt",
+                        info.requester, chat_type, group_jid
+                    );
+                }
+                Err(e) => log::warn!(
+                    "Failed to mark sender key forget for {} in {}: {}",
+                    info.requester,
+                    group_jid,
+                    e
+                ),
+            }
+        }
+
+        // 2. processKeyBundle (WA Web L51). Previously gated behind
+        //    `!is_status_broadcast()`; WA Web runs it unconditionally.
+        let key_bundle_result = self
+            .process_retry_key_bundle(node, resolved_jid, is_peer)
+            .await;
+        let key_bundle_processed = key_bundle_result.is_ok();
+
+        // 3. No bundle + regId mismatch → delete session (WA Web L52-65).
+        if !key_bundle_processed {
+            if let Err(ref e) = key_bundle_result {
+                // Demoted to debug on the happy path (peer retry without re-key):
+                // only warn when a regId mismatch triggers a delete below.
+                log::debug!(
+                    "No key bundle in retry receipt for {}: {}. Checking for reg ID mismatch.",
+                    resolved_jid,
+                    e
+                );
+            }
+
+            if let Some(received_reg_id) = extract_registration_id_from_node_ref(node) {
+                let signal_address = resolved_jid.to_protocol_address();
+                let device_store = self.persistence_manager.get_device_arc().await;
+                let device_guard = device_store.read().await;
+                let session = self
+                    .signal_cache
+                    .peek_session(&signal_address, &*device_guard.backend)
+                    .await
+                    .ok()
+                    .flatten();
+                drop(device_guard);
+
+                if let Some(session) = session
+                    && let Ok(stored_reg_id) = session.remote_registration_id()
+                    && stored_reg_id != 0
+                    && stored_reg_id != received_reg_id
+                {
+                    info!(
+                        "Registration ID mismatch for {} (stored: {}, received: {}). \
+                         Deleting session since no key bundle provided.",
+                        signal_address, stored_reg_id, received_reg_id
+                    );
+                    let lock = self.session_lock_for(signal_address.as_str()).await;
+                    let _guard = lock.lock().await;
+                    self.signal_cache.delete_session(&signal_address).await;
+                    drop(_guard);
+                    self.flush_signal_cache_logged("reg ID mismatch session deletion", None)
+                        .await;
                 }
             }
         }
 
-        // Delete through the cache so resend can't revive a stale in-memory session.
-        // The retry path flushes once after the resend so the session transition
-        // stays visible through the cache for the whole targeted rebuild.
-        self.signal_cache.delete_session(&signal_address).await;
-        info!("Deleted session for {signal_address} due to retry receipt");
-        Ok(())
+        // 4-5. Base-key collision logic (WA Web L66-80). Applied to ALL chat
+        //      types now — previously only ran in the DM branch.
+        let signal_address = resolved_jid.to_protocol_address();
+        let device_store = self.persistence_manager.get_device_arc().await;
+        let device_guard = device_store.read().await;
+        let session = self
+            .signal_cache
+            .peek_session(&signal_address, &*device_guard.backend)
+            .await
+            .ok()
+            .flatten();
+
+        let Some(session) = session else {
+            return;
+        };
+        let Ok(current_base_key) = session.alice_base_key() else {
+            return;
+        };
+
+        let addr_str = signal_address.as_str();
+        if retry_count == MIN_RETRY_FOR_BASE_KEY_CHECK {
+            // retry == 2: save base key, do NOT delete (WA Web L66-67).
+            match device_guard
+                .backend
+                .save_base_key(addr_str, message_id, current_base_key)
+                .await
+            {
+                Ok(()) => info!(
+                    "Saved base key for {} at retry #{} for collision detection",
+                    signal_address, retry_count
+                ),
+                Err(e) => warn!("Failed to save base key for {}: {}", signal_address, e),
+            }
+            return;
+        }
+
+        if retry_count > MIN_RETRY_FOR_BASE_KEY_CHECK {
+            match device_guard
+                .backend
+                .has_same_base_key(addr_str, message_id, current_base_key)
+                .await
+            {
+                Ok(true) => {
+                    warn!(
+                        "Base key collision detected for {} at retry #{}. \
+                         Session hasn't been regenerated. Forcing fresh session.",
+                        signal_address, retry_count
+                    );
+                    let _ = device_guard
+                        .backend
+                        .delete_base_key(addr_str, message_id)
+                        .await;
+                    drop(device_guard);
+                    let lock = self.session_lock_for(signal_address.as_str()).await;
+                    let _guard = lock.lock().await;
+                    self.signal_cache.delete_session(&signal_address).await;
+                    drop(_guard);
+                    self.flush_signal_cache_logged(
+                        "base key collision — forcing fresh session",
+                        None,
+                    )
+                    .await;
+                }
+                Ok(false) => {
+                    info!(
+                        "Base key changed for {} at retry #{} - session regenerated",
+                        signal_address, retry_count
+                    );
+                    let _ = device_guard
+                        .backend
+                        .delete_base_key(addr_str, message_id)
+                        .await;
+                }
+                Err(e) => {
+                    warn!("Failed to check base key for {}: {}", signal_address, e);
+                }
+            }
+        }
     }
 
     /// Extracts and processes the key bundle from a retry receipt.
@@ -1553,10 +1571,45 @@ mod tests {
         );
     }
 
+    /// Build a minimal `<receipt>` Node representing an incoming retry receipt
+    /// without `<keys>`. Used by tests that exercise the no-bundle path of
+    /// `update_local_signal_session`.
+    fn build_retry_receipt_without_keys() -> Node {
+        use wacore_binary::builder::NodeBuilder;
+        NodeBuilder::new("receipt").build()
+    }
+
+    /// Build a `<receipt>` with a `<registration>` child carrying `reg_id` (big
+    /// endian). Used to exercise the reg-ID-mismatch branch without a full
+    /// `<keys>` bundle.
+    fn build_retry_receipt_with_registration(reg_id: u32) -> Node {
+        use wacore_binary::builder::NodeBuilder;
+        NodeBuilder::new("receipt")
+            .children([NodeBuilder::new("registration")
+                .bytes(reg_id.to_be_bytes().to_vec())
+                .build()])
+            .build()
+    }
+
+    fn dm_retry_info(resolved_jid: &Jid) -> RetryChatInfo {
+        RetryChatInfo {
+            chat: resolved_jid.to_non_ad(),
+            requester: resolved_jid.clone(),
+            original_from: resolved_jid.clone(),
+            is_bot: false,
+        }
+    }
+
+    /// WA Web compliance: at retry #1 with no `<keys>`, `updateLocalSignalSession`
+    /// does NOT delete the session. Session is preserved until either a reg-ID
+    /// mismatch or a base-key collision at retry>2. Previously the Rust DM path
+    /// unconditionally deleted on every retry — this regressed legitimate
+    /// sessions and forced unnecessary prekey bundle fetches.
+    /// Ref: `WAWeb/Update/LocalSignalSession.js` (no delete on retry==1)
     #[tokio::test]
-    async fn dm_retry_deletes_only_requested_session() {
+    async fn update_local_signal_session_preserves_dm_session_at_retry_1() {
         let client =
-            crate::test_utils::create_test_client_with_failing_http("retry_dm_devices").await;
+            crate::test_utils::create_test_client_with_failing_http("retry_preserve_retry_1").await;
         let user = "100000000000088".to_string();
         let resolved_jid = Jid::lid_device(user.clone(), 33);
 
@@ -1573,10 +1626,18 @@ mod tests {
             .await
             .unwrap();
 
+        let node = build_retry_receipt_without_keys();
+        let node_ref = node.as_node_ref();
         client
-            .delete_dm_retry_session_target(&resolved_jid, "MSG-ONE-DEVICE", 1)
-            .await
-            .unwrap();
+            .update_local_signal_session(
+                &dm_retry_info(&resolved_jid),
+                &resolved_jid,
+                "MSG-RETRY-1",
+                1,
+                &node_ref,
+                false,
+            )
+            .await;
         client.flush_signal_cache().await.unwrap();
 
         assert!(
@@ -1592,16 +1653,26 @@ mod tests {
                 .get_session(device_33.as_str())
                 .await
                 .unwrap()
-                .is_none(),
-            "requesting device session should be deleted"
+                .is_some(),
+            "requesting device session should also be preserved at retry #1 — \
+             WA Web only deletes on reg-ID mismatch or base-key collision"
         );
     }
 
+    /// Mirrors the scenario from production logs (debug-1776271138): peer
+    /// sends a retry receipt without `<keys>` but with a `<registration>` child
+    /// whose reg_id differs from our stored session. WA Web deletes the session
+    /// in this case so the next ensureE2ESessions fetches a fresh bundle.
     #[tokio::test]
-    async fn dm_retry_deletes_resolved_session_without_registry_devices() {
+    async fn update_local_signal_session_handles_regid_mismatch_gracefully() {
+        // With an invalid session record in storage, peek_session returns None
+        // (errors are swallowed via .ok().flatten()). The function should not
+        // attempt to dereference a missing session — verify it completes
+        // without panicking and leaves the invalid bytes untouched (since there
+        // is no "session" for remote_registration_id() to compare against).
         let client =
-            crate::test_utils::create_test_client_with_failing_http("retry_dm_fallback").await;
-        let resolved_jid = Jid::lid("100000000000099");
+            crate::test_utils::create_test_client_with_failing_http("retry_regid_mismatch").await;
+        let resolved_jid = Jid::lid_device("100000000000099".to_string(), 17);
         let signal_address = resolved_jid.to_protocol_address();
         let backend = client.persistence_manager.backend();
 
@@ -1610,10 +1681,84 @@ mod tests {
             .await
             .unwrap();
 
+        let node = build_retry_receipt_with_registration(0xDEAD_BEEF);
+        let node_ref = node.as_node_ref();
         client
-            .delete_dm_retry_session_target(&resolved_jid, "MSG-FALLBACK", 1)
+            .update_local_signal_session(
+                &dm_retry_info(&resolved_jid),
+                &resolved_jid,
+                "MSG-REGID",
+                1,
+                &node_ref,
+                false,
+            )
+            .await;
+        client.flush_signal_cache().await.unwrap();
+
+        // Invalid bytes remain — we didn't crash, and without a parseable
+        // session the regId comparison is a no-op.
+        assert!(
+            backend
+                .get_session(signal_address.as_str())
+                .await
+                .unwrap()
+                .is_some(),
+            "unparseable session bytes should be left alone (no panic, no delete)"
+        );
+    }
+
+    /// Verify the function is a safe no-op when there is no session at all.
+    /// This is the common case for retries from devices we haven't messaged
+    /// yet (e.g., a new companion device).
+    #[tokio::test]
+    async fn update_local_signal_session_no_session_is_noop() {
+        let client =
+            crate::test_utils::create_test_client_with_failing_http("retry_no_session").await;
+        let resolved_jid = Jid::lid_device("100000000000199".to_string(), 42);
+        let node = build_retry_receipt_without_keys();
+        let node_ref = node.as_node_ref();
+        client
+            .update_local_signal_session(
+                &dm_retry_info(&resolved_jid),
+                &resolved_jid,
+                "MSG-NOSESS",
+                1,
+                &node_ref,
+                false,
+            )
+            .await;
+    }
+
+    /// Group/status at retry #1 must not delete any session (same compliance
+    /// rule as DM). Prior to this refactor, group/status didn't invoke the
+    /// base-key path at all; now it does, but the "retry 1" short-circuit
+    /// still prevents deletion.
+    #[tokio::test]
+    async fn update_local_signal_session_preserves_group_session_at_retry_1() {
+        let client =
+            crate::test_utils::create_test_client_with_failing_http("retry_group_preserve").await;
+        let resolved_jid = Jid::lid_device("100000000000088".to_string(), 33);
+        let signal_address = resolved_jid.to_protocol_address();
+        let backend = client.persistence_manager.backend();
+
+        backend
+            .put_session(signal_address.as_str(), b"invalid-session")
             .await
             .unwrap();
+
+        let group_chat: Jid = "120363042537531116@g.us".parse().unwrap();
+        let info = RetryChatInfo {
+            chat: group_chat.clone(),
+            requester: resolved_jid.clone(),
+            original_from: group_chat,
+            is_bot: false,
+        };
+
+        let node = build_retry_receipt_without_keys();
+        let node_ref = node.as_node_ref();
+        client
+            .update_local_signal_session(&info, &resolved_jid, "MSG-GRP-1", 1, &node_ref, false)
+            .await;
         client.flush_signal_cache().await.unwrap();
 
         assert!(
@@ -1621,8 +1766,8 @@ mod tests {
                 .get_session(signal_address.as_str())
                 .await
                 .unwrap()
-                .is_none(),
-            "resolved session should be deleted when registry has no device list"
+                .is_some(),
+            "group retry at #1 should not delete the session"
         );
     }
 
