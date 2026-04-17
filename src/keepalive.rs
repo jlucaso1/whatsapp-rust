@@ -95,7 +95,8 @@ impl Client {
         loop {
             // Register the shutdown listener BEFORE calculating the sleep
             // duration so we never miss a notification between loop iterations.
-            let shutdown = self.shutdown_notifier.listen();
+            // Uses per-connection shutdown so a reconnect gets a fresh keepalive.
+            let shutdown = wacore::runtime::wait_for_shutdown(&self.connection_shutdown_signal());
 
             let interval_ms = rand::make_rng::<rand::rngs::StdRng>().random_range(
                 KEEP_ALIVE_INTERVAL_MIN.as_millis()..=KEEP_ALIVE_INTERVAL_MAX.as_millis(),

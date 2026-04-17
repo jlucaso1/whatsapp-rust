@@ -165,9 +165,9 @@ async fn handle_ib_impl(client: Arc<Client>, node: &wacore_binary::NodeRef<'_>) 
                 client.complete_offline_sync(count);
 
                 let client_clone = Arc::clone(&client);
-                let shutdown = client_clone.shutdown_signal();
-                // A shutdown notify fired between spawn and wait_for_shutdown's
-                // internal listen() is missed, but the 2s sleep bounds the stall.
+                // Per-connection: the offline flush is tied to THIS connection's
+                // sync. A reconnect starts a new flush; the old task should exit.
+                let shutdown = client_clone.connection_shutdown_signal();
                 client
                     .runtime
                     .spawn(Box::pin(async move {

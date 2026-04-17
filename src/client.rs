@@ -304,7 +304,16 @@ pub struct Client {
     /// Uses an AtomicBool instead of probing the noise_socket mutex to avoid
     /// TOCTOU races where `try_lock()` fails due to contention, not disconnection.
     is_connected: Arc<AtomicBool>,
+    /// Terminal shutdown (process-wide). Fired ONLY by `disconnect()`.
+    /// Long-lived subscribers that must outlive reconnect cycles (saver,
+    /// device registry cleanup) subscribe here.
     pub(crate) shutdown_notifier: wacore::runtime::ShutdownNotifier,
+
+    /// Per-connection shutdown. Replaced with a fresh notifier on every new
+    /// connection; fired on cleanup_connection_state / stream end / stream
+    /// error / connect_failure / disconnect. Per-connection subscribers
+    /// (keepalive, request waiters, read loop, offline flush) observe this.
+    pub(crate) connection_shutdown: std::sync::Mutex<wacore::runtime::ShutdownNotifier>,
     /// Timestamp (ms since UNIX epoch) of the last received WebSocket data.
     /// Updated on every `DataReceived` transport event.
     /// WA Web: `parseAndHandleStanza` → `deadSocketTimer.cancel()`.
@@ -494,6 +503,33 @@ impl Client {
         self.shutdown_notifier.subscribe()
     }
 
+    pub(crate) fn connection_shutdown_signal(&self) -> wacore::runtime::ShutdownSignal {
+        self.connection_shutdown
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .subscribe()
+    }
+
+    /// Fire the per-connection shutdown. Per-connection subscribers exit;
+    /// the terminal shutdown_notifier is untouched so reconnects still work.
+    pub(crate) fn notify_connection_shutdown(&self) {
+        self.connection_shutdown
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .notify();
+    }
+
+    /// Reset the per-connection notifier. Call at the start of each new
+    /// connection so subscribers registered afterwards see a fresh signal.
+    /// The previous notifier's subscribers have already been woken (either
+    /// by notify on disconnect, or by falling out of scope).
+    pub(crate) fn reset_connection_shutdown(&self) {
+        *self
+            .connection_shutdown
+            .lock()
+            .unwrap_or_else(|p| p.into_inner()) = wacore::runtime::ShutdownNotifier::new();
+    }
+
     /// Read the current semaphore generation and Arc atomically under the mutex.
     pub(crate) fn read_message_semaphore(&self) -> (u64, Arc<async_lock::Semaphore>) {
         let guard = match self.message_processing_semaphore.lock() {
@@ -645,6 +681,7 @@ impl Client {
             is_running: Arc::new(AtomicBool::new(false)),
             is_connected: Arc::new(AtomicBool::new(false)),
             shutdown_notifier: wacore::runtime::ShutdownNotifier::new(),
+            connection_shutdown: std::sync::Mutex::new(wacore::runtime::ShutdownNotifier::new()),
             last_data_received_ms: Arc::new(AtomicU64::new(0)),
             last_data_sent_ms: Arc::new(AtomicU64::new(0)),
 
@@ -1121,6 +1158,11 @@ impl Client {
             }
         };
 
+        // Fresh per-connection shutdown so subscribers registered during this
+        // connection see a clean signal; the previous notifier was already
+        // fired on the prior cleanup_connection_state.
+        self.reset_connection_shutdown();
+
         *self.transport.lock().await = Some(transport);
         *self.transport_events.lock().await = Some(transport_events);
         *self.noise_socket.lock().await = Some(noise_socket);
@@ -1232,10 +1274,11 @@ impl Client {
         self.clear_sent_node_waiters();
         self.is_logged_in.store(false, Ordering::Relaxed);
         self.is_ready.store(false, Ordering::Relaxed);
-        // Signal the keepalive loop (and any other tasks) to exit promptly.
-        // Without this, a stale keepalive loop can overlap with the next one
-        // after reconnect, causing duplicate pings.
-        self.shutdown_notifier.notify();
+        // Signal the keepalive loop (and any other per-connection tasks) to
+        // exit promptly. Without this, a stale keepalive loop can overlap
+        // with the next one after reconnect. Uses the PER-CONNECTION signal
+        // so the terminal shutdown_notifier stays clean for reconnects.
+        self.notify_connection_shutdown();
         *self.transport.lock().await = None;
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
@@ -1387,10 +1430,11 @@ impl Client {
 
         // Frame decoder to parse incoming data
         let mut frame_decoder = wacore::framing::FrameDecoder::new();
+        let shutdown = self.connection_shutdown_signal();
 
         loop {
             futures::select_biased! {
-                    _ = self.shutdown_notifier.listen().fuse() => {
+                    _ = wacore::runtime::wait_for_shutdown(&shutdown).fuse() => {
                         debug!("Shutdown signaled in message loop. Exiting message loop.");
                         return Ok(());
                     },
@@ -1650,7 +1694,7 @@ impl Client {
             } else {
                 warn!("Received <xmlstreamend/>, treating as disconnect.");
             }
-            self.shutdown_notifier.notify();
+            self.notify_connection_shutdown();
             return;
         }
 
@@ -3124,13 +3168,13 @@ impl Client {
             }
         }
 
-        info!("Notifying shutdown from stream error handler");
-        self.shutdown_notifier.notify();
+        info!("Notifying connection shutdown from stream error handler");
+        self.notify_connection_shutdown();
     }
 
     pub(crate) async fn handle_connect_failure(&self, node: &wacore_binary::NodeRef<'_>) {
         self.expected_disconnect.store(true, Ordering::Relaxed);
-        self.shutdown_notifier.notify();
+        self.notify_connection_shutdown();
 
         let mut attrs = node.attrs();
         let reason_code = attrs.optional_u64("reason").unwrap_or(0) as i32;
@@ -5836,6 +5880,62 @@ mod tests {
         assert!(
             result.is_ok(),
             "send_ack_for should return Ok during expected disconnect"
+        );
+    }
+
+    // Per-connection notify must NOT set the terminal sticky flag; if it did,
+    // every reconnect would instantly abort subscribers registered on the
+    // terminal signal. Regression guard for the CI breakage observed on PR #560.
+    #[tokio::test]
+    async fn per_connection_notify_leaves_terminal_signal_untouched() {
+        let client = crate::test_utils::create_test_client().await;
+
+        client.notify_connection_shutdown();
+
+        assert!(
+            !client.shutdown_signal().is_fired(),
+            "terminal shutdown must stay clean when only per-connection fires"
+        );
+    }
+
+    // Subscribers registered AFTER a reset must not see the previous
+    // notifier's fired state. This is the core property that makes reconnect
+    // work: after cleanup_connection_state notifies the per-connection
+    // signal, the next connection replaces it with a fresh one.
+    #[tokio::test]
+    async fn reset_gives_fresh_per_connection_notifier() {
+        let client = crate::test_utils::create_test_client().await;
+
+        client.notify_connection_shutdown();
+        assert!(
+            client.connection_shutdown_signal().is_fired(),
+            "subscriber BEFORE reset sees the notify on the current notifier"
+        );
+
+        client.reset_connection_shutdown();
+
+        assert!(
+            !client.connection_shutdown_signal().is_fired(),
+            "subscribers AFTER reset must NOT see the previous notifier's state"
+        );
+    }
+
+    // Terminal disconnect() must also wake per-connection subscribers via
+    // cleanup_connection_state, so keepalive/request/read loop exit promptly.
+    #[tokio::test]
+    async fn terminal_disconnect_propagates_to_per_connection_signal() {
+        let client = crate::test_utils::create_test_client().await;
+        let conn_signal = client.connection_shutdown_signal();
+
+        client.disconnect().await;
+
+        assert!(
+            conn_signal.is_fired(),
+            "disconnect must fire per-connection via cleanup_connection_state"
+        );
+        assert!(
+            client.shutdown_signal().is_fired(),
+            "disconnect must also fire terminal"
         );
     }
 }

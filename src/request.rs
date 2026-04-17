@@ -213,7 +213,9 @@ impl Client {
             .await
             .insert(req_id.clone(), tx);
 
-        let shutdown = self.shutdown_notifier.listen();
+        // Per-connection: pending IQ requests are bound to the current socket;
+        // a reconnect aborts them (sender retries on the new connection).
+        let shutdown = wacore::runtime::wait_for_shutdown(&self.connection_shutdown_signal());
 
         if !self.is_running.load(Ordering::Acquire) {
             self.response_waiters.lock().await.remove(&req_id);
