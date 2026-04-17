@@ -1,4 +1,5 @@
 use crate::stanza::BusinessSubscription;
+use crate::types::call::IncomingCall;
 use crate::types::message::MessageInfo;
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use bytes::Bytes;
@@ -391,6 +392,10 @@ pub enum Event {
     /// Group metadata/settings/participant change from w:gp2 notification.
     GroupUpdate(GroupUpdate),
     ContactUpdate(ContactUpdate),
+
+    /// Incoming `<call>` stanza from the server (offer, preaccept, accept,
+    /// reject, terminate). Mirror of WA Web's inbound call signaling.
+    IncomingCall(IncomingCall),
 
     PushNameUpdate(PushNameUpdate),
     SelfPushNameUpdated(SelfPushNameUpdated),

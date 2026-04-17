@@ -847,7 +847,6 @@ impl Client {
             notification::NotificationHandler,
             receipt::ReceiptHandler,
             router::StanzaRouter,
-            unimplemented::UnimplementedHandler,
         };
 
         let mut router = StanzaRouter::new();
@@ -864,8 +863,9 @@ impl Client {
         router.register(Arc::new(AckHandler));
         router.register(Arc::new(ChatstateHandler));
 
+        router.register(Arc::new(crate::handlers::call::CallHandler));
+
         // Register unimplemented handlers
-        router.register(Arc::new(UnimplementedHandler::for_call()));
         router.register(Arc::new(crate::handlers::presence::PresenceHandler));
 
         router
