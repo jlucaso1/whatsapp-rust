@@ -9,10 +9,69 @@ use std::sync::OnceLock;
 use aes::Aes256;
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
+use bytes::BytesMut;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::crypto::aes_gcm::{Aes256GcmDecryption, Aes256GcmEncryption};
+
+const GCM_TAG: usize = 16;
+
+/// Growable byte buffer usable with in-place AES-GCM operations.
+///
+/// Implemented for `Vec<u8>` and `bytes::BytesMut`. Both already expose
+/// mutable-slice access plus `resize`/`truncate`, so providers can do the
+/// actual CTR/XOR work without allocating a scratch buffer.
+pub trait GcmInPlaceBuffer {
+    fn as_mut_slice(&mut self) -> &mut [u8];
+    fn as_slice(&self) -> &[u8];
+    fn len(&self) -> usize {
+        self.as_slice().len()
+    }
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+    fn resize(&mut self, new_len: usize, value: u8);
+    fn truncate(&mut self, len: usize);
+}
+
+impl GcmInPlaceBuffer for Vec<u8> {
+    #[inline]
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        self.as_mut_slice()
+    }
+    #[inline]
+    fn as_slice(&self) -> &[u8] {
+        self.as_slice()
+    }
+    #[inline]
+    fn resize(&mut self, new_len: usize, value: u8) {
+        Vec::resize(self, new_len, value);
+    }
+    #[inline]
+    fn truncate(&mut self, len: usize) {
+        Vec::truncate(self, len);
+    }
+}
+
+impl GcmInPlaceBuffer for BytesMut {
+    #[inline]
+    fn as_mut_slice(&mut self) -> &mut [u8] {
+        self
+    }
+    #[inline]
+    fn as_slice(&self) -> &[u8] {
+        self
+    }
+    #[inline]
+    fn resize(&mut self, new_len: usize, value: u8) {
+        BytesMut::resize(self, new_len, value);
+    }
+    #[inline]
+    fn truncate(&mut self, len: usize) {
+        BytesMut::truncate(self, len);
+    }
+}
 
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
 pub enum CryptoProviderError {
@@ -73,6 +132,45 @@ pub trait SignalCryptoProvider: Send + Sync + 'static {
 
     /// HMAC-SHA256 one-shot. Zero-alloc output.
     fn hmac_sha256(&self, key: &[u8], input: &[u8]) -> [u8; 32];
+
+    /// In-place AES-256-GCM seal. On entry `buffer` holds the plaintext; on
+    /// return it holds `ciphertext || tag` (length grown by 16).
+    ///
+    /// Default impl delegates to the allocating [`aes_256_gcm_encrypt`] so
+    /// existing providers keep working; override for zero-allocation variants.
+    fn aes_256_gcm_encrypt_in_place(
+        &self,
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        aad: &[u8],
+        buffer: &mut dyn GcmInPlaceBuffer,
+    ) -> Result<(), CryptoProviderError> {
+        let mut out = Vec::with_capacity(buffer.len() + GCM_TAG);
+        self.aes_256_gcm_encrypt(key, nonce, aad, buffer.as_slice(), &mut out)?;
+        buffer.resize(out.len(), 0);
+        buffer.as_mut_slice().copy_from_slice(&out);
+        Ok(())
+    }
+
+    /// In-place AES-256-GCM open. On entry `buffer` holds `ciphertext || tag`;
+    /// on success it holds plaintext (length shrunk by 16). On auth failure
+    /// the buffer contents are indeterminate and the caller must treat the
+    /// session as dead.
+    ///
+    /// Default impl delegates to the allocating [`aes_256_gcm_decrypt`].
+    fn aes_256_gcm_decrypt_in_place(
+        &self,
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        aad: &[u8],
+        buffer: &mut dyn GcmInPlaceBuffer,
+    ) -> Result<(), CryptoProviderError> {
+        let mut out = Vec::with_capacity(buffer.len().saturating_sub(GCM_TAG));
+        self.aes_256_gcm_decrypt(key, nonce, aad, buffer.as_slice(), &mut out)?;
+        buffer.resize(out.len(), 0);
+        buffer.as_mut_slice().copy_from_slice(&out);
+        Ok(())
+    }
 }
 
 static CRYPTO_PROVIDER: OnceLock<Box<dyn SignalCryptoProvider>> = OnceLock::new();
@@ -195,6 +293,47 @@ impl SignalCryptoProvider for RustCryptoProvider {
             .expect("HMAC-SHA256 accepts any key length");
         mac.update(input);
         mac.finalize().into_bytes().into()
+    }
+
+    fn aes_256_gcm_encrypt_in_place(
+        &self,
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        aad: &[u8],
+        buffer: &mut dyn GcmInPlaceBuffer,
+    ) -> Result<(), CryptoProviderError> {
+        let plaintext_len = buffer.len();
+        let mut enc =
+            Aes256GcmEncryption::new(key, nonce, aad).map_err(|_| CryptoProviderError::BadInput)?;
+        enc.encrypt(buffer.as_mut_slice());
+        let tag = enc.compute_tag();
+        buffer.resize(plaintext_len + GCM_TAG, 0);
+        buffer.as_mut_slice()[plaintext_len..].copy_from_slice(&tag);
+        Ok(())
+    }
+
+    fn aes_256_gcm_decrypt_in_place(
+        &self,
+        key: &[u8; 32],
+        nonce: &[u8; 12],
+        aad: &[u8],
+        buffer: &mut dyn GcmInPlaceBuffer,
+    ) -> Result<(), CryptoProviderError> {
+        let total = buffer.len();
+        if total < GCM_TAG {
+            return Err(CryptoProviderError::BadInput);
+        }
+        let pt_len = total - GCM_TAG;
+        let mut tag = [0u8; GCM_TAG];
+        tag.copy_from_slice(&buffer.as_slice()[pt_len..]);
+
+        let mut dec =
+            Aes256GcmDecryption::new(key, nonce, aad).map_err(|_| CryptoProviderError::BadInput)?;
+        dec.decrypt(&mut buffer.as_mut_slice()[..pt_len]);
+        dec.verify_tag(&tag)
+            .map_err(|_| CryptoProviderError::AuthFailed)?;
+        buffer.truncate(pt_len);
+        Ok(())
     }
 }
 

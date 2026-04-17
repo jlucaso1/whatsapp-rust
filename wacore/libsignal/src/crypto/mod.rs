@@ -21,7 +21,8 @@ pub use hash::{
     CryptographicHash, CryptographicMac, SHA1_OUTPUT_SIZE, SHA256_OUTPUT_SIZE, SHA512_OUTPUT_SIZE,
 };
 pub use provider::{
-    CryptoProviderError, RustCryptoProvider, SignalCryptoProvider, set_crypto_provider,
+    CryptoProviderError, GcmInPlaceBuffer, RustCryptoProvider, SignalCryptoProvider,
+    set_crypto_provider,
 };
 
 /// AES-256-GCM seal. Appends `ciphertext || tag(16)` to `out`.
@@ -54,4 +55,29 @@ pub fn aes_256_gcm_decrypt(
 #[inline]
 pub fn hmac_sha256(key: &[u8], input: &[u8]) -> [u8; 32] {
     provider::provider().hmac_sha256(key, input)
+}
+
+/// In-place AES-256-GCM seal. On entry `buffer` holds the plaintext; on return
+/// it holds `ciphertext || tag` (length grown by 16). Zero allocations with
+/// the default [`RustCryptoProvider`].
+#[inline]
+pub fn aes_256_gcm_encrypt_in_place<B: GcmInPlaceBuffer>(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    buffer: &mut B,
+) -> std::result::Result<(), CryptoProviderError> {
+    provider::provider().aes_256_gcm_encrypt_in_place(key, nonce, aad, buffer)
+}
+
+/// In-place AES-256-GCM open. On entry `buffer` holds `ciphertext || tag`; on
+/// success it holds plaintext (length shrunk by 16).
+#[inline]
+pub fn aes_256_gcm_decrypt_in_place<B: GcmInPlaceBuffer>(
+    key: &[u8; 32],
+    nonce: &[u8; 12],
+    aad: &[u8],
+    buffer: &mut B,
+) -> std::result::Result<(), CryptoProviderError> {
+    provider::provider().aes_256_gcm_decrypt_in_place(key, nonce, aad, buffer)
 }

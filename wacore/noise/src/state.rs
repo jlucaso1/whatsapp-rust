@@ -1,35 +1,15 @@
 use crate::error::{NoiseError, Result};
-use bytes::BytesMut;
 use hkdf::Hkdf;
 use sha2::{Digest, Sha256};
-use wacore_libsignal::crypto::{aes_256_gcm_decrypt, aes_256_gcm_encrypt};
+use wacore_libsignal::crypto::{
+    GcmInPlaceBuffer, aes_256_gcm_decrypt, aes_256_gcm_decrypt_in_place, aes_256_gcm_encrypt,
+    aes_256_gcm_encrypt_in_place,
+};
 
-/// Minimal byte-buffer interface used by `NoiseCipher::decrypt_in_place_with_counter`.
-/// Callers can pass either `Vec<u8>` or `bytes::BytesMut` (both read-then-write patterns).
-pub trait NoiseBuffer {
-    fn as_slice(&self) -> &[u8];
-    fn replace_contents(&mut self, data: &[u8]);
-}
-
-impl NoiseBuffer for Vec<u8> {
-    fn as_slice(&self) -> &[u8] {
-        self
-    }
-    fn replace_contents(&mut self, data: &[u8]) {
-        self.clear();
-        self.extend_from_slice(data);
-    }
-}
-
-impl NoiseBuffer for BytesMut {
-    fn as_slice(&self) -> &[u8] {
-        self
-    }
-    fn replace_contents(&mut self, data: &[u8]) {
-        self.clear();
-        self.extend_from_slice(data);
-    }
-}
+/// Buffer kinds accepted by [`NoiseCipher::decrypt_in_place_with_counter`].
+/// Both `Vec<u8>` and `bytes::BytesMut` satisfy this via [`GcmInPlaceBuffer`].
+pub trait NoiseBuffer: GcmInPlaceBuffer {}
+impl<T: GcmInPlaceBuffer + ?Sized> NoiseBuffer for T {}
 
 /// Generates an IV (nonce) for AES-GCM from a counter value.
 /// The counter is placed in the last 4 bytes of a 12-byte IV.
@@ -66,27 +46,25 @@ impl NoiseCipher {
 
     /// Encrypts plaintext in-place within the provided buffer: on entry `buffer`
     /// holds the plaintext; on return it holds ciphertext + 16-byte tag.
+    /// Preserves the buffer's allocated capacity across calls.
     pub fn encrypt_in_place_with_counter(&self, counter: u32, buffer: &mut Vec<u8>) -> Result<()> {
         let iv = generate_iv(counter);
-        let plaintext = std::mem::take(buffer);
-        aes_256_gcm_encrypt(&self.key, &iv, b"", &plaintext, buffer)
+        aes_256_gcm_encrypt_in_place(&self.key, &iv, b"", buffer)
             .map_err(|e| NoiseError::CryptoError(format!("{e}")))
     }
 
     /// Decrypts ciphertext (with 16-byte tag appended) in-place within the
     /// provided buffer. On return, `buffer` holds the plaintext (tag removed).
     /// Accepts any [`NoiseBuffer`] (`Vec<u8>` or `bytes::BytesMut`).
+    /// Zero allocations with the default [`wacore_libsignal::crypto::RustCryptoProvider`].
     pub fn decrypt_in_place_with_counter<B: NoiseBuffer>(
         &self,
         counter: u32,
         buffer: &mut B,
     ) -> Result<()> {
         let iv = generate_iv(counter);
-        let mut out = Vec::with_capacity(buffer.as_slice().len().saturating_sub(TAG_LEN));
-        aes_256_gcm_decrypt(&self.key, &iv, b"", buffer.as_slice(), &mut out)
-            .map_err(|e| NoiseError::CryptoError(format!("Decrypt failed: {e}")))?;
-        buffer.replace_contents(&out);
-        Ok(())
+        aes_256_gcm_decrypt_in_place(&self.key, &iv, b"", buffer)
+            .map_err(|e| NoiseError::CryptoError(format!("Decrypt failed: {e}")))
     }
 }
 

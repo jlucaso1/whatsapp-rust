@@ -2214,6 +2214,7 @@ dependencies = [
  "aes",
  "arrayref",
  "async-trait",
+ "bytes",
  "cbc",
  "chrono",
  "ctr",
