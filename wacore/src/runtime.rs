@@ -112,6 +112,28 @@ impl Drop for AbortHandle {
     }
 }
 
+/// Wait for a shutdown notification on a shared `Event`, resolving when
+/// `shutdown.notify(...)` fires.
+///
+/// If the Event has already been dropped the returned future never resolves,
+/// so it safely composes in `futures::select!` against other work that has
+/// its own exit condition (sleep, listener on another Event, etc.).
+///
+/// `listen()` must be called synchronously before any notify we want to
+/// observe, so the subscription is registered at the call site of this helper
+/// (not deferred to the returned future's first poll).
+pub fn wait_for_shutdown(
+    shutdown: &std::sync::Weak<event_listener::Event>,
+) -> impl Future<Output = ()> + use<> {
+    let listener = shutdown.upgrade().map(|e| e.listen());
+    async move {
+        match listener {
+            Some(l) => l.await,
+            None => std::future::pending::<()>().await,
+        }
+    }
+}
+
 /// Error returned when an async operation times out.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error("operation timed out")]

@@ -8,7 +8,7 @@ use log::{debug, error};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::time::Duration;
-use wacore::runtime::{AbortHandle, Runtime};
+use wacore::runtime::{AbortHandle, Runtime, wait_for_shutdown};
 
 pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
@@ -167,19 +167,13 @@ impl PersistenceManager {
             loop {
                 let Some(this) = weak.upgrade() else { return };
                 let save_listener = this.save_notify.listen();
-                let shutdown_listener = shutdown.upgrade().map(|e| e.listen());
                 drop(this);
 
                 let mut should_exit = false;
                 futures::select! {
                     _ = save_listener.fuse() => {}
                     _ = rt.sleep(interval).fuse() => {}
-                    _ = async {
-                        match shutdown_listener {
-                            Some(l) => l.await,
-                            None => std::future::pending::<()>().await,
-                        }
-                    }.fuse() => {
+                    _ = wait_for_shutdown(&shutdown).fuse() => {
                         should_exit = true;
                     }
                 }

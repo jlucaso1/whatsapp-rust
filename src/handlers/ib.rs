@@ -165,21 +165,16 @@ async fn handle_ib_impl(client: Arc<Client>, node: &wacore_binary::NodeRef<'_>) 
                 client.complete_offline_sync(count);
 
                 let client_clone = Arc::clone(&client);
+                let shutdown = client_clone.shutdown_signal();
                 client
                     .runtime
                     .spawn(Box::pin(async move {
                         // WA Web: OFFLINE_DEVICE_SYNC_DELAY = 2000ms
-                        let shutdown = client_clone.shutdown_signal().upgrade().map(|e| e.listen());
                         futures::select! {
                             _ = client_clone.runtime.sleep(std::time::Duration::from_secs(2)).fuse() => {
                                 client_clone.flush_pending_device_sync().await;
                             }
-                            _ = async {
-                                match shutdown {
-                                    Some(l) => l.await,
-                                    None => std::future::pending::<()>().await,
-                                }
-                            }.fuse() => {}
+                            _ = wacore::runtime::wait_for_shutdown(&shutdown).fuse() => {}
                         }
                     }))
                     .detach();

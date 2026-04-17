@@ -6,7 +6,7 @@
 //! `Backend` reference. That version should eventually be consolidated into this
 //! one once the `Device` wrapper is unified.
 
-use crate::runtime::{AbortHandle, Runtime};
+use crate::runtime::{AbortHandle, Runtime, wait_for_shutdown};
 use crate::store::commands::{DeviceCommand, apply_command_to_device};
 use crate::store::device::Device;
 use crate::store::error::{StoreError, db_err};
@@ -161,21 +161,12 @@ impl PersistenceManager {
                     return;
                 };
                 let save_listener = this.save_notify.listen();
-                let shutdown_listener = shutdown.upgrade().map(|e| e.listen());
-                drop(this); // Don't hold strong ref while sleeping
+                drop(this);
 
-                // If shutdown.notify fires between spawn and this listen(),
-                // we miss it — interval ticks eventually flush dirty state
-                // and weak.upgrade() will return None once the PM is dropped.
                 let should_exit = futures::select! {
                     _ = save_listener.fuse() => false,
                     _ = rt.sleep(interval).fuse() => false,
-                    _ = async {
-                        match shutdown_listener {
-                            Some(l) => l.await,
-                            None => std::future::pending::<()>().await,
-                        }
-                    }.fuse() => true,
+                    _ = wait_for_shutdown(&shutdown).fuse() => true,
                 };
 
                 let Some(this) = weak.upgrade() else {
