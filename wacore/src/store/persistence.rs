@@ -6,7 +6,7 @@
 //! `Backend` reference. That version should eventually be consolidated into this
 //! one once the `Device` wrapper is unified.
 
-use crate::runtime::Runtime;
+use crate::runtime::{AbortHandle, Runtime};
 use crate::store::commands::{DeviceCommand, apply_command_to_device};
 use crate::store::device::Device;
 use crate::store::error::{StoreError, db_err};
@@ -15,8 +15,8 @@ use async_lock::RwLock;
 use event_listener::Event;
 use futures::FutureExt;
 use log::{debug, error};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 /// Manages device state persistence with lazy, batched writes.
@@ -133,43 +133,56 @@ impl PersistenceManager {
         }
     }
 
-    // Known limitation: the background saver does not perform a final flush
-    // when the PersistenceManager is dropped. Any dirty state that hasn't been
-    // flushed by a periodic tick will be lost. A proper fix requires adding an
-    // explicit `shutdown()` method that callers invoke before dropping, which is
-    // a larger design change tracked separately.
-    pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
+    /// Self-terminates on `shutdown.notify(...)` after a final flush.
+    /// Caller must keep the returned `AbortHandle` — dropping it aborts the task.
+    pub fn run_background_saver(
+        self: Arc<Self>,
+        runtime: Arc<dyn Runtime>,
+        interval: Duration,
+        shutdown: Weak<Event>,
+    ) -> AbortHandle {
         let rt = runtime.clone();
         let weak = Arc::downgrade(&self);
-        drop(self); // Release the strong reference; the caller's Arc keeps it alive
-        runtime
-            .spawn(Box::pin(async move {
-                loop {
-                    let Some(this) = weak.upgrade() else {
-                        debug!("PersistenceManager dropped, exiting background saver.");
-                        return;
-                    };
-                    let listener = this.save_notify.listen();
-                    drop(this); // Don't hold strong ref while sleeping
-
-                    futures::select! {
-                        _ = listener.fuse() => {
-                            debug!("Save notification received.");
-                        }
-                        _ = rt.sleep(interval).fuse() => {}
-                    }
-
-                    let Some(this) = weak.upgrade() else {
-                        debug!("PersistenceManager dropped, exiting background saver.");
-                        return;
-                    };
-                    if let Err(e) = this.save_to_disk().await {
-                        error!("Error saving device state in background: {e}");
-                    }
-                }
-            }))
-            .detach();
+        drop(self); // Release strong ref; caller's Arc keeps it alive
         debug!("Background saver task started with interval {interval:?}");
+        runtime.spawn(Box::pin(async move {
+            loop {
+                let Some(this) = weak.upgrade() else {
+                    debug!("PersistenceManager dropped, exiting background saver.");
+                    return;
+                };
+                let save_listener = this.save_notify.listen();
+                let shutdown_listener = shutdown.upgrade().map(|e| e.listen());
+                drop(this); // Don't hold strong ref while sleeping
+
+                // If shutdown.notify fires between spawn and this listen(),
+                // we miss it — interval ticks eventually flush dirty state
+                // and weak.upgrade() will return None once the PM is dropped.
+                let should_exit = futures::select! {
+                    _ = save_listener.fuse() => false,
+                    _ = rt.sleep(interval).fuse() => false,
+                    _ = async {
+                        match shutdown_listener {
+                            Some(l) => l.await,
+                            None => std::future::pending::<()>().await,
+                        }
+                    }.fuse() => true,
+                };
+
+                let Some(this) = weak.upgrade() else {
+                    debug!("PersistenceManager dropped, exiting background saver.");
+                    return;
+                };
+                if let Err(e) = this.save_to_disk().await {
+                    error!("Error saving device state in background: {e}");
+                }
+
+                if should_exit {
+                    debug!("Background saver received shutdown; final flush complete.");
+                    return;
+                }
+            }
+        }))
     }
 
     pub async fn process_command(&self, command: DeviceCommand) {
