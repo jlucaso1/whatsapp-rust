@@ -478,6 +478,12 @@ pub struct Client {
     /// Initialized after `Arc::new(this)` in the constructor.
     pub(crate) self_weak: std::sync::OnceLock<std::sync::Weak<Client>>,
 
+    /// Holds the background saver's AbortHandle so the task lifetime follows
+    /// `Arc<Client>` ref count instead of the Bot wrapper's. Set once by
+    /// `Bot::build`; on Client drop (last Arc), the handle drops and the saver
+    /// is aborted.
+    pub(crate) saver_handle: std::sync::OnceLock<wacore::runtime::AbortHandle>,
+
     /// When true, emit `Event::RawNode` for every decoded stanza before router dispatch.
     /// Default false — only enable when external consumers need raw protocol access.
     raw_node_forwarding: AtomicBool,
@@ -736,6 +742,7 @@ impl Client {
             skip_history_sync: AtomicBool::new(false),
             cache_config,
             self_weak: std::sync::OnceLock::new(),
+            saver_handle: std::sync::OnceLock::new(),
             raw_node_forwarding: AtomicBool::new(false),
         };
 

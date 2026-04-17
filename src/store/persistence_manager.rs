@@ -336,4 +336,46 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(50)).await;
         drop(handle); // aborts the task
     }
+
+    // Regression guard for the Client-lifetime-tie fix: storing the saver's
+    // AbortHandle inside a struct held by Arc means the handle survives Arc
+    // clones and only runs abort when the LAST strong ref drops. If the
+    // handle were held by Bot alone, extracting Arc<Client> and dropping
+    // Bot would leave the Client without periodic persistence.
+    //
+    // Tested at the primitive level (Arc<T> + OnceLock<AbortHandle>) because
+    // Client's internal detached tasks hold their own strong refs and would
+    // keep Client alive regardless. Rust's Drop semantics guarantee the
+    // chain Arc::drop -> T::drop -> OnceLock::drop -> AbortHandle::drop.
+    #[tokio::test]
+    async fn abort_handle_in_arc_drops_only_when_last_ref_released() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct Owner(std::sync::OnceLock<AbortHandle>);
+
+        let owner = Arc::new(Owner(std::sync::OnceLock::new()));
+
+        let aborted = Arc::new(AtomicBool::new(false));
+        let aborted_clone = Arc::clone(&aborted);
+        owner
+            .0
+            .set(AbortHandle::new(move || {
+                aborted_clone.store(true, Ordering::SeqCst);
+            }))
+            .ok()
+            .expect("first set");
+
+        let owner_clone = Arc::clone(&owner);
+        drop(owner);
+        assert!(
+            !aborted.load(Ordering::SeqCst),
+            "handle must survive while another Arc ref is held"
+        );
+
+        drop(owner_clone);
+        assert!(
+            aborted.load(Ordering::SeqCst),
+            "last Arc drop must release the handle and fire abort"
+        );
+    }
 }

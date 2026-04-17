@@ -147,8 +147,6 @@ pub struct Bot {
     sync_task_receiver: Option<async_channel::Receiver<crate::sync_task::MajorSyncTask>>,
     event_handler: Option<EventHandlerCallback>,
     pair_code_options: Option<PairCodeOptions>,
-    /// Held for its Drop: aborts the saver task when the Bot is dropped.
-    _saver_handle: wacore::runtime::AbortHandle,
 }
 
 impl std::fmt::Debug for Bot {
@@ -692,6 +690,10 @@ impl BotBuilder<Provided, Provided, Provided, Provided> {
             std::time::Duration::from_secs(30),
             client.shutdown_signal(),
         );
+        // Tie the saver task to Arc<Client> so extracting client() and outliving
+        // Bot keeps periodic persistence alive. Client::drop on the last Arc
+        // drops the AbortHandle and aborts the task.
+        let _ = client.saver_handle.set(saver_handle);
 
         // Register custom enc handlers
         for (enc_type, handler) in self.custom_enc_handlers {
@@ -711,7 +713,6 @@ impl BotBuilder<Provided, Provided, Provided, Provided> {
             sync_task_receiver: Some(sync_task_receiver),
             event_handler: self.event_handler,
             pair_code_options: self.pair_code_options,
-            _saver_handle: saver_handle,
         })
     }
 }
