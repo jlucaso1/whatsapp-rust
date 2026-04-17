@@ -171,7 +171,6 @@ pub struct MemoryDiagnostics {
     pub device_registry_cache: u64,
     pub lid_pn_lid_entries: u64,
     pub lid_pn_pn_entries: u64,
-    pub retried_group_messages: u64,
     pub recent_messages: u64,
     pub sender_key_device_cache: u64,
     pub message_retry_counts: u64,
@@ -207,11 +206,6 @@ impl std::fmt::Display for MemoryDiagnostics {
         )?;
         writeln!(f, "  lid_pn (lid):           {}", self.lid_pn_lid_entries)?;
         writeln!(f, "  lid_pn (pn):            {}", self.lid_pn_pn_entries)?;
-        writeln!(
-            f,
-            "  retried_group_messages: {}",
-            self.retried_group_messages
-        )?;
         writeln!(f, "  recent_messages:        {}", self.recent_messages)?;
         writeln!(
             f,
@@ -375,7 +369,6 @@ pub struct Client {
 
     pub group_cache: async_lock::Mutex<Option<Arc<TypedCache<Jid, GroupInfo>>>>,
 
-    pub(crate) retried_group_messages: Cache<String, ()>,
     pub(crate) expected_disconnect: Arc<AtomicBool>,
     /// Set by `reconnect()` to suppress the "Message loop exited with an error" warning.
     /// Unlike `expected_disconnect`, this does NOT skip the reconnect backoff.
@@ -491,6 +484,11 @@ pub struct Client {
 }
 
 impl Client {
+    /// `Weak` ref so subscribers don't extend the notifier's lifetime.
+    pub fn shutdown_signal(&self) -> std::sync::Weak<event_listener::Event> {
+        Arc::downgrade(&self.shutdown_notifier)
+    }
+
     /// Read the current semaphore generation and Arc atomically under the mutex.
     pub(crate) fn read_message_semaphore(&self) -> (u64, Arc<async_lock::Semaphore>) {
         let guard = match self.message_processing_semaphore.lock() {
@@ -679,7 +677,6 @@ impl Client {
             )),
             ab_props: Arc::new(wacore::store::ab_props::AbPropsCache::new()),
             group_cache: async_lock::Mutex::new(None),
-            retried_group_messages: cache_config.retried_group_messages.build_with_ttl(),
 
             expected_disconnect: Arc::new(AtomicBool::new(false)),
             intentional_reconnect: AtomicBool::new(false),
@@ -1240,7 +1237,6 @@ impl Client {
         // is_connected==true with a cleared socket. send_node() independently
         // checks the socket, but this ordering avoids a confusing state window.
         self.is_connected.store(false, Ordering::Release);
-        self.retried_group_messages.invalidate_all();
         // Drop per-chat lanes so workers exit via channel close.
         self.chat_lanes.invalidate_all();
         // Clear pending retries so stale keys from detached scopeguard
@@ -1332,7 +1328,6 @@ impl Client {
             device_registry_cache: self.device_registry_cache.entry_count(),
             lid_pn_lid_entries: lid_lid,
             lid_pn_pn_entries: lid_pn,
-            retried_group_messages: self.retried_group_messages.entry_count(),
             recent_messages: self.recent_messages.entry_count(),
             sender_key_device_cache: self.sender_key_device_cache.entry_count(),
             message_retry_counts: self.message_retry_counts.entry_count(),
