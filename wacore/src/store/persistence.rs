@@ -146,6 +146,15 @@ impl PersistenceManager {
         drop(self); // Release strong ref; caller's Arc keeps it alive
         debug!("Background saver task started with interval {interval:?}");
         runtime.spawn(Box::pin(async move {
+            // Flush any state dirtied during construction before the first wait,
+            // covering the window where save_notify fires between PM creation
+            // and the first listener registration.
+            if let Some(this) = weak.upgrade()
+                && let Err(e) = this.save_to_disk().await
+            {
+                error!("Background saver: initial flush failed: {e}");
+            }
+
             loop {
                 let Some(this) = weak.upgrade() else {
                     debug!("PersistenceManager dropped, exiting background saver.");

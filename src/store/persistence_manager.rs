@@ -151,6 +151,19 @@ impl PersistenceManager {
         drop(self);
         runtime.spawn(Box::pin(async move {
             let mut consecutive_failures: u32 = 0;
+
+            // Flush any state dirtied during construction before the first wait.
+            // The saver is started after Client::new_with_cache_config in bot.rs,
+            // so save_notify fires from SetDeviceProps etc. happen before the first
+            // listener is registered and would otherwise be missed until the next
+            // interval tick.
+            if let Some(this) = weak.upgrade()
+                && let Err(e) = this.save_to_disk().await
+            {
+                error!("Background saver: initial flush failed: {e}");
+                consecutive_failures = 1;
+            }
+
             loop {
                 let Some(this) = weak.upgrade() else { return };
                 let save_listener = this.save_notify.listen();
