@@ -163,8 +163,6 @@ pub struct CacheConfig {
     pub device_registry_cache: CacheEntryConfig,
     /// LID-to-phone cache (time_to_idle). Default: 1h timeout, 10000 entries.
     pub lid_pn_cache: CacheEntryConfig,
-    /// Retried group messages tracker (time_to_live). Default: 5m TTL, 2000 entries.
-    pub retried_group_messages: CacheEntryConfig,
     /// Optional L1 in-memory cache for sent messages (retry support).
     /// Default: capacity 0 (disabled — DB-only, matching WA Web).
     /// Set capacity > 0 to enable a fast in-memory cache in front of the DB.
@@ -208,7 +206,6 @@ impl std::fmt::Debug for CacheConfig {
             .field("group_cache", &self.group_cache)
             .field("device_registry_cache", &self.device_registry_cache)
             .field("lid_pn_cache", &self.lid_pn_cache)
-            .field("retried_group_messages", &self.retried_group_messages)
             .field("recent_messages", &self.recent_messages)
             .field("message_retry_counts", &self.message_retry_counts)
             .field("pdo_pending_requests", &self.pdo_pending_requests)
@@ -241,7 +238,6 @@ impl Default for CacheConfig {
             group_cache: CacheEntryConfig::new(one_hour, 250),
             device_registry_cache: CacheEntryConfig::new(one_hour, 5_000),
             lid_pn_cache: CacheEntryConfig::new(one_hour, 10_000),
-            retried_group_messages: CacheEntryConfig::new(five_min, 2_000),
             recent_messages: CacheEntryConfig::new(five_min, 0),
             message_retry_counts: CacheEntryConfig::new(five_min, 1_000),
             pdo_pending_requests: CacheEntryConfig::new(Some(Duration::from_secs(30)), 500),

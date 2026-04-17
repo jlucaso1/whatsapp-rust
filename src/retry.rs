@@ -166,20 +166,15 @@ fn resolve_retry_chat_info(
     }
 }
 
-fn build_retry_dedupe_key(
-    chat: &Jid,
-    message_id: &str,
-    participant_jid: &Jid,
-    retry_count: u8,
-) -> String {
+// No retry_count in the key: concurrent receipts for the same participant must
+// serialize, otherwise two update_local_signal_session calls race on session state.
+fn build_retry_processing_key(chat: &Jid, message_id: &str, participant_jid: &Jid) -> String {
     let mut key = String::with_capacity(message_id.len() + 64);
     chat.push_to(&mut key);
     key.push(':');
     key.push_str(message_id);
     key.push(':');
     participant_jid.push_to(&mut key);
-    key.push(':');
-    key.push_str(itoa::Buffer::new().format(retry_count));
     key
 }
 
@@ -224,41 +219,22 @@ impl Client {
         );
         let is_group_or_status = info.chat.is_group() || info.chat.is_status_broadcast();
 
-        // Deduplicate retry receipts per (participant, retry_count). The count is
-        // part of the key because WA Web's recovery for a stale session relies on
-        // driving retry_count up to 3+ so `updateLocalSignalSession`'s base-key
-        // collision branch can delete the session and force a fresh bundle fetch.
-        // A participant-only key would silence retries #2-4 and leave the sender
-        // pinned to a dead pkmsg (unacknowledged_pre_key_message referencing a
-        // prekey the peer already consumed).
-        let dedupe_key =
-            build_retry_dedupe_key(&info.chat, &message_id, &info.requester, retry_count);
+        // WA Web doesn't dedupe receipts (Message/Queue.js just serializes per-chat);
+        // MAX_RETRY_COUNT covers loop prevention. This lock only guards against
+        // two concurrent receipts racing on session state.
+        let processing_key = build_retry_processing_key(&info.chat, &message_id, &info.requester);
 
-        if self.retried_group_messages.get(&dedupe_key).await.is_some() {
-            log::debug!(
-                "Ignoring duplicate retry #{} for message {} from {}: already handled.",
-                retry_count,
-                message_id,
-                info.requester
-            );
-            return Ok(());
-        }
-        self.retried_group_messages
-            .insert(dedupe_key.clone(), ())
-            .await;
-
-        // Prevent concurrent retries for the same message+participant.
         if !self
             .pending_retries
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .insert(dedupe_key.clone())
+            .insert(processing_key.clone())
         {
-            log::debug!("Ignoring retry for {dedupe_key}: a retry is already in progress.");
+            log::debug!("Ignoring retry for {processing_key}: a retry is already in progress.");
             return Ok(());
         }
         let pending = Arc::clone(&self.pending_retries);
-        let guard_key = dedupe_key.clone();
+        let guard_key = processing_key.clone();
         let _guard = scopeguard::guard((), move |()| {
             pending
                 .lock()
@@ -2250,49 +2226,41 @@ mod tests {
         assert!(info.requester.is_status_broadcast());
     }
 
-    /// Test that retry dedupe keys are differentiated per requesting device AND
-    /// per retry count. The count component is critical: WA Web-compliant recovery
-    /// from a stale session (unacknowledged pkmsg referring to a consumed prekey)
-    /// relies on driving retry_count to 3+ so the base-key collision branch can
-    /// delete the session. A participant-only key would block retries #2-4.
+    // Different participants get different keys; same participant keeps the same
+    // key across retry counts so pending_retries serializes concurrent receipts.
     #[test]
-    fn retry_dedupe_key_per_participant() {
+    fn retry_processing_key_per_participant() {
         let msg_id = "3EB06D00CAB92340790621";
 
         let status_chat = Jid::status_broadcast();
         let status_participant_a: Jid = "236395184570386@lid".parse().unwrap();
         let status_participant_b: Jid = "559985213786@s.whatsapp.net".parse().unwrap();
-        let status_key_a = build_retry_dedupe_key(&status_chat, msg_id, &status_participant_a, 1);
-        let status_key_b = build_retry_dedupe_key(&status_chat, msg_id, &status_participant_b, 1);
+        let status_key_a = build_retry_processing_key(&status_chat, msg_id, &status_participant_a);
+        let status_key_b = build_retry_processing_key(&status_chat, msg_id, &status_participant_b);
         assert_ne!(
             status_key_a, status_key_b,
-            "Different status participants should have different dedupe keys"
+            "Different status participants must have different processing keys"
         );
         assert_eq!(
             status_key_a,
-            build_retry_dedupe_key(&status_chat, msg_id, &status_participant_a, 1),
-            "Same status participant + same retry count should have the same dedupe key"
-        );
-        assert_ne!(
-            status_key_a,
-            build_retry_dedupe_key(&status_chat, msg_id, &status_participant_a, 2),
-            "Same participant with different retry_count must NOT dedupe — base-key \
-             collision relies on retry #2+ reaching update_local_signal_session"
+            build_retry_processing_key(&status_chat, msg_id, &status_participant_a),
+            "Same participant must produce the same key — any retry count for that \
+             participant serializes through pending_retries"
         );
 
         let dm_chat = Jid::pn("559911112222");
         let dm_device_a = Jid::pn_device("559922223333", 1);
         let dm_device_b = Jid::pn_device("559922223333", 2);
-        let dm_key_a = build_retry_dedupe_key(&dm_chat, msg_id, &dm_device_a, 1);
-        let dm_key_b = build_retry_dedupe_key(&dm_chat, msg_id, &dm_device_b, 1);
+        let dm_key_a = build_retry_processing_key(&dm_chat, msg_id, &dm_device_a);
+        let dm_key_b = build_retry_processing_key(&dm_chat, msg_id, &dm_device_b);
         assert_ne!(
             dm_key_a, dm_key_b,
-            "Different DM requester devices should have different dedupe keys"
+            "Different DM requester devices must have different processing keys"
         );
         assert_eq!(
             dm_key_a,
-            build_retry_dedupe_key(&dm_chat, msg_id, &dm_device_a, 1),
-            "Same DM requester device + same retry count should have the same dedupe key"
+            build_retry_processing_key(&dm_chat, msg_id, &dm_device_a),
+            "Same DM requester device must produce the same processing key"
         );
     }
 
