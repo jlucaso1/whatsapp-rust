@@ -499,6 +499,14 @@ impl Client {
         if info.chat.is_group() {
             // Group retry: pairwise encrypt to failing device only (RetryMsgJob.js:71).
             // Using sender-key broadcast would resend to ALL participants → duplicates.
+            //
+            // WA Web calls ensureE2ESessions for all chat types, not just DMs
+            // (RetryRequest.js:200). Without this, a reg-ID mismatch or unknown
+            // device whose session was deleted above would fail `prepare_group_retry_stanza`
+            // with "session not found", silencing subsequent retries via the duplicate filter.
+            self.ensure_e2e_sessions_resolved(std::slice::from_ref(&resolved_jid))
+                .await?;
+
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
 
             let addressing_mode = cached_group_info
@@ -1616,6 +1624,41 @@ mod tests {
                 .is_none(),
             "resolved session should be deleted when registry has no device list"
         );
+    }
+
+    /// WA Web calls `ensureE2ESessions([g])` before resending for all chat types
+    /// (RetryRequest.js:200). When the session already exists, this MUST be a
+    /// fast no-op — otherwise group/status retries would hit the network on
+    /// every receipt, defeating the cache. Regression guard for the group-branch
+    /// call added alongside this test.
+    #[tokio::test]
+    async fn ensure_e2e_sessions_resolved_is_noop_when_session_exists() {
+        use std::sync::atomic::Ordering;
+
+        let client = crate::test_utils::create_test_client_with_failing_http(
+            "group_retry_ensure_sessions_noop",
+        )
+        .await;
+
+        // Bypass the offline-delivery wait that ensureE2ESessions does first.
+        client.offline_sync_completed.store(true, Ordering::Relaxed);
+
+        let resolved_jid = Jid::lid_device("100000000000199".to_string(), 17);
+        let signal_address = resolved_jid.to_protocol_address();
+
+        client
+            .persistence_manager
+            .backend()
+            .put_session(signal_address.as_str(), b"fake-session-record")
+            .await
+            .unwrap();
+
+        // With a session present, no prekey fetch should happen (the test
+        // client has no wired IQ responder, so a fetch would hang/error).
+        client
+            .ensure_e2e_sessions_resolved(std::slice::from_ref(&resolved_jid))
+            .await
+            .expect("no-op when session exists");
     }
 
     #[test]
