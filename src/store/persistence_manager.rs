@@ -138,6 +138,10 @@ impl PersistenceManager {
 
     /// Self-terminates on `shutdown.notify(...)` after a final flush.
     /// Caller must keep the returned `AbortHandle` — dropping it aborts the task.
+    ///
+    /// A notify that fires between `spawn` and the first `listen()` inside the
+    /// loop is missed. The worst-case recovery is one interval tick (plus the
+    /// `AbortHandle` drop path) so no state is lost.
     pub fn run_background_saver(
         self: Arc<Self>,
         runtime: Arc<dyn Runtime>,

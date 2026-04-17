@@ -166,6 +166,8 @@ async fn handle_ib_impl(client: Arc<Client>, node: &wacore_binary::NodeRef<'_>) 
 
                 let client_clone = Arc::clone(&client);
                 let shutdown = client_clone.shutdown_signal();
+                // A shutdown notify fired between spawn and wait_for_shutdown's
+                // internal listen() is missed, but the 2s sleep bounds the stall.
                 client
                     .runtime
                     .spawn(Box::pin(async move {
