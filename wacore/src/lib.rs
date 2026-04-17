@@ -1,6 +1,5 @@
 extern crate self as wacore;
 
-pub use aes_gcm;
 pub use wacore_appstate as appstate;
 pub use wacore_noise as noise;
 

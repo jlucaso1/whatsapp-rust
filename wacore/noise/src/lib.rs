@@ -38,7 +38,6 @@ pub mod framing;
 mod handshake;
 mod state;
 
-pub use aes_gcm::Aes256Gcm;
 pub use edge_routing::{
     EdgeRoutingError, MAX_EDGE_ROUTING_LEN, build_edge_routing_preintro, build_handshake_header,
 };

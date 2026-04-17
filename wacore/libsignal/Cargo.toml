@@ -9,7 +9,6 @@ description = "Signal Protocol implementation for the WhatsApp platform"
 
 [dependencies]
 aes = { workspace = true }
-aes-gcm = { workspace = true }
 arrayref = "0.3.9"
 async-trait = { workspace = true }
 cbc = { version = "0.2", features = ["alloc"] }

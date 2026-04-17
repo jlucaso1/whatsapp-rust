@@ -2212,7 +2212,6 @@ name = "wacore-libsignal"
 version = "0.5.0"
 dependencies = [
  "aes",
- "aes-gcm",
  "arrayref",
  "async-trait",
  "cbc",
@@ -2244,7 +2243,6 @@ dependencies = [
 name = "wacore-noise"
 version = "0.5.0"
 dependencies = [
- "aes-gcm",
  "anyhow",
  "bytes",
  "hkdf",

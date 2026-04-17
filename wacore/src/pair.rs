@@ -1,6 +1,5 @@
+use crate::libsignal::crypto::aes_256_gcm_encrypt;
 use crate::libsignal::protocol::{KeyPair, PublicKey};
-use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::{Aead, KeyInit, Payload};
 use base64::Engine as _;
 use base64::prelude::*;
 use hkdf::Hkdf;
@@ -321,23 +320,20 @@ impl PairUtils {
         final_message.extend_from_slice(identity_key.public_key.public_key_bytes());
 
         // Encrypt the final message
-        let encryption_key = {
-            let hk = Hkdf::<Sha256>::new(None, &shared_secret);
-            let mut result = vec![0u8; 32];
-            hk.expand(b"WA-Ads-Key", &mut result)
-                .map_err(|_| anyhow::anyhow!("HKDF expand failed"))?;
-            result
-        };
-        let cipher = Aes256Gcm::new_from_slice(&encryption_key)
-            .map_err(|_| anyhow::anyhow!("Invalid key size for AES-GCM"))?;
-        let nonce: aes_gcm::Nonce<_> = [0u8; 12].into();
-        let payload = Payload {
-            msg: &final_message,
-            aad: pairing_ref.as_bytes(),
-        };
-        let encrypted = cipher
-            .encrypt(&nonce, payload)
-            .map_err(|_| anyhow::anyhow!("AES-GCM encryption failed"))?;
+        let mut encryption_key = [0u8; 32];
+        Hkdf::<Sha256>::new(None, &shared_secret)
+            .expand(b"WA-Ads-Key", &mut encryption_key)
+            .map_err(|_| anyhow::anyhow!("HKDF expand failed"))?;
+        let nonce = [0u8; 12];
+        let mut encrypted = Vec::with_capacity(final_message.len() + 16);
+        aes_256_gcm_encrypt(
+            &encryption_key,
+            &nonce,
+            pairing_ref.as_bytes(),
+            &final_message,
+            &mut encrypted,
+        )
+        .map_err(|e| anyhow::anyhow!("AES-GCM encryption failed: {e}"))?;
 
         Ok(encrypted)
     }
