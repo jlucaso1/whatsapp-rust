@@ -6,7 +6,7 @@
 //! `Backend` reference. That version should eventually be consolidated into this
 //! one once the `Device` wrapper is unified.
 
-use crate::runtime::{AbortHandle, Runtime, wait_for_shutdown};
+use crate::runtime::{AbortHandle, Runtime, ShutdownSignal, wait_for_shutdown};
 use crate::store::commands::{DeviceCommand, apply_command_to_device};
 use crate::store::device::Device;
 use crate::store::error::{StoreError, db_err};
@@ -15,8 +15,8 @@ use async_lock::RwLock;
 use event_listener::Event;
 use futures::FutureExt;
 use log::{debug, error};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
 use std::time::Duration;
 
 /// Manages device state persistence with lazy, batched writes.
@@ -143,7 +143,7 @@ impl PersistenceManager {
         self: Arc<Self>,
         runtime: Arc<dyn Runtime>,
         interval: Duration,
-        shutdown: Weak<Event>,
+        shutdown: ShutdownSignal,
     ) -> AbortHandle {
         let rt = runtime.clone();
         let weak = Arc::downgrade(&self);

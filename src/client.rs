@@ -484,9 +484,8 @@ pub struct Client {
 }
 
 impl Client {
-    /// `Weak` ref so subscribers don't extend the notifier's lifetime.
-    pub fn shutdown_signal(&self) -> std::sync::Weak<event_listener::Event> {
-        Arc::downgrade(&self.shutdown_notifier)
+    pub fn shutdown_signal(&self) -> wacore::runtime::ShutdownSignal {
+        wacore::runtime::ShutdownSignal::from_weak(Arc::downgrade(&self.shutdown_notifier))
     }
 
     /// Read the current semaphore generation and Arc atomically under the mutex.

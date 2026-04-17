@@ -112,20 +112,35 @@ impl Drop for AbortHandle {
     }
 }
 
-/// Wait for a shutdown notification on a shared `Event`, resolving when
-/// `shutdown.notify(...)` fires.
+/// Subscribe-side handle for a shutdown notifier.
 ///
-/// If the Event has already been dropped the returned future never resolves,
-/// so it safely composes in `futures::select!` against other work that has
-/// its own exit condition (sleep, listener on another Event, etc.).
+/// Wraps the notifier so the concrete `event_listener` type stays out of the
+/// public API. Clone is cheap (wraps a `Weak`); the handle does not extend
+/// the notifier's lifetime, so the task owning the notifier is free to drop it.
+#[derive(Clone)]
+pub struct ShutdownSignal(std::sync::Weak<event_listener::Event>);
+
+impl ShutdownSignal {
+    /// Subscribers build a `ShutdownSignal` from a downgraded notifier.
+    pub fn from_weak(weak: std::sync::Weak<event_listener::Event>) -> Self {
+        Self(weak)
+    }
+
+    /// Inert handle whose listener never fires. Useful for tests or callers
+    /// that don't wire a real notifier.
+    pub fn never() -> Self {
+        Self(std::sync::Weak::new())
+    }
+}
+
+/// Wait for shutdown, resolving when the notifier fires. If the notifier has
+/// been dropped the returned future never resolves, so it composes in
+/// `futures::select!` against other exit conditions.
 ///
-/// `listen()` must be called synchronously before any notify we want to
-/// observe, so the subscription is registered at the call site of this helper
-/// (not deferred to the returned future's first poll).
-pub fn wait_for_shutdown(
-    shutdown: &std::sync::Weak<event_listener::Event>,
-) -> impl Future<Output = ()> + use<> {
-    let listener = shutdown.upgrade().map(|e| e.listen());
+/// `listen()` runs synchronously at call time so the subscription is registered
+/// before any observable notify; don't delay calling this into the select arm.
+pub fn wait_for_shutdown(signal: &ShutdownSignal) -> impl Future<Output = ()> + use<> {
+    let listener = signal.0.upgrade().map(|e| e.listen());
     async move {
         match listener {
             Some(l) => l.await,
