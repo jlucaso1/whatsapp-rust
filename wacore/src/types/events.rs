@@ -393,7 +393,7 @@ pub enum Event {
     GroupUpdate(GroupUpdate),
     ContactUpdate(ContactUpdate),
 
-    /// Incoming `<call>` stanza from the server (offer, pre-accept, accept,
+    /// Incoming `<call>` stanza from the server (offer, preaccept, accept,
     /// reject, terminate). Mirror of WA Web's inbound call signaling.
     IncomingCall(IncomingCall),
 
