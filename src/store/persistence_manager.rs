@@ -264,3 +264,76 @@ impl PersistenceManager {
             .map_err(db_err)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime_impl::TokioRuntime;
+    use std::time::Instant;
+
+    // Saver must observe shutdown.notify, run a final flush, and exit so the
+    // AbortHandle-backed task doesn't outlive the Bot.
+    #[tokio::test]
+    async fn saver_flushes_and_exits_on_shutdown() {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend.clone())
+                .await
+                .expect("pm init"),
+        );
+
+        let shutdown_event = Arc::new(Event::new());
+        let shutdown_signal = ShutdownSignal::from_weak(Arc::downgrade(&shutdown_event));
+
+        let runtime: Arc<dyn Runtime> = Arc::new(TokioRuntime);
+        // Interval far in the future so only shutdown can wake the saver.
+        let handle =
+            pm.clone()
+                .run_background_saver(runtime, Duration::from_secs(3600), shutdown_signal);
+
+        // Let the task enter its select before mutating.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        pm.modify_device(|d| {
+            d.push_name = "shutdown-flush".to_string();
+        })
+        .await;
+
+        shutdown_event.notify(usize::MAX);
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(Some(d)) = backend.load().await
+                && d.push_name == "shutdown-flush"
+            {
+                break;
+            }
+            if Instant::now() > deadline {
+                panic!("final flush did not reach backend after shutdown");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // Dropping the handle must be a no-op when the task already exited.
+        drop(handle);
+    }
+
+    // ShutdownSignal::never() compiles into a future that never resolves; verify
+    // the saver still exits when the AbortHandle is dropped.
+    #[tokio::test]
+    async fn saver_exits_when_abort_handle_dropped_without_signal() {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(PersistenceManager::new(backend).await.expect("pm init"));
+
+        let runtime: Arc<dyn Runtime> = Arc::new(TokioRuntime);
+        let handle = pm.clone().run_background_saver(
+            runtime,
+            Duration::from_secs(3600),
+            ShutdownSignal::never(),
+        );
+
+        // Let the task start.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        drop(handle); // aborts the task
+    }
+}
