@@ -158,6 +158,55 @@ mod tests {
         }
     }
 
+    /// Drives the handler end-to-end with a real `NoiseSocket` wired to a
+    /// counting transport so the offer-ack send path is exercised. Without
+    /// this, a regression that removes `send_offer_ack_receipt` from the
+    /// handler would go unnoticed by the event-dispatch test alone.
+    #[tokio::test]
+    async fn offer_triggers_outbound_send() {
+        use async_trait::async_trait;
+        use bytes::Bytes;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use wacore::handshake::NoiseCipher;
+
+        struct CountingTransport {
+            count: Arc<AtomicUsize>,
+        }
+
+        #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
+        impl crate::transport::Transport for CountingTransport {
+            async fn send(&self, _data: Bytes) -> Result<(), anyhow::Error> {
+                self.count.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+            async fn disconnect(&self) {}
+        }
+
+        let client = make_client().await;
+        let count = Arc::new(AtomicUsize::new(0));
+        let transport: Arc<dyn crate::transport::Transport> = Arc::new(CountingTransport {
+            count: count.clone(),
+        });
+        let key = [0u8; 32];
+        let noise_socket = crate::socket::NoiseSocket::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            transport,
+            NoiseCipher::new(&key).expect("valid key"),
+            NoiseCipher::new(&key).expect("valid key"),
+        );
+        *client.noise_socket.lock().await = Some(Arc::new(noise_socket));
+
+        let node = node_to_owned_ref(&offer_stanza());
+        let mut cancelled = false;
+        assert!(CallHandler.handle(client, node, &mut cancelled).await);
+
+        assert!(
+            count.load(Ordering::SeqCst) >= 1,
+            "handler must invoke the outbound send path for offer ack receipts"
+        );
+    }
+
     #[tokio::test]
     async fn malformed_stanza_does_not_error_or_dispatch() {
         let client = make_client().await;

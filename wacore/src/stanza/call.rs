@@ -131,6 +131,9 @@ fn parse_action(node: &NodeRef<'_>) -> Result<CallAction> {
             let audio_duration = attrs
                 .optional_u64("audio_duration")
                 .and_then(|v| u32::try_from(v).ok());
+            attrs
+                .finish()
+                .map_err(|e| anyhow!("<terminate> attrs: {e}"))?;
             CallAction::Terminate {
                 call_id,
                 call_creator,
