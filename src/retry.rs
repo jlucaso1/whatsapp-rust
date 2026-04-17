@@ -1590,11 +1590,36 @@ mod tests {
         }
     }
 
+    // Produces a parseable SessionRecord so peek_session succeeds and
+    // alice_base_key/remote_registration_id return meaningful values.
+    fn valid_serialized_session(remote_regid: u32, base_key: Vec<u8>) -> Vec<u8> {
+        use wacore::libsignal::protocol::{SessionRecord, SessionState};
+        use waproto::whatsapp::SessionStructure;
+
+        let state = SessionState::from_session_structure(SessionStructure {
+            session_version: Some(3),
+            local_identity_public: None,
+            remote_identity_public: None,
+            root_key: None,
+            previous_counter: Some(0),
+            sender_chain: None,
+            receiver_chains: vec![],
+            pending_pre_key: None,
+            remote_registration_id: Some(remote_regid),
+            local_registration_id: Some(0),
+            alice_base_key: Some(base_key),
+            needs_refresh: None,
+            pending_key_exchange: None,
+        });
+        SessionRecord::new(state)
+            .serialize()
+            .expect("serialize session record")
+    }
+
     /// WA Web compliance: at retry #1 with no `<keys>`, `updateLocalSignalSession`
-    /// does NOT delete the session. Session is preserved until either a reg-ID
-    /// mismatch or a base-key collision at retry>2. Previously the Rust DM path
-    /// unconditionally deleted on every retry — this regressed legitimate
-    /// sessions and forced unnecessary prekey bundle fetches.
+    /// does NOT delete the session. Previously the Rust DM path unconditionally
+    /// deleted on every retry — this regressed legitimate sessions and forced
+    /// unnecessary prekey bundle fetches.
     /// Ref: `WAWeb/Update/LocalSignalSession.js` (no delete on retry==1)
     #[tokio::test]
     async fn update_local_signal_session_preserves_dm_session_at_retry_1() {
@@ -1607,12 +1632,17 @@ mod tests {
         let device_0 = Jid::lid_device(user.clone(), 0).to_protocol_address();
         let device_33 = Jid::lid_device(user, 33).to_protocol_address();
 
+        // Real serializable SessionRecords — peek_session must return Some(...)
+        // so the function reaches the base-key branch at retry==1 and exercises
+        // the "no delete" rule. Invalid bytes would short-circuit via .ok().flatten().
+        let session_bytes_33 = valid_serialized_session(4242, vec![0xAA; 32]);
+        let session_bytes_0 = valid_serialized_session(4243, vec![0xBB; 32]);
         backend
-            .put_session(device_0.as_str(), b"invalid-session")
+            .put_session(device_0.as_str(), &session_bytes_0)
             .await
             .unwrap();
         backend
-            .put_session(device_33.as_str(), b"invalid-session")
+            .put_session(device_33.as_str(), &session_bytes_33)
             .await
             .unwrap();
 
@@ -1636,7 +1666,7 @@ mod tests {
                 .await
                 .unwrap()
                 .is_some(),
-            "non-requesting device session should be preserved"
+            "non-requesting device session must be preserved"
         );
         assert!(
             backend
@@ -1644,24 +1674,63 @@ mod tests {
                 .await
                 .unwrap()
                 .is_some(),
-            "requesting device session should also be preserved at retry #1 — \
-             WA Web only deletes on reg-ID mismatch or base-key collision"
+            "requesting device session with valid record must be preserved at retry #1"
         );
     }
 
-    /// Mirrors the scenario from production logs (debug-1776271138): peer
-    /// sends a retry receipt without `<keys>` but with a `<registration>` child
-    /// whose reg_id differs from our stored session. WA Web deletes the session
-    /// in this case so the next ensureE2ESessions fetches a fresh bundle.
+    /// Production scenario from debug-1776271138: peer sends retry receipt
+    /// without `<keys>` but with `<registration>` whose reg_id differs from
+    /// our stored session. WA Web deletes the session (LocalSignalSession.js
+    /// L52-65) so the next ensureE2ESessions fetches a fresh bundle.
     #[tokio::test]
-    async fn update_local_signal_session_handles_regid_mismatch_gracefully() {
-        // With an invalid session record in storage, peek_session returns None
-        // (errors are swallowed via .ok().flatten()). The function should not
-        // attempt to dereference a missing session — verify it completes
-        // without panicking and leaves the invalid bytes untouched (since there
-        // is no "session" for remote_registration_id() to compare against).
+    async fn update_local_signal_session_deletes_on_regid_mismatch() {
         let client =
             crate::test_utils::create_test_client_with_failing_http("retry_regid_mismatch").await;
+        let resolved_jid = Jid::lid_device("100000000000099".to_string(), 17);
+        let signal_address = resolved_jid.to_protocol_address();
+        let backend = client.persistence_manager.backend();
+
+        let stored_regid = 4242u32;
+        let session_bytes = valid_serialized_session(stored_regid, vec![0xAA; 32]);
+        backend
+            .put_session(signal_address.as_str(), &session_bytes)
+            .await
+            .unwrap();
+
+        let received_regid = 0xDEAD_BEEFu32;
+        assert_ne!(stored_regid, received_regid);
+        let node = build_retry_receipt_with_registration(received_regid);
+        let node_ref = node.as_node_ref();
+        client
+            .update_local_signal_session(
+                &dm_retry_info(&resolved_jid),
+                &resolved_jid,
+                "MSG-REGID",
+                1,
+                &node_ref,
+                false,
+            )
+            .await;
+        client.flush_signal_cache().await.unwrap();
+
+        assert!(
+            backend
+                .get_session(signal_address.as_str())
+                .await
+                .unwrap()
+                .is_none(),
+            "session must be deleted when retry has no keys and reg IDs differ"
+        );
+    }
+
+    /// Unparseable session bytes: peek_session returns None via .ok().flatten(),
+    /// so every branch that dereferences a session is skipped. Verifies we
+    /// don't panic or re-process stale bytes when the record can't decode.
+    #[tokio::test]
+    async fn update_local_signal_session_handles_unparseable_session_gracefully() {
+        let client =
+            crate::test_utils::create_test_client_with_failing_http("retry_unparseable_session")
+                .await;
         let resolved_jid = Jid::lid_device("100000000000099".to_string(), 17);
         let signal_address = resolved_jid.to_protocol_address();
         let backend = client.persistence_manager.backend();
@@ -1685,15 +1754,13 @@ mod tests {
             .await;
         client.flush_signal_cache().await.unwrap();
 
-        // Invalid bytes remain — we didn't crash, and without a parseable
-        // session the regId comparison is a no-op.
         assert!(
             backend
                 .get_session(signal_address.as_str())
                 .await
                 .unwrap()
                 .is_some(),
-            "unparseable session bytes should be left alone (no panic, no delete)"
+            "unparseable bytes skip every branch; nothing should delete them"
         );
     }
 
@@ -1719,10 +1786,9 @@ mod tests {
             .await;
     }
 
-    /// Group/status at retry #1 must not delete any session (same compliance
-    /// rule as DM). Prior to this refactor, group/status didn't invoke the
-    /// base-key path at all; now it does, but the "retry 1" short-circuit
-    /// still prevents deletion.
+    /// Group/status at retry #1 must not delete any session. Group/status
+    /// previously skipped the base-key path entirely; now it runs but the
+    /// retry==1 short-circuit still prevents deletion.
     #[tokio::test]
     async fn update_local_signal_session_preserves_group_session_at_retry_1() {
         let client =
@@ -1731,8 +1797,9 @@ mod tests {
         let signal_address = resolved_jid.to_protocol_address();
         let backend = client.persistence_manager.backend();
 
+        let session_bytes = valid_serialized_session(9999, vec![0xCC; 32]);
         backend
-            .put_session(signal_address.as_str(), b"invalid-session")
+            .put_session(signal_address.as_str(), &session_bytes)
             .await
             .unwrap();
 
