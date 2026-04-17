@@ -169,14 +169,11 @@ impl PersistenceManager {
                 let save_listener = this.save_notify.listen();
                 drop(this);
 
-                let mut should_exit = false;
-                futures::select! {
-                    _ = save_listener.fuse() => {}
-                    _ = rt.sleep(interval).fuse() => {}
-                    _ = wait_for_shutdown(&shutdown).fuse() => {
-                        should_exit = true;
-                    }
-                }
+                let should_exit = futures::select! {
+                    _ = save_listener.fuse() => false,
+                    _ = rt.sleep(interval).fuse() => false,
+                    _ = wait_for_shutdown(&shutdown).fuse() => true,
+                };
 
                 let Some(this) = weak.upgrade() else { return };
                 if let Err(e) = this.save_to_disk().await {
