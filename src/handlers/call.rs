@@ -2,10 +2,9 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use log::{debug, warn};
-use wacore::stanza::call::parse_call_stanza;
+use wacore::stanza::call::{build_offer_ack_receipt, parse_call_stanza};
 use wacore::types::call::{CallAction, IncomingCall};
 use wacore::types::events::Event;
-use wacore_binary::builder::NodeBuilder;
 use wacore_binary::{OwnedNodeRef, Server};
 
 use crate::client::Client;
@@ -53,36 +52,16 @@ impl StanzaHandler for CallHandler {
 }
 
 async fn send_offer_ack_receipt(client: &Client, call: &IncomingCall) -> anyhow::Result<()> {
-    let CallAction::Offer {
-        call_id,
-        call_creator,
-        ..
-    } = &call.action
-    else {
-        return Ok(());
-    };
-
     let own_from = match call.from.server {
         Server::Lid => client.get_lid().await,
         _ => client.get_pn().await,
     };
 
-    let mut receipt = NodeBuilder::new("receipt")
-        .attr("to", &call.from)
-        .attr("id", call.stanza_id.as_str());
-    if let Some(jid) = own_from {
-        receipt = receipt.attr("from", jid);
-    }
+    let Some(receipt) = build_offer_ack_receipt(call, own_from.as_ref()) else {
+        return Ok(());
+    };
 
-    let offer = NodeBuilder::new("offer")
-        .attr("call-id", call_id.as_str())
-        .attr("call-creator", call_creator)
-        .build();
-
-    client
-        .send_node(receipt.children([offer]).build())
-        .await
-        .map_err(anyhow::Error::from)
+    client.send_node(receipt).await.map_err(anyhow::Error::from)
 }
 
 #[cfg(test)]
@@ -91,20 +70,21 @@ mod tests {
     use crate::test_utils::{MockHttpClient, create_test_backend, node_to_owned_ref};
     use std::sync::Arc;
     use wacore::types::events::{ChannelEventHandler, Event};
+    use wacore_binary::builder::NodeBuilder;
     use wacore_binary::{Jid, Server};
 
-    fn caller_lid() -> Jid {
-        Jid::new("271240153559280", Server::Lid)
+    fn fake_caller_lid() -> Jid {
+        Jid::new("111111111111111", Server::Lid)
     }
 
     fn offer_stanza() -> wacore_binary::Node {
         NodeBuilder::new("call")
-            .attr("from", caller_lid())
-            .attr("id", "STANZA1")
+            .attr("from", fake_caller_lid())
+            .attr("id", "STANZA-ID-0001")
             .attr("t", "1766847151")
             .children([NodeBuilder::new("offer")
-                .attr("call-creator", caller_lid())
-                .attr("call-id", "CALLID")
+                .attr("call-creator", fake_caller_lid())
+                .attr("call-id", "CALL-ID-0001")
                 .children([NodeBuilder::new("audio")
                     .attr("enc", "opus")
                     .attr("rate", "16000")
@@ -144,7 +124,8 @@ mod tests {
 
         let mut seen = false;
         while let Ok(ev) = rx.try_recv() {
-            if matches!(&*ev, Event::IncomingCall(call) if call.action.call_id() == "CALLID") {
+            if matches!(&*ev, Event::IncomingCall(call) if call.action.call_id() == "CALL-ID-0001")
+            {
                 seen = true;
                 break;
             }
@@ -160,7 +141,7 @@ mod tests {
 
         let node = node_to_owned_ref(
             &NodeBuilder::new("call")
-                .attr("from", caller_lid())
+                .attr("from", fake_caller_lid())
                 .attr("id", "S")
                 .attr("t", "1766847151")
                 .children([NodeBuilder::new("surprise").build()])
@@ -185,10 +166,10 @@ mod tests {
 
         let node = node_to_owned_ref(
             &NodeBuilder::new("call")
-                .attr("from", caller_lid())
+                .attr("from", fake_caller_lid())
                 .attr("id", "S")
                 .children([NodeBuilder::new("offer")
-                    .attr("call-creator", caller_lid())
+                    .attr("call-creator", fake_caller_lid())
                     .attr("call-id", "X")
                     .build()])
                 .build(),
