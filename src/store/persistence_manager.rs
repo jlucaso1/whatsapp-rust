@@ -320,23 +320,44 @@ mod tests {
         drop(handle);
     }
 
-    // ShutdownSignal::never() compiles into a future that never resolves; verify
-    // the saver still exits when the AbortHandle is dropped.
+    // Drop of the AbortHandle must actually terminate the task — not merely
+    // "not panic." Use the runtime Arc's strong count as the observable:
+    // the spawned task captures one reference via `rt = runtime.clone()`,
+    // which is released when the task's state machine is dropped.
     #[tokio::test]
     async fn saver_exits_when_abort_handle_dropped_without_signal() {
         let backend = crate::test_utils::create_test_backend().await;
         let pm = Arc::new(PersistenceManager::new(backend).await.expect("pm init"));
 
         let runtime: Arc<dyn Runtime> = Arc::new(TokioRuntime);
+        let baseline = Arc::strong_count(&runtime);
+
         let handle = pm.clone().run_background_saver(
-            runtime,
+            Arc::clone(&runtime),
             Duration::from_secs(3600),
             ShutdownSignal::never(),
         );
 
-        // Let the task start.
         tokio::time::sleep(Duration::from_millis(50)).await;
-        drop(handle); // aborts the task
+        assert!(
+            Arc::strong_count(&runtime) > baseline,
+            "running saver should hold a captured runtime Arc"
+        );
+
+        drop(handle);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Arc::strong_count(&runtime) > baseline {
+            if Instant::now() > deadline {
+                panic!(
+                    "saver task did not release the runtime Arc within 1s of AbortHandle drop \
+                     (strong_count={}, baseline={})",
+                    Arc::strong_count(&runtime),
+                    baseline
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
     }
 
     // Regression guard for the Client-lifetime-tie fix: storing the saver's
