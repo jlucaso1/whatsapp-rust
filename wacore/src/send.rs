@@ -1424,6 +1424,24 @@ pub fn ensure_status_participants(
     stanza
 }
 
+/// True when a `status@broadcast` message should carry the
+/// `<meta status_setting="..."/>` child. Only applies to actual status posts:
+/// reactions (handled server-side as addons) and revokes must omit it, per
+/// `WAWebEncryptAndSendStatusMsg` vs `WAWebSendReactionMsgAction`.
+///
+/// Descends `ephemeral_message` / `device_sent_message` / view-once wrappers
+/// before classifying (same as `stanza_type_from_message`), so a reaction
+/// nested inside a wrapper cannot slip past and re-trigger 479.
+pub fn status_carries_privacy_meta(message: &wa::Message) -> bool {
+    let msg = unwrap_message(message);
+    let is_revoke = msg
+        .protocol_message
+        .as_ref()
+        .is_some_and(|pm| pm.r#type == Some(wa::message::protocol_message::Type::Revoke as i32));
+    let is_reaction = msg.reaction_message.is_some() || msg.enc_reaction_message.is_some();
+    !is_revoke && !is_reaction
+}
+
 /// Dedup a pre-resolved status recipient list by user, then anchor the sender's
 /// own LID. Errors when no recipient was resolvable (matches WA Web's
 /// `WAWebLidMigrationUtils.toUserLid` + `compactMap` dropping unresolvable
@@ -1447,9 +1465,8 @@ where
     if out.is_empty() {
         anyhow::bail!("No valid status recipients after LID resolution");
     }
-    let own_base = own_lid.to_non_ad();
-    if !out.iter().any(|r| r.user == own_base.user) {
-        out.push(own_base);
+    if !out.iter().any(|r| r.user == own_lid.user) {
+        out.push(own_lid.to_non_ad());
     }
     Ok(out)
 }
@@ -1562,6 +1579,116 @@ mod tests {
                 .find(|j| j.user.as_str() == "me")
                 .expect("own LID should be present");
             assert_eq!(me.device, 0, "own LID should be non-ad (device=0)");
+        }
+    }
+
+    mod status_carries_privacy_meta {
+        use super::*;
+
+        #[test]
+        fn true_for_text_post() {
+            let msg = wa::Message {
+                extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                    text: Some("hi".into()),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn true_for_image_post() {
+            let msg = wa::Message {
+                image_message: Some(Box::new(wa::message::ImageMessage::default())),
+                ..Default::default()
+            };
+            assert!(status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn false_for_reaction() {
+            let msg = wa::Message {
+                reaction_message: Some(wa::message::ReactionMessage {
+                    text: Some("💚".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(
+                !status_carries_privacy_meta(&msg),
+                "reactions must omit <meta status_setting> (479 SmaxInvalid otherwise)"
+            );
+        }
+
+        #[test]
+        fn false_for_enc_reaction() {
+            let msg = wa::Message {
+                enc_reaction_message: Some(wa::message::EncReactionMessage::default()),
+                ..Default::default()
+            };
+            assert!(!status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn false_for_revoke() {
+            let msg = wa::Message {
+                protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                    r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(!status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn true_for_non_revoke_protocol_message() {
+            // Other ProtocolMessage types (e.g., EphemeralSettings) aren't
+            // reactions and aren't revokes — treat as posts for now.
+            let msg = wa::Message {
+                protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                    r#type: Some(wa::message::protocol_message::Type::EphemeralSetting as i32),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn false_for_reaction_inside_ephemeral_wrapper() {
+            let inner = wa::Message {
+                reaction_message: Some(wa::message::ReactionMessage::default()),
+                ..Default::default()
+            };
+            let msg = wa::Message {
+                ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
+                    message: Some(Box::new(inner)),
+                })),
+                ..Default::default()
+            };
+            assert!(!status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn false_for_revoke_inside_device_sent_wrapper() {
+            let inner = wa::Message {
+                protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                    r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            let msg = wa::Message {
+                device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                    destination_jid: Some(String::new()),
+                    message: Some(Box::new(inner)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(!status_carries_privacy_meta(&msg));
         }
     }
 
