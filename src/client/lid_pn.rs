@@ -305,6 +305,35 @@ impl Client {
         self.lid_pn_cache.add(&entry).await;
         Ok(Some(entry))
     }
+
+    /// Resolve any user JID to its bare LID form, or `None` when no LID is
+    /// available. Mirrors WA Web's `WAWebLidMigrationUtils.toUserLid`
+    /// (`docs/captured-js/WAWeb/Lid/MigrationUtils.js:17-20`): LID passes
+    /// through, PN goes through the cache-aside mapping, anything else and
+    /// any lookup failure returns `None`.
+    ///
+    /// Used by `send_status_message` to replicate WA Web's
+    /// `compactMap(list, toUserLid)` skip-on-unresolvable semantics.
+    pub(crate) async fn resolve_recipient_to_lid(&self, jid: &Jid) -> Option<Jid> {
+        if jid.is_lid() {
+            return Some(jid.to_non_ad());
+        }
+        if !jid.is_pn() {
+            return None;
+        }
+        match self.get_lid_pn_entry(jid).await {
+            Ok(Some(entry)) => Some(Jid::new(entry.lid, wacore_binary::Server::Lid)),
+            Ok(None) => None,
+            Err(e) => {
+                log::warn!(
+                    "resolve_recipient_to_lid: LID lookup for {} failed: {:?}",
+                    jid,
+                    e
+                );
+                None
+            }
+        }
+    }
 }
 
 #[cfg(test)]

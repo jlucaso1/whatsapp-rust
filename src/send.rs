@@ -292,8 +292,20 @@ impl Client {
 
     /// Send a status/story update to the given recipients using sender key encryption.
     ///
-    /// This builds a `GroupInfo` from the provided recipients (always PN addressing mode),
-    /// then reuses the group encryption pipeline with `to = status@broadcast`.
+    /// Status messages use LID addressing, matching `WAWebEncryptAndSendStatusMsg`
+    /// (`docs/captured-js/WAWeb/Encrypt/AndSendStatusMsg.js:46`), which maps the
+    /// recipient list through `WAWebLidMigrationUtils.toUserLid` and filters
+    /// unresolvable entries via `compactMap`. Concretely:
+    ///
+    /// - recipients already in LID form pass through;
+    /// - PN recipients are converted to LID via the cache-aside lookup in
+    ///   `Client::get_lid_pn_entry` (warms from the backend on a cold cache);
+    /// - recipients we cannot resolve to a LID are skipped silently, not
+    ///   errored, so a single unknown contact does not fail the whole send.
+    ///
+    /// After resolution the list feeds a `GroupInfo` with `AddressingMode::Lid`,
+    /// which drives `prepare_group_stanza` to use `own_lid` for signing and emit
+    /// `addressing_mode="lid"` on the stanza.
     pub(crate) async fn send_status_message(
         &self,
         message: wa::Message,
@@ -321,12 +333,8 @@ impl Client {
             .take()
             .unwrap_or_else(|| own_jid.clone());
 
-        // Status always uses PN addressing. Resolve any LID recipients to their
-        // phone numbers so we don't end up with duplicate PN+LID entries for the
-        // same user (which causes server error 400).
-        // Reject non-user JIDs (groups, broadcasts, etc.) to prevent invalid
-        // <participants> entries that cause server errors.
-        let mut resolved_recipients = Vec::with_capacity(recipients.len());
+        // Reject non-user JIDs up-front (cheap guard; a programming bug, not
+        // something to skip silently).
         for jid in recipients {
             if jid.is_group() || jid.is_status_broadcast() || jid.is_broadcast_list() {
                 return Err(anyhow!(
@@ -334,40 +342,18 @@ impl Client {
                     jid
                 ));
             }
-            if jid.is_lid() {
-                if let Some(pn) = self.lid_pn_cache.get_phone_number(&jid.user).await {
-                    resolved_recipients.push(Jid::new(&pn, Server::Pn));
-                } else {
-                    return Err(anyhow!(
-                        "No PN mapping for LID {}. Ensure the recipient has been \
-                         contacted previously.",
-                        jid
-                    ));
-                }
-            } else {
-                resolved_recipients.push(jid.clone());
-            }
         }
 
-        if resolved_recipients.is_empty() {
-            return Err(anyhow!("No valid PN recipients after LID resolution"));
+        // Resolve every recipient to its LID form (LID passes through; PN goes
+        // through the cache-aside lookup; everything else is skipped silently
+        // — matches WA Web `compactMap(list, toUserLid)`).
+        let mut resolved: Vec<Option<Jid>> = Vec::with_capacity(recipients.len());
+        for jid in recipients {
+            resolved.push(self.resolve_recipient_to_lid(jid).await);
         }
 
-        // Deduplicate by user (in case both LID and PN were provided for the same user)
-        let mut seen_users = std::collections::HashSet::new();
-        resolved_recipients.retain(|jid| seen_users.insert(jid.user.clone()));
-
-        let mut group_info = GroupInfo::new(resolved_recipients, AddressingMode::Pn);
-
-        // Ensure we're in the participant list
-        let own_base = own_jid.to_non_ad();
-        if !group_info
-            .participants
-            .iter()
-            .any(|p| p.is_same_user_as(&own_base))
-        {
-            group_info.participants.push(own_base);
-        }
+        let participants = wacore::send::assemble_status_participants(resolved, &own_lid)?;
+        let mut group_info = GroupInfo::new(participants, AddressingMode::Lid);
 
         self.add_recent_message(&to, &request_id, &message).await;
 
@@ -376,7 +362,11 @@ impl Client {
 
         let force_skdm = {
             use wacore::libsignal::store::sender_key_name::SenderKeyName;
-            let sender_address = own_jid.to_protocol_address();
+            // Sender key name tracks the addressing mode of the group stanza.
+            // Since status now uses LID addressing (see send_status_message
+            // header), the key is stored under own_lid, matching the address
+            // prepare_group_stanza derives internally.
+            let sender_address = own_lid.to_protocol_address();
             let sender_key_name = SenderKeyName::from_parts(&to_str, sender_address.as_str());
 
             let device_guard = device_store_arc.read().await;
@@ -396,7 +386,7 @@ impl Client {
         let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
             None
         } else {
-            self.resolve_skdm_targets(&to_str, &group_info.participants, &own_jid)
+            self.resolve_skdm_targets(&to_str, &group_info.participants, &own_lid)
                 .await
         };
 
