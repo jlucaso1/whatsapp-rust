@@ -58,20 +58,23 @@ pub struct GroupParticipantInfo {
 /// All possible group notification action types.
 ///
 /// Maps 1:1 to `GROUP_NOTIFICATION_TAG` child element tags from WhatsApp Web.
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "type")]
+///
+/// Serialization: the JSON discriminator `"type"` is always driven by
+/// [`Self::tag_name`] — the same string the wire parser dispatches on. The
+/// `impl Serialize` below is hand-written (instead of `#[derive(Serialize)]`
+/// with serde attribute overrides) to keep that mapping as the single source
+/// of truth.
+#[derive(Debug, Clone)]
 pub enum GroupNotificationAction {
     // -- Participant management --
     /// `<add>` — Members added to group
     Add {
         participants: Vec<GroupParticipantInfo>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
     /// `<remove>` — Members removed from group
     Remove {
         participants: Vec<GroupParticipantInfo>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         reason: Option<String>,
     },
     /// `<promote>` — Members promoted to admin
@@ -91,25 +94,19 @@ pub enum GroupNotificationAction {
     /// `<subject subject="..." s_o="..." s_t="..."/>` — Group name changed
     Subject {
         subject: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
         subject_owner: Option<Jid>,
-        #[serde(skip_serializing_if = "Option::is_none")]
         subject_time: Option<u64>,
     },
     /// `<description id="..."><body>text</body></description>` or `<description id="..."><delete/></description>`
     Description {
         id: String,
         /// `Some(text)` = added/updated, `None` = deleted
-        #[serde(skip_serializing_if = "Option::is_none")]
         description: Option<String>,
     },
 
     // -- Settings --
     /// `<locked threshold="..."/>` — Only admins can edit group info
-    Locked {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        threshold: Option<String>,
-    },
+    Locked { threshold: Option<String> },
     /// `<unlocked/>` — All members can edit group info
     Unlocked,
     /// `<announcement/>` — Only admins can send messages
@@ -119,7 +116,6 @@ pub enum GroupNotificationAction {
     /// `<ephemeral expiration="..." trigger="..."/>` or `<not_ephemeral/>` (expiration=0)
     Ephemeral {
         expiration: u32,
-        #[serde(skip_serializing_if = "Option::is_none")]
         trigger: Option<u32>,
     },
     /// `<membership_approval_mode><group_join state="on|off"/></membership_approval_mode>`
@@ -128,14 +124,12 @@ pub enum GroupNotificationAction {
     /// A user requested to join. Requester is on parent [`GroupNotification::participant`].
     MembershipApprovalRequest {
         request_method: MembershipRequestMethod,
-        #[serde(skip_serializing_if = "Option::is_none")]
         parent_group_jid: Option<Jid>,
     },
     /// `<created_membership_requests request_method="..." parent_group_jid="...">` —
     /// admin-side notification: new join requests appeared.
     CreatedMembershipRequests {
         request_method: MembershipRequestMethod,
-        #[serde(skip_serializing_if = "Option::is_none")]
         parent_group_jid: Option<Jid>,
         /// `<requested_user>` children (not `<participant>`).
         requests: Vec<GroupParticipantInfo>,
@@ -161,35 +155,155 @@ pub enum GroupNotificationAction {
 
     // -- Group lifecycle --
     /// `<create>` — Group created (complex structure, raw node preserved)
-    Create {
-        #[serde(skip)]
-        raw: Node,
-    },
+    Create { raw: Node },
     /// `<delete>` — Group deleted
-    Delete {
-        #[serde(skip_serializing_if = "Option::is_none")]
-        reason: Option<String>,
-    },
+    Delete { reason: Option<String> },
 
     // -- Community linking --
     /// `<link link_type="...">` — Subgroup linked
-    Link {
-        link_type: String,
-        #[serde(skip)]
-        raw: Node,
-    },
+    Link { link_type: String, raw: Node },
     /// `<unlink unlink_type="..." unlink_reason="...">` — Subgroup unlinked
     Unlink {
         unlink_type: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
         unlink_reason: Option<String>,
-        #[serde(skip)]
         raw: Node,
     },
 
     // -- Catch-all --
     /// Unknown child tag — preserved for forward compatibility
     Unknown { tag: String },
+}
+
+impl Serialize for GroupNotificationAction {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+
+        // Single-source-of-truth: the JSON discriminator is the wire tag.
+        let type_str = self.tag_name();
+
+        macro_rules! entry {
+            ($map:ident, $key:literal, $val:expr) => {
+                $map.serialize_entry($key, $val)?
+            };
+        }
+        macro_rules! entry_opt {
+            ($map:ident, $key:literal, $val:expr) => {
+                if let Some(v) = $val {
+                    $map.serialize_entry($key, v)?;
+                }
+            };
+        }
+
+        let mut map = serializer.serialize_map(None)?;
+        entry!(map, "type", type_str);
+
+        match self {
+            Self::Add {
+                participants,
+                reason,
+            } => {
+                entry!(map, "participants", participants);
+                entry_opt!(map, "reason", reason);
+            }
+            Self::Remove {
+                participants,
+                reason,
+            } => {
+                entry!(map, "participants", participants);
+                entry_opt!(map, "reason", reason);
+            }
+            Self::Promote { participants }
+            | Self::Demote { participants }
+            | Self::Modify { participants } => {
+                entry!(map, "participants", participants);
+            }
+            Self::Subject {
+                subject,
+                subject_owner,
+                subject_time,
+            } => {
+                entry!(map, "subject", subject);
+                entry_opt!(map, "subject_owner", subject_owner);
+                entry_opt!(map, "subject_time", subject_time);
+            }
+            Self::Description { id, description } => {
+                entry!(map, "id", id);
+                entry_opt!(map, "description", description);
+            }
+            Self::Locked { threshold } => {
+                entry_opt!(map, "threshold", threshold);
+            }
+            Self::Unlocked
+            | Self::Announce
+            | Self::NotAnnounce
+            | Self::NoFrequentlyForwarded
+            | Self::FrequentlyForwardedOk
+            | Self::RevokeInvite
+            | Self::GrowthUnlocked => {}
+            Self::Ephemeral {
+                expiration,
+                trigger,
+            } => {
+                entry!(map, "expiration", expiration);
+                entry_opt!(map, "trigger", trigger);
+            }
+            Self::MembershipApprovalMode { enabled } => {
+                entry!(map, "enabled", enabled);
+            }
+            Self::MembershipApprovalRequest {
+                request_method,
+                parent_group_jid,
+            } => {
+                entry!(map, "request_method", request_method);
+                entry_opt!(map, "parent_group_jid", parent_group_jid);
+            }
+            Self::CreatedMembershipRequests {
+                request_method,
+                parent_group_jid,
+                requests,
+            } => {
+                entry!(map, "request_method", request_method);
+                entry_opt!(map, "parent_group_jid", parent_group_jid);
+                entry!(map, "requests", requests);
+            }
+            Self::RevokedMembershipRequests { participants } => {
+                entry!(map, "participants", participants);
+            }
+            Self::MemberAddMode { mode } => {
+                entry!(map, "mode", mode);
+            }
+            Self::Invite { code } => {
+                entry!(map, "code", code);
+            }
+            Self::GrowthLocked {
+                expiration,
+                lock_type,
+            } => {
+                entry!(map, "expiration", expiration);
+                entry!(map, "lock_type", lock_type);
+            }
+            Self::Create { .. } => {}
+            Self::Delete { reason } => {
+                entry_opt!(map, "reason", reason);
+            }
+            Self::Link { link_type, .. } => {
+                entry!(map, "link_type", link_type);
+            }
+            Self::Unlink {
+                unlink_type,
+                unlink_reason,
+                ..
+            } => {
+                entry!(map, "unlink_type", unlink_type);
+                entry_opt!(map, "unlink_reason", unlink_reason);
+            }
+            Self::Unknown { tag } => {
+                entry!(map, "tag", tag);
+            }
+        }
+
+        map.end()
+    }
 }
 
 impl GroupNotificationAction {
@@ -856,5 +970,141 @@ mod tests {
             .build();
 
         assert!(GroupNotification::try_from_node_ref(&node.as_node_ref()).is_none());
+    }
+
+    /// Every variant serializes its JSON `"type"` discriminator using the
+    /// exact wire tag the parser dispatches on. This is the regression guard
+    /// for the PascalCase discriminator leak that used to ship
+    /// `{"type":"Demote", ...}` instead of `{"type":"demote", ...}`.
+    #[test]
+    fn serialize_discriminator_matches_wire_tag() {
+        let dummy_node = NodeBuilder::new("placeholder").build();
+        let samples: Vec<GroupNotificationAction> = vec![
+            GroupNotificationAction::Add {
+                participants: vec![],
+                reason: None,
+            },
+            GroupNotificationAction::Remove {
+                participants: vec![],
+                reason: Some("r".into()),
+            },
+            GroupNotificationAction::Promote {
+                participants: vec![],
+            },
+            GroupNotificationAction::Demote {
+                participants: vec![],
+            },
+            GroupNotificationAction::Modify {
+                participants: vec![],
+            },
+            GroupNotificationAction::Subject {
+                subject: "s".into(),
+                subject_owner: None,
+                subject_time: None,
+            },
+            GroupNotificationAction::Description {
+                id: "i".into(),
+                description: None,
+            },
+            GroupNotificationAction::Locked { threshold: None },
+            GroupNotificationAction::Unlocked,
+            GroupNotificationAction::Announce,
+            GroupNotificationAction::NotAnnounce,
+            GroupNotificationAction::Ephemeral {
+                expiration: 0,
+                trigger: None,
+            },
+            GroupNotificationAction::MembershipApprovalMode { enabled: true },
+            GroupNotificationAction::MembershipApprovalRequest {
+                request_method: MembershipRequestMethod::InviteLink,
+                parent_group_jid: None,
+            },
+            GroupNotificationAction::CreatedMembershipRequests {
+                request_method: MembershipRequestMethod::InviteLink,
+                parent_group_jid: None,
+                requests: vec![],
+            },
+            GroupNotificationAction::RevokedMembershipRequests {
+                participants: vec![],
+            },
+            GroupNotificationAction::MemberAddMode { mode: "x".into() },
+            GroupNotificationAction::NoFrequentlyForwarded,
+            GroupNotificationAction::FrequentlyForwardedOk,
+            GroupNotificationAction::Invite { code: "c".into() },
+            GroupNotificationAction::RevokeInvite,
+            GroupNotificationAction::GrowthLocked {
+                expiration: 0,
+                lock_type: "x".into(),
+            },
+            GroupNotificationAction::GrowthUnlocked,
+            GroupNotificationAction::Create {
+                raw: dummy_node.clone(),
+            },
+            GroupNotificationAction::Delete { reason: None },
+            GroupNotificationAction::Link {
+                link_type: "x".into(),
+                raw: dummy_node.clone(),
+            },
+            GroupNotificationAction::Unlink {
+                unlink_type: "x".into(),
+                unlink_reason: None,
+                raw: dummy_node,
+            },
+            GroupNotificationAction::Unknown {
+                tag: "future_tag".into(),
+            },
+        ];
+
+        for action in &samples {
+            let value = serde_json::to_value(action).expect("serialize");
+            let ty = value
+                .get("type")
+                .and_then(|v| v.as_str())
+                .unwrap_or_else(|| panic!("missing type in {value}"));
+            assert_eq!(
+                ty,
+                action.tag_name(),
+                "serialized discriminator diverged from wire tag for {action:?}"
+            );
+        }
+    }
+
+    /// Lowercase wire strings round-trip through the parser, matching the
+    /// exact JSON discriminators we now emit. If someone renames a variant
+    /// and forgets to keep `tag_name()` aligned with the parser's dispatch
+    /// table, this test fails.
+    #[test]
+    fn wire_tags_round_trip_through_parser() {
+        type Check = fn(&GroupNotificationAction) -> bool;
+        let cases: &[(&str, Check)] = &[
+            ("add", |a| matches!(a, GroupNotificationAction::Add { .. })),
+            ("demote", |a| {
+                matches!(a, GroupNotificationAction::Demote { .. })
+            }),
+            ("promote", |a| {
+                matches!(a, GroupNotificationAction::Promote { .. })
+            }),
+            ("revoke", |a| {
+                matches!(a, GroupNotificationAction::RevokeInvite)
+            }),
+            ("not_announcement", |a| {
+                matches!(a, GroupNotificationAction::NotAnnounce)
+            }),
+            ("announcement", |a| {
+                matches!(a, GroupNotificationAction::Announce)
+            }),
+        ];
+
+        for (tag, check) in cases {
+            let node = make_notification(vec![NodeBuilder::new(tag).build()]);
+            let notif = GroupNotification::try_from_node_ref(&node.as_node_ref())
+                .unwrap_or_else(|| panic!("parse failed for <{tag}>"));
+            let action = &notif.actions[0];
+            assert!(
+                check(action),
+                "tag <{tag}> did not produce expected variant (got {action:?})"
+            );
+            assert_eq!(action.tag_name(), *tag);
+        }
     }
 }
