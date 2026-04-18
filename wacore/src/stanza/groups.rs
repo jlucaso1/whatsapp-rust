@@ -113,11 +113,16 @@ pub enum GroupNotificationAction {
     Announce,
     /// `<not_announcement/>` — All members can send messages
     NotAnnounce,
-    /// `<ephemeral expiration="..." trigger="..."/>` or `<not_ephemeral/>` (expiration=0)
+    /// `<ephemeral expiration="..." trigger="..."/>` — ephemeral mode enabled.
+    /// Mirrors [`Self::NotEphemeral`] the way [`Self::Announce`] mirrors
+    /// [`Self::NotAnnounce`]: the wire tag is preserved so a round-trip
+    /// through parse → serialize yields the same discriminator.
     Ephemeral {
         expiration: u32,
         trigger: Option<u32>,
     },
+    /// `<not_ephemeral/>` — ephemeral mode disabled.
+    NotEphemeral,
     /// `<membership_approval_mode><group_join state="on|off"/></membership_approval_mode>`
     MembershipApprovalMode { enabled: bool },
     /// `<membership_approval_request request_method="..." parent_group_jid="..."/>`
@@ -236,6 +241,7 @@ impl Serialize for GroupNotificationAction {
             Self::Unlocked
             | Self::Announce
             | Self::NotAnnounce
+            | Self::NotEphemeral
             | Self::NoFrequentlyForwarded
             | Self::FrequentlyForwardedOk
             | Self::RevokeInvite
@@ -322,6 +328,7 @@ impl GroupNotificationAction {
             Self::Announce => "announcement",
             Self::NotAnnounce => "not_announcement",
             Self::Ephemeral { .. } => "ephemeral",
+            Self::NotEphemeral => "not_ephemeral",
             Self::MembershipApprovalMode { .. } => "membership_approval_mode",
             Self::MembershipApprovalRequest { .. } => "membership_approval_request",
             Self::CreatedMembershipRequests { .. } => "created_membership_requests",
@@ -442,10 +449,7 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
             expiration: node.attrs().optional_u64("expiration").unwrap_or(0) as u32,
             trigger: node.attrs().optional_u64("trigger").map(|t| t as u32),
         },
-        "not_ephemeral" => GroupNotificationAction::Ephemeral {
-            expiration: 0,
-            trigger: None,
-        },
+        "not_ephemeral" => GroupNotificationAction::NotEphemeral,
         "membership_approval_mode" => {
             let enabled = node
                 .get_optional_child("group_join")
@@ -769,16 +773,10 @@ mod tests {
         let node = make_notification(vec![NodeBuilder::new("not_ephemeral").build()]);
 
         let notif = GroupNotification::try_from_node_ref(&node.as_node_ref()).unwrap();
-        match &notif.actions[0] {
-            GroupNotificationAction::Ephemeral {
-                expiration,
-                trigger,
-            } => {
-                assert_eq!(*expiration, 0);
-                assert!(trigger.is_none());
-            }
-            other => panic!("expected Ephemeral, got {:?}", other),
-        }
+        assert!(matches!(
+            notif.actions[0],
+            GroupNotificationAction::NotEphemeral
+        ));
     }
 
     #[test]
@@ -1014,6 +1012,7 @@ mod tests {
                 expiration: 0,
                 trigger: None,
             },
+            GroupNotificationAction::NotEphemeral,
             GroupNotificationAction::MembershipApprovalMode { enabled: true },
             GroupNotificationAction::MembershipApprovalRequest {
                 request_method: MembershipRequestMethod::InviteLink,
@@ -1092,6 +1091,9 @@ mod tests {
             }),
             ("announcement", |a| {
                 matches!(a, GroupNotificationAction::Announce)
+            }),
+            ("not_ephemeral", |a| {
+                matches!(a, GroupNotificationAction::NotEphemeral)
             }),
         ];
 
