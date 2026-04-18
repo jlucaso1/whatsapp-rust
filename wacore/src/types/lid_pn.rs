@@ -13,10 +13,7 @@
 
 /// The source from which a LID-PN mapping was learned.
 /// Different sources have different trust levels and handling for identity changes.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::StringEnum,
-)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
 pub enum LearningSource {
     /// Mapping learned from usync (device sync) query response
     #[str = "usync"]

@@ -212,13 +212,16 @@ pub struct SelfPushNameUpdated {
 
 /// Type of device list update notification.
 /// Matches WhatsApp Web's device notification types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
 pub enum DeviceListUpdateType {
     /// A device was added to the user's account
+    #[str = "add"]
     Add,
     /// A device was removed from the user's account
+    #[str = "remove"]
     Remove,
     /// Device information was updated
+    #[str = "update"]
     Update,
 }
 
@@ -275,14 +278,22 @@ pub struct IdentityChange {
 }
 
 /// Type of business status update.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
 pub enum BusinessUpdateType {
+    #[str = "removed_as_business"]
     RemovedAsBusiness,
+    #[str = "verified_name_changed"]
     VerifiedNameChanged,
+    #[str = "profile_updated"]
     ProfileUpdated,
+    #[str = "products_updated"]
     ProductsUpdated,
+    #[str = "collections_updated"]
     CollectionsUpdated,
+    #[str = "subscriptions_updated"]
     SubscriptionsUpdated,
+    #[string_default]
+    #[str = "unknown"]
     Unknown,
 }
 
@@ -511,7 +522,7 @@ pub struct LoggedOut {
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamReplaced;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TempBanReason {
     SentToTooManyPeople,
     BlockedByUsers,
@@ -519,6 +530,12 @@ pub enum TempBanReason {
     SentTooManySameMessage,
     BroadcastList,
     Unknown(i32),
+}
+
+impl Serialize for TempBanReason {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i32(self.code())
+    }
 }
 
 impl From<i32> for TempBanReason {
@@ -571,8 +588,7 @@ pub struct TemporaryBan {
     pub expire: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Serialize)]
-
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum ConnectFailureReason {
     Generic,
     LoggedOut,
@@ -646,6 +662,12 @@ impl ConnectFailureReason {
     }
 }
 
+impl Serialize for ConnectFailureReason {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_i32(self.code())
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ConnectFailure {
     pub reason: ConnectFailureReason,
@@ -676,15 +698,20 @@ pub struct OfflineSyncCompleted {
     pub count: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
 pub enum DecryptFailMode {
+    #[str = "show"]
     Show,
+    #[str = "hide"]
     Hide,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::StringEnum)]
 pub enum UnavailableType {
+    #[string_default]
+    #[str = "unknown"]
     Unknown,
+    #[str = "view_once"]
     ViewOnce,
 }
 

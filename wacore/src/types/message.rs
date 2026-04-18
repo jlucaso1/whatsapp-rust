@@ -19,8 +19,7 @@ impl ChatMessageId {
 }
 
 /// Addressing mode for a group (phone number vs LID).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, crate::StringEnum)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
 pub enum AddressingMode {
     #[string_default]
     #[str = "pn"]
@@ -38,12 +37,6 @@ pub enum MessageCategory {
     Peer,
     #[string_fallback]
     Other(String),
-}
-
-impl serde::Serialize for MessageCategory {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -71,7 +64,7 @@ pub struct DeviceSentMeta {
     pub phash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, crate::StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::StringEnum)]
 pub enum EditAttribute {
     #[string_default]
     #[str = ""]

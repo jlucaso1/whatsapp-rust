@@ -28,12 +28,6 @@ pub enum DayOfWeek {
     Other(String),
 }
 
-impl serde::Serialize for DayOfWeek {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
 pub enum BusinessHourMode {
     #[str = "open_24h"]
@@ -44,12 +38,6 @@ pub enum BusinessHourMode {
     AppointmentOnly,
     #[string_fallback]
     Other(String),
-}
-
-impl serde::Serialize for BusinessHourMode {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
 }
 
 fn node_text(node: &NodeRef<'_>) -> Option<String> {

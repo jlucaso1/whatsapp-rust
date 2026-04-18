@@ -25,7 +25,7 @@ use wacore_binary::{Node, NodeRef};
 /// - `<add>` - Device was added
 /// - `<remove>` - Device was removed
 /// - `<update>` - Device info updated (hash-based lookup)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
 pub enum DeviceNotificationType {
     #[str = "add"]
     Add,

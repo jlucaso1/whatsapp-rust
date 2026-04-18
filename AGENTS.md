@@ -31,6 +31,7 @@ cargo test -p e2e-tests          # requires mock server running
 - **Protocol**: Cross-reference **whatsmeow**, **Baileys**, and captured WhatsApp Web JS (`docs/captured-js/`) to verify implementations.
 - **IQ Requests**: Use `client.execute(Spec::new(&jid)).await?` pattern. IqSpec constructors take `&Jid` not `Jid`.
 - **New features**: Expose via `src/features/mod.rs`, re-export in `src/lib.rs`.
+- **Wire-string enums**: Protocol enums carry their wire string in `#[derive(StringEnum)]` + `#[str = "..."]` — do NOT also derive `serde::Serialize`/`Deserialize` (the derive emits those, delegating to `as_str()` / `TryFrom<&str>`). Single source of truth per enum. For internally-tagged enums with payload variants (e.g. `GroupNotificationAction`), hand-write `impl Serialize` so the JSON discriminator reads from the same `tag_name()` method the parser dispatches on; cover it with a `serialize_discriminator_matches_wire_tag` test.
 
 ## Detailed Docs
 

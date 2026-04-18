@@ -536,6 +536,13 @@ fn is_option_type(ty: &syn::Type) -> bool {
 /// - `std::fmt::Display`
 /// - `TryFrom<&str>` (or `From<&str>` with fallback)
 /// - `Default` (first variant is default, or use `#[string_default]`)
+/// - `serde::Serialize` (delegates to `as_str()`)
+/// - `serde::Deserialize` (delegates to `TryFrom<&str>` / `From<&str>`)
+///
+/// Because `StringEnum` owns the serde representation, types that derive it
+/// MUST NOT also derive `serde::Serialize` or `serde::Deserialize` directly —
+/// doing so would produce conflicting `impl` blocks. The single source of
+/// truth for the wire string is the `#[str = "..."]` attribute per variant.
 ///
 /// # Attributes
 ///
@@ -789,6 +796,24 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
                     #name::#default_variant
                 }
             }
+
+            impl ::serde::Serialize for #name {
+                fn serialize<S: ::serde::Serializer>(
+                    &self,
+                    serializer: S,
+                ) -> ::core::result::Result<S::Ok, S::Error> {
+                    serializer.serialize_str(self.as_str())
+                }
+            }
+
+            impl<'de> ::serde::Deserialize<'de> for #name {
+                fn deserialize<D: ::serde::Deserializer<'de>>(
+                    deserializer: D,
+                ) -> ::core::result::Result<Self, D::Error> {
+                    let s = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
+                    ::core::result::Result::Ok(<Self as ::core::convert::From<&str>>::from(s.as_str()))
+                }
+            }
         };
 
         expanded.into()
@@ -845,6 +870,25 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
             impl ::core::default::Default for #name {
                 fn default() -> Self {
                     #name::#default_variant
+                }
+            }
+
+            impl ::serde::Serialize for #name {
+                fn serialize<S: ::serde::Serializer>(
+                    &self,
+                    serializer: S,
+                ) -> ::core::result::Result<S::Ok, S::Error> {
+                    serializer.serialize_str(self.as_str())
+                }
+            }
+
+            impl<'de> ::serde::Deserialize<'de> for #name {
+                fn deserialize<D: ::serde::Deserializer<'de>>(
+                    deserializer: D,
+                ) -> ::core::result::Result<Self, D::Error> {
+                    let s = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
+                    <Self as ::core::convert::TryFrom<&str>>::try_from(s.as_str())
+                        .map_err(|e| <D::Error as ::serde::de::Error>::custom(e.to_string()))
                 }
             }
         };
