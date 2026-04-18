@@ -1424,6 +1424,36 @@ pub fn ensure_status_participants(
     stanza
 }
 
+/// Dedup a pre-resolved status recipient list by user, then anchor the sender's
+/// own LID. Errors when no recipient was resolvable (matches WA Web's
+/// `WAWebLidMigrationUtils.toUserLid` + `compactMap` dropping unresolvable
+/// entries; an empty result means "nothing to send to").
+///
+/// Pure function: no allocations besides the returned `Vec` and (when needed)
+/// the own-LID push. Dedup is a linear Vec scan — status lists stay small
+/// enough that a HashSet is not worth its allocation.
+pub fn assemble_status_participants<I>(resolved: I, own_lid: &Jid) -> anyhow::Result<Vec<Jid>>
+where
+    I: IntoIterator<Item = Option<Jid>>,
+{
+    let iter = resolved.into_iter();
+    let (lower, _upper) = iter.size_hint();
+    let mut out: Vec<Jid> = Vec::with_capacity(lower.saturating_add(1));
+    for jid in iter.flatten() {
+        if !out.iter().any(|r| r.user == jid.user) {
+            out.push(jid);
+        }
+    }
+    if out.is_empty() {
+        anyhow::bail!("No valid status recipients after LID resolution");
+    }
+    let own_base = own_lid.to_non_ad();
+    if !out.iter().any(|r| r.user == own_base.user) {
+        out.push(own_base);
+    }
+    Ok(out)
+}
+
 /// Build a `Message.ProtocolMessage` for `GROUP_MEMBER_LABEL_CHANGE`.
 ///
 /// Sent via the standard E2EE fanout, not an IQ. Empty `label` clears.
@@ -1449,6 +1479,91 @@ mod tests {
     use crate::libsignal::protocol::{IdentityKeyPair, KeyPair, PreKeyBundle};
     use std::collections::HashMap;
     use wacore_binary::Jid;
+
+    mod assemble_status_participants {
+        use super::*;
+
+        fn lid(u: &str) -> Jid {
+            u.parse().expect("parse LID jid")
+        }
+
+        #[test]
+        fn dedup_keeps_first_entry_per_user_and_anchors_own() {
+            let own = lid("99999999999999@lid");
+            let out = assemble_status_participants(
+                vec![
+                    Some(lid("111@lid")),
+                    Some(lid("222@lid")),
+                    Some(lid("111@lid")),
+                    Some(lid("333@lid")),
+                ],
+                &own,
+            )
+            .expect("should succeed");
+            let users: Vec<&str> = out.iter().map(|j| j.user.as_str()).collect();
+            assert_eq!(users, ["111", "222", "333", "99999999999999"]);
+        }
+
+        #[test]
+        fn skips_none_entries_matching_wa_web_compactmap() {
+            // Unresolvable recipients arrive as `None` and must be silently
+            // dropped — mirrors WA Web's `compactMap(list, toUserLid)`.
+            let own = lid("me@lid");
+            let out = assemble_status_participants(
+                vec![None, Some(lid("111@lid")), None, Some(lid("222@lid"))],
+                &own,
+            )
+            .expect("should succeed");
+            let users: Vec<&str> = out.iter().map(|j| j.user.as_str()).collect();
+            assert_eq!(users, ["111", "222", "me"]);
+        }
+
+        #[test]
+        fn does_not_duplicate_own_when_already_in_list() {
+            let own = lid("me@lid");
+            let out =
+                assemble_status_participants(vec![Some(lid("111@lid")), Some(lid("me@lid"))], &own)
+                    .expect("should succeed");
+            let users: Vec<&str> = out.iter().map(|j| j.user.as_str()).collect();
+            assert_eq!(users, ["111", "me"]);
+        }
+
+        #[test]
+        fn errors_when_every_recipient_is_unresolvable() {
+            // Regression guard for the original bug: a single LID-only
+            // contact used to hard-abort the send with
+            // `No PN mapping for LID ...`. The new contract is softer —
+            // individual unresolvable entries are dropped — but we still
+            // refuse to send when the entire list came back empty, rather
+            // than silently broadcasting to own devices only.
+            let own = lid("me@lid");
+            let err = assemble_status_participants(vec![None, None, None], &own)
+                .expect_err("all-None list must error");
+            assert!(err.to_string().contains("No valid status recipients"));
+        }
+
+        #[test]
+        fn errors_when_list_is_empty() {
+            let own = lid("me@lid");
+            let err = assemble_status_participants(Vec::<Option<Jid>>::new(), &own)
+                .expect_err("empty list must error");
+            assert!(err.to_string().contains("No valid status recipients"));
+        }
+
+        #[test]
+        fn strips_device_suffix_from_own_lid() {
+            // Snapshot lid from the device store carries a device id; the
+            // participant list uses bare USER JIDs.
+            let own: Jid = "me:5@lid".parse().unwrap();
+            let out = assemble_status_participants(vec![Some(lid("111@lid"))], &own)
+                .expect("should succeed");
+            let me = out
+                .iter()
+                .find(|j| j.user.as_str() == "me")
+                .expect("own LID should be present");
+            assert_eq!(me.device, 0, "own LID should be non-ad (device=0)");
+        }
+    }
 
     #[test]
     fn build_member_label_message_sets_fields() {
