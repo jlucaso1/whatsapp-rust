@@ -1063,19 +1063,28 @@ impl IqSpec for GroupCreateIq {
 // Group Management IQ Specs
 // ---------------------------------------------------------------------------
 
-/// Response for participant change operations (add/remove/promote/demote).
+/// Response for participant change operations.
 ///
-/// Wire format: `<participant jid="..." type="200" error="..."/>`
+/// Success is signaled by absent `error`; `type` is often omitted by the server.
 #[derive(Debug, Clone, crate::ProtocolNode)]
 #[protocol(tag = "participant")]
 pub struct ParticipantChangeResponse {
     #[attr(name = "jid", jid)]
     pub jid: Jid,
-    /// HTTP-like status code (e.g. 200, 403, 409).
     #[attr(name = "type")]
     pub status: Option<String>,
     #[attr(name = "error")]
     pub error: Option<String>,
+    #[attr(name = "phone_number", jid)]
+    pub phone_number: Option<Jid>,
+    #[attr(name = "username")]
+    pub username: Option<String>,
+}
+
+impl ParticipantChangeResponse {
+    pub fn is_ok(&self) -> bool {
+        self.error.is_none()
+    }
 }
 
 /// IQ specification for setting a group's subject.
@@ -3076,7 +3085,7 @@ mod tests {
     }
 
     #[test]
-    fn test_participant_change_response_parse() {
+    fn test_participant_change_response_parse_with_type() {
         let node = NodeBuilder::new("participant")
             .attr("jid", "1234567890@s.whatsapp.net")
             .attr("type", "200")
@@ -3085,6 +3094,48 @@ mod tests {
         let result = ParticipantChangeResponse::try_from_node(&node).unwrap();
         assert_eq!(result.jid.user, "1234567890");
         assert_eq!(result.status, Some("200".to_string()));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_participant_change_response_parse_without_type() {
+        let node = NodeBuilder::new("participant")
+            .attr("jid", "1234567890@s.whatsapp.net")
+            .build();
+
+        let result = ParticipantChangeResponse::try_from_node(&node).unwrap();
+        assert_eq!(result.status, None);
+        assert_eq!(result.error, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_participant_change_response_parse_error() {
+        let node = NodeBuilder::new("participant")
+            .attr("jid", "1234567890@s.whatsapp.net")
+            .attr("error", "403")
+            .build();
+
+        let result = ParticipantChangeResponse::try_from_node(&node).unwrap();
+        assert_eq!(result.error.as_deref(), Some("403"));
+        assert!(!result.is_ok());
+    }
+
+    #[test]
+    fn test_participant_change_response_parse_mixins() {
+        let node = NodeBuilder::new("participant")
+            .attr("jid", "100000000000001@lid")
+            .attr("phone_number", "15555550100@s.whatsapp.net")
+            .attr("username", "example_user")
+            .build();
+
+        let result = ParticipantChangeResponse::try_from_node(&node).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(
+            result.phone_number.as_ref().map(|j| j.user.as_str()),
+            Some("15555550100")
+        );
+        assert_eq!(result.username.as_deref(), Some("example_user"));
     }
 
     #[test]

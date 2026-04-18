@@ -86,7 +86,10 @@ impl GroupInfo {
     /// using the `phone_number` field from each participant.  Maps are updated
     /// even for already-present participants so that a later call with
     /// `Some(phone_number)` backfills a previous `None` entry.
-    pub fn add_participants(&mut self, new: &[(Jid, Option<Jid>)]) {
+    pub fn add_participants<'a, I>(&mut self, new: I)
+    where
+        I: IntoIterator<Item = (&'a Jid, Option<&'a Jid>)>,
+    {
         for (jid, phone_number) in new {
             // Always backfill LID maps — a re-add with phone_number fills a
             // previous None (e.g., client-initiated add followed by server
@@ -178,7 +181,9 @@ mod tests {
     #[test]
     fn add_participants_pn_mode() {
         let mut info = GroupInfo::new(vec![pn("alice")], AddressingMode::Pn);
-        info.add_participants(&[(pn("bob"), None), (pn("carol"), None)]);
+        let bob = pn("bob");
+        let carol = pn("carol");
+        info.add_participants([(&bob, None), (&carol, None)]);
         assert_eq!(info.participants.len(), 3);
         assert!(info.participants.iter().any(|p| p.user == "bob"));
     }
@@ -186,14 +191,18 @@ mod tests {
     #[test]
     fn add_participants_deduplicates() {
         let mut info = GroupInfo::new(vec![pn("alice"), pn("bob")], AddressingMode::Pn);
-        info.add_participants(&[(pn("bob"), None), (pn("carol"), None)]);
+        let bob = pn("bob");
+        let carol = pn("carol");
+        info.add_participants([(&bob, None), (&carol, None)]);
         assert_eq!(info.participants.len(), 3); // bob not duplicated
     }
 
     #[test]
     fn add_participants_lid_mode_updates_maps() {
         let mut info = GroupInfo::new(vec![lid("lid_alice")], AddressingMode::Lid);
-        info.add_participants(&[(lid("lid_bob"), Some(pn("bob_pn")))]);
+        let bob_lid = lid("lid_bob");
+        let bob_pn = pn("bob_pn");
+        info.add_participants([(&bob_lid, Some(&bob_pn))]);
 
         assert_eq!(info.participants.len(), 2);
         assert_eq!(
@@ -253,11 +262,13 @@ mod tests {
     fn add_participants_backfills_lid_map_for_existing() {
         let mut info = GroupInfo::new(vec![lid("lid_bob")], AddressingMode::Lid);
         // First add without phone_number (simulates client-initiated add)
-        info.add_participants(&[(lid("lid_bob"), None)]);
+        let bob_lid = lid("lid_bob");
+        let bob_pn = pn("bob_pn");
+        info.add_participants([(&bob_lid, None)]);
         assert!(info.phone_jid_for_lid_user("lid_bob").is_none());
 
         // Second add with phone_number (simulates server notification backfill)
-        info.add_participants(&[(lid("lid_bob"), Some(pn("bob_pn")))]);
+        info.add_participants([(&bob_lid, Some(&bob_pn))]);
         assert_eq!(info.participants.len(), 1); // not duplicated
         assert_eq!(
             info.phone_jid_for_lid_user("lid_bob")
