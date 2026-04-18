@@ -851,10 +851,11 @@ impl Client {
                 .and_then(|rm| rm.key.as_ref())
                 .and_then(|k| k.participant.as_ref())
                 .and_then(|p| p.parse::<Jid>().ok())
+                .filter(|jid| jid.is_pn() || jid.is_lid())
                 .ok_or_else(|| {
                     anyhow!(
                         "send_message to status@broadcast requires \
-                         reaction_message.key.participant = status author. \
+                         reaction_message.key.participant = status author (user JID). \
                          Use client.status() for posting new statuses."
                     )
                 })?;
@@ -1694,6 +1695,36 @@ mod tests {
         assert!(
             msg.contains("reaction_message") || msg.contains("status"),
             "unexpected error: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_message_to_status_reaction_rejects_non_user_participant() {
+        let client = crate::test_utils::create_test_client().await;
+        let to = Jid::status_broadcast();
+        let err = client
+            .send_message(
+                to,
+                wa::Message {
+                    reaction_message: Some(wa::message::ReactionMessage {
+                        key: Some(wa::MessageKey {
+                            remote_jid: Some("status@broadcast".into()),
+                            from_me: Some(false),
+                            id: Some("ORIGID".into()),
+                            participant: Some("120363040237990503@g.us".into()),
+                        }),
+                        text: Some("❤️".into()),
+                        sender_timestamp_ms: Some(1),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("group JID as participant must error");
+        assert!(
+            format!("{err}").contains("user JID"),
+            "expected user-JID error, got: {err}"
         );
     }
 
