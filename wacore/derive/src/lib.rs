@@ -648,7 +648,7 @@ fn parse_enum_level_wire(attrs: &[syn::Attribute]) -> syn::Result<WireEnumCfg> {
 
 enum VariantWire {
     Str(String),
-    Int(i64),
+    Int(i32),
 }
 
 struct VariantInfo {
@@ -696,7 +696,22 @@ fn read_variant(v: &syn::Variant) -> syn::Result<VariantInfo> {
                     syn::Expr::Lit(syn::ExprLit {
                         lit: syn::Lit::Int(n),
                         ..
-                    }) => wire = Some(VariantWire::Int(n.base10_parse::<i64>()?)),
+                    }) => {
+                        // Reject out-of-range literals at macro parse time rather
+                        // than silently wrapping with `as i32`.
+                        let parsed: i32 = n.base10_parse().map_err(|_| {
+                            syn::Error::new_spanned(
+                                n,
+                                format!(
+                                    "#[wire = {}] does not fit in i32 ({}..={})",
+                                    n,
+                                    i32::MIN,
+                                    i32::MAX
+                                ),
+                            )
+                        })?;
+                        wire = Some(VariantWire::Int(parsed));
+                    }
                     _ => {
                         return Err(syn::Error::new_spanned(
                             &nv.value,
@@ -812,12 +827,16 @@ fn expand_wire_enum_unit(
             }
             default_variant = Some(info);
         }
-        if !info.aliases.is_empty() {
-            return syn::Error::new_spanned(
-                &info.ident,
-                "#[wire_alias] is only valid on tagged-mode WireEnum variants",
-            )
-            .to_compile_error();
+        for alias in &info.aliases {
+            if let Some(prev) = seen.insert(alias.clone(), info.ident.clone()) {
+                return syn::Error::new_spanned(
+                    &info.ident,
+                    format!(
+                        "#[wire_alias = \"{alias}\"] collides with existing wire tag from variant {prev}"
+                    ),
+                )
+                .to_compile_error();
+            }
         }
     }
 
@@ -849,19 +868,40 @@ fn expand_wire_enum_unit(
         })
         .collect();
 
+    // `as_str()` always returns the PRIMARY tag — aliases are parser-only and
+    // must never surface in serialization.
     let as_str_arms: Vec<_> = known
         .iter()
         .map(|(id, s)| quote! { #name::#id => #s })
         .collect();
 
-    let try_from_arms: Vec<_> = known
+    // For parsing, include primary + each alias; all map to the same variant.
+    let try_from_arms: Vec<proc_macro2::TokenStream> = infos
         .iter()
-        .map(|(id, s)| quote! { #s => ::core::result::Result::Ok(#name::#id) })
+        .filter(|i| !i.is_fallback)
+        .flat_map(|i| {
+            let id = &i.ident;
+            let VariantWire::Str(primary) = i.wire.as_ref().unwrap() else {
+                unreachable!()
+            };
+            std::iter::once(primary.clone())
+                .chain(i.aliases.iter().cloned())
+                .map(move |s| quote! { #s => ::core::result::Result::Ok(#name::#id) })
+        })
         .collect();
 
-    let from_arms: Vec<_> = known
+    let from_arms: Vec<proc_macro2::TokenStream> = infos
         .iter()
-        .map(|(id, s)| quote! { #s => #name::#id })
+        .filter(|i| !i.is_fallback)
+        .flat_map(|i| {
+            let id = &i.ident;
+            let VariantWire::Str(primary) = i.wire.as_ref().unwrap() else {
+                unreachable!()
+            };
+            std::iter::once(primary.clone())
+                .chain(i.aliases.iter().cloned())
+                .map(move |s| quote! { #s => #name::#id })
+        })
         .collect();
 
     let as_str_return_ty;
@@ -996,7 +1036,7 @@ fn expand_wire_enum_int(
     }
 
     let mut fallback: Option<&VariantInfo> = None;
-    let mut seen: std::collections::HashMap<i64, syn::Ident> = Default::default();
+    let mut seen: std::collections::HashMap<i32, syn::Ident> = Default::default();
 
     for info in &infos {
         if info.is_fallback {
@@ -1057,7 +1097,7 @@ fn expand_wire_enum_int(
             let VariantWire::Int(n) = i.wire.as_ref().unwrap() else {
                 unreachable!()
             };
-            let lit = proc_macro2::Literal::i32_suffixed(*n as i32);
+            let lit = proc_macro2::Literal::i32_suffixed(*n);
             quote! { #name::#id => #lit }
         })
         .collect();
@@ -1070,7 +1110,7 @@ fn expand_wire_enum_int(
             let VariantWire::Int(n) = i.wire.as_ref().unwrap() else {
                 unreachable!()
             };
-            let lit = proc_macro2::Literal::i32_suffixed(*n as i32);
+            let lit = proc_macro2::Literal::i32_suffixed(*n);
             quote! { #lit => #name::#id }
         })
         .collect();
@@ -1301,13 +1341,17 @@ fn expand_wire_enum_tagged(
         let VariantWire::Str(primary) = info.wire.as_ref().unwrap() else {
             unreachable!()
         };
-        // The tag-enum variant gets the primary wire as #[wire = "..."].
-        // Aliases become extra unit variants named <Ident>__alias_N.
-        tag_variant_tokens.push(quote! { #[wire = #primary] #id });
-        for (idx, alias) in info.aliases.iter().enumerate() {
-            let alias_ident = quote::format_ident!("{}__Alias{}", id, idx);
-            tag_variant_tokens.push(quote! { #[wire = #alias] #alias_ident });
-        }
+        // Primary tag + aliases collapse into ONE tag variant. The unit-string
+        // WireEnum derive on the tag enum expands `#[wire_alias = "..."]` into
+        // extra `From<&str>` arms pointing at the same variant, so parsers see
+        // `Tag::Foo` regardless of whether the wire tag was the primary or an
+        // alias.
+        let alias_attrs = info.aliases.iter().map(|a| quote! { #[wire_alias = #a] });
+        tag_variant_tokens.push(quote! {
+            #[wire = #primary]
+            #(#alias_attrs)*
+            #id
+        });
     }
 
     // --- Final expansion ---
@@ -1348,11 +1392,11 @@ fn expand_wire_enum_tagged(
             }
         }
 
-        /// Sibling unit enum listing every wire tag (primary + aliases) for
-        /// parser dispatch. Parse via `TryFrom<&str>`.
+        /// Sibling unit enum listing every canonical wire tag for parser
+        /// dispatch. Primary wire tags and any `#[wire_alias]` entries all
+        /// resolve to the same variant via `From<&str>`.
         #[doc = "Auto-generated by `#[derive(WireEnum)]`."]
-        #[derive(Debug, Clone, PartialEq, Eq, ::wacore_derive::WireEnum)]
-        #[allow(non_camel_case_types)]
+        #[derive(Debug, Clone, PartialEq, Eq, ::wacore::WireEnum)]
         #[allow(clippy::enum_variant_names)]
         pub enum #tag_ident {
             #(#tag_variant_tokens,)*

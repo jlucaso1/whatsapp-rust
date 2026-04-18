@@ -18,11 +18,14 @@ use wacore_binary::{Node, NodeRef};
 /// How a membership request was initiated.
 ///
 /// Maps to `WAWebRequestMethodType` in WhatsApp Web JS.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
 pub enum MembershipRequestMethod {
+    #[wire_default]
+    #[wire = "invite_link"]
     InviteLink,
+    #[wire = "linked_group_join"]
     LinkedGroupJoin,
+    #[wire = "non_admin_add"]
     NonAdminAdd,
 }
 
@@ -326,15 +329,13 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
         T::Unlocked => GroupNotificationAction::Unlocked,
         T::Announce => GroupNotificationAction::Announce,
         T::NotAnnounce => GroupNotificationAction::NotAnnounce,
+        // Both `<ephemeral .../>` and the alias `<not_ephemeral/>` land here —
+        // the alias carries no `expiration`/`trigger` attrs, so the fallbacks
+        // below produce `Ephemeral { expiration: 0, trigger: None }`, matching
+        // WA Web's collapse of the two wire tags into one action.
         T::Ephemeral => GroupNotificationAction::Ephemeral {
             expiration: node.attrs().optional_u64("expiration").unwrap_or(0) as u32,
             trigger: node.attrs().optional_u64("trigger").map(|t| t as u32),
-        },
-        // Alias auto-generated from #[wire_alias = "not_ephemeral"]. WA Web
-        // collapses it into Ephemeral with duration=0.
-        T::Ephemeral__Alias0 => GroupNotificationAction::Ephemeral {
-            expiration: 0,
-            trigger: None,
         },
         T::MembershipApprovalMode => {
             let enabled = node
@@ -480,12 +481,14 @@ fn parse_participant_jids(node: &NodeRef<'_>) -> Vec<Jid> {
 
 /// Maps the `request_method` attribute to [`MembershipRequestMethod`].
 /// Defaults to `InviteLink` when absent or unknown — matches WA Web's fallback.
+/// Wire strings come from the derived `TryFrom<&str>` impl; this function has
+/// no hard-coded tags of its own.
 fn parse_request_method(node: &NodeRef<'_>) -> MembershipRequestMethod {
-    match node.attrs().optional_string("request_method").as_deref() {
-        Some("linked_group_join") => MembershipRequestMethod::LinkedGroupJoin,
-        Some("non_admin_add") => MembershipRequestMethod::NonAdminAdd,
-        _ => MembershipRequestMethod::InviteLink,
-    }
+    node.attrs()
+        .optional_string("request_method")
+        .as_deref()
+        .and_then(|s| MembershipRequestMethod::try_from(s).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
