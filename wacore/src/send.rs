@@ -1090,21 +1090,23 @@ pub async fn prepare_group_stanza<
             })
             .collect();
 
-        // Determine what JID to check for - use phone number if we're in LID mode and have a mapping
-        let own_jid_to_check = if own_base_jid.is_lid() {
-            group_info
-                .phone_jid_for_lid_user(&own_base_jid.user)
-                .map(|pn| pn.to_non_ad())
-                .unwrap_or_else(|| own_base_jid.clone())
+        // Determine what user to check for — use the PN user when own is LID
+        // and we have a mapping. Keeping this as a borrow avoids allocating a
+        // throwaway Jid when own is already in the list.
+        let own_pn_mapping = if own_base_jid.is_lid() {
+            group_info.phone_jid_for_lid_user(&own_base_jid.user)
         } else {
-            own_base_jid.clone()
+            None
         };
+        let own_check_user = own_pn_mapping
+            .map(|pn| pn.user.as_str())
+            .unwrap_or(own_base_jid.user.as_str());
 
-        if !jids_to_resolve
-            .iter()
-            .any(|participant| participant.is_same_user_as(&own_jid_to_check))
-        {
-            jids_to_resolve.push(own_jid_to_check);
+        if !jids_to_resolve.iter().any(|p| p.user == own_check_user) {
+            jids_to_resolve.push(match own_pn_mapping {
+                Some(pn) => pn.to_non_ad(),
+                None => own_base_jid.clone(),
+            });
         }
 
         crate::types::jid::sort_dedup_by_user(&mut jids_to_resolve);

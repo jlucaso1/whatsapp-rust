@@ -165,8 +165,9 @@ impl PreKeyUtils {
             .get_optional_child("list")
             .ok_or_else(|| anyhow::anyhow!("<list> not found in pre-key response"))?;
 
-        let mut bundles = HashMap::new();
-        for user_node_ref in list_node.children().unwrap_or_default() {
+        let children = list_node.children().unwrap_or_default();
+        let mut bundles = HashMap::with_capacity(children.len());
+        for user_node_ref in children {
             if user_node_ref.tag != "user" {
                 continue;
             }

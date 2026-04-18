@@ -19,8 +19,8 @@ pub(crate) struct SenderKeyDeviceMap {
 
 impl SenderKeyDeviceMap {
     pub fn from_db_rows(rows: &[(String, bool)]) -> Self {
-        let mut devices: HashMap<Arc<str>, HashMap<u16, bool>> = HashMap::new();
-        let mut forgotten_users = HashSet::new();
+        let mut devices: HashMap<Arc<str>, HashMap<u16, bool>> = HashMap::with_capacity(rows.len());
+        let mut forgotten_users = HashSet::with_capacity(rows.len() / 4);
 
         for (jid_str, has_key) in rows {
             match jid_str.parse::<Jid>() {

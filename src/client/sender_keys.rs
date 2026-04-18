@@ -15,22 +15,26 @@ impl Client {
         has_key: bool,
         exclude_own_devices: bool,
     ) -> Result<()> {
-        let (own_lid_user, own_pn_user) = if exclude_own_devices {
-            let snapshot = self.persistence_manager.get_device_snapshot().await;
-            (
-                snapshot.lid.as_ref().map(|j| j.user.clone()),
-                snapshot.pn.as_ref().map(|j| j.user.clone()),
-            )
+        let snapshot = if exclude_own_devices {
+            Some(self.persistence_manager.get_device_snapshot().await)
         } else {
-            (None, None)
+            None
         };
+        let own_lid_user = snapshot
+            .as_ref()
+            .and_then(|s| s.lid.as_ref())
+            .map(|j| j.user.as_str());
+        let own_pn_user = snapshot
+            .as_ref()
+            .and_then(|s| s.pn.as_ref())
+            .map(|j| j.user.as_str());
 
         let device_ids: Vec<String> = device_jids
             .iter()
             .filter(|jid| {
                 !exclude_own_devices
-                    || !(own_lid_user.as_deref().is_some_and(|u| u == jid.user)
-                        || own_pn_user.as_deref().is_some_and(|u| u == jid.user))
+                    || !(own_lid_user.is_some_and(|u| u == jid.user)
+                        || own_pn_user.is_some_and(|u| u == jid.user))
             })
             .map(ToString::to_string)
             .collect();

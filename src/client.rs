@@ -3581,8 +3581,13 @@ impl Client {
     }
 
     pub async fn get_push_name(&self) -> String {
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-        device_snapshot.push_name.clone()
+        self.persistence_manager
+            .get_device_arc()
+            .await
+            .read()
+            .await
+            .push_name
+            .clone()
     }
 
     pub async fn get_pn(&self) -> Option<Jid> {
@@ -3596,8 +3601,13 @@ impl Client {
     }
 
     pub async fn get_lid(&self) -> Option<Jid> {
-        let snapshot = self.persistence_manager.get_device_snapshot().await;
-        snapshot.lid.clone()
+        self.persistence_manager
+            .get_device_arc()
+            .await
+            .read()
+            .await
+            .lid
+            .clone()
     }
 
     pub(crate) async fn require_pn(&self) -> Result<Jid> {
