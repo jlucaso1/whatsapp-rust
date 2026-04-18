@@ -2,19 +2,19 @@
 
 use crate::client::Client;
 use log::debug;
-use wacore::StringEnum;
+use wacore::WireEnum;
 use wacore_binary::Jid;
 use wacore_binary::builder::NodeBuilder;
 
 /// Chat state type for typing indicators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 #[non_exhaustive]
 pub enum ChatStateType {
-    #[str = "composing"]
+    #[wire = "composing"]
     Composing,
-    #[str = "recording"]
+    #[wire = "recording"]
     Recording,
-    #[str = "paused"]
+    #[wire = "paused"]
     Paused,
 }
 

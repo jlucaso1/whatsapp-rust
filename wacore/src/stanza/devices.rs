@@ -10,7 +10,7 @@
 //! - Timestamp is REQUIRED (non-zero) for remove
 //! - `hash` attribute is REQUIRED for update
 
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::iq::node::{required_attr, required_child};
 use crate::protocol::ProtocolNode;
 use anyhow::{Result, anyhow};
@@ -25,13 +25,13 @@ use wacore_binary::{Node, NodeRef};
 /// - `<add>` - Device was added
 /// - `<remove>` - Device was removed
 /// - `<update>` - Device info updated (hash-based lookup)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum DeviceNotificationType {
-    #[str = "add"]
+    #[wire = "add"]
     Add,
-    #[str = "remove"]
+    #[wire = "remove"]
     Remove,
-    #[str = "update"]
+    #[wire = "update"]
     Update,
 }
 

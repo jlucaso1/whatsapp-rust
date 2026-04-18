@@ -8,28 +8,28 @@ use wacore_binary::Jid;
 use wacore_binary::NodeRef;
 
 /// Business notification type based on child element.
-#[derive(Debug, Clone, PartialEq, Eq, crate::StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::WireEnum)]
 pub enum BusinessNotificationType {
-    #[str = "remove_jid"]
+    #[wire = "remove_jid"]
     RemoveJid,
-    #[str = "remove_hash"]
+    #[wire = "remove_hash"]
     RemoveHash,
-    #[str = "verified_name_jid"]
+    #[wire = "verified_name_jid"]
     VerifiedNameJid,
-    #[str = "verified_name_hash"]
+    #[wire = "verified_name_hash"]
     VerifiedNameHash,
-    #[str = "profile"]
+    #[wire = "profile"]
     Profile,
-    #[str = "profile_hash"]
+    #[wire = "profile_hash"]
     ProfileHash,
-    #[str = "product"]
+    #[wire = "product"]
     Product,
-    #[str = "collection"]
+    #[wire = "collection"]
     Collection,
-    #[str = "subscriptions"]
+    #[wire = "subscriptions"]
     Subscriptions,
-    #[string_default]
-    #[str = "unknown"]
+    #[wire_default]
+    #[wire = "unknown"]
     Unknown,
 }
 

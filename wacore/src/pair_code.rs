@@ -19,7 +19,7 @@
 //! - Ephemeral encryption: AES-256-CTR
 //! - Bundle encryption: AES-256-GCM after HKDF key derivation
 
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::libsignal::crypto::aes_256_gcm_encrypt;
 use crate::libsignal::protocol::{KeyPair, PublicKey};
 use aes::cipher::{KeyIvInit, StreamCipher};
@@ -80,29 +80,29 @@ const PAIR_CODE_VALIDITY_SECS: u64 = 180;
 
 /// Platform identifiers for companion devices.
 /// These match the DeviceProps.PlatformType protobuf enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 #[repr(u8)]
 pub enum PlatformId {
-    #[str = "0"]
+    #[wire = "0"]
     Unknown = 0,
-    #[string_default]
-    #[str = "1"]
+    #[wire_default]
+    #[wire = "1"]
     Chrome = 1,
-    #[str = "2"]
+    #[wire = "2"]
     Firefox = 2,
-    #[str = "3"]
+    #[wire = "3"]
     InternetExplorer = 3,
-    #[str = "4"]
+    #[wire = "4"]
     Opera = 4,
-    #[str = "5"]
+    #[wire = "5"]
     Safari = 5,
-    #[str = "6"]
+    #[wire = "6"]
     Edge = 6,
-    #[str = "7"]
+    #[wire = "7"]
     Electron = 7,
-    #[str = "8"]
+    #[wire = "8"]
     Uwp = 8,
-    #[str = "9"]
+    #[wire = "9"]
     OtherWebClient = 9,
 }
 
@@ -616,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_platform_id_string_enum() {
-        // StringEnum derive works correctly
+        // WireEnum derive works correctly
         assert_eq!(PlatformId::Chrome.as_str(), "1");
         assert_eq!(PlatformId::Firefox.to_string(), "2");
         assert_eq!(PlatformId::default(), PlatformId::Chrome);

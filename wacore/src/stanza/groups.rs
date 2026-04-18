@@ -10,6 +10,7 @@
 //! - Root `participant` attribute identifies the admin/author who triggered the change
 //! - Participant lists are nested `<participant jid="..." />` children
 
+use crate::WireEnum;
 use serde::Serialize;
 use wacore_binary::Jid;
 use wacore_binary::{Node, NodeRef};
@@ -17,11 +18,14 @@ use wacore_binary::{Node, NodeRef};
 /// How a membership request was initiated.
 ///
 /// Maps to `WAWebRequestMethodType` in WhatsApp Web JS.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
 pub enum MembershipRequestMethod {
+    #[wire_default]
+    #[wire = "invite_link"]
     InviteLink,
+    #[wire = "linked_group_join"]
     LinkedGroupJoin,
+    #[wire = "non_admin_add"]
     NonAdminAdd,
 }
 
@@ -59,45 +63,53 @@ pub struct GroupParticipantInfo {
 ///
 /// Maps 1:1 to `GROUP_NOTIFICATION_TAG` child element tags from WhatsApp Web.
 ///
-/// Serialization: the JSON discriminator `"type"` is always driven by
-/// [`Self::tag_name`] — the same string the wire parser dispatches on. The
-/// `impl Serialize` below is hand-written (instead of `#[derive(Serialize)]`
-/// with serde attribute overrides) to keep that mapping as the single source
-/// of truth.
-#[derive(Debug, Clone)]
+/// The `#[wire = "..."]` attribute is the SINGLE source of truth for each
+/// variant's wire tag: the JSON discriminator (via the auto-derived
+/// `Serialize`), the parser dispatch (via the auto-generated sibling
+/// `GroupNotificationActionTag` enum), and `wire_tag()` / `tag_name()` all
+/// read from the same table.
+#[derive(Debug, Clone, WireEnum)]
+#[wire(tag = "type")]
 pub enum GroupNotificationAction {
     // -- Participant management --
     /// `<add>` — Members added to group
+    #[wire = "add"]
     Add {
         participants: Vec<GroupParticipantInfo>,
         reason: Option<String>,
     },
     /// `<remove>` — Members removed from group
+    #[wire = "remove"]
     Remove {
         participants: Vec<GroupParticipantInfo>,
         reason: Option<String>,
     },
     /// `<promote>` — Members promoted to admin
+    #[wire = "promote"]
     Promote {
         participants: Vec<GroupParticipantInfo>,
     },
     /// `<demote>` — Members demoted from admin
+    #[wire = "demote"]
     Demote {
         participants: Vec<GroupParticipantInfo>,
     },
     /// `<modify>` — Member changed phone number
+    #[wire = "modify"]
     Modify {
         participants: Vec<GroupParticipantInfo>,
     },
 
     // -- Metadata --
     /// `<subject subject="..." s_o="..." s_t="..."/>` — Group name changed
+    #[wire = "subject"]
     Subject {
         subject: String,
         subject_owner: Option<Jid>,
         subject_time: Option<u64>,
     },
     /// `<description id="..."><body>text</body></description>` or `<description id="..."><delete/></description>`
+    #[wire = "description"]
     Description {
         id: String,
         /// `Some(text)` = added/updated, `None` = deleted
@@ -106,28 +118,39 @@ pub enum GroupNotificationAction {
 
     // -- Settings --
     /// `<locked threshold="..."/>` — Only admins can edit group info
+    #[wire = "locked"]
     Locked { threshold: Option<String> },
     /// `<unlocked/>` — All members can edit group info
+    #[wire = "unlocked"]
     Unlocked,
     /// `<announcement/>` — Only admins can send messages
+    #[wire = "announcement"]
     Announce,
     /// `<not_announcement/>` — All members can send messages
+    #[wire = "not_announcement"]
     NotAnnounce,
-    /// `<ephemeral expiration="..." trigger="..."/>` or `<not_ephemeral/>` (expiration=0)
+    /// `<ephemeral expiration="..." trigger="..."/>` — and the alias
+    /// `<not_ephemeral/>` which parses into `Ephemeral { expiration: 0 }`,
+    /// matching WA Web's collapsing of the two tags into one action type.
+    #[wire = "ephemeral"]
+    #[wire_alias = "not_ephemeral"]
     Ephemeral {
         expiration: u32,
         trigger: Option<u32>,
     },
     /// `<membership_approval_mode><group_join state="on|off"/></membership_approval_mode>`
+    #[wire = "membership_approval_mode"]
     MembershipApprovalMode { enabled: bool },
     /// `<membership_approval_request request_method="..." parent_group_jid="..."/>`
     /// A user requested to join. Requester is on parent [`GroupNotification::participant`].
+    #[wire = "membership_approval_request"]
     MembershipApprovalRequest {
         request_method: MembershipRequestMethod,
         parent_group_jid: Option<Jid>,
     },
     /// `<created_membership_requests request_method="..." parent_group_jid="...">` —
     /// admin-side notification: new join requests appeared.
+    #[wire = "created_membership_requests"]
     CreatedMembershipRequests {
         request_method: MembershipRequestMethod,
         parent_group_jid: Option<Jid>,
@@ -135,211 +158,65 @@ pub enum GroupNotificationAction {
         requests: Vec<GroupParticipantInfo>,
     },
     /// `<revoked_membership_requests>` — requests rejected by admin or cancelled by requester.
+    #[wire = "revoked_membership_requests"]
     RevokedMembershipRequests { participants: Vec<Jid> },
     /// `<member_add_mode>admin_add|all_member_add</member_add_mode>`
+    #[wire = "member_add_mode"]
     MemberAddMode { mode: String },
     /// `<no_frequently_forwarded/>` — Forwarding restricted
+    #[wire = "no_frequently_forwarded"]
     NoFrequentlyForwarded,
     /// `<frequently_forwarded_ok/>` — Forwarding allowed
+    #[wire = "frequently_forwarded_ok"]
     FrequentlyForwardedOk,
 
     // -- Invites --
     /// `<invite code="..."/>` — Joined via invite link
+    #[wire = "invite"]
     Invite { code: String },
     /// `<revoke>` — Invite link revoked
+    #[wire = "revoke"]
     RevokeInvite,
     /// `<growth_locked expiration="..." type="..."/>` — Invite links unavailable
+    #[wire = "growth_locked"]
     GrowthLocked { expiration: u32, lock_type: String },
     /// `<growth_unlocked/>` — Invite links available again
+    #[wire = "growth_unlocked"]
     GrowthUnlocked,
 
     // -- Group lifecycle --
     /// `<create>` — Group created (complex structure, raw node preserved)
-    Create { raw: Node },
+    #[wire = "create"]
+    Create {
+        #[wire(skip)]
+        raw: Node,
+    },
     /// `<delete>` — Group deleted
+    #[wire = "delete"]
     Delete { reason: Option<String> },
 
     // -- Community linking --
     /// `<link link_type="...">` — Subgroup linked
-    Link { link_type: String, raw: Node },
+    #[wire = "link"]
+    Link {
+        link_type: String,
+        #[wire(skip)]
+        raw: Node,
+    },
     /// `<unlink unlink_type="..." unlink_reason="...">` — Subgroup unlinked
+    #[wire = "unlink"]
     Unlink {
         unlink_type: String,
         unlink_reason: Option<String>,
+        #[wire(skip)]
         raw: Node,
     },
 
     // -- Catch-all --
-    /// Unknown child tag — preserved for forward compatibility
+    /// Unknown child tag — preserved for forward compatibility. The `tag`
+    /// field is what `wire_tag()` returns, so roundtrips stay intact.
+    #[wire_fallback]
     Unknown { tag: String },
-}
-
-impl Serialize for GroupNotificationAction {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeMap;
-
-        // Single-source-of-truth: the JSON discriminator is the wire tag.
-        let type_str = self.tag_name();
-
-        macro_rules! entry {
-            ($map:ident, $key:literal, $val:expr) => {
-                $map.serialize_entry($key, $val)?
-            };
-        }
-        macro_rules! entry_opt {
-            ($map:ident, $key:literal, $val:expr) => {
-                if let Some(v) = $val {
-                    $map.serialize_entry($key, v)?;
-                }
-            };
-        }
-
-        let mut map = serializer.serialize_map(None)?;
-        entry!(map, "type", type_str);
-
-        match self {
-            Self::Add {
-                participants,
-                reason,
-            } => {
-                entry!(map, "participants", participants);
-                entry_opt!(map, "reason", reason);
-            }
-            Self::Remove {
-                participants,
-                reason,
-            } => {
-                entry!(map, "participants", participants);
-                entry_opt!(map, "reason", reason);
-            }
-            Self::Promote { participants }
-            | Self::Demote { participants }
-            | Self::Modify { participants } => {
-                entry!(map, "participants", participants);
-            }
-            Self::Subject {
-                subject,
-                subject_owner,
-                subject_time,
-            } => {
-                entry!(map, "subject", subject);
-                entry_opt!(map, "subject_owner", subject_owner);
-                entry_opt!(map, "subject_time", subject_time);
-            }
-            Self::Description { id, description } => {
-                entry!(map, "id", id);
-                entry_opt!(map, "description", description);
-            }
-            Self::Locked { threshold } => {
-                entry_opt!(map, "threshold", threshold);
-            }
-            Self::Unlocked
-            | Self::Announce
-            | Self::NotAnnounce
-            | Self::NoFrequentlyForwarded
-            | Self::FrequentlyForwardedOk
-            | Self::RevokeInvite
-            | Self::GrowthUnlocked => {}
-            Self::Ephemeral {
-                expiration,
-                trigger,
-            } => {
-                entry!(map, "expiration", expiration);
-                entry_opt!(map, "trigger", trigger);
-            }
-            Self::MembershipApprovalMode { enabled } => {
-                entry!(map, "enabled", enabled);
-            }
-            Self::MembershipApprovalRequest {
-                request_method,
-                parent_group_jid,
-            } => {
-                entry!(map, "request_method", request_method);
-                entry_opt!(map, "parent_group_jid", parent_group_jid);
-            }
-            Self::CreatedMembershipRequests {
-                request_method,
-                parent_group_jid,
-                requests,
-            } => {
-                entry!(map, "request_method", request_method);
-                entry_opt!(map, "parent_group_jid", parent_group_jid);
-                entry!(map, "requests", requests);
-            }
-            Self::RevokedMembershipRequests { participants } => {
-                entry!(map, "participants", participants);
-            }
-            Self::MemberAddMode { mode } => {
-                entry!(map, "mode", mode);
-            }
-            Self::Invite { code } => {
-                entry!(map, "code", code);
-            }
-            Self::GrowthLocked {
-                expiration,
-                lock_type,
-            } => {
-                entry!(map, "expiration", expiration);
-                entry!(map, "lock_type", lock_type);
-            }
-            Self::Create { .. } => {}
-            Self::Delete { reason } => {
-                entry_opt!(map, "reason", reason);
-            }
-            Self::Link { link_type, .. } => {
-                entry!(map, "link_type", link_type);
-            }
-            Self::Unlink {
-                unlink_type,
-                unlink_reason,
-                ..
-            } => {
-                entry!(map, "unlink_type", unlink_type);
-                entry_opt!(map, "unlink_reason", unlink_reason);
-            }
-            Self::Unknown { tag } => {
-                entry!(map, "tag", tag);
-            }
-        }
-
-        map.end()
-    }
-}
-
-impl GroupNotificationAction {
-    /// Returns the wire tag name for this action, matching `GROUP_NOTIFICATION_TAG` values.
-    pub fn tag_name(&self) -> &str {
-        match self {
-            Self::Add { .. } => "add",
-            Self::Remove { .. } => "remove",
-            Self::Promote { .. } => "promote",
-            Self::Demote { .. } => "demote",
-            Self::Modify { .. } => "modify",
-            Self::Subject { .. } => "subject",
-            Self::Description { .. } => "description",
-            Self::Locked { .. } => "locked",
-            Self::Unlocked => "unlocked",
-            Self::Announce => "announcement",
-            Self::NotAnnounce => "not_announcement",
-            Self::Ephemeral { .. } => "ephemeral",
-            Self::MembershipApprovalMode { .. } => "membership_approval_mode",
-            Self::MembershipApprovalRequest { .. } => "membership_approval_request",
-            Self::CreatedMembershipRequests { .. } => "created_membership_requests",
-            Self::RevokedMembershipRequests { .. } => "revoked_membership_requests",
-            Self::MemberAddMode { .. } => "member_add_mode",
-            Self::NoFrequentlyForwarded => "no_frequently_forwarded",
-            Self::FrequentlyForwardedOk => "frequently_forwarded_ok",
-            Self::Invite { .. } => "invite",
-            Self::RevokeInvite => "revoke",
-            Self::GrowthLocked { .. } => "growth_locked",
-            Self::GrowthUnlocked => "growth_unlocked",
-            Self::Create { .. } => "create",
-            Self::Delete { .. } => "delete",
-            Self::Link { .. } => "link",
-            Self::Unlink { .. } => "unlink",
-            Self::Unknown { tag } => tag.as_str(),
-        }
-    }
 }
 
 impl GroupNotification {
@@ -376,34 +253,48 @@ impl GroupNotification {
 
 /// Parse a single child element into a GroupNotificationAction.
 ///
+/// Dispatches via [`GroupNotificationActionTag`] (auto-generated by
+/// `#[derive(WireEnum)]`) — no wire-tag string literal appears in this
+/// function. If the `#[wire = "..."]` attribute on a variant changes, both
+/// the serializer and this dispatcher track it automatically.
+///
 /// Only `Create`/`Link`/`Unlink` call `.to_owned()` because those variants store `raw: Node`.
 fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
+    use GroupNotificationActionTag as T;
     use wacore_binary::NodeContentRef;
-    let action = match node.tag.as_ref() {
-        "add" => GroupNotificationAction::Add {
+
+    // WA Web drops this child entirely; mirror that behavior.
+    if node.tag.as_ref() == "missing_participant_identification" {
+        return None;
+    }
+
+    let tag = T::from(node.tag.as_ref());
+
+    let action = match tag {
+        T::Add => GroupNotificationAction::Add {
             participants: parse_participants(node),
             reason: node
                 .attrs()
                 .optional_string("reason")
                 .map(|s| s.into_owned()),
         },
-        "remove" => GroupNotificationAction::Remove {
+        T::Remove => GroupNotificationAction::Remove {
             participants: parse_participants(node),
             reason: node
                 .attrs()
                 .optional_string("reason")
                 .map(|s| s.into_owned()),
         },
-        "promote" => GroupNotificationAction::Promote {
+        T::Promote => GroupNotificationAction::Promote {
             participants: parse_participants(node),
         },
-        "demote" => GroupNotificationAction::Demote {
+        T::Demote => GroupNotificationAction::Demote {
             participants: parse_participants(node),
         },
-        "modify" => GroupNotificationAction::Modify {
+        T::Modify => GroupNotificationAction::Modify {
             participants: parse_participants(node),
         },
-        "subject" => GroupNotificationAction::Subject {
+        T::Subject => GroupNotificationAction::Subject {
             subject: node
                 .attrs()
                 .optional_string("subject")
@@ -413,7 +304,7 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
             subject_owner: node.attrs().optional_jid("s_o"),
             subject_time: node.attrs().optional_u64("s_t"),
         },
-        "description" => {
+        T::Description => {
             let id = node
                 .attrs()
                 .optional_string("id")
@@ -429,31 +320,31 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
             };
             GroupNotificationAction::Description { id, description }
         }
-        "locked" => GroupNotificationAction::Locked {
+        T::Locked => GroupNotificationAction::Locked {
             threshold: node
                 .attrs()
                 .optional_string("threshold")
                 .map(|s| s.into_owned()),
         },
-        "unlocked" => GroupNotificationAction::Unlocked,
-        "announcement" => GroupNotificationAction::Announce,
-        "not_announcement" => GroupNotificationAction::NotAnnounce,
-        "ephemeral" => GroupNotificationAction::Ephemeral {
+        T::Unlocked => GroupNotificationAction::Unlocked,
+        T::Announce => GroupNotificationAction::Announce,
+        T::NotAnnounce => GroupNotificationAction::NotAnnounce,
+        // Both `<ephemeral .../>` and the alias `<not_ephemeral/>` land here —
+        // the alias carries no `expiration`/`trigger` attrs, so the fallbacks
+        // below produce `Ephemeral { expiration: 0, trigger: None }`, matching
+        // WA Web's collapse of the two wire tags into one action.
+        T::Ephemeral => GroupNotificationAction::Ephemeral {
             expiration: node.attrs().optional_u64("expiration").unwrap_or(0) as u32,
             trigger: node.attrs().optional_u64("trigger").map(|t| t as u32),
         },
-        "not_ephemeral" => GroupNotificationAction::Ephemeral {
-            expiration: 0,
-            trigger: None,
-        },
-        "membership_approval_mode" => {
+        T::MembershipApprovalMode => {
             let enabled = node
                 .get_optional_child("group_join")
                 .and_then(|gj| gj.attrs().optional_string("state"))
                 .is_some_and(|s| s == "on");
             GroupNotificationAction::MembershipApprovalMode { enabled }
         }
-        "membership_approval_request" => {
+        T::MembershipApprovalRequest => {
             let request_method = parse_request_method(node);
             let parent_group_jid = node.attrs().optional_jid("parent_group_jid");
             GroupNotificationAction::MembershipApprovalRequest {
@@ -461,7 +352,7 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
                 parent_group_jid,
             }
         }
-        "created_membership_requests" => {
+        T::CreatedMembershipRequests => {
             let request_method = parse_request_method(node);
             let parent_group_jid = node.attrs().optional_jid("parent_group_jid");
             let requests = parse_requested_users(node);
@@ -471,11 +362,11 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
                 requests,
             }
         }
-        "revoked_membership_requests" => {
+        T::RevokedMembershipRequests => {
             let participants = parse_participant_jids(node);
             GroupNotificationAction::RevokedMembershipRequests { participants }
         }
-        "member_add_mode" => {
+        T::MemberAddMode => {
             let mode = match node.content.as_deref() {
                 Some(NodeContentRef::String(s)) => s.to_string(),
                 Some(NodeContentRef::Bytes(b)) => String::from_utf8_lossy(b.as_ref()).into_owned(),
@@ -483,9 +374,9 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
             };
             GroupNotificationAction::MemberAddMode { mode }
         }
-        "no_frequently_forwarded" => GroupNotificationAction::NoFrequentlyForwarded,
-        "frequently_forwarded_ok" => GroupNotificationAction::FrequentlyForwardedOk,
-        "invite" => GroupNotificationAction::Invite {
+        T::NoFrequentlyForwarded => GroupNotificationAction::NoFrequentlyForwarded,
+        T::FrequentlyForwardedOk => GroupNotificationAction::FrequentlyForwardedOk,
+        T::Invite => GroupNotificationAction::Invite {
             code: node
                 .attrs()
                 .optional_string("code")
@@ -493,8 +384,8 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
                 .unwrap_or_default()
                 .to_string(),
         },
-        "revoke" => GroupNotificationAction::RevokeInvite,
-        "growth_locked" => GroupNotificationAction::GrowthLocked {
+        T::RevokeInvite => GroupNotificationAction::RevokeInvite,
+        T::GrowthLocked => GroupNotificationAction::GrowthLocked {
             expiration: node.attrs().optional_u64("expiration").unwrap_or(0) as u32,
             lock_type: node
                 .attrs()
@@ -503,18 +394,17 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
                 .unwrap_or_default()
                 .to_string(),
         },
-        "growth_unlocked" => GroupNotificationAction::GrowthUnlocked,
-        // These three variants store owned Node — only convert what's needed.
-        "create" => GroupNotificationAction::Create {
+        T::GrowthUnlocked => GroupNotificationAction::GrowthUnlocked,
+        T::Create => GroupNotificationAction::Create {
             raw: node.to_owned(),
         },
-        "delete" => GroupNotificationAction::Delete {
+        T::Delete => GroupNotificationAction::Delete {
             reason: node
                 .attrs()
                 .optional_string("reason")
                 .map(|s| s.into_owned()),
         },
-        "link" => GroupNotificationAction::Link {
+        T::Link => GroupNotificationAction::Link {
             link_type: node
                 .attrs()
                 .optional_string("link_type")
@@ -523,7 +413,7 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
                 .to_string(),
             raw: node.to_owned(),
         },
-        "unlink" => GroupNotificationAction::Unlink {
+        T::Unlink => GroupNotificationAction::Unlink {
             unlink_type: node
                 .attrs()
                 .optional_string("unlink_type")
@@ -536,8 +426,7 @@ fn parse_action(node: &NodeRef<'_>) -> Option<GroupNotificationAction> {
                 .map(|s| s.into_owned()),
             raw: node.to_owned(),
         },
-        "missing_participant_identification" => return None,
-        _ => GroupNotificationAction::Unknown {
+        T::Unknown(_) => GroupNotificationAction::Unknown {
             tag: node.tag.to_string(),
         },
     };
@@ -592,12 +481,14 @@ fn parse_participant_jids(node: &NodeRef<'_>) -> Vec<Jid> {
 
 /// Maps the `request_method` attribute to [`MembershipRequestMethod`].
 /// Defaults to `InviteLink` when absent or unknown — matches WA Web's fallback.
+/// Wire strings come from the derived `TryFrom<&str>` impl; this function has
+/// no hard-coded tags of its own.
 fn parse_request_method(node: &NodeRef<'_>) -> MembershipRequestMethod {
-    match node.attrs().optional_string("request_method").as_deref() {
-        Some("linked_group_join") => MembershipRequestMethod::LinkedGroupJoin,
-        Some("non_admin_add") => MembershipRequestMethod::NonAdminAdd,
-        _ => MembershipRequestMethod::InviteLink,
-    }
+    node.attrs()
+        .optional_string("request_method")
+        .as_deref()
+        .and_then(|s| MembershipRequestMethod::try_from(s).ok())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

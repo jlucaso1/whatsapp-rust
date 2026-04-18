@@ -212,16 +212,16 @@ pub struct SelfPushNameUpdated {
 
 /// Type of device list update notification.
 /// Matches WhatsApp Web's device notification types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum DeviceListUpdateType {
     /// A device was added to the user's account
-    #[str = "add"]
+    #[wire = "add"]
     Add,
     /// A device was removed from the user's account
-    #[str = "remove"]
+    #[wire = "remove"]
     Remove,
     /// Device information was updated
-    #[str = "update"]
+    #[wire = "update"]
     Update,
 }
 
@@ -278,22 +278,22 @@ pub struct IdentityChange {
 }
 
 /// Type of business status update.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum BusinessUpdateType {
-    #[str = "removed_as_business"]
+    #[wire = "removed_as_business"]
     RemovedAsBusiness,
-    #[str = "verified_name_changed"]
+    #[wire = "verified_name_changed"]
     VerifiedNameChanged,
-    #[str = "profile_updated"]
+    #[wire = "profile_updated"]
     ProfileUpdated,
-    #[str = "products_updated"]
+    #[wire = "products_updated"]
     ProductsUpdated,
-    #[str = "collections_updated"]
+    #[wire = "collections_updated"]
     CollectionsUpdated,
-    #[str = "subscriptions_updated"]
+    #[wire = "subscriptions_updated"]
     SubscriptionsUpdated,
-    #[string_default]
-    #[str = "unknown"]
+    #[wire_default]
+    #[wire = "unknown"]
     Unknown,
 }
 
@@ -522,46 +522,21 @@ pub struct LoggedOut {
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamReplaced;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::WireEnum)]
+#[wire(kind = "int")]
 pub enum TempBanReason {
+    #[wire = 101]
     SentToTooManyPeople,
+    #[wire = 102]
     BlockedByUsers,
+    #[wire = 103]
     CreatedTooManyGroups,
+    #[wire = 104]
     SentTooManySameMessage,
+    #[wire = 106]
     BroadcastList,
+    #[wire_fallback]
     Unknown(i32),
-}
-
-impl Serialize for TempBanReason {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(self.code())
-    }
-}
-
-impl From<i32> for TempBanReason {
-    fn from(code: i32) -> Self {
-        match code {
-            101 => Self::SentToTooManyPeople,
-            102 => Self::BlockedByUsers,
-            103 => Self::CreatedTooManyGroups,
-            104 => Self::SentTooManySameMessage,
-            106 => Self::BroadcastList,
-            _ => Self::Unknown(code),
-        }
-    }
-}
-
-impl TempBanReason {
-    pub fn code(&self) -> i32 {
-        match self {
-            Self::SentToTooManyPeople => 101,
-            Self::BlockedByUsers => 102,
-            Self::CreatedTooManyGroups => 103,
-            Self::SentTooManySameMessage => 104,
-            Self::BroadcastList => 106,
-            Self::Unknown(code) => *code,
-        }
-    }
 }
 
 impl fmt::Display for TempBanReason {
@@ -588,68 +563,42 @@ pub struct TemporaryBan {
     pub expire: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
+#[wire(kind = "int")]
 pub enum ConnectFailureReason {
+    #[wire = 400]
     Generic,
+    #[wire = 401]
     LoggedOut,
+    #[wire = 402]
     TempBanned,
+    #[wire = 403]
     MainDeviceGone,
+    #[wire = 406]
     UnknownLogout,
+    #[wire = 405]
     ClientOutdated,
+    #[wire = 409]
     BadUserAgent,
+    #[wire = 413]
     CatExpired,
+    #[wire = 414]
     CatInvalid,
+    #[wire = 415]
     NotFound,
+    #[wire = 418]
     ClientUnknown,
+    #[wire = 500]
     InternalServerError,
+    #[wire = 501]
     Experimental,
+    #[wire = 503]
     ServiceUnavailable,
+    #[wire_fallback]
     Unknown(i32),
 }
 
-impl From<i32> for ConnectFailureReason {
-    fn from(code: i32) -> Self {
-        match code {
-            400 => Self::Generic,
-            401 => Self::LoggedOut,
-            402 => Self::TempBanned,
-            403 => Self::MainDeviceGone,
-            406 => Self::UnknownLogout,
-            405 => Self::ClientOutdated,
-            409 => Self::BadUserAgent,
-            413 => Self::CatExpired,
-            414 => Self::CatInvalid,
-            415 => Self::NotFound,
-            418 => Self::ClientUnknown,
-            500 => Self::InternalServerError,
-            501 => Self::Experimental,
-            503 => Self::ServiceUnavailable,
-            _ => Self::Unknown(code),
-        }
-    }
-}
-
 impl ConnectFailureReason {
-    pub fn code(&self) -> i32 {
-        match self {
-            Self::Generic => 400,
-            Self::LoggedOut => 401,
-            Self::TempBanned => 402,
-            Self::MainDeviceGone => 403,
-            Self::UnknownLogout => 406,
-            Self::ClientOutdated => 405,
-            Self::BadUserAgent => 409,
-            Self::CatExpired => 413,
-            Self::CatInvalid => 414,
-            Self::NotFound => 415,
-            Self::ClientUnknown => 418,
-            Self::InternalServerError => 500,
-            Self::Experimental => 501,
-            Self::ServiceUnavailable => 503,
-            Self::Unknown(code) => *code,
-        }
-    }
-
     pub fn is_logged_out(&self) -> bool {
         matches!(
             self,
@@ -659,12 +608,6 @@ impl ConnectFailureReason {
 
     pub fn should_reconnect(&self) -> bool {
         matches!(self, Self::ServiceUnavailable | Self::InternalServerError)
-    }
-}
-
-impl Serialize for ConnectFailureReason {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_i32(self.code())
     }
 }
 
@@ -698,20 +641,20 @@ pub struct OfflineSyncCompleted {
     pub count: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum DecryptFailMode {
-    #[str = "show"]
+    #[wire = "show"]
     Show,
-    #[str = "hide"]
+    #[wire = "hide"]
     Hide,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, crate::StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::WireEnum)]
 pub enum UnavailableType {
-    #[string_default]
-    #[str = "unknown"]
+    #[wire_default]
+    #[wire = "unknown"]
     Unknown,
-    #[str = "view_once"]
+    #[wire = "view_once"]
     ViewOnce,
 }
 
