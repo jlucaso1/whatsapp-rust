@@ -3125,7 +3125,7 @@ mod tests {
     fn test_participant_change_response_parse_mixins() {
         let node = NodeBuilder::new("participant")
             .attr("jid", "100000000000001@lid")
-            .attr("phone_number", "5511999999999@s.whatsapp.net")
+            .attr("phone_number", "15555550100@s.whatsapp.net")
             .attr("username", "example_user")
             .build();
 
@@ -3133,7 +3133,7 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(
             result.phone_number.as_ref().map(|j| j.user.as_str()),
-            Some("5511999999999")
+            Some("15555550100")
         );
         assert_eq!(result.username.as_deref(), Some("example_user"));
     }
