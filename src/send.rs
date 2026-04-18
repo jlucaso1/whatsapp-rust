@@ -344,16 +344,25 @@ impl Client {
             }
         }
 
-        // Resolve every user JID to its LID form (LID passes through; PN goes
-        // through the cache-aside lookup; `None` means no mapping — dropped
-        // silently to match WA Web `compactMap(list, toUserLid)`).
+        use std::collections::HashMap;
         let mut resolved: Vec<Option<Jid>> = Vec::with_capacity(recipients.len());
+        let mut lid_to_pn_map: HashMap<wacore_binary::CompactString, Jid> =
+            HashMap::with_capacity(recipients.len() + 1);
         for jid in recipients {
-            resolved.push(self.resolve_recipient_to_lid(jid).await);
+            if let Some(lid_jid) = self.resolve_recipient_to_lid(jid).await {
+                if jid.is_pn() {
+                    lid_to_pn_map.insert(lid_jid.user.clone(), jid.to_non_ad());
+                }
+                resolved.push(Some(lid_jid));
+            } else {
+                resolved.push(None);
+            }
         }
+        lid_to_pn_map.insert(own_lid.user.clone(), own_jid.to_non_ad());
 
         let participants = wacore::send::assemble_status_participants(resolved, &own_lid)?;
-        let mut group_info = GroupInfo::new(participants, AddressingMode::Lid);
+        let mut group_info =
+            GroupInfo::with_lid_to_pn_map(participants, AddressingMode::Lid, lid_to_pn_map);
 
         self.add_recent_message(&to, &request_id, &message).await;
 
@@ -386,7 +395,7 @@ impl Client {
         let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
             None
         } else {
-            self.resolve_skdm_targets(&to_str, &group_info.participants, &own_lid)
+            self.resolve_skdm_targets(&to_str, &group_info, &own_lid)
                 .await
         };
 
@@ -510,15 +519,16 @@ impl Client {
         })
     }
 
-    /// Resolve which devices need SKDM by reading the per-device sender key map.
+    /// Resolve which devices need SKDM. Returns `None` for full distribution
+    /// (no cache data), or `Some(devices)` listing devices that need fresh SKDM.
     ///
-    /// Returns `None` for full distribution (no map data or all unknown), or
-    /// `Some(devices)` listing only the devices that need fresh SKDM.
-    /// Uses `Jid::device_key()` for O(1) lookups — no string allocations in the hot path.
+    /// For LID mode, uses `group_info.phone_jid_for_lid_user` to query devices
+    /// via PN when available (LID usync is unreliable for own JID), then
+    /// converts the result back to LID. Same fallback as `prepare_group_stanza`.
     async fn resolve_skdm_targets(
         &self,
         group_jid: &str,
-        participants: &[Jid],
+        group_info: &wacore::client::context::GroupInfo,
         own_sending_jid: &Jid,
     ) -> Option<Vec<Jid>> {
         use crate::sender_key_device_cache::SenderKeyDeviceMap;
@@ -549,10 +559,33 @@ impl Client {
             return None;
         }
 
-        let jids_to_resolve: Vec<Jid> = participants.iter().map(|jid| jid.to_non_ad()).collect();
+        let is_lid_mode = group_info.addressing_mode == wacore::types::message::AddressingMode::Lid;
+        let jids_to_resolve: Vec<Jid> = group_info
+            .participants
+            .iter()
+            .map(|jid| {
+                let base = jid.to_non_ad();
+                if is_lid_mode
+                    && base.is_lid()
+                    && let Some(pn) = group_info.phone_jid_for_lid_user(&base.user)
+                {
+                    return pn.to_non_ad();
+                }
+                base
+            })
+            .collect();
 
         match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
             Ok(all_devices) => {
+                let all_devices: Vec<Jid> = if is_lid_mode {
+                    all_devices
+                        .into_iter()
+                        .map(|d| group_info.phone_device_jid_to_lid(&d))
+                        .collect()
+                } else {
+                    all_devices
+                };
+
                 let needs_skdm: Vec<Jid> = all_devices
                     .into_iter()
                     .filter(|device| {
@@ -955,7 +988,7 @@ impl Client {
             let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
                 None
             } else {
-                self.resolve_skdm_targets(&to_str, &group_info.participants, &own_sending_jid)
+                self.resolve_skdm_targets(&to_str, &group_info, &own_sending_jid)
                     .await
             };
 
