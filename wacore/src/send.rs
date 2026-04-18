@@ -1425,18 +1425,13 @@ pub fn ensure_status_participants(
 }
 
 /// Dedup a pre-resolved status recipient list by user, then anchor the sender's
-/// own LID. Returns `Err` if no resolvable recipient was provided, matching
-/// WA Web's behaviour where `compactMap(list, toUserLid)` over an empty result
-/// has nothing to send to.
+/// own LID. Errors when no recipient was resolvable (matches WA Web's
+/// `WAWebLidMigrationUtils.toUserLid` + `compactMap` dropping unresolvable
+/// entries; an empty result means "nothing to send to").
 ///
 /// Pure function: no allocations besides the returned `Vec` and (when needed)
-/// pushing the caller's own LID. Dedup is a linear Vec scan — status lists
-/// stay small enough that the HashSet overhead isn't worth it.
-///
-/// Callers (see `Client::send_status_message`) are expected to have already
-/// mapped each PN → LID via `Client::get_lid_pn_entry` (cache-aside),
-/// silently skipping unresolvable entries — that's the `Option` filter in
-/// `Iterator<Item = Option<Jid>>`.
+/// the own-LID push. Dedup is a linear Vec scan — status lists stay small
+/// enough that a HashSet is not worth its allocation.
 pub fn assemble_status_participants<I>(resolved: I, own_lid: &Jid) -> anyhow::Result<Vec<Jid>>
 where
     I: IntoIterator<Item = Option<Jid>>,

@@ -290,22 +290,15 @@ impl Client {
         Ok(result)
     }
 
-    /// Send a status/story update to the given recipients using sender key encryption.
+    /// Send a status/story update using sender-key encryption.
     ///
-    /// Status messages use LID addressing, matching `WAWebEncryptAndSendStatusMsg`
-    /// (`docs/captured-js/WAWeb/Encrypt/AndSendStatusMsg.js:46`), which maps the
-    /// recipient list through `WAWebLidMigrationUtils.toUserLid` and filters
-    /// unresolvable entries via `compactMap`. Concretely:
-    ///
-    /// - recipients already in LID form pass through;
-    /// - PN recipients are converted to LID via the cache-aside lookup in
-    ///   `Client::get_lid_pn_entry` (warms from the backend on a cold cache);
-    /// - recipients we cannot resolve to a LID are skipped silently, not
-    ///   errored, so a single unknown contact does not fail the whole send.
-    ///
-    /// After resolution the list feeds a `GroupInfo` with `AddressingMode::Lid`,
-    /// which drives `prepare_group_stanza` to use `own_lid` for signing and emit
-    /// `addressing_mode="lid"` on the stanza.
+    /// Status uses LID addressing (matches `WAWebEncryptAndSendStatusMsg`):
+    /// LID recipients pass through, PN recipients are resolved to LID via
+    /// `Client::get_lid_pn_entry` (cache-aside), and unresolvable recipients
+    /// are skipped silently. The resulting `GroupInfo` carries
+    /// `AddressingMode::Lid`; `prepare_group_stanza` signs with `own_lid`
+    /// and emits `addressing_mode="lid"` on the stanza. Errors only if no
+    /// recipient could be resolved.
     pub(crate) async fn send_status_message(
         &self,
         message: wa::Message,
