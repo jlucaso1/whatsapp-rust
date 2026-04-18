@@ -180,22 +180,6 @@ impl<'a> Status<'a> {
             .send_status_message(revoke_message, recipients, options)
             .await
     }
-
-    /// React to someone's status update (e.g. the "like" heart in WA Web).
-    ///
-    /// `status_owner` is the JID of the person whose status you're reacting to.
-    /// `server_id` is the server-assigned ID of the status message.
-    /// `reaction` is the emoji code (e.g. "💚" for the default like). Pass empty to remove.
-    pub async fn send_reaction(
-        &self,
-        status_owner: &Jid,
-        server_id: u64,
-        reaction: &str,
-    ) -> Result<(), anyhow::Error> {
-        self.client
-            .send_server_reaction(status_owner, server_id, reaction)
-            .await
-    }
 }
 
 impl Client {

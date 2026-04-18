@@ -67,6 +67,20 @@ impl MessageContext {
         )
     }
 
+    /// Referential [`wa::MessageKey`] for [`wa::message::ReactionMessage::key`].
+    /// Sender-side revokes have a different shape; use [`Client::revoke_message`].
+    pub fn message_key(&self) -> wa::MessageKey {
+        use wacore_binary::JidExt;
+        let needs_participant =
+            self.info.source.is_group || self.info.source.chat.is_status_broadcast();
+        wa::MessageKey {
+            remote_jid: Some(self.info.source.chat.to_string()),
+            from_me: Some(self.info.source.is_from_me),
+            id: Some(self.info.id.clone()),
+            participant: needs_participant.then(|| self.info.source.sender.to_string()),
+        }
+    }
+
     pub async fn edit_message(
         &self,
         original_message_id: impl Into<String>,
