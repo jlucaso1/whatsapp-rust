@@ -67,8 +67,8 @@ impl MessageContext {
         )
     }
 
-    /// [`wa::MessageKey`] referencing this message. `participant` is populated
-    /// for groups and status so reactions/revokes can identify the author.
+    /// Referential [`wa::MessageKey`] for [`wa::message::ReactionMessage::key`].
+    /// Sender-side revokes have a different shape; use [`Client::revoke_message`].
     pub fn message_key(&self) -> wa::MessageKey {
         use wacore_binary::JidExt;
         let needs_participant =
