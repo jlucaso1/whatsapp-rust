@@ -1184,11 +1184,11 @@ async fn handle_group_notification(client: &Arc<Client>, node: Arc<OwnedNodeRef>
             GroupNotificationAction::Add { participants, .. } => {
                 let group_cache = client.get_group_cache().await;
                 if let Some(mut info) = group_cache.get(&notification.group_jid).await {
-                    let new: Vec<_> = participants
-                        .iter()
-                        .map(|p| (p.jid.clone(), p.phone_number.clone()))
-                        .collect();
-                    info.add_participants(&new);
+                    info.add_participants(
+                        participants
+                            .iter()
+                            .map(|p| (&p.jid, p.phone_number.as_ref())),
+                    );
                     group_cache
                         .insert(notification.group_jid.clone(), info)
                         .await;

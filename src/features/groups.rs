@@ -332,16 +332,15 @@ impl<'a> Groups<'a> {
         };
 
         let result = self.client.execute(iq).await?;
-        // phone_number mixin backfills LID↔PN maps for LID-addressed groups.
-        let accepted: Vec<_> = result
-            .iter()
-            .filter(|r| r.is_ok())
-            .map(|r| (r.jid.clone(), r.phone_number.clone()))
-            .collect();
-        if !accepted.is_empty() {
+        if result.iter().any(|r| r.is_ok()) {
             let group_cache = self.client.get_group_cache().await;
             if let Some(mut info) = group_cache.get(jid).await {
-                info.add_participants(&accepted);
+                info.add_participants(
+                    result
+                        .iter()
+                        .filter(|r| r.is_ok())
+                        .map(|r| (&r.jid, r.phone_number.as_ref())),
+                );
                 group_cache.insert(jid.clone(), info).await;
             }
         }
