@@ -16,7 +16,7 @@
 //! </iq>
 //! ```
 
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
@@ -25,14 +25,14 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::{Jid, Server};
 use wacore_binary::{Node, NodeContent, NodeRef};
 
-#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
 pub enum HostType {
-    #[str = "primary"]
-    #[string_default]
+    #[wire = "primary"]
+    #[wire_default]
     Primary,
-    #[str = "fallback"]
+    #[wire = "fallback"]
     Fallback,
-    #[string_fallback]
+    #[wire_fallback]
     Other(String),
 }
 

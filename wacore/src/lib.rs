@@ -4,7 +4,7 @@ pub use wacore_appstate as appstate;
 pub use wacore_noise as noise;
 
 // Re-export derive macros
-pub use wacore_derive::{EmptyNode, ProtocolNode, StringEnum};
+pub use wacore_derive::{EmptyNode, ProtocolNode, WireEnum};
 
 pub mod adv;
 pub mod appstate_sync;

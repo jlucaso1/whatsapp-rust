@@ -1,18 +1,21 @@
-//! Wire-tag invariant tests for enums that derive `StringEnum`.
+//! Wire-tag invariant tests for enums that derive `WireEnum`.
 //!
-//! These enums own the wire string per variant via `#[str = "..."]`. Since
-//! the `StringEnum` derive emits `Serialize`/`Deserialize` that delegate to
-//! `as_str()` / `TryFrom<&str>`, the JSON representation MUST be that exact
-//! string — no PascalCase discriminator, no `rename_all` override.
+//! The derive owns `Serialize`/`Deserialize`, which delegate to `as_str()` /
+//! `TryFrom<&str>` — so the JSON representation MUST be exactly what the
+//! `#[wire = "..."]` attribute declares. No PascalCase discriminator, no
+//! serde `rename_all`, no hand-written impls.
 //!
-//! The cases below cover every enum that used to derive `Serialize` directly
-//! alongside `StringEnum` (and silently produced PascalCase JSON for variants
-//! whose `#[str = "..."]` did not match the variant name).
+//! Cases cover unit-string mode (with and without `#[wire_fallback]`),
+//! int mode (see `TempBanReason` / `ConnectFailureReason` serialization as
+//! i32), and the sanity check on `EditAttribute` whose wire strings diverge
+//! from variant names. Tagged mode is covered end-to-end inside
+//! `stanza::groups::tests`.
 
 use wacore::stanza::business::BusinessNotificationType;
 use wacore::stanza::devices::DeviceNotificationType;
 use wacore::types::events::{
-    BusinessUpdateType, DecryptFailMode, DeviceListUpdateType, UnavailableType,
+    BusinessUpdateType, ConnectFailureReason, DecryptFailMode, DeviceListUpdateType, TempBanReason,
+    UnavailableType,
 };
 use wacore::types::lid_pn::LearningSource;
 use wacore::types::message::{AddressingMode, EditAttribute, MessageCategory};
@@ -161,4 +164,37 @@ fn message_category_fallback_serializes_literal() {
         serde_json::to_value(MessageCategory::Other("custom".into())).unwrap(),
         "custom"
     );
+}
+
+#[test]
+fn temp_ban_reason_serializes_as_int_and_roundtrips() {
+    for (value, expected) in [
+        (TempBanReason::SentToTooManyPeople, 101),
+        (TempBanReason::BlockedByUsers, 102),
+        (TempBanReason::CreatedTooManyGroups, 103),
+        (TempBanReason::SentTooManySameMessage, 104),
+        (TempBanReason::BroadcastList, 106),
+        (TempBanReason::Unknown(999), 999),
+    ] {
+        let json = serde_json::to_value(&value).unwrap();
+        assert_eq!(json, expected);
+        let back: TempBanReason = serde_json::from_value(json).unwrap();
+        assert_eq!(back, value);
+    }
+}
+
+#[test]
+fn connect_failure_reason_serializes_as_int_and_roundtrips() {
+    for (value, expected) in [
+        (ConnectFailureReason::Generic, 400),
+        (ConnectFailureReason::LoggedOut, 401),
+        (ConnectFailureReason::TempBanned, 402),
+        (ConnectFailureReason::ServiceUnavailable, 503),
+        (ConnectFailureReason::Unknown(999), 999),
+    ] {
+        let json = serde_json::to_value(value).unwrap();
+        assert_eq!(json, expected);
+        let back: ConnectFailureReason = serde_json::from_value(json).unwrap();
+        assert_eq!(back, value);
+    }
 }

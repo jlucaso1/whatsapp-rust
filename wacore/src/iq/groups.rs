@@ -1,4 +1,4 @@
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::iq::node::{collect_children, required_attr, required_child};
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
@@ -38,40 +38,40 @@ pub const BATCH_GROUP_INFO_LIMIT: usize = 10_000;
 pub const BATCH_PROFILE_PICTURES_LIMIT: usize = 1_000;
 
 /// Member link mode for group invite links.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum MemberLinkMode {
-    #[str = "admin_link"]
+    #[wire = "admin_link"]
     AdminLink,
-    #[str = "all_member_link"]
+    #[wire = "all_member_link"]
     AllMemberLink,
 }
 
 /// Member add mode for who can add participants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum MemberAddMode {
-    #[str = "admin_add"]
+    #[wire = "admin_add"]
     AdminAdd,
-    #[str = "all_member_add"]
+    #[wire = "all_member_add"]
     AllMemberAdd,
 }
 
 /// Membership approval mode for join requests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum MembershipApprovalMode {
-    #[string_default]
-    #[str = "off"]
+    #[wire_default]
+    #[wire = "off"]
     Off,
-    #[str = "on"]
+    #[wire = "on"]
     On,
 }
 
 /// Who can share message history with new members.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum MemberShareHistoryMode {
-    #[string_default]
-    #[str = "admin_share"]
+    #[wire_default]
+    #[wire = "admin_share"]
     AdminShare,
-    #[str = "all_member_share"]
+    #[wire = "all_member_share"]
     AllMemberShare,
 }
 
@@ -153,22 +153,22 @@ define_error_code_enum! {
 }
 
 /// Query request type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum GroupQueryRequestType {
-    #[string_default]
-    #[str = "interactive"]
+    #[wire_default]
+    #[wire = "interactive"]
     Interactive,
 }
 
 /// Participant type (admin level).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum ParticipantType {
-    #[string_default]
-    #[str = "member"]
+    #[wire_default]
+    #[wire = "member"]
     Member,
-    #[str = "admin"]
+    #[wire = "admin"]
     Admin,
-    #[str = "superadmin"]
+    #[wire = "superadmin"]
     SuperAdmin,
 }
 

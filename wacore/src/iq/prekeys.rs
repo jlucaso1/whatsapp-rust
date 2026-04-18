@@ -118,13 +118,13 @@ impl IqSpec for PreKeyCountSpec {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, crate::StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::WireEnum)]
 pub enum PreKeyFetchReason {
-    #[str = "identity"]
+    #[wire = "identity"]
     Identity,
-    #[str = "retry"]
+    #[wire = "retry"]
     Retry,
-    #[string_fallback]
+    #[wire_fallback]
     Other(String),
 }
 

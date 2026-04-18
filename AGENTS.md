@@ -31,7 +31,7 @@ cargo test -p e2e-tests          # requires mock server running
 - **Protocol**: Cross-reference **whatsmeow**, **Baileys**, and captured WhatsApp Web JS (`docs/captured-js/`) to verify implementations.
 - **IQ Requests**: Use `client.execute(Spec::new(&jid)).await?` pattern. IqSpec constructors take `&Jid` not `Jid`.
 - **New features**: Expose via `src/features/mod.rs`, re-export in `src/lib.rs`.
-- **Wire-string enums**: Protocol enums carry their wire string in `#[derive(StringEnum)]` + `#[str = "..."]` — do NOT also derive `serde::Serialize`/`Deserialize` (the derive emits those, delegating to `as_str()` / `TryFrom<&str>`). Single source of truth per enum. For internally-tagged enums with payload variants (e.g. `GroupNotificationAction`), hand-write `impl Serialize` so the JSON discriminator reads from the same `tag_name()` method the parser dispatches on; cover it with a `serialize_discriminator_matches_wire_tag` test.
+- **Wire-tagged enums**: Every protocol enum uses `#[derive(WireEnum)]`. The `#[wire = "..."]` (or `#[wire = NUM]` for int mode) attribute is the SINGLE source of truth for each variant's wire value. Do NOT also derive `serde::Serialize`/`Deserialize` or add `#[serde(rename_all)]` — the derive owns both. Three modes: unit-string (default), tagged-with-payload (`#[wire(tag = "type")]` on the enum, optional `#[wire_alias = "..."]` and `#[wire(skip)]` on fields, `#[wire_fallback]` for catch-all), and int (`#[wire(kind = "int")]`). In tagged mode the derive auto-generates a sibling `<Name>Tag` enum; parsers must dispatch via `<Name>Tag::try_from(node.tag.as_ref())` instead of matching string literals, so renaming a wire tag stays a single-attribute change.
 
 ## Detailed Docs
 

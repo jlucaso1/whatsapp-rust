@@ -1,4 +1,4 @@
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use wacore_binary::builder::NodeBuilder;
@@ -7,17 +7,17 @@ use wacore_binary::{Node, NodeContent, NodeRef};
 
 pub const DIRTY_NAMESPACE: &str = "urn:xmpp:whatsapp:dirty";
 
-#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
 pub enum DirtyType {
-    #[str = "account_sync"]
+    #[wire = "account_sync"]
     AccountSync,
-    #[str = "groups"]
+    #[wire = "groups"]
     Groups,
-    #[str = "syncd_app_state"]
+    #[wire = "syncd_app_state"]
     SyncdAppState,
-    #[str = "newsletter_metadata"]
+    #[wire = "newsletter_metadata"]
     NewsletterMetadata,
-    #[string_fallback]
+    #[wire_fallback]
     Other(String),
 }
 

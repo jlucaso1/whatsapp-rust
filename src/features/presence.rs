@@ -1,7 +1,7 @@
 use crate::client::Client;
 use log::{debug, warn};
 use thiserror::Error;
-use wacore::StringEnum;
+use wacore::WireEnum;
 use wacore::iq::tctoken::build_tc_token_node;
 use wacore_binary::Jid;
 use wacore_binary::Node;
@@ -16,12 +16,12 @@ pub enum PresenceError {
 }
 
 /// Presence status for online/offline state.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 #[non_exhaustive]
 pub enum PresenceStatus {
-    #[str = "available"]
+    #[wire = "available"]
     Available,
-    #[str = "unavailable"]
+    #[wire = "unavailable"]
     Unavailable,
 }
 

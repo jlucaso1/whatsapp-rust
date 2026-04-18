@@ -19,7 +19,7 @@
 //! </chatstate>
 //! ```
 
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::protocol::ProtocolNode;
 use anyhow::Result;
 use thiserror::Error;
@@ -54,17 +54,17 @@ pub enum ChatstateParseError {
 /// - `typing` = ACTIVE_CHAT_STATE_TYPE.TYPING
 /// - `recording_audio` = ACTIVE_CHAT_STATE_TYPE.RECORDING_AUDIO
 /// - `idle` = IDLE_CHAT_STATE_TYPE.IDLE
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum ReceivedChatState {
     /// User is typing text
-    #[str = "typing"]
+    #[wire = "typing"]
     Typing,
     /// User is recording a voice message
-    #[str = "recording_audio"]
+    #[wire = "recording_audio"]
     RecordingAudio,
     /// User stopped typing/recording
-    #[str = "idle"]
-    #[string_default]
+    #[wire = "idle"]
+    #[wire_default]
     Idle,
 }
 

@@ -4,7 +4,7 @@
 //! Uses MEX (GraphQL) for metadata/management and standard IQ for message operations.
 //! Newsletter messages are plaintext (no Signal E2E encryption).
 
-use wacore::StringEnum;
+use wacore::WireEnum;
 
 use crate::client::Client;
 use crate::features::mex::{MexError, MexRequest};
@@ -19,24 +19,24 @@ use waproto::whatsapp as wa;
 
 // Types
 
-#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
 #[non_exhaustive]
 pub enum NewsletterMessageType {
-    #[str = "text"]
+    #[wire = "text"]
     Text,
-    #[str = "media"]
+    #[wire = "media"]
     Media,
-    #[str = "reaction"]
+    #[wire = "reaction"]
     Reaction,
-    #[str = "revoke"]
+    #[wire = "revoke"]
     Revoke,
-    #[str = "poll_creation"]
+    #[wire = "poll_creation"]
     PollCreation,
-    #[str = "poll_vote"]
+    #[wire = "poll_vote"]
     PollVote,
-    #[str = "edit"]
+    #[wire = "edit"]
     Edit,
-    #[string_fallback]
+    #[wire_fallback]
     Other(String),
 }
 

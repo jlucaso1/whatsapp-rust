@@ -41,11 +41,11 @@ pub struct ProfilePicture {
 }
 
 /// Profile picture type (preview thumbnail or full-size).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum ProfilePictureType {
-    #[str = "preview"]
+    #[wire = "preview"]
     Preview,
-    #[str = "image"]
+    #[wire = "image"]
     Full,
 }
 
