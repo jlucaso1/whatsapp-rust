@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1776469009096,
+  "lastUpdate": 1776475220189,
   "repoUrl": "https://github.com/oxidezap/whatsapp-rust",
   "entries": {
     "whatsapp-rust integration benchmarks": [
@@ -1025,6 +1025,120 @@ window.BENCHMARK_DATA = {
           {
             "name": "integration::reconnect::wall_ms",
             "value": 4916,
+            "unit": "milliseconds"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "55464917+jlucaso1@users.noreply.github.com",
+            "name": "João Lucas",
+            "username": "jlucaso1"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "0c52f5999849deebdc8dd794a274f3c804348295",
+          "message": "fix: status reactions via send_message with correct E2EE wire format (#563)",
+          "timestamp": "2026-04-17T22:18:20-03:00",
+          "tree_id": "121f4a20a2d3162716036bb54c4eac3ca9a475c6",
+          "url": "https://github.com/oxidezap/whatsapp-rust/commit/0c52f5999849deebdc8dd794a274f3c804348295"
+        },
+        "date": 1776475219805,
+        "tool": "customSmallerIsBetter",
+        "benches": [
+          {
+            "name": "integration::connect_to_ready::alloc_count",
+            "value": 9495,
+            "unit": "allocations"
+          },
+          {
+            "name": "integration::connect_to_ready::alloc_bytes",
+            "value": 3265197,
+            "unit": "bytes"
+          },
+          {
+            "name": "integration::connect_to_ready::wall_ms",
+            "value": 390,
+            "unit": "milliseconds"
+          },
+          {
+            "name": "integration::send_message::alloc_count",
+            "value": 230,
+            "unit": "allocations"
+          },
+          {
+            "name": "integration::send_message::alloc_bytes",
+            "value": 38052,
+            "unit": "bytes"
+          },
+          {
+            "name": "integration::send_message::wall_ms",
+            "value": 0,
+            "unit": "milliseconds"
+          },
+          {
+            "name": "integration::send_message_x20_amortized::alloc_count",
+            "value": 390,
+            "unit": "allocations"
+          },
+          {
+            "name": "integration::send_message_x20_amortized::alloc_bytes",
+            "value": 91683,
+            "unit": "bytes"
+          },
+          {
+            "name": "integration::send_message_x20_amortized::wall_ms",
+            "value": 0,
+            "unit": "milliseconds"
+          },
+          {
+            "name": "integration::send_and_receive_message::alloc_count",
+            "value": 386,
+            "unit": "allocations"
+          },
+          {
+            "name": "integration::send_and_receive_message::alloc_bytes",
+            "value": 97065,
+            "unit": "bytes"
+          },
+          {
+            "name": "integration::send_and_receive_message::wall_ms",
+            "value": 0,
+            "unit": "milliseconds"
+          },
+          {
+            "name": "integration::send_and_receive_x20_amortized::alloc_count",
+            "value": 426,
+            "unit": "allocations"
+          },
+          {
+            "name": "integration::send_and_receive_x20_amortized::alloc_bytes",
+            "value": 101638,
+            "unit": "bytes"
+          },
+          {
+            "name": "integration::send_and_receive_x20_amortized::wall_ms",
+            "value": 18,
+            "unit": "milliseconds"
+          },
+          {
+            "name": "integration::reconnect::alloc_count",
+            "value": 1478,
+            "unit": "allocations"
+          },
+          {
+            "name": "integration::reconnect::alloc_bytes",
+            "value": 504374,
+            "unit": "bytes"
+          },
+          {
+            "name": "integration::reconnect::wall_ms",
+            "value": 4877,
             "unit": "milliseconds"
           }
         ]
