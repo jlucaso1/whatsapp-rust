@@ -842,12 +842,26 @@ impl Client {
         edit: Option<crate::types::message::EditAttribute>,
         extra_stanza_nodes: Vec<Node>,
     ) -> Result<(), anyhow::Error> {
-        // Status broadcasts must go through send_status_message() which provides recipients
-        if to.is_status_broadcast() {
-            return Err(anyhow!(
-                "Use send_status_message() or client.status() API for status@broadcast"
-            ));
-        }
+        // status@broadcast reactions fan out pairwise to the author's devices;
+        // status posts keep going through send_status_message (owns recipients).
+        let (to, is_status_addon) = if to.is_status_broadcast() {
+            let author = message
+                .reaction_message
+                .as_ref()
+                .and_then(|rm| rm.key.as_ref())
+                .and_then(|k| k.participant.as_ref())
+                .and_then(|p| p.parse::<Jid>().ok())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "send_message to status@broadcast requires \
+                         reaction_message.key.participant = status author. \
+                         Use client.status() for posting new statuses."
+                    )
+                })?;
+            (author, true)
+        } else {
+            (to, false)
+        };
 
         // Generate request ID early (doesn't need lock)
         let request_id = match request_id_override {
@@ -1030,7 +1044,14 @@ impl Client {
             // Per-device locking to match decrypt path (message.rs:684),
             // preventing ratchet desync on concurrent send/receive.
 
-            self.add_recent_message(&to, &request_id, message).await;
+            // Status reaction retries arrive with `from=status@broadcast`;
+            // cache under the broadcast chat so take_recent_message hits.
+            if is_status_addon {
+                self.add_recent_message(&Jid::status_broadcast(), &request_id, message)
+                    .await;
+            } else {
+                self.add_recent_message(&to, &request_id, message).await;
+            }
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             let own_jid = device_snapshot
@@ -1121,7 +1142,9 @@ impl Client {
             self.ensure_e2e_sessions(&all_dm_jids).await?;
 
             let mut extra_stanza_nodes = extra_stanza_nodes;
-            if !to.is_group() && !to.is_newsletter() {
+            // tctoken applies to 1:1 chats; status reactions share the fanout
+            // path but WA Web does not attach tctokens to them.
+            if !to.is_group() && !to.is_newsletter() && !is_status_addon {
                 let (should_issue_after_send, cached_token_key) = self
                     .maybe_include_tc_token(&to, &mut extra_stanza_nodes)
                     .await;
@@ -1174,6 +1197,13 @@ impl Client {
         } else {
             None
         };
+
+        // Server expects the outer `to` as the broadcast chat even though
+        // encryption targeted the author's devices (mirrors incoming `from`).
+        let mut stanza_to_send = stanza_to_send;
+        if is_status_addon {
+            stanza_to_send.attrs.insert("to", Jid::status_broadcast());
+        }
 
         if let Err(e) = self.send_node(stanza_to_send).await {
             if let Some((_, _, ref msg_id)) = ack {
@@ -1645,6 +1675,57 @@ impl Client {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[tokio::test]
+    async fn send_message_to_status_without_reaction_errors() {
+        let client = crate::test_utils::create_test_client().await;
+        let to = Jid::status_broadcast();
+        let err = client
+            .send_message(
+                to,
+                wa::Message {
+                    conversation: Some("hi".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("status@broadcast without reaction must error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("reaction_message") || msg.contains("status"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_message_to_status_reaction_without_participant_errors() {
+        let client = crate::test_utils::create_test_client().await;
+        let to = Jid::status_broadcast();
+        let err = client
+            .send_message(
+                to,
+                wa::Message {
+                    reaction_message: Some(wa::message::ReactionMessage {
+                        key: Some(wa::MessageKey {
+                            remote_jid: Some("status@broadcast".into()),
+                            from_me: Some(false),
+                            id: Some("ORIGID".into()),
+                            participant: None,
+                        }),
+                        text: Some("❤️".into()),
+                        sender_timestamp_ms: Some(1),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("reaction without key.participant must error");
+        assert!(
+            format!("{err}").contains("participant"),
+            "expected participant error, got: {err}"
+        );
+    }
 
     #[test]
     fn test_revoke_type_default_is_sender() {
