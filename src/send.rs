@@ -399,19 +399,18 @@ impl Client {
                 .await
         };
 
-        // WhatsApp Web includes <meta status_setting="..."/> on non-revoke status messages.
-        // Revoke messages omit this node.
-        let is_revoke = message.protocol_message.as_ref().is_some_and(|pm| {
-            pm.r#type == Some(wa::message::protocol_message::Type::Revoke as i32)
-        });
-        let extra_stanza_nodes = if is_revoke {
-            vec![]
-        } else {
+        // `<meta status_setting>` describes the POSTER's privacy on their own
+        // status. Reactions go through WA Web's addon path and never visit
+        // `WAWebEncryptAndSendStatusMsg`; attaching the meta on a reaction
+        // gets the stanza NACK'd with 479 (SmaxInvalid). Revokes also skip it.
+        let extra_stanza_nodes = if wacore::send::status_carries_privacy_meta(&message) {
             vec![
                 NodeBuilder::new("meta")
                     .attr("status_setting", options.privacy.as_str())
                     .build(),
             ]
+        } else {
+            vec![]
         };
 
         let prepared = match wacore::send::prepare_group_stanza(
