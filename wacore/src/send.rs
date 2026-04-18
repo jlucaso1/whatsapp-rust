@@ -1428,12 +1428,17 @@ pub fn ensure_status_participants(
 /// `<meta status_setting="..."/>` child. Only applies to actual status posts:
 /// reactions (handled server-side as addons) and revokes must omit it, per
 /// `WAWebEncryptAndSendStatusMsg` vs `WAWebSendReactionMsgAction`.
+///
+/// Descends `ephemeral_message` / `device_sent_message` / view-once wrappers
+/// before classifying (same as `stanza_type_from_message`), so a reaction
+/// nested inside a wrapper cannot slip past and re-trigger 479.
 pub fn status_carries_privacy_meta(message: &wa::Message) -> bool {
-    let is_revoke = message
+    let msg = unwrap_message(message);
+    let is_revoke = msg
         .protocol_message
         .as_ref()
         .is_some_and(|pm| pm.r#type == Some(wa::message::protocol_message::Type::Revoke as i32));
-    let is_reaction = message.reaction_message.is_some() || message.enc_reaction_message.is_some();
+    let is_reaction = msg.reaction_message.is_some() || msg.enc_reaction_message.is_some();
     !is_revoke && !is_reaction
 }
 
@@ -1650,6 +1655,41 @@ mod tests {
                 ..Default::default()
             };
             assert!(status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn false_for_reaction_inside_ephemeral_wrapper() {
+            let inner = wa::Message {
+                reaction_message: Some(wa::message::ReactionMessage::default()),
+                ..Default::default()
+            };
+            let msg = wa::Message {
+                ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
+                    message: Some(Box::new(inner)),
+                })),
+                ..Default::default()
+            };
+            assert!(!status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn false_for_revoke_inside_device_sent_wrapper() {
+            let inner = wa::Message {
+                protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                    r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            let msg = wa::Message {
+                device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                    destination_jid: Some(String::new()),
+                    message: Some(Box::new(inner)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(!status_carries_privacy_meta(&msg));
         }
     }
 
