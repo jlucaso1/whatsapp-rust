@@ -553,7 +553,7 @@ mod tests {
     async fn setup_lid_pn(client: &Arc<Client>, lid: &str, pn: &str) {
         use crate::lid_pn_cache::LidPnEntry;
         let entry = LidPnEntry::new(lid.to_string(), pn.to_string(), LearningSource::Usync);
-        client.lid_pn_cache.add(entry).await;
+        client.lid_pn_cache.add(&entry).await;
     }
 
     async fn setup_device_record(client: &Arc<Client>, user: &str, device_ids: &[u32]) {

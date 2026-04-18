@@ -2487,7 +2487,7 @@ mod tests {
         // Now add a LID mapping (simulates mapping arriving between send and retry)
         client
             .lid_pn_cache
-            .add(wacore::types::lid_pn::LidPnEntry {
+            .add(&wacore::types::lid_pn::LidPnEntry {
                 lid: lid_jid.user.to_string(),
                 phone_number: pn_jid.user.to_string(),
                 created_at: 0,
@@ -2536,7 +2536,7 @@ mod tests {
 
         client
             .lid_pn_cache
-            .add(wacore::types::lid_pn::LidPnEntry {
+            .add(&wacore::types::lid_pn::LidPnEntry {
                 lid: lid_jid.user.to_string(),
                 phone_number: pn_jid.user.to_string(),
                 created_at: 0,
@@ -2604,7 +2604,7 @@ mod tests {
         // Add LID mapping
         client
             .lid_pn_cache
-            .add(wacore::types::lid_pn::LidPnEntry {
+            .add(&wacore::types::lid_pn::LidPnEntry {
                 lid: lid_jid.user.to_string(),
                 phone_number: pn_jid.user.to_string(),
                 created_at: 0,
@@ -2702,7 +2702,7 @@ mod tests {
         // Add mapping but don't store any message
         client
             .lid_pn_cache
-            .add(wacore::types::lid_pn::LidPnEntry {
+            .add(&wacore::types::lid_pn::LidPnEntry {
                 lid: lid_jid.user.to_string(),
                 phone_number: pn_jid.user.to_string(),
                 created_at: 0,
