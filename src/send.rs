@@ -563,14 +563,13 @@ impl Client {
             .participants
             .iter()
             .map(|jid| {
-                let base = jid.to_non_ad();
                 if is_lid_mode
-                    && base.is_lid()
-                    && let Some(pn) = group_info.phone_jid_for_lid_user(&base.user)
+                    && jid.is_lid()
+                    && let Some(pn) = group_info.phone_jid_for_lid_user(&jid.user)
                 {
                     return pn.to_non_ad();
                 }
-                base
+                jid.to_non_ad()
             })
             .collect();
 

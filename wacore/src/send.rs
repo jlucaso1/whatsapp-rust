@@ -1465,9 +1465,8 @@ where
     if out.is_empty() {
         anyhow::bail!("No valid status recipients after LID resolution");
     }
-    let own_base = own_lid.to_non_ad();
-    if !out.iter().any(|r| r.user == own_base.user) {
-        out.push(own_base);
+    if !out.iter().any(|r| r.user == own_lid.user) {
+        out.push(own_lid.to_non_ad());
     }
     Ok(out)
 }
