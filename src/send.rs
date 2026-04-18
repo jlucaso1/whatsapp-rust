@@ -328,25 +328,32 @@ impl Client {
             .pn
             .take()
             .ok_or(crate::client::ClientError::NotLoggedIn)?;
-        let own_lid = device_snapshot
-            .lid
-            .take()
-            .unwrap_or_else(|| own_jid.clone());
+        // Status is LID-addressed (matches WA Web post-LID-migration). Without
+        // a real device LID we can't sign or fan out correctly; refuse rather
+        // than silently emit `addressing_mode="lid"` with a PN sender.
+        let own_lid = device_snapshot.lid.take().ok_or_else(|| {
+            anyhow!(
+                "Cannot send status: device has no LID yet. Finish pairing / LID \
+                 migration before posting status."
+            )
+        })?;
 
-        // Reject non-user JIDs up-front (cheap guard; a programming bug, not
-        // something to skip silently).
+        // Fail fast for any JID that isn't a user (PN or LID). Mirrors WA
+        // Web's `asUserWidOrThrow` inside `toUserLid`: non-user inputs are a
+        // programming bug, not something to silently drop during resolution.
         for jid in recipients {
-            if jid.is_group() || jid.is_status_broadcast() || jid.is_broadcast_list() {
+            if !(jid.is_pn() || jid.is_lid()) {
                 return Err(anyhow!(
-                    "Invalid status recipient {}: must be a user JID, not a group/broadcast",
+                    "Invalid status recipient {}: must be a user JID (PN or LID), \
+                     not a group/broadcast/newsletter/hosted/etc.",
                     jid
                 ));
             }
         }
 
-        // Resolve every recipient to its LID form (LID passes through; PN goes
-        // through the cache-aside lookup; everything else is skipped silently
-        // — matches WA Web `compactMap(list, toUserLid)`).
+        // Resolve every user JID to its LID form (LID passes through; PN goes
+        // through the cache-aside lookup; `None` means no mapping — dropped
+        // silently to match WA Web `compactMap(list, toUserLid)`).
         let mut resolved: Vec<Option<Jid>> = Vec::with_capacity(recipients.len());
         for jid in recipients {
             resolved.push(self.resolve_recipient_to_lid(jid).await);
