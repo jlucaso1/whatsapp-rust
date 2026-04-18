@@ -3614,7 +3614,7 @@ mod tests {
             phone.to_string(),
             crate::lid_pn_cache::LearningSource::PeerLidMessage,
         );
-        client.lid_pn_cache.add(entry).await;
+        client.lid_pn_cache.add(&entry).await;
 
         // Verify the cache has the mapping
         let cached_lid = client.lid_pn_cache.get_current_lid(phone).await;
@@ -3753,7 +3753,7 @@ mod tests {
             phone.to_string(),
             crate::lid_pn_cache::LearningSource::PeerLidMessage,
         );
-        client.lid_pn_cache.add(entry).await;
+        client.lid_pn_cache.add(&entry).await;
 
         // Parse a PN-addressed DM message WITHOUT sender_lid attribute
         let dm_node_without_sender_lid = wacore_binary::builder::NodeBuilder::new("message")

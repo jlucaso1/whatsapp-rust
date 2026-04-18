@@ -11,10 +11,21 @@
 
 use anyhow::Result;
 use log::debug;
+use wacore::store::traits::LidPnMappingEntry;
 use wacore_binary::Jid;
 
 use super::Client;
 use crate::lid_pn_cache::{LearningSource, LidPnEntry};
+
+/// Backend `LidPnMappingEntry` → in-memory `LidPnEntry`.
+fn mapping_to_entry(m: LidPnMappingEntry) -> LidPnEntry {
+    LidPnEntry::with_timestamp(
+        m.lid,
+        m.phone_number,
+        m.created_at,
+        LearningSource::parse(&m.learning_source),
+    )
+}
 
 impl Client {
     /// Warm up the LID-PN cache from persistent storage.
@@ -29,19 +40,9 @@ impl Client {
             return Ok(());
         }
 
-        let cache_entries: Vec<LidPnEntry> = entries
-            .into_iter()
-            .map(|e| {
-                LidPnEntry::with_timestamp(
-                    e.lid,
-                    e.phone_number,
-                    e.created_at,
-                    LearningSource::parse(&e.learning_source),
-                )
-            })
-            .collect();
-
-        self.lid_pn_cache.warm_up(cache_entries).await;
+        self.lid_pn_cache
+            .warm_up(entries.into_iter().map(mapping_to_entry))
+            .await;
         Ok(())
     }
 
@@ -66,7 +67,7 @@ impl Client {
 
         // Add to in-memory cache
         let entry = LidPnEntry::new(lid.to_string(), phone_number.to_string(), source);
-        self.lid_pn_cache.add(entry.clone()).await;
+        self.lid_pn_cache.add(&entry).await;
 
         // Persist to storage
         let backend = self.persistence_manager.backend();
@@ -273,43 +274,36 @@ impl Client {
     /// Look up the LID↔phone mapping for a JID. Cache-aside: falls back to
     /// the backend on cache miss so mappings survive cache eviction and any
     /// backend implementation gets the fallback without warm-up.
-    pub async fn get_lid_pn_entry(&self, jid: &Jid) -> Option<LidPnEntry> {
+    ///
+    /// Backend errors are propagated — callers can distinguish "no mapping"
+    /// (`Ok(None)`) from "lookup failed" (`Err(_)`).
+    pub async fn get_lid_pn_entry(&self, jid: &Jid) -> Result<Option<LidPnEntry>> {
         let (hit, is_lid) = if jid.is_lid() {
             (self.lid_pn_cache.get_entry_by_lid(&jid.user).await, true)
         } else if jid.is_pn() {
             (self.lid_pn_cache.get_entry_by_phone(&jid.user).await, false)
         } else {
-            return None;
+            return Ok(None);
         };
 
         if let Some(entry) = hit {
-            return Some(entry);
+            return Ok(Some(entry));
         }
 
         let backend = self.persistence_manager.backend();
-        let result = if is_lid {
-            backend.get_lid_mapping(&jid.user).await
+        let mapping = if is_lid {
+            backend.get_lid_mapping(&jid.user).await?
         } else {
-            backend.get_pn_mapping(&jid.user).await
+            backend.get_pn_mapping(&jid.user).await?
         };
 
-        let mapping = match result {
-            Ok(Some(m)) => m,
-            Ok(None) => return None,
-            Err(e) => {
-                debug!("LID-PN backend lookup failed for {jid}: {e:?}");
-                return None;
-            }
+        let Some(mapping) = mapping else {
+            return Ok(None);
         };
 
-        let entry = LidPnEntry::with_timestamp(
-            mapping.lid,
-            mapping.phone_number,
-            mapping.created_at,
-            LearningSource::parse(&mapping.learning_source),
-        );
-        self.lid_pn_cache.add(entry.clone()).await;
-        Some(entry)
+        let entry = mapping_to_entry(mapping);
+        self.lid_pn_cache.add(&entry).await;
+        Ok(Some(entry))
     }
 }
 
@@ -368,14 +362,24 @@ mod tests {
         let pn = "55999999999";
         let lid = "100000012345678";
 
-        assert!(client.get_lid_pn_entry(&Jid::pn(pn)).await.is_none());
+        assert!(
+            client
+                .get_lid_pn_entry(&Jid::pn(pn))
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         client
             .add_lid_pn_mapping(lid, pn, LearningSource::Usync)
             .await
             .unwrap();
 
-        let entry = client.get_lid_pn_entry(&Jid::pn(pn)).await.unwrap();
+        let entry = client
+            .get_lid_pn_entry(&Jid::pn(pn))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(entry.lid, lid);
         assert_eq!(entry.phone_number, pn);
     }
@@ -386,14 +390,24 @@ mod tests {
         let pn = "55999999999";
         let lid = "100000012345678";
 
-        assert!(client.get_lid_pn_entry(&Jid::lid(lid)).await.is_none());
+        assert!(
+            client
+                .get_lid_pn_entry(&Jid::lid(lid))
+                .await
+                .unwrap()
+                .is_none()
+        );
 
         client
             .add_lid_pn_mapping(lid, pn, LearningSource::Usync)
             .await
             .unwrap();
 
-        let entry = client.get_lid_pn_entry(&Jid::lid(lid)).await.unwrap();
+        let entry = client
+            .get_lid_pn_entry(&Jid::lid(lid))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(entry.lid, lid);
         assert_eq!(entry.phone_number, pn);
     }
@@ -421,14 +435,20 @@ mod tests {
             .unwrap();
 
         // Cache was never warmed from this backend write → cache miss path.
-        let entry = client.get_lid_pn_entry(&Jid::lid(lid)).await.unwrap();
+        let entry = client
+            .get_lid_pn_entry(&Jid::lid(lid))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(entry.lid, lid);
         assert_eq!(entry.phone_number, pn);
 
-        // Subsequent lookup should now be served from cache (no backend call
-        // needed, but we can't assert that without a mock backend — the
-        // functional round-trip is sufficient).
-        let entry = client.get_lid_pn_entry(&Jid::pn(pn)).await.unwrap();
+        // Subsequent lookup served from cache.
+        let entry = client
+            .get_lid_pn_entry(&Jid::pn(pn))
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(entry.lid, lid);
     }
 }

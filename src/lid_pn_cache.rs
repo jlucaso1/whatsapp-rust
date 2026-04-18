@@ -116,7 +116,7 @@ impl LidPnCache {
     /// backends (e.g., Redis), concurrent `add()` calls for the same phone
     /// number can race. This is acceptable because the cache is best-effort
     /// and backed by persistent storage for correctness.
-    pub async fn add(&self, entry: LidPnEntry) {
+    pub async fn add(&self, entry: &LidPnEntry) {
         // Check if PN map needs update first
         let should_update_pn = match self.pn_to_entry.get(entry.phone_number.as_str()).await {
             Some(existing) => existing.created_at <= entry.created_at,
@@ -131,7 +131,7 @@ impl LidPnCache {
         // Update PN -> Entry map (only if newer or equal timestamp)
         if should_update_pn {
             self.pn_to_entry
-                .insert(entry.phone_number.clone(), entry)
+                .insert(entry.phone_number.clone(), entry.clone())
                 .await;
         }
     }
@@ -145,7 +145,7 @@ impl LidPnCache {
         let mut count = 0;
 
         for entry in entries {
-            self.add(entry).await;
+            self.add(&entry).await;
             count += 1;
         }
 
@@ -196,7 +196,7 @@ mod tests {
             "559980000001".to_string(),
             LearningSource::Usync,
         );
-        cache.add(entry).await;
+        cache.add(&entry).await;
 
         // Should be retrievable both ways
         assert_eq!(
@@ -220,7 +220,7 @@ mod tests {
             1000,
             LearningSource::Other,
         );
-        cache.add(old_entry).await;
+        cache.add(&old_entry).await;
 
         assert_eq!(
             cache.get_current_lid("559980000001").await,
@@ -234,7 +234,7 @@ mod tests {
             2000,
             LearningSource::Usync,
         );
-        cache.add(new_entry).await;
+        cache.add(&new_entry).await;
 
         // Should return the newer LID for PN lookup
         assert_eq!(
@@ -264,7 +264,7 @@ mod tests {
             2000,
             LearningSource::Usync,
         );
-        cache.add(new_entry).await;
+        cache.add(&new_entry).await;
 
         // Try to add older mapping
         let old_entry = LidPnEntry::with_timestamp(
@@ -273,7 +273,7 @@ mod tests {
             1000,
             LearningSource::Other,
         );
-        cache.add(old_entry).await;
+        cache.add(&old_entry).await;
 
         // PN -> LID should still return the newer one
         assert_eq!(
@@ -326,7 +326,7 @@ mod tests {
             "559980000001".to_string(),
             LearningSource::Usync,
         );
-        cache.add(entry).await;
+        cache.add(&entry).await;
 
         assert_eq!(cache.lid_count().await, 1);
         assert_eq!(cache.pn_count().await, 1);

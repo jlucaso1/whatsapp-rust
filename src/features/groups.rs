@@ -257,7 +257,7 @@ impl<'a> Groups<'a> {
                 let entry = self
                     .client
                     .get_lid_pn_entry(&participant.jid)
-                    .await
+                    .await?
                     .ok_or_else(|| {
                         anyhow::anyhow!("Missing phone number mapping for LID {}", participant.jid)
                     })?;
