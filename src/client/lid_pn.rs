@@ -270,18 +270,46 @@ impl Client {
         }
     }
 
-    /// Look up the LID↔phone mapping for a JID.
-    ///
-    /// Routes automatically: LID JIDs search by LID, PN JIDs search by phone.
-    /// Returns `None` for non-user JIDs (groups, newsletters, etc.).
+    /// Look up the LID↔phone mapping for a JID. Cache-aside: falls back to
+    /// the backend on cache miss so mappings survive cache eviction and any
+    /// backend implementation gets the fallback without warm-up.
     pub async fn get_lid_pn_entry(&self, jid: &Jid) -> Option<LidPnEntry> {
-        if jid.is_lid() {
-            self.lid_pn_cache.get_entry_by_lid(&jid.user).await
+        let (hit, is_lid) = if jid.is_lid() {
+            (self.lid_pn_cache.get_entry_by_lid(&jid.user).await, true)
         } else if jid.is_pn() {
-            self.lid_pn_cache.get_entry_by_phone(&jid.user).await
+            (self.lid_pn_cache.get_entry_by_phone(&jid.user).await, false)
         } else {
-            None
+            return None;
+        };
+
+        if let Some(entry) = hit {
+            return Some(entry);
         }
+
+        let backend = self.persistence_manager.backend();
+        let result = if is_lid {
+            backend.get_lid_mapping(&jid.user).await
+        } else {
+            backend.get_pn_mapping(&jid.user).await
+        };
+
+        let mapping = match result {
+            Ok(Some(m)) => m,
+            Ok(None) => return None,
+            Err(e) => {
+                debug!("LID-PN backend lookup failed for {jid}: {e:?}");
+                return None;
+            }
+        };
+
+        let entry = LidPnEntry::with_timestamp(
+            mapping.lid,
+            mapping.phone_number,
+            mapping.created_at,
+            LearningSource::parse(&mapping.learning_source),
+        );
+        self.lid_pn_cache.add(entry.clone()).await;
+        Some(entry)
     }
 }
 
@@ -368,5 +396,39 @@ mod tests {
         let entry = client.get_lid_pn_entry(&Jid::lid(lid)).await.unwrap();
         assert_eq!(entry.lid, lid);
         assert_eq!(entry.phone_number, pn);
+    }
+
+    /// Cache-aside fallback: if the in-memory cache is missing an entry the
+    /// backend has, the lookup should still succeed and re-populate the cache.
+    #[tokio::test]
+    async fn test_get_lid_pn_entry_falls_back_to_backend() {
+        use wacore::store::traits::LidPnMappingEntry;
+
+        let client: Arc<Client> = create_test_client().await;
+        let pn = "15555550123";
+        let lid = "100000000000123";
+
+        let backend = client.persistence_manager.backend();
+        backend
+            .put_lid_mapping(&LidPnMappingEntry {
+                lid: lid.into(),
+                phone_number: pn.into(),
+                created_at: 1,
+                updated_at: 1,
+                learning_source: "usync".into(),
+            })
+            .await
+            .unwrap();
+
+        // Cache was never warmed from this backend write → cache miss path.
+        let entry = client.get_lid_pn_entry(&Jid::lid(lid)).await.unwrap();
+        assert_eq!(entry.lid, lid);
+        assert_eq!(entry.phone_number, pn);
+
+        // Subsequent lookup should now be served from cache (no backend call
+        // needed, but we can't assert that without a mock backend — the
+        // functional round-trip is sufficient).
+        let entry = client.get_lid_pn_entry(&Jid::pn(pn)).await.unwrap();
+        assert_eq!(entry.lid, lid);
     }
 }
