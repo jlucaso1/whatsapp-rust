@@ -193,22 +193,21 @@ impl<'a> Groups<'a> {
 
         let group = self.client.execute(GroupQueryIq::new(jid)).await?;
 
-        let participants: Vec<Jid> = group.participants.iter().map(|p| p.jid.clone()).collect();
-
-        let lid_to_pn_map: HashMap<wacore_binary::CompactString, Jid> =
-            if group.addressing_mode == AddressingMode::Lid {
-                group
-                    .participants
-                    .iter()
-                    .filter_map(|p| {
-                        p.phone_number
-                            .as_ref()
-                            .map(|pn| (p.jid.user.clone(), pn.clone()))
-                    })
-                    .collect()
-            } else {
-                HashMap::new()
-            };
+        // Single pass: move participants out and build lid_to_pn_map alongside.
+        let n = group.participants.len();
+        let is_lid = group.addressing_mode == AddressingMode::Lid;
+        let mut participants: Vec<Jid> = Vec::with_capacity(n);
+        let mut lid_to_pn_map: HashMap<wacore_binary::CompactString, Jid> = if is_lid {
+            HashMap::with_capacity(n)
+        } else {
+            HashMap::new()
+        };
+        for p in group.participants {
+            if is_lid && let Some(pn) = p.phone_number {
+                lid_to_pn_map.insert(p.jid.user.clone(), pn);
+            }
+            participants.push(p.jid);
+        }
 
         let mut info = GroupInfo::new(participants, group.addressing_mode);
         if !lid_to_pn_map.is_empty() {

@@ -133,10 +133,10 @@ fn resolve_retry_chat_info(
         let is_peer = own_pn.is_some_and(|pn| from.is_same_user_as(pn))
             || own_lid.is_some_and(|lid| from.is_same_user_as(lid));
 
-        let chat = if is_bot && recipient.is_some() {
-            recipient.clone().unwrap().to_non_ad()
+        let chat = if is_bot && let Some(r) = recipient.as_ref() {
+            r.to_non_ad()
         } else if is_peer {
-            match &recipient {
+            match recipient.as_ref() {
                 Some(r) => r.to_non_ad(),
                 // No recipient on peer retry — chat will be our own JID,
                 // message lookup will likely fail. WA Web returns null here.
@@ -233,13 +233,14 @@ impl Client {
             log::debug!("Ignoring retry for {processing_key}: a retry is already in progress.");
             return Ok(());
         }
+        // processing_key isn't needed by name after this point — move it into
+        // the scopeguard instead of cloning again.
         let pending = Arc::clone(&self.pending_retries);
-        let guard_key = processing_key.clone();
         let _guard = scopeguard::guard((), move |()| {
             pending
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
-                .remove(&guard_key);
+                .remove(&processing_key);
         });
 
         let (original_msg, alt_chat) = match self.take_recent_message(&info.chat, &message_id).await
@@ -282,11 +283,13 @@ impl Client {
         };
 
         let sender_device_id = info.requester.device() as u32;
-        let sender_user = info.requester.user.clone();
-        if !self.has_device(&sender_user, sender_device_id).await {
+        if !self
+            .has_device(&info.requester.user, sender_device_id)
+            .await
+        {
             warn!(
                 "handle_retry_receipt: device not found for device={}, user={}",
-                sender_device_id, sender_user
+                sender_device_id, info.requester.user
             );
             return Ok(());
         }

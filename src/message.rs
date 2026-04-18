@@ -1098,16 +1098,17 @@ impl Client {
         }
         let mut adapter = self.signal_adapter().await;
 
+        // Always use bare sender for sender key operations. Real WA delivers
+        // skmsg with bare participant but pkmsg (SKDM) with device-qualified
+        // participant — normalizing to bare ensures consistent lookup.
+        // Hoisted out of the payload loop: all three are loop-invariant.
+        let sender_for_sk = info.source.sender.to_non_ad();
+        let sender_address = sender_for_sk.to_protocol_address();
+        let sender_key_name = make_sender_key_name(&info.source.chat, &sender_address);
+
         for payload in payloads {
             let ciphertext = &payload.ciphertext[..];
             let padding_version = payload.padding_version;
-
-            // Always use bare sender for sender key operations. Real WA delivers
-            // skmsg with bare participant but pkmsg (SKDM) with device-qualified
-            // participant — normalizing to bare ensures consistent lookup.
-            let sender_for_sk = info.source.sender.to_non_ad();
-            let sender_address = sender_for_sk.to_protocol_address();
-            let sender_key_name = make_sender_key_name(&info.source.chat, &sender_address);
 
             log::debug!(
                 "Looking up sender key for group {} with sender address {} (from sender JID: {})",
@@ -1434,10 +1435,14 @@ impl Client {
         &self,
         node: &wacore_binary::NodeRef<'_>,
     ) -> Result<MessageInfo, anyhow::Error> {
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
+        let (own_pn, own_lid) = {
+            let arc = self.persistence_manager.get_device_arc().await;
+            let guard = arc.read().await;
+            (guard.pn.clone(), guard.lid.clone())
+        };
         let default_jid = Jid::default();
-        let own_jid = device_snapshot.pn.as_ref().unwrap_or(&default_jid);
-        wacore::messages::parse_message_info(node, own_jid, device_snapshot.lid.as_ref())
+        let own_jid = own_pn.as_ref().unwrap_or(&default_jid);
+        wacore::messages::parse_message_info(node, own_jid, own_lid.as_ref())
     }
 
     pub(crate) async fn handle_app_state_sync_key_share(

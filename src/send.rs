@@ -1154,12 +1154,10 @@ impl Client {
                 !is_sender
             });
 
-            // Dedup for self-DMs: recipient and own device lists overlap
-            // when sending to own account (WA Web uses Map keyed by toString)
-            {
-                let mut seen = std::collections::HashSet::with_capacity(all_dm_jids.len());
-                all_dm_jids.retain(|j| seen.insert(j.clone()));
-            }
+            // Dedup for self-DMs: recipient and own device lists overlap when
+            // sending to own account. `participant_list_hash` sorts internally,
+            // so reordering here is safe.
+            wacore::types::jid::sort_dedup_by_device(&mut all_dm_jids);
 
             self.ensure_e2e_sessions(&all_dm_jids).await?;
 
