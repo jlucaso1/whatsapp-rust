@@ -466,13 +466,30 @@ impl Client {
 
         let client_clone = Arc::clone(self);
         let info_clone = Arc::clone(info);
+        // Per-connection: on disconnect/reconnect the signal fires and we bail
+        // before inserting into `pdo_pending_requests`, preventing a 30s TTL
+        // strand on an entry that can no longer receive its response.
+        let shutdown = self.connection_shutdown_signal();
 
         self.runtime
             .spawn(Box::pin(async move {
+                use futures::FutureExt;
+
                 if !immediate {
-                    // Add a small delay to allow the retry receipt to be processed first
-                    // This avoids overwhelming the phone with simultaneous requests
-                    client_clone.runtime.sleep(Duration::from_millis(500)).await;
+                    // Delay lets the retry receipt land before we pile PDO on top.
+                    futures::select! {
+                        _ = client_clone
+                            .runtime
+                            .sleep(Duration::from_millis(500))
+                            .fuse() => {}
+                        _ = wacore::runtime::wait_for_shutdown(&shutdown).fuse() => {
+                            return;
+                        }
+                    }
+                }
+
+                if shutdown.is_fired() {
+                    return;
                 }
 
                 if let Err(e) = client_clone

@@ -90,25 +90,9 @@ impl Client {
         // Tracked so `disconnect()` can flush in-flight receipts (issue #571).
         let client_clone = self.clone();
         let info_for_receipt = Arc::clone(&info);
-        self.pending_receipt_tasks
-            .fetch_add(1, std::sync::atomic::Ordering::Release);
-        self.runtime
-            .spawn(Box::pin(async move {
-                client_clone.send_delivery_receipt(&info_for_receipt).await;
-                if client_clone
-                    .pending_receipt_tasks
-                    .fetch_sub(1, std::sync::atomic::Ordering::Release)
-                    <= 1
-                {
-                    // Clamp to 0 so an accidental extra decrement can't wrap the
-                    // counter around and mask future bumps.
-                    client_clone
-                        .pending_receipt_tasks
-                        .store(0, std::sync::atomic::Ordering::Relaxed);
-                    client_clone.pending_receipt_tasks_idle.notify(usize::MAX);
-                }
-            }))
-            .detach();
+        self.outbound_flush.spawn(&*self.runtime, async move {
+            client_clone.send_delivery_receipt(&info_for_receipt).await;
+        });
 
         self.core
             .event_bus
