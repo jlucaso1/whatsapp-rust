@@ -700,6 +700,84 @@ mod tests {
         assert_eq!(client.lid_pn_cache.lid_count().await, 0);
     }
 
+    /// Online (`is_offline = false`) batch must persist the mapping to the
+    /// backend AND run `migrate_device_registry_on_lid_discovery` for each
+    /// newly learned PN. Polls until the detached task completes.
+    #[tokio::test]
+    async fn test_learn_lid_pn_mappings_batch_online_persists_and_migrates() {
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+        use wacore_binary::Jid;
+
+        let client: Arc<Client> = create_test_client().await;
+        let lid = "200000000077777";
+        let pn = "5511955550000";
+        let backend = client.persistence_manager.backend();
+
+        // Seed a PN-keyed device registry row so the migration has something
+        // to move when the mapping is learned. Without this, the migration
+        // helper is a no-op and the test can't distinguish "migration ran"
+        // from "migration never called".
+        backend
+            .update_device_list(DeviceListRecord {
+                user: pn.to_string(),
+                devices: vec![DeviceInfo {
+                    device_id: 3,
+                    key_index: None,
+                }],
+                timestamp: wacore::time::now_secs(),
+                phash: None,
+                raw_id: None,
+            })
+            .await
+            .unwrap();
+
+        client
+            .learn_lid_pn_mappings_batch(
+                vec![(lid.to_string(), pn.to_string())],
+                LearningSource::Other,
+                false,
+            )
+            .await;
+
+        // Poll for the end-of-chain migration effect (device row moved to
+        // LID key). That strictly happens after both `put_lid_mappings` and
+        // `migrate_device_registry_on_lid_discovery`, so observing it
+        // guarantees both steps ran.
+        let start = std::time::Instant::now();
+        let deadline = std::time::Duration::from_secs(5);
+        loop {
+            if backend.get_devices(lid).await.unwrap().is_some() {
+                break;
+            }
+            assert!(
+                start.elapsed() < deadline,
+                "timed out waiting for batch persist + migration"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+
+        assert!(
+            backend.get_lid_mapping(lid).await.unwrap().is_some(),
+            "mapping must be persisted"
+        );
+        assert!(
+            backend.get_devices(pn).await.unwrap().is_none(),
+            "migration must delete the old PN-keyed device row"
+        );
+        let lid_row = backend.get_devices(lid).await.unwrap().unwrap();
+        assert_eq!(lid_row.devices[0].device_id, 3);
+        // And the mapping resolves from both directions.
+        assert_eq!(
+            client
+                .get_lid_pn_entry(&Jid::pn(pn))
+                .await
+                .unwrap()
+                .unwrap()
+                .lid,
+            lid
+        );
+    }
+
     /// Offline batch only warms the in-memory cache; the persist task never
     /// fires. Mirrors WA Web's `flushImmediately = false` semantics.
     #[tokio::test]

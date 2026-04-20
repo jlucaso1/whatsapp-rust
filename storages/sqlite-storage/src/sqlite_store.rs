@@ -1894,41 +1894,39 @@ impl ProtocolStore for SqliteStore {
         if entries.is_empty() {
             return Ok(());
         }
-        let pool = self.pool.clone();
         let device_id = self.device_id;
-        let entries: Vec<LidPnMappingEntry> = entries.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            conn.transaction::<_, diesel::result::Error, _>(|conn| {
-                for entry in &entries {
-                    diesel::insert_into(lid_pn_mapping::table)
-                        .values((
-                            lid_pn_mapping::lid.eq(&entry.lid),
-                            lid_pn_mapping::phone_number.eq(&entry.phone_number),
-                            lid_pn_mapping::created_at.eq(entry.created_at),
-                            lid_pn_mapping::learning_source.eq(&entry.learning_source),
-                            lid_pn_mapping::updated_at.eq(entry.updated_at),
-                            lid_pn_mapping::device_id.eq(device_id),
-                        ))
-                        .on_conflict((lid_pn_mapping::lid, lid_pn_mapping::device_id))
-                        .do_update()
-                        .set((
-                            lid_pn_mapping::phone_number.eq(&entry.phone_number),
-                            lid_pn_mapping::learning_source.eq(&entry.learning_source),
-                            lid_pn_mapping::updated_at.eq(entry.updated_at),
-                        ))
-                        .execute(conn)?;
-                }
-                Ok(())
+        // Share the batch across retry attempts via Arc so no retry re-clones
+        // the Vec. `with_retry` invokes `make_op` once per attempt; we only
+        // bump the Arc refcount.
+        let entries: std::sync::Arc<Vec<LidPnMappingEntry>> = std::sync::Arc::new(entries.to_vec());
+        self.with_retry("put_lid_mappings", move || {
+            let entries = std::sync::Arc::clone(&entries);
+            Box::new(move |conn: &mut SqliteConnection| {
+                conn.transaction::<_, DieselError, _>(|conn| {
+                    for entry in entries.iter() {
+                        diesel::insert_into(lid_pn_mapping::table)
+                            .values((
+                                lid_pn_mapping::lid.eq(&entry.lid),
+                                lid_pn_mapping::phone_number.eq(&entry.phone_number),
+                                lid_pn_mapping::created_at.eq(entry.created_at),
+                                lid_pn_mapping::learning_source.eq(&entry.learning_source),
+                                lid_pn_mapping::updated_at.eq(entry.updated_at),
+                                lid_pn_mapping::device_id.eq(device_id),
+                            ))
+                            .on_conflict((lid_pn_mapping::lid, lid_pn_mapping::device_id))
+                            .do_update()
+                            .set((
+                                lid_pn_mapping::phone_number.eq(&entry.phone_number),
+                                lid_pn_mapping::learning_source.eq(&entry.learning_source),
+                                lid_pn_mapping::updated_at.eq(entry.updated_at),
+                            ))
+                            .execute(conn)?;
+                    }
+                    Ok(())
+                })
             })
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     async fn get_all_lid_mappings(&self) -> Result<Vec<LidPnMappingEntry>> {
