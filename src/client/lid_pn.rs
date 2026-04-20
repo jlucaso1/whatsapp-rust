@@ -110,6 +110,64 @@ impl Client {
             .detach();
     }
 
+    /// Batched variant of [`learn_lid_pn_mapping_fast`]. Updates the in-memory
+    /// cache synchronously for every entry, then fires one detached task that
+    /// persists the whole batch in a single backend transaction and runs the
+    /// device/session migrations for newly discovered PN↔LID pairs.
+    ///
+    /// Mirrors WA Web's `createLidPnMappings({ mappings, flushImmediately, learningSource })`
+    /// call shape: one backend write for N participants instead of N detached
+    /// tasks racing each other. The savings are linear in batch size and
+    /// matter most on first `query_info` of large groups.
+    ///
+    /// `is_offline` mirrors the single-entry path: skip the persist task for
+    /// offline replays; mappings are re-learned from the next live event.
+    ///
+    /// Takes owned `(lid, phone_number)` pairs; each `String` moves directly
+    /// into the `LidPnEntry` stored in the cache, then (via `into_iter`) into
+    /// the `LidPnMappingEntry` that's persisted — no clones on either step.
+    /// The `Vec` itself is consumed, so no copy of the outer container either.
+    pub(crate) async fn learn_lid_pn_mappings_batch(
+        self: &Arc<Self>,
+        mappings: Vec<(String, String)>,
+        source: LearningSource,
+        is_offline: bool,
+    ) {
+        if mappings.is_empty() {
+            return;
+        }
+        let cap = mappings.len();
+        let mut entries: Vec<LidPnEntry> = Vec::with_capacity(cap);
+        let mut is_new_flags: Vec<bool> = Vec::with_capacity(cap);
+        for (lid, phone_number) in mappings {
+            let is_new = self
+                .lid_pn_cache
+                .get_current_lid(&phone_number)
+                .await
+                .is_none();
+            let entry = LidPnEntry::new(lid, phone_number, source);
+            self.lid_pn_cache.add(&entry).await;
+            entries.push(entry);
+            is_new_flags.push(is_new);
+        }
+
+        if is_offline {
+            return;
+        }
+
+        let client = Arc::clone(self);
+        self.runtime
+            .spawn(Box::pin(async move {
+                if let Err(err) = client
+                    .persist_and_migrate_lid_pn_batch(entries, is_new_flags)
+                    .await
+                {
+                    log::warn!("Background LID-PN batch persist failed: {err}");
+                }
+            }))
+            .detach();
+    }
+
     async fn record_lid_pn_in_memory(
         &self,
         lid: &str,
@@ -158,6 +216,45 @@ impl Client {
                 &storage_entry.lid,
             )
             .await;
+        }
+
+        Ok(())
+    }
+
+    async fn persist_and_migrate_lid_pn_batch(
+        &self,
+        entries: Vec<LidPnEntry>,
+        is_new_flags: Vec<bool>,
+    ) -> Result<()> {
+        use anyhow::anyhow;
+
+        // Consume entries so `lid`/`phone_number` move into storage rather
+        // than being cloned. Only `learning_source` is allocated, and only
+        // because `LidPnMappingEntry.learning_source` is a `String` field.
+        let storage: Vec<LidPnMappingEntry> = entries
+            .into_iter()
+            .map(|entry| LidPnMappingEntry {
+                lid: entry.lid,
+                phone_number: entry.phone_number,
+                created_at: entry.created_at,
+                updated_at: entry.created_at,
+                learning_source: entry.learning_source.as_str().to_string(),
+            })
+            .collect();
+
+        self.persistence_manager
+            .backend()
+            .put_lid_mappings(&storage)
+            .await
+            .map_err(|e| anyhow!("persisting LID-PN mapping batch: {e}"))?;
+
+        for (entry, is_new) in storage.iter().zip(is_new_flags.iter()) {
+            if *is_new {
+                self.migrate_device_registry_on_lid_discovery(&entry.phone_number, &entry.lid)
+                    .await;
+                self.migrate_signal_sessions_on_lid_discovery(&entry.phone_number, &entry.lid)
+                    .await;
+            }
         }
 
         Ok(())
@@ -565,5 +662,74 @@ mod tests {
         let resolved = client.resolve_encryption_jid(&Jid::pn(pn)).await;
         assert_eq!(resolved.user, lid, "cache must have the mapping on return");
         assert_eq!(resolved.server, Server::Lid);
+    }
+
+    /// Batched variant must populate the in-memory cache synchronously for
+    /// every entry before returning; WA Web parity for `createLidPnMappings`.
+    #[tokio::test]
+    async fn test_learn_lid_pn_mappings_batch_populates_cache_synchronously() {
+        let client: Arc<Client> = create_test_client().await;
+        let pairs = [
+            ("200000000000001", "5511911111111"),
+            ("200000000000002", "5511922222222"),
+            ("200000000000003", "5511933333333"),
+        ];
+
+        let batch: Vec<(String, String)> = pairs
+            .iter()
+            .map(|(lid, pn)| ((*lid).to_string(), (*pn).to_string()))
+            .collect();
+        client
+            .learn_lid_pn_mappings_batch(batch, LearningSource::Other, false)
+            .await;
+
+        for (lid, pn) in &pairs {
+            let resolved = client.resolve_encryption_jid(&Jid::pn(*pn)).await;
+            assert_eq!(resolved.user, *lid, "batch entry {pn} missing from cache");
+            assert_eq!(resolved.server, Server::Lid);
+        }
+    }
+
+    /// Empty batch is a no-op (no detached task, no panic).
+    #[tokio::test]
+    async fn test_learn_lid_pn_mappings_batch_empty_is_noop() {
+        let client: Arc<Client> = create_test_client().await;
+        client
+            .learn_lid_pn_mappings_batch(Vec::new(), LearningSource::Other, false)
+            .await;
+        assert_eq!(client.lid_pn_cache.lid_count().await, 0);
+    }
+
+    /// Offline batch only warms the in-memory cache; the persist task never
+    /// fires. Mirrors WA Web's `flushImmediately = false` semantics.
+    #[tokio::test]
+    async fn test_learn_lid_pn_mappings_batch_offline_skips_persist() {
+        use wacore_binary::Jid;
+
+        let client: Arc<Client> = create_test_client().await;
+        let lid = "200000000009999";
+        let pn = "5511900009999";
+
+        client
+            .learn_lid_pn_mappings_batch(
+                vec![(lid.to_string(), pn.to_string())],
+                LearningSource::Other,
+                true,
+            )
+            .await;
+
+        let resolved = client.resolve_encryption_jid(&Jid::pn(pn)).await;
+        assert_eq!(resolved.user, lid);
+
+        assert!(
+            client
+                .persistence_manager
+                .backend()
+                .get_lid_mapping(lid)
+                .await
+                .unwrap()
+                .is_none(),
+            "offline batch must not persist to DB"
+        );
     }
 }

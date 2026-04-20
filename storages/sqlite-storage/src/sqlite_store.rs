@@ -1887,31 +1887,43 @@ impl ProtocolStore for SqliteStore {
     }
 
     async fn put_lid_mapping(&self, entry: &LidPnMappingEntry) -> Result<()> {
+        self.put_lid_mappings(std::slice::from_ref(entry)).await
+    }
+
+    async fn put_lid_mappings(&self, entries: &[LidPnMappingEntry]) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
         let pool = self.pool.clone();
         let device_id = self.device_id;
-        let entry = entry.clone();
+        let entries: Vec<LidPnMappingEntry> = entries.to_vec();
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(lid_pn_mapping::table)
-                .values((
-                    lid_pn_mapping::lid.eq(&entry.lid),
-                    lid_pn_mapping::phone_number.eq(&entry.phone_number),
-                    lid_pn_mapping::created_at.eq(entry.created_at),
-                    lid_pn_mapping::learning_source.eq(&entry.learning_source),
-                    lid_pn_mapping::updated_at.eq(entry.updated_at),
-                    lid_pn_mapping::device_id.eq(device_id),
-                ))
-                .on_conflict((lid_pn_mapping::lid, lid_pn_mapping::device_id))
-                .do_update()
-                .set((
-                    lid_pn_mapping::phone_number.eq(&entry.phone_number),
-                    lid_pn_mapping::learning_source.eq(&entry.learning_source),
-                    lid_pn_mapping::updated_at.eq(entry.updated_at),
-                ))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            conn.transaction::<_, diesel::result::Error, _>(|conn| {
+                for entry in &entries {
+                    diesel::insert_into(lid_pn_mapping::table)
+                        .values((
+                            lid_pn_mapping::lid.eq(&entry.lid),
+                            lid_pn_mapping::phone_number.eq(&entry.phone_number),
+                            lid_pn_mapping::created_at.eq(entry.created_at),
+                            lid_pn_mapping::learning_source.eq(&entry.learning_source),
+                            lid_pn_mapping::updated_at.eq(entry.updated_at),
+                            lid_pn_mapping::device_id.eq(device_id),
+                        ))
+                        .on_conflict((lid_pn_mapping::lid, lid_pn_mapping::device_id))
+                        .do_update()
+                        .set((
+                            lid_pn_mapping::phone_number.eq(&entry.phone_number),
+                            lid_pn_mapping::learning_source.eq(&entry.learning_source),
+                            lid_pn_mapping::updated_at.eq(entry.updated_at),
+                        ))
+                        .execute(conn)?;
+                }
+                Ok(())
+            })
+            .map_err(|e| StoreError::Database(e.to_string()))?;
             Ok(())
         })
         .await

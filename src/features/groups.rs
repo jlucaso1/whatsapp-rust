@@ -212,22 +212,25 @@ impl<'a> Groups<'a> {
         // Populate lid_pn_cache so silent-observer participants (no messages
         // from them) get their mapping; otherwise `invalidate_device_cache`
         // can't resolve the PN alias and leaves zombie registry entries.
+        // One batched call mirrors WA Web's single `createLidPnMappings`
+        // invocation from `QueryGroupJob`, so N participants = 1 persist
+        // task + 1 DB transaction instead of N detached tasks.
         if !lid_to_pn_map.is_empty()
             && let Some(client_arc) = self.client.self_weak.get().and_then(|w| w.upgrade())
         {
+            let mut batch: Vec<(String, String)> = Vec::with_capacity(lid_to_pn_map.len());
             for (lid_user, pn_jid) in &lid_to_pn_map {
-                if !pn_jid.is_pn() {
-                    continue;
+                if pn_jid.is_pn() {
+                    batch.push((lid_user.as_str().to_string(), pn_jid.user.to_string()));
                 }
-                client_arc
-                    .learn_lid_pn_mapping_fast(
-                        lid_user.as_str(),
-                        &pn_jid.user,
-                        crate::lid_pn_cache::LearningSource::Other,
-                        false,
-                    )
-                    .await;
             }
+            client_arc
+                .learn_lid_pn_mappings_batch(
+                    batch,
+                    crate::lid_pn_cache::LearningSource::Other,
+                    false,
+                )
+                .await;
         }
 
         let mut info = GroupInfo::new(participants, group.addressing_mode);

@@ -245,6 +245,16 @@ pub trait ProtocolStore: Send + Sync {
     /// Store or update a LID-PN mapping.
     async fn put_lid_mapping(&self, entry: &LidPnMappingEntry) -> Result<()>;
 
+    /// Batched variant of `put_lid_mapping`. Backends should override with a
+    /// single transaction; the default loops for correctness. Mirrors WA Web's
+    /// `WAWebDBCreateLidPnMappings.createLidPnMappings({ mappings, … })`.
+    async fn put_lid_mappings(&self, entries: &[LidPnMappingEntry]) -> Result<()> {
+        for entry in entries {
+            self.put_lid_mapping(entry).await?;
+        }
+        Ok(())
+    }
+
     /// Get all LID-PN mappings (for cache warm-up).
     async fn get_all_lid_mappings(&self) -> Result<Vec<LidPnMappingEntry>>;
 

@@ -1384,12 +1384,22 @@ mod tests {
         );
     }
 
-    /// U4 — TOCTOU regression: even if the cache got repopulated between the
-    /// pre-delete `invalidate` and the DB `delete_devices`, the post-delete
-    /// `invalidate` wipes it out. Simulated by pre-seeding both cache and DB
-    /// under PN, then running the canonical-flip write.
+    /// U4 — canonical-flip path with a warm cache: no zombie entry survives.
+    ///
+    /// This does *not* deterministically exercise the TOCTOU window between
+    /// invalidate1 and delete — the first invalidate clears the pre-seeded
+    /// cache, so the test would pass even without the post-delete second
+    /// invalidate. Reaching that window requires interleaving a concurrent
+    /// reader between those two calls, which would need a backend-level
+    /// latch (i.e., wrapping `Backend` to run a hook before `delete_devices`).
+    /// The full trait has ~50 methods via blanket impl, so that machinery is
+    /// out of scope for this PR; the double-invalidate lives on as
+    /// defense-in-depth validated by code review rather than this test.
+    ///
+    /// What this still guards: the first invalidate + DB delete end-to-end
+    /// (removing either one would fail this test).
     #[tokio::test]
-    async fn test_update_device_list_toctou_second_invalidate_clears_resurrected_cache() {
+    async fn test_update_device_list_canonical_flip_clears_warm_cache() {
         use wacore::store::traits::{DeviceInfo, DeviceListRecord};
 
         let client = create_test_client().await;
@@ -1408,8 +1418,8 @@ mod tests {
             raw_id: None,
         };
         backend.update_device_list(legacy.clone()).await.unwrap();
-        // Pre-populate cache[PN] directly to emulate a concurrent reader that
-        // loaded from the DB row between the two invalidate calls.
+        // Warm cache under PN to simulate a reader that populated it before
+        // the mapping was learned.
         client.device_registry_cache.insert(pn.into(), legacy).await;
 
         setup_lid_pn(&client, lid, pn).await;
@@ -1430,11 +1440,11 @@ mod tests {
 
         assert!(
             client.device_registry_cache.get(pn).await.is_none(),
-            "second invalidate must clear the pre-populated cache entry"
+            "cache[pn] must be cleared after canonical flip"
         );
         assert!(
             backend.get_devices(pn).await.unwrap().is_none(),
-            "PN DB row must still be gone"
+            "DB[pn] must be deleted after canonical flip"
         );
     }
 }
