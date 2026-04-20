@@ -1227,6 +1227,12 @@ impl Client {
             log::error!("Failed to flush device state during disconnect: {e}");
         }
 
+        // Explicitly close the socket here (AFTER flush) so any in-flight
+        // receipts see a live transport. `cleanup_connection_state` below is
+        // a belt-and-suspenders guard for the concurrent-disconnect race
+        // (run loop could reach cleanup first and clear the transport before
+        // this branch runs); the JS / tokio transport impl makes
+        // `disconnect()` idempotent so double-fire is safe.
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }
@@ -1259,9 +1265,11 @@ impl Client {
         self.auto_reconnect_errors
             .store(Self::RECONNECT_BACKOFF_STEP, Ordering::Relaxed);
         self.notify_connection_shutdown();
+
         self.outbound_flush
             .flush(&*self.runtime, std::time::Duration::from_secs(2))
             .await;
+
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }
@@ -1276,9 +1284,11 @@ impl Client {
         info!("Reconnecting immediately (expected disconnect).");
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.notify_connection_shutdown();
+
         self.outbound_flush
             .flush(&*self.runtime, std::time::Duration::from_secs(2))
             .await;
+
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }
@@ -1298,7 +1308,14 @@ impl Client {
         // with the next one after reconnect. Uses the PER-CONNECTION signal
         // so the terminal shutdown_notifier stays clean for reconnects.
         self.notify_connection_shutdown();
-        *self.transport.lock().await = None;
+        // Close the socket as part of cleanup so this path is authoritative
+        // even when reached via the run loop's graceful-exit flow (not just
+        // `Client::disconnect()`). Transport impls make `disconnect()`
+        // idempotent, so the redundant call from `Client::disconnect()` is
+        // safe.
+        if let Some(transport) = self.transport.lock().await.take() {
+            transport.disconnect().await;
+        }
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
         // Clear is_connected AFTER noise_socket is None, so no task can see
