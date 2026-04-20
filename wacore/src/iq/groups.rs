@@ -13,12 +13,6 @@ use wacore_binary::{Node, NodeContent, NodeRef};
 // Re-export AddressingMode from types::message for convenience
 pub use crate::types::message::AddressingMode;
 
-/// MEX (GraphQL) document IDs for group operations.
-pub mod mex_docs {
-    /// Update a group property (xwa2_group_update_property mutation).
-    pub const UPDATE_GROUP_PROPERTY: &str = "9418211574894172";
-}
-
 /// IQ namespace for group operations.
 pub const GROUP_IQ_NAMESPACE: &str = "w:g2";
 

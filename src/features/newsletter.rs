@@ -10,6 +10,7 @@ use crate::client::Client;
 use crate::features::mex::{MexError, MexRequest};
 use prost::Message as ProtoMessage;
 use serde_json::json;
+use wacore::iq::mex_ids::newsletter as newsletter_docs;
 use wacore::iq::newsletter::NEWSLETTER_XMLNS;
 use wacore::request::InfoQuery;
 use wacore_binary::Jid;
@@ -123,7 +124,7 @@ impl<'a> Newsletter<'a> {
             .client
             .mex()
             .query(MexRequest {
-                doc_id: wacore::iq::newsletter::mex_docs::LIST_SUBSCRIBED,
+                doc: newsletter_docs::LIST_SUBSCRIBED,
                 variables: json!({}),
             })
             .await?;
@@ -146,7 +147,7 @@ impl<'a> Newsletter<'a> {
             .client
             .mex()
             .query(MexRequest {
-                doc_id: wacore::iq::newsletter::mex_docs::FETCH_METADATA,
+                doc: newsletter_docs::FETCH_METADATA,
                 variables: json!({
                     "input": {
                         "key": jid.to_string(),
@@ -190,7 +191,7 @@ impl<'a> Newsletter<'a> {
             .client
             .mex()
             .mutate(MexRequest {
-                doc_id: wacore::iq::newsletter::mex_docs::CREATE,
+                doc: newsletter_docs::CREATE,
                 variables: json!({ "input": input }),
             })
             .await?;
@@ -215,7 +216,7 @@ impl<'a> Newsletter<'a> {
             .client
             .mex()
             .mutate(MexRequest {
-                doc_id: wacore::iq::newsletter::mex_docs::JOIN,
+                doc: newsletter_docs::JOIN,
                 variables: json!({
                     "newsletter_id": jid.to_string()
                 }),
@@ -241,7 +242,7 @@ impl<'a> Newsletter<'a> {
             .client
             .mex()
             .mutate(MexRequest {
-                doc_id: wacore::iq::newsletter::mex_docs::LEAVE,
+                doc: newsletter_docs::LEAVE,
                 variables: json!({
                     "newsletter_id": jid.to_string()
                 }),
@@ -279,7 +280,7 @@ impl<'a> Newsletter<'a> {
             .client
             .mex()
             .mutate(MexRequest {
-                doc_id: wacore::iq::newsletter::mex_docs::UPDATE,
+                doc: newsletter_docs::UPDATE,
                 variables: json!({
                     "newsletter_id": jid.to_string(),
                     "updates": updates
@@ -309,7 +310,7 @@ impl<'a> Newsletter<'a> {
             .client
             .mex()
             .query(MexRequest {
-                doc_id: wacore::iq::newsletter::mex_docs::FETCH_METADATA,
+                doc: newsletter_docs::FETCH_METADATA,
                 variables: json!({
                     "input": {
                         "key": invite_code,
