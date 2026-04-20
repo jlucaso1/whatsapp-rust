@@ -1211,7 +1211,11 @@ impl Client {
     }
 
     pub async fn disconnect(self: &Arc<Self>) {
+        use wacore::time::Instant;
+
         info!("Disconnecting client intentionally.");
+        let t_total = Instant::now();
+
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
         self.shutdown_notifier.notify();
@@ -1219,18 +1223,33 @@ impl Client {
         // we're flushing receipts (issue #571).
         self.notify_connection_shutdown();
 
+        let t = Instant::now();
         self.outbound_flush
             .flush(&*self.runtime, std::time::Duration::from_secs(5))
             .await;
+        log::debug!(target: "Client/Disconnect", "outbound_flush drained in {:?}", t.elapsed());
 
+        let t = Instant::now();
         if let Err(e) = self.persistence_manager.flush().await {
             log::error!("Failed to flush device state during disconnect: {e}");
         }
+        log::debug!(target: "Client/Disconnect", "persistence flushed in {:?}", t.elapsed());
 
+        let t = Instant::now();
         if let Some(transport) = self.transport.lock().await.as_ref() {
+            log::debug!(target: "Client/Disconnect", "transport lock acquired in {:?}", t.elapsed());
+            let t_d = Instant::now();
             transport.disconnect().await;
+            log::debug!(target: "Client/Disconnect", "transport.disconnect() returned in {:?}", t_d.elapsed());
+        } else {
+            log::debug!(target: "Client/Disconnect", "no transport present (lock in {:?})", t.elapsed());
         }
+
+        let t = Instant::now();
         self.cleanup_connection_state().await;
+        log::debug!(target: "Client/Disconnect", "cleanup_connection_state in {:?}", t.elapsed());
+
+        log::debug!(target: "Client/Disconnect", "disconnect complete in {:?}", t_total.elapsed());
     }
 
     /// Backoff step used by [`reconnect()`] to create an offline window.
@@ -1254,17 +1273,31 @@ impl Client {
     /// - Forcing a fresh server session
     /// - Testing offline message delivery
     pub async fn reconnect(self: &Arc<Self>) {
+        use wacore::time::Instant;
+
         info!("Reconnecting: dropping transport for auto-reconnect.");
+        let t_total = Instant::now();
+
         self.intentional_reconnect.store(true, Ordering::Relaxed);
         self.auto_reconnect_errors
             .store(Self::RECONNECT_BACKOFF_STEP, Ordering::Relaxed);
         self.notify_connection_shutdown();
+
+        let t = Instant::now();
         self.outbound_flush
             .flush(&*self.runtime, std::time::Duration::from_secs(2))
             .await;
+        log::debug!(target: "Client/Reconnect", "outbound_flush drained in {:?}", t.elapsed());
+
+        let t = Instant::now();
         if let Some(transport) = self.transport.lock().await.as_ref() {
+            log::debug!(target: "Client/Reconnect", "transport lock acquired in {:?}", t.elapsed());
+            let t_d = Instant::now();
             transport.disconnect().await;
+            log::debug!(target: "Client/Reconnect", "transport.disconnect() returned in {:?}", t_d.elapsed());
         }
+
+        log::debug!(target: "Client/Reconnect", "reconnect teardown complete in {:?}", t_total.elapsed());
     }
 
     /// Drop the current connection and reconnect immediately with no delay.
@@ -1273,15 +1306,29 @@ impl Client {
     /// this method sets the `expected_disconnect` flag so the run loop
     /// skips the backoff delay and reconnects as fast as possible.
     pub async fn reconnect_immediately(self: &Arc<Self>) {
+        use wacore::time::Instant;
+
         info!("Reconnecting immediately (expected disconnect).");
+        let t_total = Instant::now();
+
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.notify_connection_shutdown();
+
+        let t = Instant::now();
         self.outbound_flush
             .flush(&*self.runtime, std::time::Duration::from_secs(2))
             .await;
+        log::debug!(target: "Client/Reconnect", "outbound_flush drained in {:?}", t.elapsed());
+
+        let t = Instant::now();
         if let Some(transport) = self.transport.lock().await.as_ref() {
+            log::debug!(target: "Client/Reconnect", "transport lock acquired in {:?}", t.elapsed());
+            let t_d = Instant::now();
             transport.disconnect().await;
+            log::debug!(target: "Client/Reconnect", "transport.disconnect() returned in {:?}", t_d.elapsed());
         }
+
+        log::debug!(target: "Client/Reconnect", "reconnect_immediately teardown complete in {:?}", t_total.elapsed());
     }
 
     async fn cleanup_connection_state(&self) {

@@ -31,16 +31,24 @@ impl FlushScope {
     }
 
     /// Spawn a tracked task. The counter decrements on completion OR if the
-    /// future is dropped (e.g. aborted), so `flush` can never deadlock waiting
-    /// on a cancelled task.
+    /// future is dropped (e.g. aborted, or dropped before its first poll), so
+    /// `flush` can never deadlock waiting on a cancelled task.
     pub fn spawn<F>(self: &Arc<Self>, rt: &dyn Runtime, fut: F)
     where
         F: Future<Output = ()> + Send + 'static,
     {
         self.count.fetch_add(1, Ordering::Relaxed);
-        let scope = Arc::clone(self);
+        // Construct the guard outside the async block so it's captured as an
+        // upvalue. This puts it in the future's state machine BEFORE the first
+        // poll, so even if the runtime drops the future without polling it,
+        // the guard's Drop runs and decrements the counter. Constructing the
+        // guard inside the async body would delay it until the first poll,
+        // which leaks the count if the future is dropped earlier.
+        let guard = DecrementOnDrop {
+            scope: Arc::clone(self),
+        };
         rt.spawn(Box::pin(async move {
-            let _guard = DecrementOnDrop { scope };
+            let _guard = guard;
             fut.await;
         }))
         .detach();
@@ -176,6 +184,38 @@ mod tests {
             scope.pending(),
             0,
             "DecrementOnDrop must fire when the in-flight future is dropped"
+        );
+    }
+
+    /// Regression for the field report from baileyrs (PR #576): if the outer
+    /// wrapping future is dropped *before its first poll* (e.g. the executor
+    /// is shutting down), the guard must still be dropped so the counter
+    /// decrements. Before the fix (guard constructed INSIDE the async body),
+    /// this would leak the counter and cause `flush()` to wait its full
+    /// timeout on every disconnect.
+    #[tokio::test]
+    async fn decrement_runs_when_future_is_dropped_before_first_poll() {
+        let scope = Arc::new(FlushScope::new());
+
+        // Emulate what spawn() does. The guard must be captured as an upvalue
+        // so it's in the state machine from construction, not only after the
+        // first poll.
+        scope.count.fetch_add(1, Ordering::Relaxed);
+        let guard = DecrementOnDrop {
+            scope: Arc::clone(&scope),
+        };
+        let never_polled_fut = async move {
+            let _guard = guard;
+            futures::future::pending::<()>().await;
+        };
+        assert_eq!(scope.pending(), 1);
+
+        drop(never_polled_fut);
+
+        assert_eq!(
+            scope.pending(),
+            0,
+            "guard must drop with the never-polled future"
         );
     }
 
