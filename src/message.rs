@@ -336,9 +336,12 @@ impl Client {
             return None;
         }
 
-        // Warm LID-PN cache before resolution so resolve_encryption_jid() finds the mapping
-        self.cache_lid_pn_from_message(&info.source.sender, info.source.sender_alt.as_ref())
-            .await;
+        self.cache_lid_pn_from_message(
+            &info.source.sender,
+            info.source.sender_alt.as_ref(),
+            info.is_offline,
+        )
+        .await;
         let sender_encryption_jid = self.resolve_encryption_jid(&info.source.sender).await;
 
         let unavailable_node = nr.get_optional_child("unavailable");
@@ -1392,8 +1395,12 @@ impl Client {
         }
     }
 
-    /// Cache LID-PN mapping from message attributes (before resolve_encryption_jid).
-    async fn cache_lid_pn_from_message(&self, sender: &Jid, alt: Option<&Jid>) {
+    async fn cache_lid_pn_from_message(
+        self: &Arc<Self>,
+        sender: &Jid,
+        alt: Option<&Jid>,
+        is_offline: bool,
+    ) {
         let (lid_user, pn_user, source) = if sender.is_lid() {
             if let Some(alt_jid) = alt
                 && alt_jid.is_pn()
@@ -1422,12 +1429,8 @@ impl Client {
             return;
         };
 
-        if let Err(err) = self.add_lid_pn_mapping(lid_user, pn_user, source).await {
-            warn!(
-                "Failed to cache LID-PN mapping {} <-> {}: {err}",
-                lid_user, pn_user
-            );
-        }
+        self.learn_lid_pn_mapping_fast(lid_user, pn_user, source, is_offline)
+            .await;
     }
 
     pub(crate) async fn parse_message_info(
