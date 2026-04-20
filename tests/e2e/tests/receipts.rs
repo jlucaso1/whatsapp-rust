@@ -439,3 +439,65 @@ async fn test_delivery_receipts_flushed_on_disconnect() -> anyhow::Result<()> {
     client_a.disconnect().await;
     Ok(())
 }
+
+/// Performance regression guard for issue #571 / PR #573: `disconnect()`
+/// must not pad latency when there are no pending receipt tasks. Cold
+/// disconnect (just connected, never received a message) should complete
+/// in milliseconds, not anywhere near the 5s drain cap.
+#[tokio::test]
+async fn test_disconnect_is_fast_with_no_pending_receipts() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client = TestClient::connect("e2e_rcpt_cold_disconnect").await?;
+
+    let start = std::time::Instant::now();
+    client.client.disconnect().await;
+    let elapsed = start.elapsed();
+
+    info!("cold disconnect took {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "disconnect with zero pending receipts took {elapsed:?}, expected well under 500ms — \
+         likely waiting on the receipt-drain cap"
+    );
+    Ok(())
+}
+
+/// Hot disconnect: B receives a burst of messages from A and disconnects
+/// immediately. The drain SHOULD complete fast (each receipt is a single
+/// `<receipt>` send) — significantly faster than the 5s cap. Padding here
+/// would compound across every test that creates+tears-down a client.
+#[tokio::test]
+async fn test_disconnect_is_fast_with_pending_receipts() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client_a = TestClient::connect("e2e_rcpt_hot_a").await?;
+    let mut client_b = TestClient::connect("e2e_rcpt_hot_b").await?;
+    let jid_b = client_b.jid().await;
+
+    const N: usize = 5;
+    for i in 0..N {
+        client_a
+            .client
+            .send_message(jid_b.clone(), text_msg(&format!("burst {i}")))
+            .await?;
+    }
+
+    // Wait until B observes the LAST message — receipt tasks are spawned
+    // by then but may still be in-flight on the runtime.
+    client_b.wait_for_text(&format!("burst {}", N - 1), 15).await?;
+
+    let start = std::time::Instant::now();
+    client_b.client.disconnect().await;
+    let elapsed = start.elapsed();
+
+    info!("hot disconnect with {N} pending receipts took {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "disconnect with {N} pending receipts took {elapsed:?}, expected <1s — \
+         drain is hitting the 5s cap on every call"
+    );
+
+    client_a.disconnect().await;
+    Ok(())
+}
