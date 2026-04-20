@@ -1285,29 +1285,12 @@ pub async fn prepare_group_stanza<
 
     let stanza = stanza_builder.children(message_children).build();
 
-    // Emit both LID and PN aliases when the group knows them: registry
-    // entries can be stored under either key depending on when/how usync
-    // was called, and `invalidate_device_cache` needs both to clean up
-    // zombie records without relying on `lid_pn_cache` being populated.
     let stale_users = if had_unregistered_devices {
-        let is_lid_mode = group_info.addressing_mode == crate::types::message::AddressingMode::Lid;
-        let encrypted_set: HashSet<&Jid> = skdm_encrypted_devices.iter().collect();
-        let mut user_set = HashSet::new();
-        if let Some(ref dist) = distribution_list {
-            for d in dist {
-                if !encrypted_set.contains(d) {
-                    user_set.insert(d.user.to_string());
-                    if is_lid_mode
-                        && d.is_lid()
-                        && let Some(pn_jid) = group_info.phone_jid_for_lid_user(&d.user)
-                        && pn_jid.is_pn()
-                    {
-                        user_set.insert(pn_jid.user.to_string());
-                    }
-                }
-            }
-        }
-        user_set.into_iter().collect()
+        collect_stale_device_users(
+            distribution_list.as_deref(),
+            &skdm_encrypted_devices,
+            group_info,
+        )
     } else {
         Vec::new()
     };
@@ -1317,6 +1300,38 @@ pub async fn prepare_group_stanza<
         skdm_devices: skdm_encrypted_devices,
         stale_device_users: stale_users,
     })
+}
+
+/// Collect users whose devices failed SKDM so the caller can invalidate their
+/// registry entries. In LID-mode groups, both the LID and PN aliases are
+/// emitted when the group knows the mapping — `invalidate_device_cache` needs
+/// both to clean up zombie records that were stored under whichever alias
+/// `update_device_list` canonicalised to at the time of the write.
+pub(crate) fn collect_stale_device_users(
+    distribution_list: Option<&[Jid]>,
+    skdm_encrypted_devices: &[Jid],
+    group_info: &GroupInfo,
+) -> Vec<String> {
+    let Some(dist) = distribution_list else {
+        return Vec::new();
+    };
+    let is_lid_mode = group_info.addressing_mode == crate::types::message::AddressingMode::Lid;
+    let encrypted_set: HashSet<&Jid> = skdm_encrypted_devices.iter().collect();
+    let mut user_set: HashSet<String> = HashSet::new();
+    for d in dist {
+        if encrypted_set.contains(d) {
+            continue;
+        }
+        user_set.insert(d.user.to_string());
+        if is_lid_mode
+            && d.is_lid()
+            && let Some(pn_jid) = group_info.phone_jid_for_lid_user(&d.user)
+            && pn_jid.is_pn()
+        {
+            user_set.insert(pn_jid.user.to_string());
+        }
+    }
+    user_set.into_iter().collect()
 }
 
 pub async fn create_sender_key_distribution_message_for_group(
@@ -2983,6 +2998,119 @@ mod tests {
             // This would only match if we also checked IqError (we don't — we use ServerErrorCode)
             // The SendContextResolver impl is responsible for wrapping in ServerErrorCode
             assert!(!is_device_unregistered_error(&err));
+        }
+    }
+
+    mod collect_stale_device_users {
+        use super::super::collect_stale_device_users;
+        use crate::client::context::GroupInfo;
+        use crate::types::message::AddressingMode;
+        use std::collections::{HashMap, HashSet};
+        use wacore_binary::{CompactString, Jid};
+
+        fn lid_device(user: &str, dev: u16) -> Jid {
+            Jid::lid_device(user.to_string(), dev)
+        }
+
+        fn pn_user(user: &str) -> Jid {
+            Jid::pn(user)
+        }
+
+        fn group_info_lid(mapping: &[(&str, &str)]) -> GroupInfo {
+            let mut info = GroupInfo::new(Vec::new(), AddressingMode::Lid);
+            if !mapping.is_empty() {
+                let mut map: HashMap<CompactString, Jid> = HashMap::new();
+                for (lid_user, pn) in mapping {
+                    map.insert(CompactString::from(*lid_user), pn_user(pn));
+                }
+                info.set_lid_to_pn_map(map);
+            }
+            info
+        }
+
+        #[test]
+        fn emits_lid_and_pn_alias_when_mapping_known() {
+            let info = group_info_lid(&[("100000000000001", "15550000001")]);
+            let dist = vec![lid_device("100000000000001", 5)];
+            let out = collect_stale_device_users(Some(&dist), &[], &info);
+            let set: HashSet<String> = out.into_iter().collect();
+            assert!(set.contains("100000000000001"));
+            assert!(set.contains("15550000001"));
+            assert_eq!(set.len(), 2);
+        }
+
+        #[test]
+        fn emits_only_lid_when_mapping_unknown() {
+            let info = group_info_lid(&[]);
+            let dist = vec![lid_device("100000000000002", 7)];
+            let out = collect_stale_device_users(Some(&dist), &[], &info);
+            assert_eq!(out, vec!["100000000000002".to_string()]);
+        }
+
+        #[test]
+        fn dedups_multiple_devices_of_same_user() {
+            let info = group_info_lid(&[("100000000000003", "15550000003")]);
+            let dist = vec![
+                lid_device("100000000000003", 1),
+                lid_device("100000000000003", 2),
+                lid_device("100000000000003", 3),
+            ];
+            let out = collect_stale_device_users(Some(&dist), &[], &info);
+            let set: HashSet<String> = out.into_iter().collect();
+            assert_eq!(set.len(), 2);
+            assert!(set.contains("100000000000003"));
+            assert!(set.contains("15550000003"));
+        }
+
+        #[test]
+        fn skips_successfully_encrypted_devices() {
+            let info = group_info_lid(&[]);
+            let encrypted = lid_device("100000000000004", 5);
+            let dist = vec![encrypted.clone(), lid_device("100000000000005", 5)];
+            let encrypted_set = vec![encrypted];
+            let out = collect_stale_device_users(Some(&dist), &encrypted_set, &info);
+            assert_eq!(out, vec!["100000000000005".to_string()]);
+        }
+
+        #[test]
+        fn pn_mode_group_does_not_emit_alias() {
+            // In PN-mode groups the distribution list is already PN-form, so
+            // there's no LID↔PN duality to emit.
+            let mut info = GroupInfo::new(Vec::new(), AddressingMode::Pn);
+            let mut map: HashMap<CompactString, Jid> = HashMap::new();
+            map.insert(
+                CompactString::from("100000000000006"),
+                pn_user("15550000006"),
+            );
+            info.set_lid_to_pn_map(map);
+            let dist = vec![Jid::pn_device("15550000006", 3)];
+            let out = collect_stale_device_users(Some(&dist), &[], &info);
+            assert_eq!(out, vec!["15550000006".to_string()]);
+        }
+
+        #[test]
+        fn skips_non_pn_alias() {
+            // If phone_jid_for_lid_user returns a JID whose server isn't PN
+            // (malformed/adversarial server response), do not emit it.
+            let mut info = GroupInfo::new(Vec::new(), AddressingMode::Lid);
+            let mut map: HashMap<CompactString, Jid> = HashMap::new();
+            map.insert(
+                CompactString::from("100000000000007"),
+                Jid::lid("100000000000099"),
+            );
+            info.set_lid_to_pn_map(map);
+            let dist = vec![lid_device("100000000000007", 5)];
+            let out = collect_stale_device_users(Some(&dist), &[], &info);
+            assert_eq!(out, vec!["100000000000007".to_string()]);
+        }
+
+        #[test]
+        fn empty_distribution_list_yields_empty() {
+            let info = group_info_lid(&[]);
+            let out = collect_stale_device_users(None, &[], &info);
+            assert!(out.is_empty());
+            let out = collect_stale_device_users(Some(&[]), &[], &info);
+            assert!(out.is_empty());
         }
     }
 }

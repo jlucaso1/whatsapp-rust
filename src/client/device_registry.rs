@@ -1234,4 +1234,207 @@ mod tests {
             "sender key cache should have been invalidated after device removal"
         );
     }
+
+    // ── LID↔PN zombie-path regression tests (PR #579) ───────────────────
+
+    /// U1 — `update_device_list` deletes the stale DB row when the canonical
+    /// key flips (e.g. the LID↔PN mapping is learned between two writes).
+    /// Without this, the old PN-keyed row lingers and re-surfaces as a zombie
+    /// through alias lookup, causing 406s on group sends.
+    #[tokio::test]
+    async fn test_update_device_list_canonical_flip_deletes_old_db_row() {
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+
+        let client = create_test_client().await;
+        let pn = "15550000011";
+        let lid = "100000000000011";
+        let backend = client.persistence_manager.backend();
+
+        // Legacy state: DB row stored under PN (mapping wasn't known yet).
+        backend
+            .update_device_list(DeviceListRecord {
+                user: pn.to_string(),
+                devices: vec![DeviceInfo {
+                    device_id: 5,
+                    key_index: None,
+                }],
+                timestamp: wacore::time::now_secs(),
+                phash: None,
+                raw_id: None,
+            })
+            .await
+            .unwrap();
+
+        setup_lid_pn(&client, lid, pn).await;
+
+        // New write: `update_device_list` with original_user = PN, canonical
+        // now resolves to LID because the mapping is known.
+        client
+            .update_device_list(DeviceListRecord {
+                user: pn.to_string(),
+                devices: vec![DeviceInfo {
+                    device_id: 7,
+                    key_index: None,
+                }],
+                timestamp: wacore::time::now_secs(),
+                phash: None,
+                raw_id: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            backend.get_devices(pn).await.unwrap().is_none(),
+            "old PN-keyed DB row must be deleted after canonical flip"
+        );
+        let lid_row = backend.get_devices(lid).await.unwrap();
+        assert!(lid_row.is_some(), "new LID-keyed DB row must exist");
+        assert_eq!(lid_row.unwrap().devices[0].device_id, 7);
+    }
+
+    /// U2 — `migrate_device_registry_on_lid_discovery` deletes the PN-keyed DB
+    /// row, not just the cache entry. Without this the PN row stayed around
+    /// as a zombie that surfaced via alias lookup on future sends.
+    #[tokio::test]
+    async fn test_migrate_device_registry_deletes_pn_db_row() {
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+
+        let client = create_test_client().await;
+        let pn = "15550000022";
+        let lid = "100000000000022";
+        let backend = client.persistence_manager.backend();
+
+        backend
+            .update_device_list(DeviceListRecord {
+                user: pn.to_string(),
+                devices: vec![DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                }],
+                timestamp: wacore::time::now_secs(),
+                phash: None,
+                raw_id: None,
+            })
+            .await
+            .unwrap();
+
+        setup_lid_pn(&client, lid, pn).await;
+
+        client
+            .migrate_device_registry_on_lid_discovery(pn, lid)
+            .await;
+
+        assert!(
+            backend.get_devices(pn).await.unwrap().is_none(),
+            "PN-keyed DB row must be gone after migration"
+        );
+        assert!(
+            backend.get_devices(lid).await.unwrap().is_some(),
+            "LID-keyed DB row must exist after migration"
+        );
+    }
+
+    /// U3 — `invalidate_device_cache` with a known LID↔PN mapping clears both
+    /// aliases from the DB (not only the cache). This is the primary fix for
+    /// the 23-batches-in-3h45m zombie loop from the field report.
+    #[tokio::test]
+    async fn test_invalidate_device_cache_clears_both_aliases_from_db() {
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+
+        let client = create_test_client().await;
+        let pn = "15550000033";
+        let lid = "100000000000033";
+        let backend = client.persistence_manager.backend();
+
+        // Seed DB under BOTH aliases (simulating split-brain legacy state).
+        for user in [pn, lid] {
+            backend
+                .update_device_list(DeviceListRecord {
+                    user: user.to_string(),
+                    devices: vec![DeviceInfo {
+                        device_id: 1,
+                        key_index: None,
+                    }],
+                    timestamp: wacore::time::now_secs(),
+                    phash: None,
+                    raw_id: None,
+                })
+                .await
+                .unwrap();
+        }
+        setup_lid_pn(&client, lid, pn).await;
+
+        client.invalidate_device_cache(lid).await;
+
+        assert!(
+            backend.get_devices(pn).await.unwrap().is_none(),
+            "PN DB row must be deleted via alias resolution"
+        );
+        assert!(
+            backend.get_devices(lid).await.unwrap().is_none(),
+            "LID DB row must be deleted"
+        );
+        assert!(
+            client.device_registry_cache.get(pn).await.is_none(),
+            "PN cache entry must be gone"
+        );
+        assert!(
+            client.device_registry_cache.get(lid).await.is_none(),
+            "LID cache entry must be gone"
+        );
+    }
+
+    /// U4 — TOCTOU regression: even if the cache got repopulated between the
+    /// pre-delete `invalidate` and the DB `delete_devices`, the post-delete
+    /// `invalidate` wipes it out. Simulated by pre-seeding both cache and DB
+    /// under PN, then running the canonical-flip write.
+    #[tokio::test]
+    async fn test_update_device_list_toctou_second_invalidate_clears_resurrected_cache() {
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+
+        let client = create_test_client().await;
+        let pn = "15550000044";
+        let lid = "100000000000044";
+        let backend = client.persistence_manager.backend();
+
+        let legacy = DeviceListRecord {
+            user: pn.to_string(),
+            devices: vec![DeviceInfo {
+                device_id: 9,
+                key_index: None,
+            }],
+            timestamp: wacore::time::now_secs(),
+            phash: None,
+            raw_id: None,
+        };
+        backend.update_device_list(legacy.clone()).await.unwrap();
+        // Pre-populate cache[PN] directly to emulate a concurrent reader that
+        // loaded from the DB row between the two invalidate calls.
+        client.device_registry_cache.insert(pn.into(), legacy).await;
+
+        setup_lid_pn(&client, lid, pn).await;
+
+        client
+            .update_device_list(DeviceListRecord {
+                user: pn.to_string(),
+                devices: vec![DeviceInfo {
+                    device_id: 10,
+                    key_index: None,
+                }],
+                timestamp: wacore::time::now_secs(),
+                phash: None,
+                raw_id: None,
+            })
+            .await
+            .unwrap();
+
+        assert!(
+            client.device_registry_cache.get(pn).await.is_none(),
+            "second invalidate must clear the pre-populated cache entry"
+        );
+        assert!(
+            backend.get_devices(pn).await.unwrap().is_none(),
+            "PN DB row must still be gone"
+        );
+    }
 }
