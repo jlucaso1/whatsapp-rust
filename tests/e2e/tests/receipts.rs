@@ -485,7 +485,9 @@ async fn test_disconnect_is_fast_with_pending_receipts() -> anyhow::Result<()> {
 
     // Wait until B observes the LAST message — receipt tasks are spawned
     // by then but may still be in-flight on the runtime.
-    client_b.wait_for_text(&format!("burst {}", N - 1), 15).await?;
+    client_b
+        .wait_for_text(&format!("burst {}", N - 1), 15)
+        .await?;
 
     let start = std::time::Instant::now();
     client_b.client.disconnect().await;
