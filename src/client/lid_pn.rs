@@ -9,6 +9,8 @@
 //! - Resolving JIDs to their LID equivalents
 //! - Bidirectional lookup (LID to PN and PN to LID)
 
+use std::sync::Arc;
+
 use anyhow::Result;
 use log::debug;
 use wacore::store::traits::LidPnMappingEntry;
@@ -46,31 +48,91 @@ impl Client {
         Ok(())
     }
 
-    /// Add a LID-PN mapping to both the in-memory cache and persistent storage.
-    /// This is called when we learn about a mapping from messages, usync, etc.
-    /// Also migrates any existing PN-keyed device registry entries to LID.
+    /// Awaits the persist + any device/session migrations. Hot paths should
+    /// prefer [`learn_lid_pn_mapping_fast`].
     pub(crate) async fn add_lid_pn_mapping(
         &self,
         lid: &str,
         phone_number: &str,
         source: LearningSource,
     ) -> Result<()> {
-        use anyhow::anyhow;
-        use wacore::store::traits::LidPnMappingEntry;
+        let (entry, is_new_mapping) = self
+            .record_lid_pn_in_memory(lid, phone_number, source)
+            .await;
+        self.persist_and_migrate_lid_pn(entry, is_new_mapping).await
+    }
 
-        // Check if this is a new mapping (not just an update)
+    /// Hot-path variant: cache is updated synchronously (so a subsequent
+    /// `resolve_encryption_jid` sees the mapping), DB write + migrations run
+    /// in a detached task. Matches WA Web's `warmUpLidPnMapping` + the
+    /// deferred `lidPnCacheDirtySet` flush in `WAWebDBCreateLidPnMappings`.
+    ///
+    /// `is_offline` mirrors WA Web's `flushImmediately = msgInfo.offline == null`:
+    /// offline replays only warm the in-memory cache, so a burst of queued
+    /// messages on reconnect doesn't fan out one persist task per message.
+    /// Offline mappings are re-learned from the next live message or usync.
+    ///
+    /// Durability: if the spawned persist task fails (DB error, shutdown
+    /// mid-write), the mapping is only in-memory and will be lost on restart.
+    /// Use [`add_lid_pn_mapping`] when the caller needs a durable guarantee.
+    ///
+    /// Concurrent calls for the same phone number may both observe
+    /// `is_new_mapping = true` and each spawn a persist task. The downstream
+    /// work tolerates this:
+    /// - `put_lid_mapping` is an upsert
+    /// - `migrate_device_registry_on_lid_discovery` no-ops after the PN-keyed
+    ///   record is gone
+    /// - `migrate_signal_sessions_on_lid_discovery` no-ops after the sessions
+    ///   are migrated
+    pub(crate) async fn learn_lid_pn_mapping_fast(
+        self: &Arc<Self>,
+        lid: &str,
+        phone_number: &str,
+        source: LearningSource,
+        is_offline: bool,
+    ) {
+        let (entry, is_new_mapping) = self
+            .record_lid_pn_in_memory(lid, phone_number, source)
+            .await;
+        if is_offline {
+            return;
+        }
+        let client = Arc::clone(self);
+        self.runtime
+            .spawn(Box::pin(async move {
+                if let Err(err) = client
+                    .persist_and_migrate_lid_pn(entry, is_new_mapping)
+                    .await
+                {
+                    log::warn!("Background LID-PN persist failed: {err}");
+                }
+            }))
+            .detach();
+    }
+
+    async fn record_lid_pn_in_memory(
+        &self,
+        lid: &str,
+        phone_number: &str,
+        source: LearningSource,
+    ) -> (LidPnEntry, bool) {
         let is_new_mapping = self
             .lid_pn_cache
             .get_current_lid(phone_number)
             .await
             .is_none();
-
-        // Add to in-memory cache
         let entry = LidPnEntry::new(lid.to_string(), phone_number.to_string(), source);
         self.lid_pn_cache.add(&entry).await;
+        (entry, is_new_mapping)
+    }
 
-        // Persist to storage
-        let backend = self.persistence_manager.backend();
+    async fn persist_and_migrate_lid_pn(
+        &self,
+        entry: LidPnEntry,
+        is_new_mapping: bool,
+    ) -> Result<()> {
+        use anyhow::anyhow;
+
         let storage_entry = LidPnMappingEntry {
             lid: entry.lid,
             phone_number: entry.phone_number,
@@ -79,17 +141,23 @@ impl Client {
             learning_source: entry.learning_source.as_str().to_string(),
         };
 
-        backend
+        self.persistence_manager
+            .backend()
             .put_lid_mapping(&storage_entry)
             .await
             .map_err(|e| anyhow!("persisting LID-PN mapping: {e}"))?;
 
-        // If this is a new LID mapping, migrate any existing PN-keyed entries to LID
         if is_new_mapping {
-            self.migrate_device_registry_on_lid_discovery(phone_number, lid)
-                .await;
-            self.migrate_signal_sessions_on_lid_discovery(phone_number, lid)
-                .await;
+            self.migrate_device_registry_on_lid_discovery(
+                &storage_entry.phone_number,
+                &storage_entry.lid,
+            )
+            .await;
+            self.migrate_signal_sessions_on_lid_discovery(
+                &storage_entry.phone_number,
+                &storage_entry.lid,
+            )
+            .await;
         }
 
         Ok(())
@@ -479,5 +547,23 @@ mod tests {
             .unwrap()
             .unwrap();
         assert_eq!(entry.lid, lid);
+    }
+
+    /// `learn_lid_pn_mapping_fast` must leave the in-memory cache populated
+    /// by the time it returns — `resolve_encryption_jid` runs immediately
+    /// after on the decrypt hot path and needs to find the LID.
+    #[tokio::test]
+    async fn test_learn_lid_pn_mapping_fast_populates_cache_synchronously() {
+        let client: Arc<Client> = create_test_client().await;
+        let pn = "5511999998877";
+        let lid = "200000000007788";
+
+        client
+            .learn_lid_pn_mapping_fast(lid, pn, LearningSource::PeerPnMessage, false)
+            .await;
+
+        let resolved = client.resolve_encryption_jid(&Jid::pn(pn)).await;
+        assert_eq!(resolved.user, lid, "cache must have the mapping on return");
+        assert_eq!(resolved.server, Server::Lid);
     }
 }
