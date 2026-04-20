@@ -168,6 +168,18 @@ impl Client {
             .context("Failed to update device list in backend")?;
 
         if canonical_key != original_user {
+            // Invalidate before + after delete so a concurrent reader that
+            // resurrects the cache from the about-to-be-deleted DB row still
+            // gets cleared. Run the second invalidate unconditionally: even
+            // if delete fails, the cache may have been repopulated with data
+            // that no longer reflects our intent.
+            self.device_registry_cache.invalidate(&original_user).await;
+            if let Err(e) = backend.delete_devices(&original_user).await {
+                warn!(
+                    "Failed to delete stale device row under {} after canonical flip: {e}",
+                    original_user
+                );
+            }
             self.device_registry_cache.invalidate(&original_user).await;
             debug!(
                 "Device registry: stored under LID {} (resolved from {})",
@@ -528,7 +540,15 @@ impl Client {
                     .insert(lid.to_string(), record)
                     .await;
 
-                // Clean up stale PN-keyed entry without touching the fresh LID entry.
+                // Drop the PN-keyed row in both cache and DB. Invalidate
+                // twice (before + after delete) so a concurrent reader can't
+                // resurrect the cache from the DB row between the two calls.
+                // Always run the second invalidate; even if delete fails, the
+                // cache may carry resurrected data that shouldn't stick.
+                self.device_registry_cache.invalidate(pn).await;
+                if let Err(e) = backend.delete_devices(pn).await {
+                    warn!("Failed to delete PN-keyed device row during LID migration: {e}");
+                }
                 self.device_registry_cache.invalidate(pn).await;
             }
             Ok(None) => {}

@@ -421,46 +421,22 @@ where
             "Fetching prekeys for {} devices without sessions",
             jids_needing_prekeys.len()
         );
-        // WA Web's fetchPrekeys() collects per-device errors separately and returns
-        // successful bundles. On batch 406, retry per-device so one stale device
-        // doesn't blank valid companions in the same batch.
+        // 406 on this batch is all-or-nothing — per-device retries just wasted
+        // N·RTT with the same failure. Mark `had_406` so the caller invalidates
+        // the users and the next send re-fetches. Matches WA Web's
+        // `GroupSkmsgJob`: log, continue without those devices.
         let prekey_bundles = match resolver
             .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
             .await
         {
             Ok(bundles) => bundles,
             Err(e) if is_device_unregistered_error(&e) => {
-                if jids_needing_prekeys.len() == 1 {
-                    log::warn!(
-                        "Prekey fetch returned 406 (device unregistered): {}",
-                        jids_needing_prekeys[0]
-                    );
-                    had_406 = true;
-                    std::collections::HashMap::new()
-                } else {
-                    // Batch failed: retry per-device to salvage valid ones
-                    log::warn!(
-                        "Batch prekey fetch returned 406 for {} devices, retrying individually",
-                        jids_needing_prekeys.len()
-                    );
-                    let mut bundles = std::collections::HashMap::new();
-                    for jid in &jids_needing_prekeys {
-                        match resolver
-                            .fetch_prekeys_for_identity_check(std::slice::from_ref(jid))
-                            .await
-                        {
-                            Ok(single) => bundles.extend(single),
-                            Err(e) if is_device_unregistered_error(&e) => {
-                                log::warn!("Device {jid} returned 406, skipping");
-                                had_406 = true;
-                            }
-                            Err(e) => {
-                                log::warn!("Prekey fetch for {jid} failed: {e}, skipping");
-                            }
-                        }
-                    }
-                    bundles
-                }
+                log::warn!(
+                    "Prekey fetch returned 406 for {} device(s); skipping them this round",
+                    jids_needing_prekeys.len()
+                );
+                had_406 = true;
+                std::collections::HashMap::new()
             }
             Err(e) => return Err(e),
         };
@@ -1309,15 +1285,25 @@ pub async fn prepare_group_stanza<
 
     let stanza = stanza_builder.children(message_children).build();
 
-    // Collect deduplicated users whose devices failed SKDM (were in
-    // distribution_list but not in skdm_encrypted_devices)
+    // Emit both LID and PN aliases when the group knows them: registry
+    // entries can be stored under either key depending on when/how usync
+    // was called, and `invalidate_device_cache` needs both to clean up
+    // zombie records without relying on `lid_pn_cache` being populated.
     let stale_users = if had_unregistered_devices {
+        let is_lid_mode = group_info.addressing_mode == crate::types::message::AddressingMode::Lid;
         let encrypted_set: HashSet<&Jid> = skdm_encrypted_devices.iter().collect();
         let mut user_set = HashSet::new();
         if let Some(ref dist) = distribution_list {
             for d in dist {
                 if !encrypted_set.contains(d) {
                     user_set.insert(d.user.to_string());
+                    if is_lid_mode
+                        && d.is_lid()
+                        && let Some(pn_jid) = group_info.phone_jid_for_lid_user(&d.user)
+                        && pn_jid.is_pn()
+                    {
+                        user_set.insert(pn_jid.user.to_string());
+                    }
                 }
             }
         }

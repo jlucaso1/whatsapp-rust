@@ -209,6 +209,27 @@ impl<'a> Groups<'a> {
             participants.push(p.jid);
         }
 
+        // Populate lid_pn_cache so silent-observer participants (no messages
+        // from them) get their mapping; otherwise `invalidate_device_cache`
+        // can't resolve the PN alias and leaves zombie registry entries.
+        if !lid_to_pn_map.is_empty()
+            && let Some(client_arc) = self.client.self_weak.get().and_then(|w| w.upgrade())
+        {
+            for (lid_user, pn_jid) in &lid_to_pn_map {
+                if !pn_jid.is_pn() {
+                    continue;
+                }
+                client_arc
+                    .learn_lid_pn_mapping_fast(
+                        lid_user.as_str(),
+                        &pn_jid.user,
+                        crate::lid_pn_cache::LearningSource::Other,
+                        false,
+                    )
+                    .await;
+            }
+        }
+
         let mut info = GroupInfo::new(participants, group.addressing_mode);
         if !lid_to_pn_map.is_empty() {
             info.set_lid_to_pn_map(lid_to_pn_map);
