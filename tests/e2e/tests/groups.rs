@@ -713,3 +713,52 @@ async fn test_per_device_sender_key_tracking() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+/// E1 — regression test for PR #579 Fix 1: after `query_info` on an LID-mode
+/// group, each LID participant's PN must be present in `lid_pn_cache`.
+/// This closes the silent-observer zombie loop where `invalidate_device_cache`
+/// couldn't resolve a participant's PN alias because the mapping was never
+/// learned from a message (matches WA Web's `CreateOrReplaceDisplayNamesAndLidPnMappings`).
+#[tokio::test]
+async fn test_query_info_populates_lid_pn_cache_for_participants() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client_a = TestClient::connect("e2e_grp_lidpn_a").await?;
+    let client_b = TestClient::connect("e2e_grp_lidpn_b").await?;
+
+    let jid_b_pn = client_b.jid().await;
+    let jid_b_lid = client_b
+        .client
+        .get_lid()
+        .await
+        .expect("B must have a LID after pairing")
+        .to_non_ad();
+    info!("B pn={jid_b_pn} lid={jid_b_lid}");
+
+    let group_jid = client_a
+        .client
+        .groups()
+        .create_group(GroupCreateOptions {
+            subject: "LID-PN mapping test".to_string(),
+            participants: vec![GroupParticipantOptions::new(jid_b_pn.clone())],
+            ..Default::default()
+        })
+        .await?
+        .gid;
+
+    // create_group doesn't populate the group cache, so the first query_info
+    // hits the network and runs the lid_pn_cache populate loop.
+    let _info = client_a.client.groups().query_info(&group_jid).await?;
+
+    let entry = client_a
+        .client
+        .get_lid_pn_entry(&jid_b_lid)
+        .await?
+        .expect("lid_pn_cache must have B's mapping after query_info");
+    assert_eq!(entry.lid, jid_b_lid.user);
+    assert_eq!(entry.phone_number, jid_b_pn.user);
+
+    client_a.disconnect().await;
+    client_b.disconnect().await;
+    Ok(())
+}
