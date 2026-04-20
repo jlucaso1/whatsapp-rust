@@ -426,6 +426,10 @@ pub struct Client {
     pub(crate) history_sync_tasks_in_flight: Arc<AtomicUsize>,
     /// Notifier triggered when history sync work becomes idle.
     pub(crate) history_sync_idle_notifier: Arc<event_listener::Event>,
+    /// Drained by `disconnect()` before tearing down the transport so in-flight
+    /// delivery receipts aren't dropped with `NotConnected` (issue #571).
+    pub(crate) pending_receipt_tasks: AtomicUsize,
+    pub(crate) pending_receipt_tasks_idle: event_listener::Event,
     /// Contacts with active presence subscriptions that must be re-subscribed on reconnect.
     pub(crate) presence_subscriptions: Arc<async_lock::Mutex<HashSet<Jid>>>,
     /// Metrics for granular offline sync logging
@@ -758,6 +762,8 @@ impl Client {
             offline_sync_completed: Arc::new(AtomicBool::new(false)),
             history_sync_tasks_in_flight: Arc::new(AtomicUsize::new(0)),
             history_sync_idle_notifier: Arc::new(event_listener::Event::new()),
+            pending_receipt_tasks: AtomicUsize::new(0),
+            pending_receipt_tasks_idle: event_listener::Event::new(),
             presence_subscriptions: Arc::new(async_lock::Mutex::new(HashSet::new())),
             socket_ready_notifier: Arc::new(event_listener::Event::new()),
             is_ready: Arc::new(AtomicBool::new(false)),
@@ -1210,8 +1216,13 @@ impl Client {
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
         self.shutdown_notifier.notify();
+        // Stop the read loop first so no new stanzas enter the pipeline while
+        // we're flushing receipts (issue #571).
+        self.notify_connection_shutdown();
 
-        // Flush dirty device state before tearing down the connection.
+        self.wait_for_pending_receipts(std::time::Duration::from_secs(5))
+            .await;
+
         if let Err(e) = self.persistence_manager.flush().await {
             log::error!("Failed to flush device state during disconnect: {e}");
         }
@@ -1220,6 +1231,38 @@ impl Client {
             transport.disconnect().await;
         }
         self.cleanup_connection_state().await;
+    }
+
+    async fn wait_for_pending_receipts(self: &Arc<Self>, timeout: std::time::Duration) {
+        use wacore::time::Instant;
+
+        let deadline = Instant::now() + timeout;
+        loop {
+            let listener = self.pending_receipt_tasks_idle.listen();
+            if self.pending_receipt_tasks.load(Ordering::Acquire) == 0 {
+                return;
+            }
+
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                log::warn!(
+                    "Timed out flushing {} in-flight delivery receipt task(s) during disconnect",
+                    self.pending_receipt_tasks.load(Ordering::Relaxed)
+                );
+                return;
+            }
+
+            if wacore::runtime::timeout(&*self.runtime, remaining, listener)
+                .await
+                .is_err()
+            {
+                log::warn!(
+                    "Timed out flushing {} in-flight delivery receipt task(s) during disconnect",
+                    self.pending_receipt_tasks.load(Ordering::Relaxed)
+                );
+                return;
+            }
+        }
     }
 
     /// Backoff step used by [`reconnect()`] to create an offline window.
@@ -1247,6 +1290,9 @@ impl Client {
         self.intentional_reconnect.store(true, Ordering::Relaxed);
         self.auto_reconnect_errors
             .store(Self::RECONNECT_BACKOFF_STEP, Ordering::Relaxed);
+        self.notify_connection_shutdown();
+        self.wait_for_pending_receipts(std::time::Duration::from_secs(2))
+            .await;
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }
@@ -1260,6 +1306,9 @@ impl Client {
     pub async fn reconnect_immediately(self: &Arc<Self>) {
         info!("Reconnecting immediately (expected disconnect).");
         self.expected_disconnect.store(true, Ordering::Relaxed);
+        self.notify_connection_shutdown();
+        self.wait_for_pending_receipts(std::time::Duration::from_secs(2))
+            .await;
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }
