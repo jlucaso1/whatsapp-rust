@@ -447,6 +447,21 @@ pub enum Event {
     /// Gated by `Client::set_raw_node_forwarding(true)` to avoid overhead when unused.
     #[serde(skip)]
     RawNode(Arc<OwnedNodeRef>),
+
+    /// Server-pushed MEX (GraphQL) update. Routed by the textual `op_name`,
+    /// which is stable across WA Web bundle releases.
+    MexNotification(MexNotification),
+}
+
+/// `payload` shape depends on `op_name`. `offline` is true when the server
+/// replays this as part of the post-connect backlog rather than live.
+#[derive(Debug, Clone, Serialize)]
+pub struct MexNotification {
+    pub op_name: String,
+    pub from: Option<Jid>,
+    pub stanza_id: Option<String>,
+    pub offline: bool,
+    pub payload: serde_json::Value,
 }
 
 impl Event {

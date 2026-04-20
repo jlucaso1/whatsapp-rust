@@ -695,7 +695,7 @@ impl<'a> Groups<'a> {
             .client
             .mex()
             .mutate(MexRequest {
-                doc_id: wacore::iq::groups::mex_docs::UPDATE_GROUP_PROPERTY,
+                doc: wacore::iq::mex_ids::groups::UPDATE_GROUP_PROPERTY,
                 variables: serde_json::json!({
                     "group_id": jid.to_string(),
                     "update": update,
