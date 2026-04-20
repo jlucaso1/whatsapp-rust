@@ -1345,7 +1345,20 @@ impl Client {
         // with the next one after reconnect. Uses the PER-CONNECTION signal
         // so the terminal shutdown_notifier stays clean for reconnects.
         self.notify_connection_shutdown();
-        *self.transport.lock().await = None;
+        // Take + disconnect the transport so the underlying socket is closed
+        // even when cleanup_connection_state runs on a path other than
+        // `Client::disconnect()` (e.g. the run loop calling this after
+        // graceful message-loop exit triggered by the shutdown signal).
+        // Without this, a concurrent user-initiated disconnect can race the
+        // run loop: run loop wins, clears transport to None, user's
+        // `disconnect()` then sees None and skips transport teardown,
+        // leaving the socket un-closed (observed empirically with 3+
+        // concurrent `disconnect()` calls on a single-threaded executor).
+        // `transport.disconnect()` is expected to be idempotent so it's fine
+        // if `Client::disconnect()` also calls it on the same transport.
+        if let Some(transport) = self.transport.lock().await.take() {
+            transport.disconnect().await;
+        }
         *self.transport_events.lock().await = None;
         *self.noise_socket.lock().await = None;
         // Clear is_connected AFTER noise_socket is None, so no task can see
