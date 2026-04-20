@@ -453,14 +453,15 @@ pub enum Event {
     MexNotification(MexNotification),
 }
 
-/// `payload` shape depends on `op_name`. `offline` is true when the server
-/// replays this as part of the post-connect backlog rather than live.
+/// `payload` shape depends on `op_name`. `offline` mirrors the raw string
+/// the server sets when replaying backlog (often a timestamp); presence
+/// alone signals backlog vs live.
 #[derive(Debug, Clone, Serialize)]
 pub struct MexNotification {
     pub op_name: String,
     pub from: Option<Jid>,
     pub stanza_id: Option<String>,
-    pub offline: bool,
+    pub offline: Option<String>,
     pub payload: serde_json::Value,
 }
 

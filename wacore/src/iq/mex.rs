@@ -129,6 +129,7 @@ impl MexQuerySpec {
 fn looks_like_stale_persisted_query(error: &MexGraphQLError) -> bool {
     let msg = error.message.as_bytes();
     contains_ascii_ci(msg, b"doc_id")
+        || contains_ascii_ci(msg, b"persistedquery")
         || contains_ascii_ci(msg, b"persisted query")
         || contains_ascii_ci(msg, b"document not found")
         || contains_ascii_ci(msg, b"unknown query")
@@ -316,6 +317,9 @@ mod tests {
         )));
         assert!(looks_like_stale_persisted_query(&mk(
             "Persisted query not registered"
+        )));
+        assert!(looks_like_stale_persisted_query(&mk(
+            "PersistedQueryNotFound"
         )));
         assert!(looks_like_stale_persisted_query(&mk(
             "Document not found for id"

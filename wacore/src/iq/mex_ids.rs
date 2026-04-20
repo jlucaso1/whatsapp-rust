@@ -106,3 +106,51 @@ pub mod reachout_timelock {
         id: "23983697327930364",
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// Every registered doc must have a unique `name` and a unique `id`.
+    /// A duplicate usually means a copy-paste slip when adding a new entry.
+    #[test]
+    fn doc_ids_are_unique() {
+        let docs: &[MexDoc] = &[
+            community::FETCH_ALL_SUBGROUPS,
+            community::FETCH_SUBGROUP_SUGGESTIONS,
+            community::FETCH_SUBGROUP_PARTICIPANT_COUNT,
+            groups::UPDATE_GROUP_PROPERTY,
+            newsletter::LIST_SUBSCRIBED,
+            newsletter::FETCH_METADATA,
+            newsletter::FETCH_DEHYDRATED,
+            newsletter::CREATE,
+            newsletter::UPDATE,
+            newsletter::JOIN,
+            newsletter::LEAVE,
+            newsletter::FETCH_ADMIN_COUNT,
+            newsletter::FETCH_ADMIN_CAPABILITIES,
+            newsletter::FETCH_PENDING_INVITES,
+            newsletter::FETCH_SUBSCRIBERS,
+            newsletter::FETCH_REACTION_SENDERS,
+            reachout_timelock::FETCH,
+        ];
+
+        let mut names: HashSet<&'static str> = HashSet::with_capacity(docs.len());
+        let mut ids: HashSet<&'static str> = HashSet::with_capacity(docs.len());
+        for d in docs {
+            assert!(
+                names.insert(d.name),
+                "duplicate MexDoc name: {} (id={})",
+                d.name,
+                d.id
+            );
+            assert!(
+                ids.insert(d.id),
+                "duplicate MexDoc id: {} (name={})",
+                d.id,
+                d.name
+            );
+        }
+    }
+}

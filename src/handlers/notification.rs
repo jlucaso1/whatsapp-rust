@@ -1338,16 +1338,17 @@ fn handle_mex_notification(client: &Arc<Client>, node: &NodeRef<'_>) {
         return;
     };
 
-    let body = match update_node.content.as_deref() {
-        Some(NodeContentRef::String(s)) => s.as_bytes(),
-        Some(NodeContentRef::Bytes(b)) => b.as_ref(),
+    // `from_str` skips the redundant UTF-8 validation `from_slice` would
+    // do on a `&str`.
+    let parsed = match update_node.content.as_deref() {
+        Some(NodeContentRef::String(s)) => serde_json::from_str(s),
+        Some(NodeContentRef::Bytes(b)) => serde_json::from_slice(b.as_ref()),
         _ => {
             warn!(target: "Client/Mex", "mex notification op={op_name} has no JSON body");
             return;
         }
     };
-
-    let payload: serde_json::Value = match serde_json::from_slice(body) {
+    let payload: serde_json::Value = match parsed {
         Ok(v) => v,
         Err(e) => {
             warn!(target: "Client/Mex", "mex notification op={op_name} JSON parse failed: {e}");
@@ -1358,10 +1359,14 @@ fn handle_mex_notification(client: &Arc<Client>, node: &NodeRef<'_>) {
     let mut attrs = node.attrs();
     let from = attrs.optional_jid("from");
     let stanza_id = attrs.optional_string("id").map(|s| s.into_owned());
-    let offline = attrs.optional_string("offline").is_some();
+    let offline = attrs.optional_string("offline").map(|s| s.into_owned());
     let op_name = op_name.into_owned();
 
-    debug!(target: "Client/Mex", "mex notification received: op_name={op_name} offline={offline}");
+    debug!(
+        target: "Client/Mex",
+        "mex notification received: op_name={op_name} offline={}",
+        offline.is_some()
+    );
     client
         .core
         .event_bus
