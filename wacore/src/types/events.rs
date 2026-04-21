@@ -1,7 +1,6 @@
 use crate::stanza::BusinessSubscription;
-use crate::types::call::{BasicCallMeta, CallMediaType, CallRemoteMeta};
+use crate::types::call::{BasicCallMeta, CallMediaType, CallRemoteMeta, IncomingCall};
 use crate::types::message::MessageInfo;
-use crate::types::newsletter::{NewsletterMetadata, NewsletterMuteState, NewsletterRole};
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use bytes::Bytes;
 use chrono::{DateTime, Duration, Utc};
@@ -9,127 +8,156 @@ use prost::Message;
 use serde::Serialize;
 use std::fmt;
 use std::sync::{Arc, OnceLock, RwLock};
-use wacore_binary::jid::{Jid, MessageId};
-use wacore_binary::node::Node;
-use waproto::whatsapp::{self as wa, HistorySync};
+use wacore_binary::Node;
+use wacore_binary::OwnedNodeRef;
+use wacore_binary::{Jid, MessageId};
+use waproto::whatsapp as wa;
 
-/// Wrapper for large event data that uses Arc for cheap cloning.
-/// This avoids cloning large protobuf messages when dispatching events.
-#[derive(Debug, Clone)]
-pub struct SharedData<T>(pub Arc<T>);
-
-impl<T> SharedData<T> {
-    pub fn new(data: T) -> Self {
-        Self(Arc::new(data))
-    }
-}
-
-impl<T> std::ops::Deref for SharedData<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl<T: Serialize> Serialize for SharedData<T> {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        self.0.serialize(serializer)
-    }
-}
-
-/// A lazily-parsed conversation from history sync.
+/// A lazily-parsed history sync blob.
 ///
-/// The raw protobuf bytes are stored and only parsed when accessed.
-/// This allows emitting events without the cost of parsing if the
-/// consumer doesn't actually need the conversation data.
+/// Wraps the decompressed protobuf bytes and only decodes on first access.
+/// With `Arc<Event>` dispatch, all handlers share the same `LazyHistorySync`
+/// so `OnceLock` gives parse-once semantics for free.
 ///
-/// Uses `bytes::Bytes` for zero-copy reference counting. Cloning is O(1)
-/// and parsing only happens once on first access.
-#[derive(Clone)]
-pub struct LazyConversation {
-    /// Raw protobuf bytes using Bytes for zero-copy cloning.
-    /// Bytes is reference-counted internally, so clones share the same data.
+/// Cheap metadata (`sync_type`, `chunk_order`, `progress`) is available
+/// without decoding — useful for filtering events.
+///
+/// Call [`get()`](Self::get) for full access to conversations, pushnames,
+/// global settings, past participants, call logs, and everything else in
+/// the `wa::HistorySync` proto.
+pub struct LazyHistorySync {
     raw_bytes: Bytes,
-    /// Cached parsed result, initialized on first access.
-    parsed: Arc<OnceLock<wa::Conversation>>,
+    sync_type: i32,
+    chunk_order: Option<u32>,
+    progress: Option<u32>,
+    parsed: OnceLock<Option<Box<wa::HistorySync>>>,
 }
 
-impl LazyConversation {
-    /// Create a new lazy conversation from raw protobuf bytes.
-    /// The bytes are moved into Bytes for zero-copy sharing.
-    pub fn new(raw_bytes: Vec<u8>) -> Self {
+impl Clone for LazyHistorySync {
+    fn clone(&self) -> Self {
         Self {
-            raw_bytes: Bytes::from(raw_bytes),
-            parsed: Arc::new(OnceLock::new()),
+            raw_bytes: self.raw_bytes.clone(),
+            sync_type: self.sync_type,
+            chunk_order: self.chunk_order,
+            progress: self.progress,
+            parsed: OnceLock::new(), // don't deep-copy the decoded proto
         }
     }
+}
 
-    /// Create from an existing Bytes instance (true zero-copy).
-    pub fn from_bytes(raw_bytes: Bytes) -> Self {
+impl LazyHistorySync {
+    pub fn new(
+        raw_bytes: Bytes,
+        sync_type: i32,
+        chunk_order: Option<u32>,
+        progress: Option<u32>,
+    ) -> Self {
         Self {
             raw_bytes,
-            parsed: Arc::new(OnceLock::new()),
+            sync_type,
+            chunk_order,
+            progress,
+            parsed: OnceLock::new(),
         }
     }
 
-    /// Get the parsed conversation, parsing on first access.
-    /// Returns None if parsing fails (empty id indicates invalid conversation).
-    pub fn get(&self) -> Option<&wa::Conversation> {
-        let conv = self
-            .parsed
-            .get_or_init(|| wa::Conversation::decode(&self.raw_bytes[..]).unwrap_or_default());
-        (!conv.id.is_empty()).then_some(conv)
+    /// History sync type (e.g. InitialBootstrap, Recent, PushName).
+    /// Available without decoding the proto.
+    pub fn sync_type(&self) -> i32 {
+        self.sync_type
     }
 
-    /// Get the parsed conversation, parsing on first access.
-    /// Panics if parsing fails (use `get()` for fallible access).
-    pub fn conversation(&self) -> &wa::Conversation {
-        self.parsed.get_or_init(|| {
-            let mut conv = wa::Conversation::decode(&self.raw_bytes[..])
-                .expect("Failed to decode conversation");
-            // Strip heavy fields after parsing to reduce memory
-            conv.messages.clear();
-            conv.messages.shrink_to_fit();
-            conv
-        })
+    /// Chunk ordering for multi-chunk transfers.
+    pub fn chunk_order(&self) -> Option<u32> {
+        self.chunk_order
+    }
+
+    /// Sync progress (0-100).
+    pub fn progress(&self) -> Option<u32> {
+        self.progress
+    }
+
+    /// Full decode of the history sync proto, cached via OnceLock.
+    /// Returns `None` if decoding fails.
+    ///
+    /// Note: decoding materializes the full proto in memory alongside the
+    /// raw bytes (~2x decompressed size). For large InitialBootstrap blobs,
+    /// prefer [`raw_bytes()`](Self::raw_bytes) with partial decoding if
+    /// you only need specific fields.
+    pub fn get(&self) -> Option<&wa::HistorySync> {
+        self.parsed
+            .get_or_init(|| {
+                wa::HistorySync::decode(&self.raw_bytes[..])
+                    .ok()
+                    .map(Box::new)
+            })
+            .as_deref()
+    }
+
+    /// Access the raw decompressed protobuf bytes for custom/partial decoding.
+    pub fn raw_bytes(&self) -> &[u8] {
+        &self.raw_bytes
     }
 }
 
-impl fmt::Debug for LazyConversation {
+impl fmt::Debug for LazyHistorySync {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Some(conv) = self.parsed.get() {
-            f.debug_struct("LazyConversation")
-                .field("id", &conv.id)
-                .field("parsed", &true)
-                .finish()
-        } else {
-            f.debug_struct("LazyConversation")
-                .field("raw_size", &self.raw_bytes.len())
-                .field("parsed", &false)
-                .finish()
-        }
+        f.debug_struct("LazyHistorySync")
+            .field("sync_type", &self.sync_type)
+            .field("chunk_order", &self.chunk_order)
+            .field("progress", &self.progress)
+            .field("raw_size", &self.raw_bytes.len())
+            .field(
+                "parsed",
+                &self.parsed.get().and_then(|o| o.as_ref()).is_some(),
+            )
+            .finish()
     }
 }
 
-impl Serialize for LazyConversation {
+impl Serialize for LazyHistorySync {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
-        // Only serialize if parsed, otherwise serialize as null/empty
-        if let Some(conv) = self.parsed.get() {
-            conv.serialize(serializer)
-        } else {
-            serializer.serialize_none()
-        }
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("LazyHistorySync", 3)?;
+        s.serialize_field("sync_type", &self.sync_type)?;
+        s.serialize_field("chunk_order", &self.chunk_order)?;
+        s.serialize_field("progress", &self.progress)?;
+        s.end()
     }
 }
 
 pub trait EventHandler: Send + Sync {
-    fn handle_event(&self, event: &Event);
+    fn handle_event(&self, event: Arc<Event>);
+}
+
+/// Event handler that forwards events to an async channel.
+///
+/// # Example
+/// ```ignore
+/// let (handler, rx) = ChannelEventHandler::new();
+/// client.register_handler(handler);
+/// while let Ok(event) = rx.recv().await {
+///     if matches!(&*event, Event::Connected(_)) { break; }
+/// }
+/// ```
+pub struct ChannelEventHandler {
+    tx: async_channel::Sender<Arc<Event>>,
+}
+
+impl ChannelEventHandler {
+    pub fn new() -> (Arc<Self>, async_channel::Receiver<Arc<Event>>) {
+        let (tx, rx) = async_channel::unbounded();
+        (Arc::new(Self { tx }), rx)
+    }
+}
+
+impl EventHandler for ChannelEventHandler {
+    fn handle_event(&self, event: Arc<Event>) {
+        let _ = self.tx.try_send(event);
+    }
 }
 
 #[derive(Default, Clone)]
@@ -159,14 +187,18 @@ impl CoreEventBus {
             .is_empty()
     }
 
-    pub fn dispatch(&self, event: &Event) {
-        for handler in self
+    pub fn dispatch(&self, event: Event) {
+        let handlers = self
             .handlers
             .read()
             .expect("RwLock should not be poisoned")
-            .iter()
-        {
-            handler.handle_event(event);
+            .clone();
+        if handlers.is_empty() {
+            return;
+        }
+        let event = Arc::new(event);
+        for handler in &handlers {
+            handler.handle_event(Arc::clone(&event));
         }
     }
 }
@@ -180,13 +212,16 @@ pub struct SelfPushNameUpdated {
 
 /// Type of device list update notification.
 /// Matches WhatsApp Web's device notification types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum DeviceListUpdateType {
     /// A device was added to the user's account
+    #[wire = "add"]
     Add,
     /// A device was removed from the user's account
+    #[wire = "remove"]
     Remove,
     /// Device information was updated
+    #[wire = "update"]
     Update,
 }
 
@@ -231,15 +266,34 @@ pub struct DeviceListUpdate {
     pub contact_hash: Option<String>,
 }
 
+/// Identity key changed for a user (e.g., user reinstalled WhatsApp).
+/// Emitted after device record cleanup so sessions and sender keys are cleared.
+#[derive(Debug, Clone, Serialize)]
+pub struct IdentityChange {
+    /// The user whose identity changed
+    pub user: Jid,
+    /// Optional LID for the user
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lid_user: Option<Jid>,
+}
+
 /// Type of business status update.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum BusinessUpdateType {
+    #[wire = "removed_as_business"]
     RemovedAsBusiness,
+    #[wire = "verified_name_changed"]
     VerifiedNameChanged,
+    #[wire = "profile_updated"]
     ProfileUpdated,
+    #[wire = "products_updated"]
     ProductsUpdated,
+    #[wire = "collections_updated"]
     CollectionsUpdated,
+    #[wire = "subscriptions_updated"]
     SubscriptionsUpdated,
+    #[wire_default]
+    #[wire = "unknown"]
     Unknown,
 }
 
@@ -273,9 +327,11 @@ impl From<crate::stanza::business::BusinessNotificationType> for BusinessUpdateT
 /// Business status update notification.
 #[derive(Debug, Clone, Serialize)]
 pub struct BusinessStatusUpdate {
+    /// The business account whose status changed.
     pub jid: Jid,
     pub update_type: BusinessUpdateType,
-    pub timestamp: i64,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub timestamp: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_jid: Option<Jid>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -290,7 +346,25 @@ pub struct BusinessStatusUpdate {
     pub subscriptions: Vec<BusinessSubscription>,
 }
 
+/// A contact's default disappearing messages setting changed.
+///
+/// Sent by the server as `<notification type="disappearing_mode">`.
+/// WA Web: `WAWebHandleDisappearingModeNotification` →
+/// `WAWebUpdateDisappearingModeForContact`.
 #[derive(Debug, Clone, Serialize)]
+pub struct DisappearingModeChanged {
+    /// The contact whose setting changed.
+    pub from: Jid,
+    /// New duration in seconds (0 = disabled, 86400 = 24h, etc.).
+    pub duration: u32,
+    /// When the setting was changed.
+    /// Consumers should only apply this if it's newer than their stored value.
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub setting_timestamp: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub enum Event {
     Connected(Connected),
     Disconnected(Disconnected),
@@ -312,36 +386,47 @@ pub enum Event {
     QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
     ClientOutdated(ClientOutdated),
 
-    Message(Box<wa::Message>, MessageInfo),
+    Message(Box<wa::Message>, Arc<MessageInfo>),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
-    Notification(Node),
+    #[serde(skip)]
+    Notification(Arc<OwnedNodeRef>),
 
     ChatPresence(ChatPresenceUpdate),
     Presence(PresenceUpdate),
     PictureUpdate(PictureUpdate),
     UserAboutUpdate(UserAboutUpdate),
+    ContactUpdated(ContactUpdated),
+    ContactNumberChanged(ContactNumberChanged),
+    ContactSyncRequested(ContactSyncRequested),
 
-    JoinedGroup(LazyConversation),
-    GroupInfoUpdate {
-        jid: Jid,
-        update: Box<wa::SyncActionValue>,
-    },
+    /// Group metadata/settings/participant change from w:gp2 notification.
+    GroupUpdate(GroupUpdate),
     ContactUpdate(ContactUpdate),
+
+    /// Incoming `<call>` stanza from the server (offer, preaccept, accept,
+    /// reject, terminate). Mirror of WA Web's inbound call signaling.
+    IncomingCall(IncomingCall),
 
     PushNameUpdate(PushNameUpdate),
     SelfPushNameUpdated(SelfPushNameUpdated),
     PinUpdate(PinUpdate),
     MuteUpdate(MuteUpdate),
     ArchiveUpdate(ArchiveUpdate),
+    StarUpdate(StarUpdate),
     MarkChatAsReadUpdate(MarkChatAsReadUpdate),
+    DeleteChatUpdate(DeleteChatUpdate),
+    DeleteMessageForMeUpdate(DeleteMessageForMeUpdate),
 
-    HistorySync(HistorySync),
+    HistorySync(Box<LazyHistorySync>),
     OfflineSyncPreview(OfflineSyncPreview),
     OfflineSyncCompleted(OfflineSyncCompleted),
 
     /// Device list changed for a user (device added/removed/updated)
     DeviceListUpdate(DeviceListUpdate),
+
+    /// Identity key changed (user reinstalled WhatsApp)
+    IdentityChange(IdentityChange),
 
     /// Business account status changed (verified name, profile, conversion to personal)
     BusinessStatusUpdate(BusinessStatusUpdate),
@@ -355,6 +440,72 @@ pub enum Event {
     TemporaryBan(TemporaryBan),
     ConnectFailure(ConnectFailure),
     StreamError(StreamError),
+
+    /// A contact changed their default disappearing messages setting.
+    DisappearingModeChanged(DisappearingModeChanged),
+
+    /// Newsletter live update (reaction counts changed, message updates, etc.).
+    NewsletterLiveUpdate(NewsletterLiveUpdate),
+
+    /// Raw decoded stanza, emitted before router dispatch.
+    /// Library extension — no WA Web equivalent (WA Web has no raw stanza observer).
+    /// Gated by `Client::set_raw_node_forwarding(true)` to avoid overhead when unused.
+    #[serde(skip)]
+    RawNode(Arc<OwnedNodeRef>),
+
+    /// Server-pushed MEX (GraphQL) update. Routed by the textual `op_name`,
+    /// which is stable across WA Web bundle releases.
+    MexNotification(MexNotification),
+}
+
+/// `payload` shape depends on `op_name`. `offline` mirrors the raw string
+/// the server sets when replaying backlog (often a timestamp); presence
+/// alone signals backlog vs live.
+#[derive(Debug, Clone, Serialize)]
+pub struct MexNotification {
+    pub op_name: String,
+    pub from: Option<Jid>,
+    pub stanza_id: Option<String>,
+    pub offline: Option<String>,
+    pub payload: serde_json::Value,
+}
+
+impl Event {
+    pub fn as_message(&self) -> Option<(&wa::Message, &MessageInfo)> {
+        if let Event::Message(msg, info) = self {
+            Some((msg, &**info))
+        } else {
+            None
+        }
+    }
+
+    pub fn message_text(&self) -> Option<&str> {
+        let (msg, _) = self.as_message()?;
+        msg.conversation.as_deref()
+    }
+}
+
+/// A newsletter live update notification, typically containing updated
+/// reaction counts for one or more messages.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdate {
+    /// The newsletter channel this update belongs to.
+    pub newsletter_jid: Jid,
+    pub messages: Vec<NewsletterLiveUpdateMessage>,
+}
+
+/// A single message entry in a newsletter live update.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdateMessage {
+    pub server_id: u64,
+    pub reactions: Vec<NewsletterLiveUpdateReaction>,
+}
+
+/// A reaction count in a newsletter live update.
+#[derive(Debug, Clone, Serialize)]
+pub struct NewsletterLiveUpdateReaction {
+    pub code: String,
+    pub count: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -392,40 +543,21 @@ pub struct LoggedOut {
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamReplaced;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::WireEnum)]
+#[wire(kind = "int")]
 pub enum TempBanReason {
+    #[wire = 101]
     SentToTooManyPeople,
+    #[wire = 102]
     BlockedByUsers,
+    #[wire = 103]
     CreatedTooManyGroups,
+    #[wire = 104]
     SentTooManySameMessage,
+    #[wire = 106]
     BroadcastList,
+    #[wire_fallback]
     Unknown(i32),
-}
-
-impl From<i32> for TempBanReason {
-    fn from(code: i32) -> Self {
-        match code {
-            101 => Self::SentToTooManyPeople,
-            102 => Self::BlockedByUsers,
-            103 => Self::CreatedTooManyGroups,
-            104 => Self::SentTooManySameMessage,
-            106 => Self::BroadcastList,
-            _ => Self::Unknown(code),
-        }
-    }
-}
-
-impl TempBanReason {
-    pub fn code(&self) -> i32 {
-        match self {
-            Self::SentToTooManyPeople => 101,
-            Self::BlockedByUsers => 102,
-            Self::CreatedTooManyGroups => 103,
-            Self::SentTooManySameMessage => 104,
-            Self::BroadcastList => 106,
-            Self::Unknown(code) => *code,
-        }
-    }
 }
 
 impl fmt::Display for TempBanReason {
@@ -452,69 +584,42 @@ pub struct TemporaryBan {
     pub expire: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Serialize)]
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
+#[wire(kind = "int")]
 pub enum ConnectFailureReason {
+    #[wire = 400]
     Generic,
+    #[wire = 401]
     LoggedOut,
+    #[wire = 402]
     TempBanned,
+    #[wire = 403]
     MainDeviceGone,
+    #[wire = 406]
     UnknownLogout,
+    #[wire = 405]
     ClientOutdated,
+    #[wire = 409]
     BadUserAgent,
+    #[wire = 413]
     CatExpired,
+    #[wire = 414]
     CatInvalid,
+    #[wire = 415]
     NotFound,
+    #[wire = 418]
     ClientUnknown,
+    #[wire = 500]
     InternalServerError,
+    #[wire = 501]
     Experimental,
+    #[wire = 503]
     ServiceUnavailable,
+    #[wire_fallback]
     Unknown(i32),
 }
 
-impl From<i32> for ConnectFailureReason {
-    fn from(code: i32) -> Self {
-        match code {
-            400 => Self::Generic,
-            401 => Self::LoggedOut,
-            402 => Self::TempBanned,
-            403 => Self::MainDeviceGone,
-            406 => Self::UnknownLogout,
-            405 => Self::ClientOutdated,
-            409 => Self::BadUserAgent,
-            413 => Self::CatExpired,
-            414 => Self::CatInvalid,
-            415 => Self::NotFound,
-            418 => Self::ClientUnknown,
-            500 => Self::InternalServerError,
-            501 => Self::Experimental,
-            503 => Self::ServiceUnavailable,
-            _ => Self::Unknown(code),
-        }
-    }
-}
-
 impl ConnectFailureReason {
-    pub fn code(&self) -> i32 {
-        match self {
-            Self::Generic => 400,
-            Self::LoggedOut => 401,
-            Self::TempBanned => 402,
-            Self::MainDeviceGone => 403,
-            Self::UnknownLogout => 406,
-            Self::ClientOutdated => 405,
-            Self::BadUserAgent => 409,
-            Self::CatExpired => 413,
-            Self::CatInvalid => 414,
-            Self::NotFound => 415,
-            Self::ClientUnknown => 418,
-            Self::InternalServerError => 500,
-            Self::Experimental => 501,
-            Self::ServiceUnavailable => 503,
-            Self::Unknown(code) => *code,
-        }
-    }
-
     pub fn is_logged_out(&self) -> bool {
         matches!(
             self,
@@ -557,21 +662,26 @@ pub struct OfflineSyncCompleted {
     pub count: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum DecryptFailMode {
+    #[wire = "show"]
     Show,
+    #[wire = "hide"]
     Hide,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::WireEnum)]
 pub enum UnavailableType {
+    #[wire_default]
+    #[wire = "unknown"]
     Unknown,
+    #[wire = "view_once"]
     ViewOnce,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UndecryptableMessage {
-    pub info: MessageInfo,
+    pub info: Arc<MessageInfo>,
     pub is_unavailable: bool,
     pub unavailable_type: UnavailableType,
     pub decrypt_fail_mode: DecryptFailMode,
@@ -583,7 +693,6 @@ pub struct Receipt {
     pub message_ids: Vec<MessageId>,
     pub timestamp: DateTime<Utc>,
     pub r#type: ReceiptType,
-    pub message_sender: Jid,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -595,6 +704,7 @@ pub struct ChatPresenceUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PresenceUpdate {
+    /// The contact whose presence changed.
     pub from: Jid,
     pub unavailable: bool,
     pub last_seen: Option<DateTime<Utc>>,
@@ -602,21 +712,100 @@ pub struct PresenceUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PictureUpdate {
+    /// The JID whose picture changed (user or group).
     pub jid: Jid,
-    pub author: Jid,
+    /// The user who made the change. Present for group picture changes
+    /// (the admin who changed it). `None` for personal picture updates.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub author: Option<Jid>,
     pub timestamp: DateTime<Utc>,
-    pub photo_change: Option<wa::PhotoChange>,
+    /// Whether the picture was removed (true) or set/updated (false).
+    pub removed: bool,
+    /// The server-assigned picture ID (from `<set id="..."/>`). `None` for deletions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UserAboutUpdate {
+    /// The contact whose about text changed.
     pub jid: Jid,
     pub status: String,
     pub timestamp: DateTime<Utc>,
 }
 
+/// A contact's profile changed (server notification).
+///
+/// Emitted from `<notification type="contacts"><update jid="..."/>`.
+/// WA Web resets cached presence and refreshes the profile picture on this
+/// event — consumers should invalidate any cached presence/profile data.
+///
+/// Not to be confused with [`ContactUpdate`] which comes from app-state
+/// sync mutations (different source, different payload).
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactUpdated {
+    /// The contact whose profile was updated.
+    pub jid: Jid,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// A contact changed their phone number.
+///
+/// Emitted from `<notification type="contacts"><modify old="..." new="..."
+/// old_lid="..." new_lid="..."/>`.
+///
+/// WA Web creates two LID-PN mappings (`old_lid→old_jid`, `new_lid→new_jid`)
+/// and generates a system notification message in both old and new chats.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactNumberChanged {
+    /// Old phone number JID.
+    pub old_jid: Jid,
+    /// New phone number JID.
+    pub new_jid: Jid,
+    /// Old LID (if provided by server).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub old_lid: Option<Jid>,
+    /// New LID (if provided by server).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub new_lid: Option<Jid>,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Server requests a full contact re-sync.
+///
+/// Emitted from `<notification type="contacts"><sync after="..."/>`.
+#[derive(Debug, Clone, Serialize)]
+pub struct ContactSyncRequested {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub after: Option<DateTime<Utc>>,
+    pub timestamp: DateTime<Utc>,
+}
+
+/// Group update notification.
+///
+/// Emitted for each action in a `<notification type="w:gp2">` stanza.
+/// A single notification may produce multiple `GroupUpdate` events (one per action).
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupUpdate {
+    /// The group this update applies to
+    pub group_jid: Jid,
+    /// The admin/user who triggered the change (`participant` attribute)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participant: Option<Jid>,
+    /// Phone number JID of the participant (for LID-addressed groups)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub participant_pn: Option<Jid>,
+    /// When the change occurred
+    pub timestamp: DateTime<Utc>,
+    /// Whether the group uses LID addressing mode
+    pub is_lid_addressing_mode: bool,
+    /// The specific action
+    pub action: crate::stanza::groups::GroupNotificationAction,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ContactUpdate {
+    /// The chat/contact this sync action applies to.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ContactAction>,
@@ -625,6 +814,7 @@ pub struct ContactUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PushNameUpdate {
+    /// The contact who changed their push name.
     pub jid: Jid,
     pub message: Box<MessageInfo>,
     pub old_push_name: String,
@@ -633,6 +823,7 @@ pub struct PushNameUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct PinUpdate {
+    /// The chat being pinned or unpinned.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::PinAction>,
@@ -641,6 +832,7 @@ pub struct PinUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct MuteUpdate {
+    /// The chat being muted or unmuted.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MuteAction>,
@@ -649,6 +841,7 @@ pub struct MuteUpdate {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ArchiveUpdate {
+    /// The chat being archived or unarchived.
     pub jid: Jid,
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::ArchiveChatAction>,
@@ -656,35 +849,26 @@ pub struct ArchiveUpdate {
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct MarkChatAsReadUpdate {
-    pub jid: Jid,
+pub struct StarUpdate {
+    /// The chat containing the starred or unstarred message.
+    pub chat_jid: Jid,
+    /// The participant who sent the message. `Some` for group messages from
+    /// others, `None` for self-authored or 1-on-1 messages (wire value `"0"`).
+    pub participant_jid: Option<Jid>,
+    pub message_id: String,
+    pub from_me: bool,
     pub timestamp: DateTime<Utc>,
-    pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
+    pub action: Box<wa::sync_action_value::StarAction>,
     pub from_full_sync: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
-pub struct NewsletterJoin {
-    pub metadata: NewsletterMetadata,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NewsletterLeave {
-    pub id: Jid,
-    pub role: NewsletterRole,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NewsletterMuteChange {
-    pub id: Jid,
-    pub mute: NewsletterMuteState,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NewsletterLiveUpdate {
+pub struct MarkChatAsReadUpdate {
+    /// The chat being marked as read or unread.
     pub jid: Jid,
-    pub time: DateTime<Utc>,
-    pub messages: Vec<crate::types::newsletter::NewsletterMessage>,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
+    pub from_full_sync: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -709,4 +893,144 @@ pub struct CallRejected {
 #[derive(Debug, Clone, Serialize)]
 pub struct CallEnded {
     pub meta: BasicCallMeta,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteChatUpdate {
+    /// The chat being deleted.
+    pub jid: Jid,
+    /// From the index, not the proto — DeleteChatAction only has messageRange.
+    pub delete_media: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::DeleteChatAction>,
+    pub from_full_sync: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeleteMessageForMeUpdate {
+    /// The chat containing the deleted message.
+    pub chat_jid: Jid,
+    pub participant_jid: Option<Jid>,
+    pub message_id: String,
+    pub from_me: bool,
+    pub timestamp: DateTime<Utc>,
+    pub action: Box<wa::sync_action_value::DeleteMessageForMeAction>,
+    pub from_full_sync: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use prost::Message;
+    use waproto::whatsapp as wa;
+
+    /// Build a HistorySync proto with conversations and encode it.
+    fn make_history_sync_bytes(conversations: Vec<wa::Conversation>) -> Vec<u8> {
+        let hs = wa::HistorySync {
+            sync_type: wa::history_sync::HistorySyncType::InitialBootstrap as i32,
+            conversations,
+            ..Default::default()
+        };
+        hs.encode_to_vec()
+    }
+
+    #[test]
+    fn lazy_history_sync_get_decodes() {
+        let bytes = make_history_sync_bytes(vec![wa::Conversation {
+            id: "chat@s.whatsapp.net".to_string(),
+            ..Default::default()
+        }]);
+        let lazy = LazyHistorySync::new(Bytes::from(bytes), 0, None, None);
+
+        let hs = lazy.get().expect("should decode");
+        assert_eq!(hs.conversations.len(), 1);
+        assert_eq!(hs.conversations[0].id, "chat@s.whatsapp.net");
+    }
+
+    #[test]
+    fn lazy_history_sync_caches_decode() {
+        let bytes = make_history_sync_bytes(vec![wa::Conversation {
+            id: "test@g.us".to_string(),
+            ..Default::default()
+        }]);
+        let lazy = LazyHistorySync::new(Bytes::from(bytes), 0, None, None);
+
+        let first = lazy.get().expect("first decode");
+        let second = lazy.get().expect("second decode");
+        // Same reference — OnceLock cached it
+        assert!(std::ptr::eq(first, second));
+    }
+
+    #[test]
+    fn lazy_history_sync_cheap_metadata() {
+        let bytes = make_history_sync_bytes(vec![]);
+        let lazy = LazyHistorySync::new(Bytes::from(bytes), 3, Some(2), Some(50));
+
+        assert_eq!(lazy.sync_type(), 3);
+        assert_eq!(lazy.chunk_order(), Some(2));
+        assert_eq!(lazy.progress(), Some(50));
+    }
+
+    #[test]
+    fn lazy_history_sync_raw_bytes() {
+        let bytes = make_history_sync_bytes(vec![wa::Conversation {
+            id: "raw@s.whatsapp.net".to_string(),
+            ..Default::default()
+        }]);
+        let raw = bytes.clone();
+        let lazy = LazyHistorySync::new(Bytes::from(bytes), 0, None, None);
+
+        assert_eq!(lazy.raw_bytes(), &raw[..]);
+
+        // Consumer can partial-decode from raw_bytes
+        let decoded = wa::HistorySync::decode(lazy.raw_bytes()).expect("should decode");
+        assert_eq!(decoded.conversations[0].id, "raw@s.whatsapp.net");
+    }
+
+    #[test]
+    fn lazy_history_sync_empty_bytes_decodes_default() {
+        // Empty protobuf bytes are valid — decode to default HistorySync
+        let lazy = LazyHistorySync::new(Bytes::new(), 0, None, None);
+        let hs = lazy.get().expect("empty bytes decode to default");
+        assert!(hs.conversations.is_empty());
+    }
+
+    #[test]
+    fn lazy_history_sync_corrupt_bytes_returns_none() {
+        let lazy = LazyHistorySync::new(Bytes::from_static(&[0xFF, 0xFF, 0xFF]), 0, None, None);
+        assert!(lazy.get().is_none());
+    }
+
+    #[test]
+    fn lazy_history_sync_preserves_messages() {
+        let conv = wa::Conversation {
+            id: "chat@s.whatsapp.net".to_string(),
+            messages: vec![wa::HistorySyncMsg {
+                message: Some(wa::WebMessageInfo {
+                    key: wa::MessageKey {
+                        id: Some("msg-0".to_string()),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                }),
+                msg_order_id: Some(0),
+            }],
+            ..Default::default()
+        };
+        let bytes = make_history_sync_bytes(vec![conv]);
+        let lazy = LazyHistorySync::new(Bytes::from(bytes), 0, None, None);
+
+        let hs = lazy.get().expect("should decode");
+        assert_eq!(hs.conversations[0].messages.len(), 1);
+        assert_eq!(
+            hs.conversations[0].messages[0]
+                .message
+                .as_ref()
+                .unwrap()
+                .key
+                .id
+                .as_deref(),
+            Some("msg-0")
+        );
+    }
 }

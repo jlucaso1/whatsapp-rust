@@ -1,41 +1,49 @@
-use crate::jid::Jid;
+use std::borrow::Cow;
+
 use crate::node::{Attrs, Node, NodeContent, NodeValue};
 
 #[derive(Debug, Default)]
 pub struct NodeBuilder {
-    tag: String,
+    tag: Cow<'static, str>,
     attrs: Attrs,
     content: Option<NodeContent>,
 }
 
 impl NodeBuilder {
-    pub fn new(tag: impl Into<String>) -> Self {
+    pub fn new(tag: &'static str) -> Self {
         Self {
-            tag: tag.into(),
+            tag: Cow::Borrowed(tag),
             ..Default::default()
         }
     }
 
-    pub fn attr(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
-        self.attrs.insert(key.into(), value.into());
+    /// For dynamic tags (rare).
+    pub fn new_dynamic(tag: String) -> Self {
+        Self {
+            tag: Cow::Owned(tag),
+            ..Default::default()
+        }
+    }
+
+    pub fn attr(mut self, key: &'static str, value: impl Into<NodeValue>) -> Self {
+        self.attrs.insert(Cow::Borrowed(key), value.into());
         self
     }
 
-    /// Add a JID attribute directly without stringifying.
-    /// This is more efficient than `attr(key, jid.to_string())`.
-    pub fn jid_attr(mut self, key: impl Into<String>, jid: Jid) -> Self {
-        self.attrs.insert(key.into(), NodeValue::Jid(jid));
+    /// Insert an attribute with an owned (dynamic) key. Prefer `attr` with a
+    /// `&'static str` when the key is known at compile time.
+    pub fn attr_dynamic(mut self, key: String, value: impl Into<NodeValue>) -> Self {
+        self.attrs.insert(Cow::Owned(key), value.into());
         self
     }
 
-    pub fn attrs<I, K, V>(mut self, attrs: I) -> Self
+    pub fn attrs<I, V>(mut self, attrs: I) -> Self
     where
-        I: IntoIterator<Item = (K, V)>,
-        K: Into<String>,
+        I: IntoIterator<Item = (&'static str, V)>,
         V: Into<NodeValue>,
     {
         for (key, value) in attrs.into_iter() {
-            self.attrs.insert(key.into(), value.into());
+            self.attrs.insert(Cow::Borrowed(key), value.into());
         }
         self
     }
@@ -50,7 +58,7 @@ impl NodeBuilder {
         self
     }
 
-    pub fn string_content(mut self, s: impl Into<String>) -> Self {
+    pub fn string_content(mut self, s: impl Into<crate::CompactString>) -> Self {
         self.content = Some(NodeContent::String(s.into()));
         self
     }

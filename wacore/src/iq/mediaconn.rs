@@ -16,25 +16,55 @@
 //! </iq>
 //! ```
 
+use crate::WireEnum;
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Jid, Server};
+use wacore_binary::{Node, NodeContent, NodeRef};
+
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
+pub enum HostType {
+    #[wire = "primary"]
+    #[wire_default]
+    Primary,
+    #[wire = "fallback"]
+    Fallback,
+    #[wire_fallback]
+    Other(String),
+}
 
 /// Media connection host information.
+///
+/// Hosts are sorted primary-first by `MediaConnSpec::parse_response`.
+/// WA Web: `mapParsedMediaConn` categorizes hosts as `"primary"` or `"fallback"`.
 #[derive(Debug, Clone)]
 pub struct MediaConnHost {
     pub hostname: String,
+    /// Determines retry order: primary hosts are tried first.
+    pub host_type: HostType,
+    /// Fallback hostname to try if this host fails.
+    pub fallback_hostname: Option<String>,
+}
+
+impl MediaConnHost {
+    /// Create a host with just a hostname (defaults to primary, no fallback).
+    pub fn new(hostname: String) -> Self {
+        Self {
+            hostname,
+            host_type: HostType::Primary,
+            fallback_hostname: None,
+        }
+    }
 }
 
 /// Extended media connection host with all attributes (for server-side responses).
 #[derive(Debug, Clone)]
 pub struct MediaConnHostExtended {
     pub hostname: String,
-    pub host_type: String, // "primary" or "fallback"
+    pub host_type: HostType,
     pub fallback_hostname: Option<String>,
     pub ip4: Option<String>,
     pub ip6: Option<String>,
@@ -48,7 +78,7 @@ pub struct MediaConnHostExtended {
 
 impl MediaConnHostExtended {
     /// Create a simple host (for fallback hosts).
-    pub fn simple(hostname: String, host_type: String) -> Self {
+    pub fn simple(hostname: String, host_type: HostType) -> Self {
         Self {
             hostname,
             host_type,
@@ -75,12 +105,12 @@ impl MediaConnHostExtended {
     ) -> Self {
         Self {
             hostname,
-            host_type: "primary".to_string(),
+            host_type: HostType::Primary,
             fallback_hostname: Some(fallback_hostname),
-            ip4: Some(ip4.clone()),
-            ip6: Some(ip6.clone()),
-            fallback_ip4: Some(ip4),
-            fallback_ip6: Some(ip6),
+            fallback_ip4: Some(ip4.clone()),
+            fallback_ip6: Some(ip6.clone()),
+            ip4: Some(ip4),
+            ip6: Some(ip6),
             upload: true,
             download: true,
             download_categories,
@@ -97,7 +127,7 @@ impl ProtocolNode for MediaConnHostExtended {
     fn into_node(self) -> Node {
         let mut builder = NodeBuilder::new("host")
             .attr("hostname", &self.hostname)
-            .attr("type", &self.host_type);
+            .attr("type", self.host_type.as_str());
 
         if let Some(ref fallback_hostname) = self.fallback_hostname {
             builder = builder.attr("fallback_hostname", fallback_hostname);
@@ -127,14 +157,14 @@ impl ProtocolNode for MediaConnHostExtended {
             let download_cat_nodes: Vec<Node> = self
                 .download_categories
                 .iter()
-                .map(|cat| NodeBuilder::new(cat).build())
+                .map(|cat| NodeBuilder::new_dynamic(cat.clone()).build())
                 .collect();
 
             // Build download buckets
             let download_bucket_nodes: Vec<Node> = self
                 .download_buckets
                 .iter()
-                .map(|bucket| NodeBuilder::new(bucket).build())
+                .map(|bucket| NodeBuilder::new_dynamic(bucket.clone()).build())
                 .collect();
 
             children.push(
@@ -159,7 +189,7 @@ impl ProtocolNode for MediaConnHostExtended {
         builder.build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         if node.tag != "host" {
             return Err(anyhow!("expected <host>, got <{}>", node.tag));
         }
@@ -168,31 +198,37 @@ impl ProtocolNode for MediaConnHostExtended {
         let hostname = attrs
             .optional_string("hostname")
             .ok_or_else(|| anyhow!("missing hostname attribute"))?
-            .to_string();
+            .into_owned();
         let host_type = attrs
             .optional_string("type")
-            .unwrap_or("primary")
-            .to_string();
+            .map(|s| HostType::from(s.as_ref()))
+            .unwrap_or(HostType::Primary);
 
         Ok(Self {
             hostname,
             host_type,
-            fallback_hostname: attrs.optional_string("fallback_hostname").map(String::from),
-            ip4: attrs.optional_string("ip4").map(String::from),
-            ip6: attrs.optional_string("ip6").map(String::from),
-            fallback_ip4: attrs.optional_string("fallback_ip4").map(String::from),
-            fallback_ip6: attrs.optional_string("fallback_ip6").map(String::from),
+            fallback_hostname: attrs
+                .optional_string("fallback_hostname")
+                .map(|s| s.into_owned()),
+            ip4: attrs.optional_string("ip4").map(|s| s.into_owned()),
+            ip6: attrs.optional_string("ip6").map(|s| s.into_owned()),
+            fallback_ip4: attrs
+                .optional_string("fallback_ip4")
+                .map(|s| s.into_owned()),
+            fallback_ip6: attrs
+                .optional_string("fallback_ip6")
+                .map(|s| s.into_owned()),
             upload: node.get_optional_child("upload").is_some(),
             download: node.get_optional_child("download").is_some(),
             download_categories: node
                 .get_optional_child("download")
                 .and_then(|d| d.children())
-                .map(|children| children.iter().map(|c| c.tag.clone()).collect())
+                .map(|children| children.iter().map(|c| c.tag.to_string()).collect())
                 .unwrap_or_default(),
             download_buckets: node
                 .get_optional_child("download_buckets")
                 .and_then(|d| d.children())
-                .map(|children| children.iter().map(|c| c.tag.clone()).collect())
+                .map(|children| children.iter().map(|c| c.tag.to_string()).collect())
                 .unwrap_or_default(),
         })
     }
@@ -203,6 +239,7 @@ impl ProtocolNode for MediaConnHostExtended {
 pub struct MediaConnResponse {
     pub auth: String,
     pub ttl: u64,
+    pub auth_ttl: Option<u64>,
     pub max_buckets: Option<u64>,
     pub hosts: Vec<MediaConnHost>,
 }
@@ -263,7 +300,7 @@ impl ProtocolNode for MediaConnResponseExtended {
         builder.build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self, anyhow::Error> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
         if node.tag != "media_conn" {
             return Err(anyhow!("expected <media_conn>, got <{}>", node.tag));
         }
@@ -272,17 +309,17 @@ impl ProtocolNode for MediaConnResponseExtended {
         let auth = attrs
             .optional_string("auth")
             .ok_or_else(|| anyhow!("missing auth attribute"))?
-            .to_string();
+            .into_owned();
         let ttl = attrs.optional_u64("ttl").unwrap_or(0);
         let auth_ttl = attrs.optional_u64("auth_ttl");
         let max_buckets = attrs.optional_u64("max_buckets");
-        let ip_token = attrs.optional_string("ip_token").map(String::from);
+        let ip_token = attrs.optional_string("ip_token").map(|s| s.into_owned());
         let set_ip_token = attrs.optional_u64("set_ip_token");
 
-        let mut hosts = Vec::new();
-        for host_node in node.get_children_by_tag("host") {
-            hosts.push(MediaConnHostExtended::try_from_node(host_node)?);
-        }
+        let hosts = node
+            .get_children_by_tag("host")
+            .map(MediaConnHostExtended::try_from_node_ref)
+            .collect::<Result<Vec<_>, _>>()?;
 
         Ok(Self {
             auth,
@@ -314,12 +351,12 @@ impl IqSpec for MediaConnSpec {
 
         InfoQuery::set(
             "w:m",
-            Jid::new("", SERVER_JID),
+            Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![media_conn_node])),
         )
     }
 
-    fn parse_response(&self, response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         let media_conn_node = response
             .get_optional_child("media_conn")
             .ok_or_else(|| anyhow!("Missing media_conn node in response"))?;
@@ -330,21 +367,34 @@ impl IqSpec for MediaConnSpec {
             .ok_or_else(|| anyhow!("Missing 'auth' attribute in media_conn response"))?
             .to_string();
         let ttl = attrs.optional_u64("ttl").unwrap_or(0);
+        let auth_ttl = attrs.optional_u64("auth_ttl");
         let max_buckets = attrs.optional_u64("max_buckets");
 
-        let mut hosts = Vec::new();
-        for host_node in media_conn_node.get_children_by_tag("host") {
-            let hostname = host_node
-                .attrs()
-                .optional_string("hostname")
-                .ok_or_else(|| anyhow!("Missing 'hostname' attribute in host node"))?
-                .to_string();
-            hosts.push(MediaConnHost { hostname });
-        }
+        // Parse extended host info (type, fallback) and map to MediaConnHost.
+        // Sort: primary hosts first, fallback hosts second (matches WA Web's mapParsedMediaConn).
+        let mut hosts: Vec<MediaConnHost> = media_conn_node
+            .get_children_by_tag("host")
+            .filter_map(|host_node| {
+                let ext = MediaConnHostExtended::try_from_node_ref(host_node).ok()?;
+                Some(MediaConnHost {
+                    hostname: ext.hostname,
+                    host_type: ext.host_type,
+                    fallback_hostname: ext.fallback_hostname,
+                })
+            })
+            .collect();
+        hosts.sort_by_key(|h| {
+            if h.host_type == HostType::Primary {
+                0
+            } else {
+                1
+            }
+        });
 
         Ok(MediaConnResponse {
             auth,
             ttl,
+            auth_ttl,
             max_buckets,
             hosts,
         })
@@ -394,7 +444,7 @@ mod tests {
                 .build()])
             .build();
 
-        let result = spec.parse_response(&response).unwrap();
+        let result = spec.parse_response(&response.as_node_ref()).unwrap();
 
         assert_eq!(result.auth, "test-auth-token");
         assert_eq!(result.ttl, 3600);
@@ -410,7 +460,7 @@ mod tests {
 
         let response = NodeBuilder::new("iq").attr("type", "result").build();
 
-        let result = spec.parse_response(&response);
+        let result = spec.parse_response(&response.as_node_ref());
         assert!(result.is_err());
     }
 
@@ -430,7 +480,7 @@ mod tests {
 
         let parsed = MediaConnHostExtended::try_from_node(&node).unwrap();
         assert_eq!(parsed.hostname, host.hostname);
-        assert_eq!(parsed.host_type, "primary");
+        assert_eq!(parsed.host_type, HostType::Primary);
         assert!(parsed.upload);
         assert!(parsed.download);
         assert_eq!(parsed.download_categories.len(), 2);
@@ -448,7 +498,7 @@ mod tests {
                 vec!["image".to_string()],
                 vec!["0".to_string()],
             ),
-            MediaConnHostExtended::simple("localhost:3000".to_string(), "fallback".to_string()),
+            MediaConnHostExtended::simple("localhost:3000".to_string(), HostType::Fallback),
         ];
 
         let response = MediaConnResponseExtended::mock("test-auth".to_string(), 300, hosts);
@@ -463,7 +513,7 @@ mod tests {
         assert_eq!(parsed.max_buckets, Some(12));
         assert_eq!(parsed.ip_token, Some("MOCK_IP_TOKEN".to_string()));
         assert_eq!(parsed.hosts.len(), 2);
-        assert_eq!(parsed.hosts[0].host_type, "primary");
-        assert_eq!(parsed.hosts[1].host_type, "fallback");
+        assert_eq!(parsed.hosts[0].host_type, HostType::Primary);
+        assert_eq!(parsed.hosts[1].host_type, HostType::Fallback);
     }
 }

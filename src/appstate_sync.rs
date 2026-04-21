@@ -1,342 +1,20 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use anyhow::{Result, anyhow};
-use async_trait::async_trait;
-use prost::Message;
-use tokio::sync::Mutex;
-use wacore::appstate::hash::HashState;
-use wacore::appstate::keys::ExpandedAppStateKeys;
-use wacore::appstate::patch_decode::{PatchList, WAPatchName, parse_patch_list};
-use wacore::appstate::{
-    collect_key_ids_from_patch_list, expand_app_state_keys, process_patch, process_snapshot,
-};
-use wacore::store::traits::Backend;
-use wacore_binary::node::Node;
-use waproto::whatsapp as wa;
-
-// Re-export Mutation from wacore for backwards compatibility
+// Re-export everything from wacore::appstate_sync for backwards compatibility
 pub use wacore::appstate::Mutation;
-
-#[derive(Clone)]
-pub struct AppStateProcessor {
-    backend: Arc<dyn Backend>,
-    key_cache: Arc<Mutex<HashMap<String, ExpandedAppStateKeys>>>,
-}
-
-impl AppStateProcessor {
-    pub fn new(backend: Arc<dyn Backend>) -> Self {
-        Self {
-            backend,
-            key_cache: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    async fn get_app_state_key(&self, key_id: &[u8]) -> Result<ExpandedAppStateKeys> {
-        use base64::Engine;
-        use base64::engine::general_purpose::STANDARD_NO_PAD;
-        let id_b64 = STANDARD_NO_PAD.encode(key_id);
-        if let Some(cached) = self.key_cache.lock().await.get(&id_b64).cloned() {
-            return Ok(cached);
-        }
-        let key_opt = self.backend.get_sync_key(key_id).await?;
-        let key = key_opt.ok_or_else(|| anyhow!("app state key not found"))?;
-        let expanded: ExpandedAppStateKeys = expand_app_state_keys(&key.key_data);
-        self.key_cache.lock().await.insert(id_b64, expanded.clone());
-        Ok(expanded)
-    }
-
-    /// Pre-fetch and cache all keys needed for a patch list.
-    async fn prefetch_keys(&self, pl: &PatchList) -> Result<()> {
-        let key_ids = collect_key_ids_from_patch_list(pl.snapshot.as_ref(), &pl.patches);
-        for key_id in key_ids {
-            // This will fetch and cache if not already cached
-            let _ = self.get_app_state_key(&key_id).await;
-        }
-        Ok(())
-    }
-
-    pub async fn decode_patch_list<FDownload>(
-        &self,
-        stanza_root: &Node,
-        download: FDownload,
-        validate_macs: bool,
-    ) -> Result<(Vec<Mutation>, HashState, PatchList)>
-    where
-        FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
-    {
-        let mut pl = parse_patch_list(stanza_root)?;
-
-        // Download external snapshot if present (matches WhatsApp Web behavior)
-        if pl.snapshot.is_none()
-            && let Some(ext) = &pl.snapshot_ref
-            && let Ok(data) = download(ext)
-            && let Ok(snapshot) = wa::SyncdSnapshot::decode(data.as_slice())
-        {
-            pl.snapshot = Some(snapshot);
-        }
-
-        // Download external mutations for each patch (matches WhatsApp Web behavior)
-        // WhatsApp Web: if (r.externalMutations) { n = yield downloadExternalPatch(e, r) }
-        for patch in &mut pl.patches {
-            if let Some(ext) = &patch.external_mutations {
-                let patch_version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
-                match download(ext) {
-                    Ok(data) => match wa::SyncdMutations::decode(data.as_slice()) {
-                        Ok(ext_mutations) => {
-                            log::trace!(
-                                target: "AppState",
-                                "Downloaded external mutations for patch v{}: {} mutations (inline had {})",
-                                patch_version,
-                                ext_mutations.mutations.len(),
-                                patch.mutations.len()
-                            );
-                            patch.mutations = ext_mutations.mutations;
-                        }
-                        Err(e) => {
-                            log::warn!(
-                                target: "AppState",
-                                "Failed to decode external mutations for patch v{}: {}",
-                                patch_version,
-                                e
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        log::warn!(
-                            target: "AppState",
-                            "Failed to download external mutations for patch v{}: {}",
-                            patch_version,
-                            e
-                        );
-                    }
-                }
-            }
-        }
-
-        self.process_patch_list(pl, validate_macs).await
-    }
-
-    pub async fn process_patch_list(
-        &self,
-        pl: PatchList,
-        validate_macs: bool,
-    ) -> Result<(Vec<Mutation>, HashState, PatchList)> {
-        // Pre-fetch all keys we'll need
-        self.prefetch_keys(&pl).await?;
-
-        let mut state = self.backend.get_version(pl.name.as_str()).await?;
-        let mut new_mutations: Vec<Mutation> = Vec::new();
-        let collection_name = pl.name.as_str();
-
-        // Process snapshot if present
-        if let Some(snapshot) = &pl.snapshot {
-            let keys_map = self.key_cache.lock().await.clone();
-            let snapshot_clone = snapshot.clone();
-            let collection_name_owned = collection_name.to_string();
-
-            // Offload CPU-intensive snapshot processing to a blocking thread
-            let result = tokio::task::spawn_blocking(move || {
-                let get_keys = |key_id: &[u8]| -> Result<
-                    ExpandedAppStateKeys,
-                    wacore::appstate::AppStateError,
-                > {
-                    use base64::Engine;
-                    use base64::engine::general_purpose::STANDARD_NO_PAD;
-                    let id_b64 = STANDARD_NO_PAD.encode(key_id);
-                    keys_map
-                        .get(&id_b64)
-                        .cloned()
-                        .ok_or(wacore::appstate::AppStateError::KeyNotFound)
-                };
-
-                let mut snapshot_state = HashState::default();
-                let result = process_snapshot(
-                    &snapshot_clone,
-                    &mut snapshot_state,
-                    get_keys,
-                    validate_macs,
-                    &collection_name_owned,
-                )?;
-                Ok::<_, wacore::appstate::AppStateError>((result, snapshot_state))
-            })
-            .await
-            .map_err(|e| anyhow!("Blocking task failed: {}", e))?
-            .map_err(|e| anyhow!("{}", e))?;
-
-            let (snapshot_result, snapshot_state) = result;
-            state = snapshot_state;
-
-            new_mutations.extend(snapshot_result.mutations);
-
-            // Persist state and MACs
-            self.backend
-                .set_version(collection_name, state.clone())
-                .await?;
-            if !snapshot_result.mutation_macs.is_empty() {
-                self.backend
-                    .put_mutation_macs(
-                        collection_name,
-                        state.version,
-                        &snapshot_result.mutation_macs,
-                    )
-                    .await?;
-            }
-        }
-
-        // Snapshot the key cache once for all patches (prefetch_keys already populated it)
-        let keys_map = self.key_cache.lock().await.clone();
-        let collection_name_owned = collection_name.to_string();
-
-        // Process patches
-        for patch in &pl.patches {
-            // Collect index MACs we need to look up (pre-allocate with upper bound)
-            let mut need_db_lookup: Vec<Vec<u8>> = Vec::with_capacity(patch.mutations.len());
-            for m in &patch.mutations {
-                if let Some(rec) = &m.record
-                    && let Some(ind) = &rec.index
-                    && let Some(index_mac) = &ind.blob
-                    && !need_db_lookup.iter().any(|v| v == index_mac)
-                {
-                    need_db_lookup.push(index_mac.clone());
-                }
-            }
-
-            // Batch fetch previous value MACs from database
-            let mut db_prev: HashMap<Vec<u8>, Vec<u8>> =
-                HashMap::with_capacity(need_db_lookup.len());
-            for index_mac in need_db_lookup {
-                if let Some(mac) = self
-                    .backend
-                    .get_mutation_mac(collection_name, &index_mac)
-                    .await?
-                {
-                    db_prev.insert(index_mac, mac);
-                }
-            }
-
-            // Clone data for blocking task
-            let patch_clone = patch.clone();
-            let state_clone = state.clone();
-            let keys = keys_map.clone();
-            let coll = collection_name_owned.clone();
-
-            // Offload CPU-intensive patch processing to a blocking thread
-            let result = tokio::task::spawn_blocking(move || {
-                let get_keys = |key_id: &[u8]| -> Result<
-                    ExpandedAppStateKeys,
-                    wacore::appstate::AppStateError,
-                > {
-                    use base64::Engine;
-                    use base64::engine::general_purpose::STANDARD_NO_PAD;
-                    let id_b64 = STANDARD_NO_PAD.encode(key_id);
-                    keys.get(&id_b64)
-                        .cloned()
-                        .ok_or(wacore::appstate::AppStateError::KeyNotFound)
-                };
-
-                let get_prev_value_mac = |index_mac: &[u8]| -> Result<
-                    Option<Vec<u8>>,
-                    wacore::appstate::AppStateError,
-                > { Ok(db_prev.get(index_mac).cloned()) };
-
-                let mut state = state_clone;
-                process_patch(
-                    &patch_clone,
-                    &mut state,
-                    get_keys,
-                    get_prev_value_mac,
-                    validate_macs,
-                    &coll,
-                )
-            })
-            .await
-            .map_err(|e| anyhow!("Blocking task failed: {}", e))?
-            .map_err(|e| anyhow!("{}", e))?;
-
-            // Update local state with the result from the blocking task
-            state = result.state;
-
-            new_mutations.extend(result.mutations);
-
-            // Persist state and MACs
-            self.backend
-                .set_version(collection_name, state.clone())
-                .await?;
-            if !result.removed_index_macs.is_empty() {
-                self.backend
-                    .delete_mutation_macs(collection_name, &result.removed_index_macs)
-                    .await?;
-            }
-            if !result.added_macs.is_empty() {
-                self.backend
-                    .put_mutation_macs(collection_name, state.version, &result.added_macs)
-                    .await?;
-            }
-        }
-
-        // Handle case where we only have a snapshot and no patches
-        if pl.patches.is_empty() && pl.snapshot.is_some() {
-            self.backend
-                .set_version(collection_name, state.clone())
-                .await?;
-        }
-
-        Ok((new_mutations, state, pl))
-    }
-
-    pub async fn get_missing_key_ids(&self, pl: &PatchList) -> Result<Vec<Vec<u8>>> {
-        let key_ids = collect_key_ids_from_patch_list(pl.snapshot.as_ref(), &pl.patches);
-        let mut missing = Vec::new();
-        for id in key_ids {
-            if self.backend.get_sync_key(&id).await?.is_none() {
-                missing.push(id);
-            }
-        }
-        Ok(missing)
-    }
-
-    pub async fn sync_collection<D, FDownload>(
-        &self,
-        driver: &D,
-        name: WAPatchName,
-        validate_macs: bool,
-        download: FDownload,
-    ) -> Result<Vec<Mutation>>
-    where
-        D: AppStateSyncDriver + Sync,
-        FDownload: Fn(&wa::ExternalBlobReference) -> Result<Vec<u8>> + Send + Sync,
-    {
-        let mut all = Vec::new();
-        loop {
-            let state = self.backend.get_version(name.as_str()).await?;
-            let node = driver.fetch_collection(name, state.version).await?;
-            let (mut muts, _new_state, list) = self
-                .decode_patch_list(&node, &download, validate_macs)
-                .await?;
-            all.append(&mut muts);
-            if !list.has_more_patches {
-                break;
-            }
-        }
-        Ok(all)
-    }
-}
-
-#[async_trait]
-pub trait AppStateSyncDriver {
-    async fn fetch_collection(&self, name: WAPatchName, after_version: u64) -> Result<Node>;
-}
+pub use wacore::appstate_sync::{AppStateProcessor, AppStateSyncDriver, AppStateSyncError};
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use async_lock::Mutex;
+    use async_trait::async_trait;
     use prost::Message;
     use std::collections::HashMap;
+    use std::sync::Arc;
     use wacore::appstate::WAPATCH_INTEGRITY;
     use wacore::appstate::hash::HashState;
     use wacore::appstate::hash::generate_content_mac;
     use wacore::appstate::keys::expand_app_state_keys;
+    use wacore::appstate::patch_decode::{PatchList, WAPatchName};
     use wacore::appstate::processor::AppStateMutationMAC;
     use wacore::libsignal::crypto::aes_256_cbc_encrypt_into;
     use wacore::store::error::Result as StoreResult;
@@ -344,7 +22,7 @@ mod tests {
         AppStateSyncKey, AppSyncStore, DeviceListRecord, DeviceStore, LidPnMappingEntry,
         ProtocolStore, SignalStore,
     };
-    use wacore_binary::jid::Jid;
+    use waproto::whatsapp as wa;
 
     type MockMacMap = Arc<Mutex<HashMap<(String, Vec<u8>), Vec<u8>>>>;
 
@@ -353,21 +31,23 @@ mod tests {
         versions: Arc<Mutex<HashMap<String, HashState>>>,
         macs: MockMacMap,
         keys: Arc<Mutex<HashMap<Vec<u8>, AppStateSyncKey>>>,
+        latest_key_id: Arc<Mutex<Option<Vec<u8>>>>,
     }
 
     // Implement SignalStore - Signal protocol cryptographic operations
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl SignalStore for MockBackend {
         async fn put_identity(&self, _: &str, _: [u8; 32]) -> StoreResult<()> {
             Ok(())
         }
-        async fn load_identity(&self, _: &str) -> StoreResult<Option<Vec<u8>>> {
+        async fn load_identity(&self, _: &str) -> StoreResult<Option<[u8; 32]>> {
             Ok(None)
         }
         async fn delete_identity(&self, _: &str) -> StoreResult<()> {
             Ok(())
         }
-        async fn get_session(&self, _: &str) -> StoreResult<Option<Vec<u8>>> {
+        async fn get_session(&self, _: &str) -> StoreResult<Option<bytes::Bytes>> {
             Ok(None)
         }
         async fn put_session(&self, _: &str, _: &[u8]) -> StoreResult<()> {
@@ -379,11 +59,14 @@ mod tests {
         async fn store_prekey(&self, _: u32, _: &[u8], _: bool) -> StoreResult<()> {
             Ok(())
         }
-        async fn load_prekey(&self, _: u32) -> StoreResult<Option<Vec<u8>>> {
+        async fn load_prekey(&self, _: u32) -> StoreResult<Option<bytes::Bytes>> {
             Ok(None)
         }
         async fn remove_prekey(&self, _: u32) -> StoreResult<()> {
             Ok(())
+        }
+        async fn get_max_prekey_id(&self) -> StoreResult<u32> {
+            Ok(0)
         }
         async fn store_signed_prekey(&self, _: u32, _: &[u8]) -> StoreResult<()> {
             Ok(())
@@ -409,13 +92,15 @@ mod tests {
     }
 
     // Implement AppSyncStore - WhatsApp app state synchronization
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl AppSyncStore for MockBackend {
         async fn get_sync_key(&self, key_id: &[u8]) -> StoreResult<Option<AppStateSyncKey>> {
             Ok(self.keys.lock().await.get(key_id).cloned())
         }
         async fn set_sync_key(&self, key_id: &[u8], key: AppStateSyncKey) -> StoreResult<()> {
             self.keys.lock().await.insert(key_id.to_vec(), key);
+            *self.latest_key_id.lock().await = Some(key_id.to_vec());
             Ok(())
         }
         async fn get_version(&self, name: &str) -> StoreResult<HashState> {
@@ -458,18 +143,25 @@ mod tests {
         async fn delete_mutation_macs(&self, _: &str, _: &[Vec<u8>]) -> StoreResult<()> {
             Ok(())
         }
+        async fn get_latest_sync_key_id(&self) -> StoreResult<Option<Vec<u8>>> {
+            Ok(self.latest_key_id.lock().await.clone())
+        }
     }
 
     // Implement ProtocolStore - WhatsApp Web protocol alignment
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl ProtocolStore for MockBackend {
-        async fn get_skdm_recipients(&self, _: &str) -> StoreResult<Vec<Jid>> {
+        async fn get_sender_key_devices(&self, _: &str) -> StoreResult<Vec<(String, bool)>> {
             Ok(vec![])
         }
-        async fn add_skdm_recipients(&self, _: &str, _: &[Jid]) -> StoreResult<()> {
+        async fn set_sender_key_status(&self, _: &str, _: &[(&str, bool)]) -> StoreResult<()> {
             Ok(())
         }
-        async fn clear_skdm_recipients(&self, _: &str) -> StoreResult<()> {
+        async fn clear_sender_key_devices(&self, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn clear_all_sender_key_devices(&self) -> StoreResult<()> {
             Ok(())
         }
         async fn get_lid_mapping(&self, _: &str) -> StoreResult<Option<LidPnMappingEntry>> {
@@ -499,16 +191,45 @@ mod tests {
         async fn get_devices(&self, _: &str) -> StoreResult<Option<DeviceListRecord>> {
             Ok(None)
         }
-        async fn mark_forget_sender_key(&self, _: &str, _: &str) -> StoreResult<()> {
+        async fn delete_devices(&self, _: &str) -> StoreResult<()> {
             Ok(())
         }
-        async fn consume_forget_marks(&self, _: &str) -> StoreResult<Vec<String>> {
+        async fn get_tc_token(
+            &self,
+            _: &str,
+        ) -> StoreResult<Option<wacore::store::traits::TcTokenEntry>> {
+            Ok(None)
+        }
+        async fn put_tc_token(
+            &self,
+            _: &str,
+            _: &wacore::store::traits::TcTokenEntry,
+        ) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn delete_tc_token(&self, _: &str) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn get_all_tc_token_jids(&self) -> StoreResult<Vec<String>> {
             Ok(vec![])
+        }
+        async fn delete_expired_tc_tokens(&self, _: i64) -> StoreResult<u32> {
+            Ok(0)
+        }
+        async fn store_sent_message(&self, _: &str, _: &str, _: &[u8]) -> StoreResult<()> {
+            Ok(())
+        }
+        async fn take_sent_message(&self, _: &str, _: &str) -> StoreResult<Option<Vec<u8>>> {
+            Ok(None)
+        }
+        async fn delete_expired_sent_messages(&self, _: i64) -> StoreResult<u32> {
+            Ok(0)
         }
     }
 
     // Implement DeviceStore - Device persistence
-    #[async_trait]
+    #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+    #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
     impl DeviceStore for MockBackend {
         async fn save(&self, _: &wacore::store::Device) -> StoreResult<()> {
             Ok(())
@@ -561,7 +282,8 @@ mod tests {
     #[tokio::test]
     async fn test_process_patch_list_handles_set_overwrite_correctly() {
         let backend = Arc::new(MockBackend::default());
-        let processor = AppStateProcessor::new(backend.clone());
+        let processor =
+            AppStateProcessor::new(backend.clone(), Arc::new(crate::runtime_impl::TokioRuntime));
         let collection_name = WAPatchName::Regular;
         let index_mac = vec![1; 32];
         let key_id_bytes = b"test_key_id".to_vec();
@@ -654,6 +376,7 @@ mod tests {
             }],
             snapshot: None,
             snapshot_ref: None,
+            error: None,
         };
 
         let result = processor.process_patch_list(patch_list, false).await;

@@ -2,8 +2,6 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use std::collections::HashMap;
 use std::sync::Arc;
-use wacore_binary::node::Node;
-
 /// Central router for dispatching XML stanzas to their appropriate handlers.
 ///
 /// The router maintains a registry of handlers keyed by XML tag and efficiently
@@ -49,10 +47,10 @@ impl StanzaRouter {
     pub async fn dispatch(
         &self,
         client: Arc<Client>,
-        node: Arc<Node>,
+        node: Arc<wacore_binary::OwnedNodeRef>,
         cancelled: &mut bool,
     ) -> bool {
-        if let Some(handler) = self.handlers.get(node.tag.as_str()) {
+        if let Some(handler) = self.handlers.get(node.tag()) {
             handler.handle(client, node, cancelled).await
         } else {
             false
@@ -76,7 +74,8 @@ mod tests {
     use super::*;
     use crate::test_utils::MockHttpClient;
     use std::sync::Arc;
-    use wacore_binary::node::{Attrs, Node, NodeContent};
+    use wacore_binary::OwnedNodeRef;
+    use wacore_binary::{Attrs, Node, NodeContent};
 
     #[derive(Debug)]
     struct MockHandler {
@@ -106,7 +105,7 @@ mod tests {
         async fn handle(
             &self,
             _client: Arc<crate::client::Client>,
-            _node: Arc<Node>,
+            _node: Arc<OwnedNodeRef>,
             _cancelled: &mut bool,
         ) -> bool {
             self.handled
@@ -114,6 +113,8 @@ mod tests {
             true
         }
     }
+
+    use crate::test_utils::node_to_owned_ref;
 
     #[test]
     fn test_router_registration() {
@@ -143,16 +144,11 @@ mod tests {
 
         router.register(handler);
 
-        // Create owned Node wrapped in Arc
         let mut attrs = Attrs::new();
         attrs.insert("id".to_string(), "test-id".to_string());
-        let node = Arc::new(Node::new(
-            "test",
-            attrs,
-            Some(NodeContent::String("test".to_string())),
-        ));
+        let raw_node = Node::new("test", attrs, Some(NodeContent::String("test".into())));
+        let node = node_to_owned_ref(&raw_node);
 
-        // Create a minimal client for testing with an in-memory database
         use crate::store::persistence_manager::PersistenceManager;
 
         let backend = crate::test_utils::create_test_backend().await;
@@ -161,8 +157,14 @@ mod tests {
             .expect("persistence manager should initialize");
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
-        let (client, _rx) =
-            crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
+        let (client, _rx) = crate::client::Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            Arc::new(pm),
+            transport,
+            http_client,
+            None,
+        )
+        .await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, node, &mut cancelled).await;
@@ -175,16 +177,11 @@ mod tests {
     async fn test_router_dispatch_not_found() {
         let router = StanzaRouter::new();
 
-        // Create owned Node wrapped in Arc
         let mut attrs = Attrs::new();
         attrs.insert("id".to_string(), "test-id".to_string());
-        let node = Arc::new(Node::new(
-            "unknown",
-            attrs,
-            Some(NodeContent::String("test".to_string())),
-        ));
+        let raw_node = Node::new("unknown", attrs, Some(NodeContent::String("test".into())));
+        let node = node_to_owned_ref(&raw_node);
 
-        // Create a minimal client for testing with an in-memory database
         use crate::store::persistence_manager::PersistenceManager;
 
         let backend = crate::test_utils::create_test_backend().await;
@@ -193,8 +190,14 @@ mod tests {
             .expect("persistence manager should initialize");
         let transport = Arc::new(crate::transport::mock::MockTransportFactory::new());
         let http_client = Arc::new(MockHttpClient);
-        let (client, _rx) =
-            crate::client::Client::new(Arc::new(pm), transport, http_client, None).await;
+        let (client, _rx) = crate::client::Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            Arc::new(pm),
+            transport,
+            http_client,
+            None,
+        )
+        .await;
 
         let mut cancelled = false;
         let result = router.dispatch(client, node, &mut cancelled).await;

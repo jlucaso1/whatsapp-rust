@@ -5,13 +5,15 @@
 use crate::protocol::ProtocolNode;
 use anyhow::Result;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::node::Node;
+use wacore_binary::{Node, NodeRef};
 
 /// Unified session telemetry node.
 ///
 /// Session ID formula: `(now_ms + server_offset_ms + 3_DAYS_MS) % 7_DAYS_MS`
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::ProtocolNode)]
+#[protocol(tag = "unified_session")]
 pub struct UnifiedSession {
+    #[attr(name = "id")]
     pub id: String,
 }
 
@@ -26,7 +28,7 @@ impl UnifiedSession {
         const WEEK_MS: i64 = 7 * DAY_MS;
         const OFFSET_MS: i64 = 3 * DAY_MS;
 
-        let now = chrono::Utc::now().timestamp_millis();
+        let now = crate::time::now_millis();
         let adjusted_now = now + server_time_offset_ms;
         let id = (adjusted_now + OFFSET_MS) % WEEK_MS;
         id.to_string()
@@ -34,33 +36,6 @@ impl UnifiedSession {
 
     pub fn from_offset(server_time_offset_ms: i64) -> Self {
         Self::new(Self::calculate_id(server_time_offset_ms))
-    }
-}
-
-impl ProtocolNode for UnifiedSession {
-    fn tag(&self) -> &'static str {
-        "unified_session"
-    }
-
-    fn into_node(self) -> Node {
-        NodeBuilder::new("unified_session")
-            .attr("id", self.id)
-            .build()
-    }
-
-    fn try_from_node(node: &Node) -> Result<Self> {
-        if node.tag != "unified_session" {
-            return Err(anyhow::anyhow!(
-                "expected <unified_session>, got <{}>",
-                node.tag
-            ));
-        }
-        let id = node
-            .attrs
-            .get("id")
-            .map(|v| v.to_string_value())
-            .unwrap_or_default();
-        Ok(Self { id })
     }
 }
 
@@ -103,7 +78,7 @@ impl ProtocolNode for IbStanza {
             .build()
     }
 
-    fn try_from_node(node: &Node) -> Result<Self> {
+    fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self> {
         if node.tag != "ib" {
             return Err(anyhow::anyhow!("expected <ib>, got <{}>", node.tag));
         }
@@ -111,7 +86,9 @@ impl ProtocolNode for IbStanza {
         if let Some(children) = node.children() {
             for child in children {
                 if child.tag == "unified_session" {
-                    return Ok(Self::unified_session(UnifiedSession::try_from_node(child)?));
+                    return Ok(Self::unified_session(UnifiedSession::try_from_node_ref(
+                        child,
+                    )?));
                 }
             }
         }
@@ -130,10 +107,7 @@ mod tests {
         let node = session.into_node();
 
         assert_eq!(node.tag, "unified_session");
-        assert_eq!(
-            node.attrs.get("id").and_then(|v| v.as_str()),
-            Some("123456789")
-        );
+        assert!(node.attrs.get("id").is_some_and(|v| v == "123456789"));
     }
 
     #[test]
@@ -155,9 +129,11 @@ mod tests {
         let children = node.children().unwrap();
         assert_eq!(children.len(), 1);
         assert_eq!(children[0].tag, "unified_session");
-        assert_eq!(
-            children[0].attrs.get("id").and_then(|v| v.as_str()),
-            Some("123456789")
+        assert!(
+            children[0]
+                .attrs
+                .get("id")
+                .is_some_and(|v| v == "123456789")
         );
     }
 

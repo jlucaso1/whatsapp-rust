@@ -1,4 +1,5 @@
-use std::borrow::Cow;
+use crate::node::NodeStr;
+use compact_str::CompactString;
 use std::fmt;
 use std::str::FromStr;
 
@@ -33,23 +34,11 @@ pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
 
     for (i, &b) in bytes.iter().enumerate() {
         match b {
-            b'@' => {
-                if at_pos.is_none() {
-                    at_pos = Some(i);
-                }
-            }
-            b':' => {
-                // Only track colon in user part (before @)
-                if at_pos.is_none() {
-                    colon_pos = Some(i);
-                }
-            }
-            b'.' => {
-                // Only track dots in user part (before @ and before :)
-                if at_pos.is_none() && colon_pos.is_none() {
-                    last_dot_pos = Some(i);
-                }
-            }
+            b'@' if at_pos.is_none() => at_pos = Some(i),
+            // Only track colon in user part (before @)
+            b':' if at_pos.is_none() => colon_pos = Some(i),
+            // Only track dots in user part (before @ and before :)
+            b'.' if at_pos.is_none() && colon_pos.is_none() => last_dot_pos = Some(i),
             _ => {}
         }
     }
@@ -169,6 +158,100 @@ pub fn parse_jid_fast(s: &str) -> Option<ParsedJidParts<'_>> {
     })
 }
 
+/// Known WhatsApp server identifiers.
+///
+/// Maps to the wire protocol's AD_JID domain type (u8) and the `@server` suffix
+/// in JID string representation.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[repr(u8)]
+pub enum Server {
+    #[default]
+    Pn = 0,
+    Lid = 1,
+    Group = 2,
+    Broadcast = 3,
+    Newsletter = 4,
+    Hosted = 5,
+    HostedLid = 6,
+    Messenger = 7,
+    Interop = 8,
+    Bot = 9,
+    Legacy = 10,
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Server {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Server {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = <&str>::deserialize(deserializer)?;
+        Server::try_from(s).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Server {
+    #[inline]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pn => "s.whatsapp.net",
+            Self::Lid => "lid",
+            Self::Group => "g.us",
+            Self::Broadcast => "broadcast",
+            Self::Newsletter => "newsletter",
+            Self::Hosted => "hosted",
+            Self::HostedLid => "hosted.lid",
+            Self::Messenger => "msgr",
+            Self::Interop => "interop",
+            Self::Bot => "bot",
+            Self::Legacy => "c.us",
+        }
+    }
+}
+
+impl fmt::Display for Server {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq<str> for Server {
+    fn eq(&self, other: &str) -> bool {
+        self.as_str() == other
+    }
+}
+
+impl PartialEq<&str> for Server {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_str() == *other
+    }
+}
+
+impl TryFrom<&str> for Server {
+    type Error = JidError;
+    fn try_from(s: &str) -> std::result::Result<Self, Self::Error> {
+        match s {
+            "s.whatsapp.net" => Ok(Self::Pn),
+            "lid" => Ok(Self::Lid),
+            "g.us" => Ok(Self::Group),
+            "broadcast" => Ok(Self::Broadcast),
+            "newsletter" => Ok(Self::Newsletter),
+            "hosted" => Ok(Self::Hosted),
+            "hosted.lid" => Ok(Self::HostedLid),
+            "msgr" => Ok(Self::Messenger),
+            "interop" => Ok(Self::Interop),
+            "bot" => Ok(Self::Bot),
+            "c.us" => Ok(Self::Legacy),
+            other => Err(JidError::InvalidFormat(format!("unknown server: {other}"))),
+        }
+    }
+}
+
+// Keep string constants for backward compatibility and use in non-JID contexts
 pub const DEFAULT_USER_SERVER: &str = "s.whatsapp.net";
 pub const SERVER_JID: &str = "s.whatsapp.net";
 pub const GROUP_SERVER: &str = "g.us";
@@ -220,57 +303,58 @@ impl From<std::num::ParseIntError> for JidError {
 
 pub trait JidExt {
     fn user(&self) -> &str;
-    fn server(&self) -> &str;
+    fn server(&self) -> Server;
     fn device(&self) -> u16;
     fn integrator(&self) -> u16;
 
     fn is_ad(&self) -> bool {
         self.device() > 0
-            && (self.server() == DEFAULT_USER_SERVER
-                || self.server() == HIDDEN_USER_SERVER
-                || self.server() == HOSTED_SERVER)
+            && matches!(
+                self.server(),
+                Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+            )
     }
 
     fn is_interop(&self) -> bool {
-        self.server() == INTEROP_SERVER && self.integrator() > 0
+        self.server() == Server::Interop && self.integrator() > 0
     }
 
     fn is_messenger(&self) -> bool {
-        self.server() == MESSENGER_SERVER && self.device() > 0
+        self.server() == Server::Messenger && self.device() > 0
     }
 
     fn is_group(&self) -> bool {
-        self.server() == GROUP_SERVER
+        self.server() == Server::Group
     }
 
     fn is_broadcast_list(&self) -> bool {
-        self.server() == BROADCAST_SERVER && self.user() != STATUS_BROADCAST_USER
+        self.server() == Server::Broadcast && self.user() != STATUS_BROADCAST_USER
     }
 
     fn is_status_broadcast(&self) -> bool {
-        self.server() == BROADCAST_SERVER && self.user() == STATUS_BROADCAST_USER
+        self.server() == Server::Broadcast && self.user() == STATUS_BROADCAST_USER
     }
 
     fn is_bot(&self) -> bool {
-        (self.server() == DEFAULT_USER_SERVER
+        (self.server() == Server::Pn
             && self.device() == 0
             && (self.user().starts_with("1313555") || self.user().starts_with("131655500")))
-            || self.server() == BOT_SERVER
+            || self.server() == Server::Bot
     }
 
     fn is_newsletter(&self) -> bool {
-        self.server() == NEWSLETTER_SERVER
+        self.server() == Server::Newsletter
     }
 
     /// Returns true if this is a hosted/Cloud API device.
     /// Hosted devices have device ID 99 or use @hosted/@hosted.lid server.
     /// These devices should be excluded from group message fanout.
     fn is_hosted(&self) -> bool {
-        self.device() == 99 || self.server() == HOSTED_SERVER || self.server() == HOSTED_LID_SERVER
+        self.device() == 99 || matches!(self.server(), Server::Hosted | Server::HostedLid)
     }
 
     fn is_empty(&self) -> bool {
-        self.server().is_empty()
+        self.user().is_empty()
     }
 
     fn is_same_user_as(&self, other: &impl JidExt) -> bool {
@@ -281,17 +365,17 @@ pub trait JidExt {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Jid {
-    pub user: String,
-    pub server: String,
+    pub user: CompactString,
+    pub server: Server,
     pub agent: u8,
     pub device: u16,
     pub integrator: u16,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, yoke::Yokeable)]
 pub struct JidRef<'a> {
-    pub user: Cow<'a, str>,
-    pub server: Cow<'a, str>,
+    pub user: NodeStr<'a>,
+    pub server: Server,
     pub agent: u8,
     pub device: u16,
     pub integrator: u16,
@@ -301,8 +385,8 @@ impl JidExt for Jid {
     fn user(&self) -> &str {
         &self.user
     }
-    fn server(&self) -> &str {
-        &self.server
+    fn server(&self) -> Server {
+        self.server
     }
     fn device(&self) -> u16 {
         self.device
@@ -313,56 +397,76 @@ impl JidExt for Jid {
 }
 
 impl Jid {
-    pub fn new(user: &str, server: &str) -> Self {
+    pub fn new(user: impl Into<CompactString>, server: Server) -> Self {
         Self {
-            user: user.to_string(),
-            server: server.to_string(),
+            user: user.into(),
+            server,
             ..Default::default()
         }
     }
 
     /// Create a phone number JID (s.whatsapp.net)
-    pub fn pn(user: impl Into<String>) -> Self {
+    pub fn pn(user: impl Into<CompactString>) -> Self {
         Self {
             user: user.into(),
-            server: DEFAULT_USER_SERVER.to_string(),
+            server: Server::Pn,
             ..Default::default()
         }
     }
 
     /// Create a LID JID (lid server)
-    pub fn lid(user: impl Into<String>) -> Self {
+    pub fn lid(user: impl Into<CompactString>) -> Self {
         Self {
             user: user.into(),
-            server: HIDDEN_USER_SERVER.to_string(),
+            server: Server::Lid,
             ..Default::default()
         }
     }
 
-    /// Create a group JID (g.us)
-    pub fn group(id: impl Into<String>) -> Self {
+    /// Creates the `status@broadcast` JID used for status/story updates.
+    pub fn status_broadcast() -> Self {
+        Self {
+            user: CompactString::from(STATUS_BROADCAST_USER),
+            server: Server::Broadcast,
+            agent: 0,
+            device: 0,
+            integrator: 0,
+        }
+    }
+
+    /// Create a group JID (g.us).
+    pub fn group(id: impl Into<CompactString>) -> Self {
         Self {
             user: id.into(),
-            server: GROUP_SERVER.to_string(),
+            server: Server::Group,
+            ..Default::default()
+        }
+    }
+
+    /// Create a newsletter (channel) JID (newsletter server).
+    pub fn newsletter(id: impl Into<CompactString>) -> Self {
+        Self {
+            user: id.into(),
+            server: Server::Newsletter,
             ..Default::default()
         }
     }
 
     /// Create a phone number JID with device ID
-    pub fn pn_device(user: impl Into<String>, device: u16) -> Self {
+    pub fn pn_device(user: impl Into<CompactString>, device: u16) -> Self {
         Self {
             user: user.into(),
-            server: DEFAULT_USER_SERVER.to_string(),
+            server: Server::Pn,
             device,
             ..Default::default()
         }
     }
 
     /// Create a LID JID with device ID
-    pub fn lid_device(user: impl Into<String>, device: u16) -> Self {
+    pub fn lid_device(user: impl Into<CompactString>, device: u16) -> Self {
         Self {
             user: user.into(),
-            server: HIDDEN_USER_SERVER.to_string(),
+            server: Server::Lid,
             device,
             ..Default::default()
         }
@@ -371,13 +475,13 @@ impl Jid {
     /// Returns true if this is a Phone Number based JID (s.whatsapp.net)
     #[inline]
     pub fn is_pn(&self) -> bool {
-        self.server == DEFAULT_USER_SERVER
+        self.server == Server::Pn
     }
 
     /// Returns true if this is a LID based JID
     #[inline]
     pub fn is_lid(&self) -> bool {
-        self.server == HIDDEN_USER_SERVER
+        self.server == Server::Lid
     }
 
     /// Returns the user part without the device ID suffix (e.g., "123:4" -> "123")
@@ -394,29 +498,17 @@ impl Jid {
     pub fn with_device(&self, device_id: u16) -> Self {
         Self {
             user: self.user.clone(),
-            server: self.server.clone(),
+            server: self.server,
             agent: self.agent,
             device: device_id,
             integrator: self.integrator,
         }
     }
 
-    pub fn actual_agent(&self) -> u8 {
-        match self.server.as_str() {
-            DEFAULT_USER_SERVER => 0,
-            // For LID (HIDDEN_USER_SERVER), use the parsed agent value.
-            // LID user identifiers can contain dots (e.g., "100000000000001.1"),
-            // which are part of the identity, not agent separators.
-            // Only non-device LID JIDs (without ':') may have an agent suffix.
-            HIDDEN_USER_SERVER => self.agent,
-            _ => self.agent,
-        }
-    }
-
     pub fn to_non_ad(&self) -> Self {
         Self {
             user: self.user.clone(),
-            server: self.server.clone(),
+            server: self.server,
             integrator: self.integrator,
             ..Default::default()
         }
@@ -436,7 +528,7 @@ impl Jid {
     /// using a normalized key where the agent is 0 for standard servers (s.whatsapp.net, lid).
     pub fn normalize_for_prekey_bundle(&self) -> Self {
         let mut jid = self.clone();
-        if jid.server == DEFAULT_USER_SERVER || jid.server == HIDDEN_USER_SERVER {
+        if matches!(jid.server, Server::Pn | Server::Lid) {
             jid.agent = 0;
         }
         jid
@@ -444,13 +536,24 @@ impl Jid {
 
     pub fn to_ad_string(&self) -> String {
         if self.user.is_empty() {
-            self.server.clone()
-        } else {
-            format!(
-                "{}.{}:{}@{}",
-                self.user, self.agent, self.device, self.server
-            )
+            return self.server.as_str().to_string();
         }
+        let mut s = String::with_capacity(self.user.len() + 20);
+        s.push_str(&self.user);
+        s.push('.');
+        s.push_str(itoa::Buffer::new().format(self.agent));
+        s.push(':');
+        s.push_str(itoa::Buffer::new().format(self.device));
+        s.push('@');
+        s.push_str(self.server.as_str());
+        s
+    }
+
+    /// Append the Display representation to `buf` using direct push operations,
+    /// bypassing `fmt::Display` and `dyn Write` dispatch.
+    #[inline]
+    pub fn push_to(&self, buf: &mut String) {
+        push_jid_to_string(&self.user, self.server, self.agent, self.device, buf);
     }
 
     /// Compare device identity (user, server, device) without allocation.
@@ -464,7 +567,7 @@ impl Jid {
     pub fn device_key(&self) -> DeviceKey<'_> {
         DeviceKey {
             user: &self.user,
-            server: &self.server,
+            server: self.server,
             device: self.device,
         }
     }
@@ -474,7 +577,7 @@ impl Jid {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct DeviceKey<'a> {
     pub user: &'a str,
-    pub server: &'a str,
+    pub server: Server,
     pub device: u16,
 }
 
@@ -482,8 +585,8 @@ impl<'a> JidExt for JidRef<'a> {
     fn user(&self) -> &str {
         &self.user
     }
-    fn server(&self) -> &str {
-        &self.server
+    fn server(&self) -> Server {
+        self.server
     }
     fn device(&self) -> u16 {
         self.device
@@ -494,24 +597,28 @@ impl<'a> JidExt for JidRef<'a> {
 }
 
 impl<'a> JidRef<'a> {
-    pub fn new(user: Cow<'a, str>, server: Cow<'a, str>) -> Self {
-        Self {
-            user,
-            server,
-            agent: 0,
-            device: 0,
-            integrator: 0,
-        }
-    }
-
     pub fn to_owned(&self) -> Jid {
         Jid {
-            user: self.user.to_string(),
-            server: self.server.to_string(),
+            user: self.user.to_compact_string(),
+            server: self.server,
             agent: self.agent,
             device: self.device,
             integrator: self.integrator,
         }
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for JidRef<'_> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("Jid", 5)?;
+        s.serialize_field("user", &*self.user)?;
+        s.serialize_field("server", &self.server)?;
+        s.serialize_field("agent", &self.agent)?;
+        s.serialize_field("device", &self.device)?;
+        s.serialize_field("integrator", &self.integrator)?;
+        s.end()
     }
 }
 
@@ -521,8 +628,8 @@ impl FromStr for Jid {
         // Try fast path first for well-formed JIDs
         if let Some(parts) = parse_jid_fast(s) {
             return Ok(Jid {
-                user: parts.user.to_string(),
-                server: parts.server.to_string(),
+                user: CompactString::from(parts.user),
+                server: Server::try_from(parts.server)?,
                 agent: parts.agent,
                 device: parts.device,
                 integrator: parts.integrator,
@@ -536,26 +643,10 @@ impl FromStr for Jid {
             None => ("", s),
         };
 
-        if user_part.is_empty() {
-            let known_servers = [
-                DEFAULT_USER_SERVER,
-                GROUP_SERVER,
-                LEGACY_USER_SERVER,
-                BROADCAST_SERVER,
-                HIDDEN_USER_SERVER,
-                NEWSLETTER_SERVER,
-                HOSTED_SERVER,
-                MESSENGER_SERVER,
-                INTEROP_SERVER,
-                BOT_SERVER,
-                STATUS_BROADCAST_USER,
-            ];
-            if !known_servers.contains(&server) {
-                return Err(JidError::InvalidFormat(format!(
-                    "Invalid JID format: unknown server '{}'",
-                    server
-                )));
-            }
+        if user_part.is_empty() && Server::try_from(server).is_err() {
+            return Err(JidError::InvalidFormat(format!(
+                "unknown server '{server}'"
+            )));
         }
 
         // Special handling for LID JIDs, as their user part can contain dots
@@ -567,8 +658,8 @@ impl FromStr for Jid {
                 (user_part, 0)
             };
             return Ok(Jid {
-                user: user.to_string(),
-                server: server.to_string(),
+                user: CompactString::from(user),
+                server: Server::try_from(server)?,
                 device,
                 agent: 0,
                 integrator: 0,
@@ -590,30 +681,18 @@ impl FromStr for Jid {
             && let Some((u, last_part)) = user.rsplit_once('.')
             && let Ok(num_val) = last_part.parse::<u16>()
         {
+            if num_val > u8::MAX as u16 {
+                return Err(JidError::InvalidFormat(format!(
+                    "Agent component out of range: {num_val}"
+                )));
+            }
             user = u;
             agent = num_val as u8;
         }
 
-        if let Some((u, last_part)) = user_part.rsplit_once('.')
-            && let Ok(num_val) = last_part.parse::<u16>()
-        {
-            if server == DEFAULT_USER_SERVER {
-                user = u;
-                device = num_val;
-            } else {
-                user = u;
-                if num_val > u8::MAX as u16 {
-                    return Err(JidError::InvalidFormat(format!(
-                        "Agent component out of range: {num_val}"
-                    )));
-                }
-                agent = num_val as u8;
-            }
-        }
-
         Ok(Jid {
-            user: user.to_string(),
-            server: server.to_string(),
+            user: CompactString::from(user),
+            server: Server::try_from(server)?,
             agent,
             device,
             integrator: 0,
@@ -621,71 +700,91 @@ impl FromStr for Jid {
     }
 }
 
+/// Core JID formatting logic used by `fmt::Display`, `push_jid_to_string`, and
+/// `push_jid_to_compact`. Writes `{user}[.{agent}][:{device}]@{server}`.
+///
+/// Two flavors via `$append`:
+/// - **fallible** (`f.write_str(s)?`): for `fmt::Formatter` which returns `fmt::Result`
+/// - **infallible** (`$buf.push_str(s)`): for `String`/`CompactString`
+macro_rules! write_jid {
+    // Infallible variant: push_str/push into a growable buffer
+    (infallible $buf:expr, $user:expr, $server:expr, $agent:expr, $device:expr) => {{
+        let (user, server, agent, device) = ($user, $server, $agent, $device);
+        if user.is_empty() {
+            $buf.push_str(server.as_str());
+            return;
+        }
+        $buf.push_str(user);
+        if agent > 0
+            && !matches!(
+                server,
+                Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+            )
+        {
+            $buf.push('.');
+            $buf.push_str(itoa::Buffer::new().format(agent));
+        }
+        if device > 0 {
+            $buf.push(':');
+            $buf.push_str(itoa::Buffer::new().format(device));
+        }
+        $buf.push('@');
+        $buf.push_str(server.as_str());
+    }};
+    // Fallible variant: write_str into fmt::Formatter
+    (fallible $f:expr, $user:expr, $server:expr, $agent:expr, $device:expr) => {{
+        let (user, server, agent, device) = ($user, $server, $agent, $device);
+        if user.is_empty() {
+            return $f.write_str(server.as_str());
+        }
+        $f.write_str(user)?;
+        if agent > 0
+            && !matches!(
+                server,
+                Server::Pn | Server::Lid | Server::Hosted | Server::HostedLid
+            )
+        {
+            $f.write_str(".")?;
+            $f.write_str(itoa::Buffer::new().format(agent))?;
+        }
+        if device > 0 {
+            $f.write_str(":")?;
+            $f.write_str(itoa::Buffer::new().format(device))?;
+        }
+        $f.write_str("@")?;
+        $f.write_str(server.as_str())
+    }};
+}
+
+/// Write the JID display representation directly into a `String`,
+/// bypassing `fmt::Display` and `dyn Write` dispatch entirely.
+#[inline]
+pub fn push_jid_to_string(user: &str, server: Server, agent: u8, device: u16, buf: &mut String) {
+    write_jid!(infallible buf, user, server, agent, device);
+}
+
+/// Write the JID display representation directly into a `CompactString`,
+/// bypassing `fmt::Display` and `dyn Write` dispatch entirely.
+#[inline]
+pub fn push_jid_to_compact(
+    user: &str,
+    server: Server,
+    agent: u8,
+    device: u16,
+    buf: &mut CompactString,
+) {
+    write_jid!(infallible buf, user, server, agent, device);
+}
+
 impl fmt::Display for Jid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.user.is_empty() {
-            // Server-only JID (e.g., "s.whatsapp.net") - no @ prefix
-            write!(f, "{}", self.server)
-        } else {
-            write!(f, "{}", self.user)?;
-
-            // The agent is encoded in the server type for AD JIDs.
-            // We should NOT append it to the user string for standard servers.
-            // Only non-standard servers might use an agent suffix.
-            // The old JS logic appears to never append the agent for s.whatsapp.net or lid.
-            if self.agent > 0 {
-                // This is a guess based on the failure. The old JS logic is complex.
-                // We will only append the agent if the server is NOT s.whatsapp.net or lid.
-                // AND the server is not one that is derived *from* the agent (like 'hosted').
-                let server_str = self.server(); // Use trait method
-                if server_str != DEFAULT_USER_SERVER
-                    && server_str != HIDDEN_USER_SERVER
-                    && server_str != HOSTED_SERVER
-                {
-                    write!(f, ".{}", self.agent)?;
-                }
-            }
-
-            if self.device > 0 {
-                write!(f, ":{}", self.device)?;
-            }
-
-            write!(f, "@{}", self.server)
-        }
+        write_jid!(fallible f, &*self.user, self.server, self.agent, self.device)
     }
 }
 
 impl<'a> fmt::Display for JidRef<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.user.is_empty() {
-            // Server-only JID (e.g., "s.whatsapp.net") - no @ prefix
-            write!(f, "{}", self.server)
-        } else {
-            write!(f, "{}", self.user)?;
-
-            // The agent is encoded in the server type for AD JIDs.
-            // We should NOT append it to the user string for standard servers.
-            // Only non-standard servers might use an agent suffix.
-            // The old JS logic appears to never append the agent for s.whatsapp.net or lid.
-            if self.agent > 0 {
-                // This is a guess based on the failure. The old JS logic is complex.
-                // We will only append the agent if the server is NOT s.whatsapp.net or lid.
-                // AND the server is not one that is derived *from* the agent (like 'hosted').
-                let server_str = self.server(); // Use trait method
-                if server_str != DEFAULT_USER_SERVER
-                    && server_str != HIDDEN_USER_SERVER
-                    && server_str != HOSTED_SERVER
-                {
-                    write!(f, ".{}", self.agent)?;
-                }
-            }
-
-            if self.device > 0 {
-                write!(f, ":{}", self.device)?;
-            }
-
-            write!(f, "@{}", self.server)
-        }
+        write_jid!(fallible f, &*self.user, self.server, self.agent, self.device)
     }
 }
 
@@ -820,52 +919,41 @@ mod tests {
         // Failure Case 1: An AD-JID for s.whatsapp.net decoded with an agent.
         // The Display trait MUST NOT show the agent number.
         let jid1 = Jid {
-            user: "1234567890".to_string(),
-            server: "s.whatsapp.net".to_string(),
-            device: 15,
-            agent: 2, // This agent would be decoded from binary but should be ignored in display
-            integrator: 0,
-        };
-        // Expected: "1234567890:15@s.whatsapp.net" (agent is omitted)
-        // Buggy: "1234567890.2:15@s.whatsapp.net"
-        assert_eq!(jid1.to_string(), "1234567890:15@s.whatsapp.net");
-
-        // Failure Case 2: A LID JID with a device, decoded with an agent.
-        // The Display trait MUST NOT show the agent number.
-        let jid2 = Jid {
-            user: "12345.6789".to_string(),
-            server: "lid".to_string(),
-            device: 25,
-            agent: 1, // This agent would be decoded from binary but should be ignored in display
-            integrator: 0,
-        };
-        // Expected: "12345.6789:25@lid"
-        // Buggy: "12345.6789.1:25@lid"
-        assert_eq!(jid2.to_string(), "12345.6789:25@lid");
-
-        // Failure Case 3: A JID that was decoded as "hosted" because of its agent.
-        // The Display trait MUST NOT show the agent number.
-        let jid3 = Jid {
-            user: "1234567890".to_string(),
-            server: "hosted".to_string(),
+            user: "1234567890".into(),
+            server: Server::Pn,
             device: 15,
             agent: 2,
             integrator: 0,
         };
-        // Expected: "1234567890:15@hosted"
-        // Buggy: "1234567890.2:15@hosted"
+        assert_eq!(jid1.to_string(), "1234567890:15@s.whatsapp.net");
+
+        let jid2 = Jid {
+            user: "12345.6789".into(),
+            server: Server::Lid,
+            device: 25,
+            agent: 1,
+            integrator: 0,
+        };
+        assert_eq!(jid2.to_string(), "12345.6789:25@lid");
+
+        let jid3 = Jid {
+            user: "1234567890".into(),
+            server: Server::Hosted,
+            device: 15,
+            agent: 2,
+            integrator: 0,
+        };
         assert_eq!(jid3.to_string(), "1234567890:15@hosted");
 
-        // Verification Case: A generic JID where the agent SHOULD be displayed.
+        // Agent SHOULD be displayed for non-AD servers (e.g., bot, interop)
         let jid4 = Jid {
-            user: "user".to_string(),
-            server: "custom.net".to_string(),
+            user: "user".into(),
+            server: Server::Bot,
             device: 10,
             agent: 5,
             integrator: 0,
         };
-        // The agent should be displayed because the server is not a special AD-JID type
-        assert_eq!(jid4.to_string(), "user.5:10@custom.net");
+        assert_eq!(jid4.to_string(), "user.5:10@bot");
     }
 
     #[test]
@@ -1138,6 +1226,52 @@ mod tests {
     }
 
     #[test]
+    fn test_status_broadcast_jid() {
+        let jid = Jid::status_broadcast();
+        assert_eq!(jid.user, STATUS_BROADCAST_USER);
+        assert_eq!(jid.server, BROADCAST_SERVER);
+        assert_eq!(jid.device, 0);
+        assert!(jid.is_status_broadcast());
+        assert!(!jid.is_group());
+        assert!(!jid.is_broadcast_list());
+        assert_eq!(jid.to_string(), "status@broadcast");
+
+        // Parsing round-trip
+        let parsed: Jid = "status@broadcast".parse().expect("should parse");
+        assert!(parsed.is_status_broadcast());
+        assert_eq!(parsed.user, "status");
+        assert_eq!(parsed.server, "broadcast");
+
+        // Regular broadcast list should NOT be status broadcast
+        let broadcast_list = Jid::new("12345", Server::Broadcast);
+        assert!(broadcast_list.is_broadcast_list());
+        assert!(!broadcast_list.is_status_broadcast());
+    }
+
+    #[test]
+    fn test_jid_to_non_ad_preserves_user_server() {
+        // Verify to_non_ad strips device but keeps user/server
+        let device_jid = Jid::pn_device("1234567890", 33);
+        let non_ad = device_jid.to_non_ad();
+        assert_eq!(non_ad.user, "1234567890");
+        assert_eq!(non_ad.server, DEFAULT_USER_SERVER);
+        assert_eq!(non_ad.device, 0);
+        assert!(!non_ad.is_ad());
+
+        // LID variant
+        let lid_device = Jid::lid_device("100000012345678", 25);
+        let lid_non_ad = lid_device.to_non_ad();
+        assert_eq!(lid_non_ad.user, "100000012345678");
+        assert_eq!(lid_non_ad.server, HIDDEN_USER_SERVER);
+        assert_eq!(lid_non_ad.device, 0);
+
+        // status@broadcast stays the same
+        let status = Jid::status_broadcast();
+        let status_non_ad = status.to_non_ad();
+        assert_eq!(status_non_ad.to_string(), "status@broadcast");
+    }
+
+    #[test]
     fn test_jid_factories_with_string_types() {
         // Test with &str
         let jid1 = Jid::pn("123");
@@ -1151,5 +1285,173 @@ mod tests {
         let user = "789".to_string();
         let jid3 = Jid::group(user);
         assert_eq!(jid3.user, "789");
+    }
+
+    /// Verify that all JID formatting paths produce identical output:
+    /// `Jid::Display`, `JidRef::Display`, `push_jid_to_string`, `push_jid_to_compact`,
+    /// and `Jid::push_to`. Exercises the agent-elision rules across server variants.
+    #[test]
+    fn test_jid_format_parity() {
+        struct Case {
+            user: &'static str,
+            server: Server,
+            agent: u8,
+            device: u16,
+        }
+
+        let cases = [
+            // Empty user (server-only JID)
+            Case {
+                user: "",
+                server: Server::Pn,
+                agent: 0,
+                device: 0,
+            },
+            // Basic phone, no agent/device
+            Case {
+                user: "5511999887766",
+                server: Server::Pn,
+                agent: 0,
+                device: 0,
+            },
+            // Phone with device
+            Case {
+                user: "5511999887766",
+                server: Server::Pn,
+                agent: 0,
+                device: 2,
+            },
+            // Phone with agent (suppressed for Pn)
+            Case {
+                user: "5511999887766",
+                server: Server::Pn,
+                agent: 3,
+                device: 15,
+            },
+            // LID with agent (suppressed for Lid)
+            Case {
+                user: "12345.6789",
+                server: Server::Lid,
+                agent: 1,
+                device: 25,
+            },
+            // Hosted with agent (suppressed)
+            Case {
+                user: "100000012345678",
+                server: Server::Hosted,
+                agent: 2,
+                device: 99,
+            },
+            // HostedLid with agent (suppressed)
+            Case {
+                user: "100000012345678",
+                server: Server::HostedLid,
+                agent: 1,
+                device: 99,
+            },
+            // Group (no agent, no device)
+            Case {
+                user: "120363012345678901",
+                server: Server::Group,
+                agent: 0,
+                device: 0,
+            },
+            // Bot with agent (shown)
+            Case {
+                user: "user",
+                server: Server::Bot,
+                agent: 5,
+                device: 10,
+            },
+            // Interop with agent (shown)
+            Case {
+                user: "447911123456",
+                server: Server::Interop,
+                agent: 3,
+                device: 0,
+            },
+            // Messenger with device, no agent
+            Case {
+                user: "messenger_user",
+                server: Server::Messenger,
+                agent: 0,
+                device: 50,
+            },
+            // Broadcast
+            Case {
+                user: "status",
+                server: Server::Broadcast,
+                agent: 0,
+                device: 0,
+            },
+            // Newsletter
+            Case {
+                user: "newsletter_id",
+                server: Server::Newsletter,
+                agent: 0,
+                device: 0,
+            },
+            // Max values
+            Case {
+                user: "447911123456789",
+                server: Server::Pn,
+                agent: 255,
+                device: 65535,
+            },
+            // Short user
+            Case {
+                user: "1",
+                server: Server::Legacy,
+                agent: 0,
+                device: 1,
+            },
+        ];
+
+        for (i, c) in cases.iter().enumerate() {
+            let jid = Jid {
+                user: c.user.into(),
+                server: c.server,
+                agent: c.agent,
+                device: c.device,
+                integrator: 0,
+            };
+
+            // Reference: Display impl (via write_jid! fallible)
+            let display = jid.to_string();
+
+            // JidRef Display
+            let jid_ref = JidRef {
+                user: NodeStr::Borrowed(c.user),
+                server: c.server,
+                agent: c.agent,
+                device: c.device,
+                integrator: 0,
+            };
+            let ref_display = jid_ref.to_string();
+
+            // push_jid_to_string
+            let mut string_buf = String::new();
+            push_jid_to_string(c.user, c.server, c.agent, c.device, &mut string_buf);
+
+            // push_jid_to_compact
+            let mut compact_buf = CompactString::default();
+            push_jid_to_compact(c.user, c.server, c.agent, c.device, &mut compact_buf);
+
+            // Jid::push_to
+            let mut push_buf = String::new();
+            jid.push_to(&mut push_buf);
+
+            assert_eq!(display, ref_display, "case {i}: Display vs JidRef::Display");
+            assert_eq!(
+                display, string_buf,
+                "case {i}: Display vs push_jid_to_string"
+            );
+            assert_eq!(
+                display,
+                compact_buf.as_str(),
+                "case {i}: Display vs push_jid_to_compact"
+            );
+            assert_eq!(display, push_buf, "case {i}: Display vs Jid::push_to");
+        }
     }
 }

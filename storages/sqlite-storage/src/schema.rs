@@ -44,6 +44,7 @@ diesel::table! {
         phash -> Nullable<Text>,
         device_id -> Integer,
         updated_at -> Integer,
+        raw_id -> Nullable<Integer>,
     }
 }
 
@@ -67,6 +68,9 @@ diesel::table! {
         app_version_last_fetched_ms -> BigInt,
         edge_routing_info -> Nullable<Binary>,
         props_hash -> Nullable<Text>,
+        next_pre_key_id -> Integer,
+        nct_salt -> Nullable<Binary>,
+        server_has_prekeys -> Bool,
     }
 }
 
@@ -99,11 +103,12 @@ diesel::table! {
 }
 
 diesel::table! {
-    sender_key_status (group_jid, participant, device_id) {
+    sender_key_devices (group_jid, device_jid, device_id) {
         group_jid -> Text,
-        participant -> Text,
+        device_jid -> Text,
+        has_key -> Integer,
         device_id -> Integer,
-        marked_at -> Integer,
+        updated_at -> BigInt,
     }
 }
 
@@ -132,11 +137,23 @@ diesel::table! {
 }
 
 diesel::table! {
-    skdm_recipients (group_jid, device_jid, device_id) {
-        group_jid -> Text,
-        device_jid -> Text,
+    tc_tokens (jid, device_id) {
+        jid -> Text,
+        token -> Binary,
+        token_timestamp -> BigInt,
+        sender_timestamp -> Nullable<BigInt>,
         device_id -> Integer,
-        created_at -> Integer,
+        updated_at -> BigInt,
+    }
+}
+
+diesel::table! {
+    sent_messages (chat_jid, message_id, device_id) {
+        chat_jid -> Text,
+        message_id -> Text,
+        payload -> Binary,
+        device_id -> Integer,
+        created_at -> BigInt,
     }
 }
 
@@ -150,9 +167,10 @@ diesel::allow_tables_to_appear_in_same_query!(
     identities,
     lid_pn_mapping,
     prekeys,
-    sender_key_status,
+    sender_key_devices,
     sender_keys,
+    sent_messages,
     sessions,
     signed_prekeys,
-    skdm_recipients,
+    tc_tokens,
 );

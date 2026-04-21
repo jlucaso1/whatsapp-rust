@@ -1,0 +1,76 @@
+//! Device management IQ specs.
+
+use std::time::Duration;
+
+use crate::iq::spec::IqSpec;
+use crate::request::InfoQuery;
+use wacore_binary::builder::NodeBuilder;
+use wacore_binary::{Jid, Server};
+use wacore_binary::{NodeContent, NodeRef};
+
+/// WA Web uses a 3s timeout for the logout IQ (Socket/Model.js).
+const LOGOUT_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Deregister this companion device from the WhatsApp account.
+pub struct RemoveCompanionDeviceSpec {
+    jid: Jid,
+}
+
+impl RemoveCompanionDeviceSpec {
+    pub fn new(jid: &Jid) -> Self {
+        Self { jid: jid.clone() }
+    }
+}
+
+impl IqSpec for RemoveCompanionDeviceSpec {
+    type Response = ();
+
+    fn build_iq(&self) -> InfoQuery<'static> {
+        let child = NodeBuilder::new("remove-companion-device")
+            .attr("jid", &self.jid)
+            .attr("reason", "user_initiated")
+            .build();
+
+        InfoQuery::set(
+            "md",
+            Jid::new("", Server::Pn),
+            Some(NodeContent::Nodes(vec![child])),
+        )
+        .with_timeout(LOGOUT_TIMEOUT)
+    }
+
+    fn parse_response(&self, _response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn iq_structure() {
+        let jid: Jid = "551199887766:87@s.whatsapp.net".parse().unwrap();
+        let spec = RemoveCompanionDeviceSpec::new(&jid);
+        let iq = spec.build_iq();
+
+        assert_eq!(iq.namespace, "md");
+        assert_eq!(iq.query_type, crate::request::InfoQueryType::Set);
+
+        let children = match &iq.content {
+            Some(NodeContent::Nodes(c)) => c,
+            _ => panic!("expected Nodes content"),
+        };
+        assert_eq!(children[0].tag, "remove-companion-device");
+
+        let mut attrs = children[0].attrs();
+        assert_eq!(
+            attrs.optional_string("jid").unwrap().as_ref(),
+            "551199887766:87@s.whatsapp.net"
+        );
+        assert_eq!(
+            attrs.optional_string("reason").unwrap().as_ref(),
+            "user_initiated"
+        );
+    }
+}

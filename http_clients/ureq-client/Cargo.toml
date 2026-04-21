@@ -1,18 +1,20 @@
 [package]
 name = "whatsapp-rust-ureq-http-client"
-version = "0.2.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["João Lucas <jlucaso@hotmail.com>"]
 license = "MIT"
 repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Ureq-based HTTP client implementation for whatsapp-rust"
 
+[features]
+default = []
+# Skip TLS certificate verification (for testing with mock servers)
+danger-skip-tls-verify = []
+
 [dependencies]
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 tokio = { workspace = true, features = ["rt"] }
-ureq = { version = "3.1.4", default-features = false, features = [
-    "rustls",
-    "json",
-] }
+ureq = { version = "3.3.0", default-features = false, features = ["rustls"] }
 wacore = { workspace = true }

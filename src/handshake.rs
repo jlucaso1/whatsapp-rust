@@ -3,11 +3,12 @@ use crate::transport::{Transport, TransportEvent};
 use log::{debug, info, warn};
 use prost::Message;
 use std::sync::Arc;
+use std::time::Duration;
 use thiserror::Error;
-use tokio::time::{Duration, timeout};
 use wacore::handshake::{
     HandshakeError as CoreHandshakeError, HandshakeState, build_handshake_header,
 };
+use wacore::runtime::{Runtime, timeout as rt_timeout};
 use wacore_binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER};
 
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
@@ -20,13 +21,26 @@ pub enum HandshakeError {
     Core(#[from] CoreHandshakeError),
     #[error("Timed out waiting for handshake response")]
     Timeout,
+    #[error("Disconnected during handshake")]
+    Disconnected,
     #[error("Unexpected event during handshake: {0}")]
     UnexpectedEvent(String),
+}
+
+impl HandshakeError {
+    /// Transient errors that are expected during reconnect and will resolve on retry.
+    pub fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::Transport(_) | Self::Timeout | Self::Disconnected
+        )
+    }
 }
 
 type Result<T> = std::result::Result<T, HandshakeError>;
 
 pub async fn do_handshake(
+    runtime: Arc<dyn Runtime>,
     device: &crate::store::Device,
     transport: Arc<dyn Transport>,
     transport_events: &mut async_channel::Receiver<TransportEvent>,
@@ -57,11 +71,17 @@ pub async fn do_handshake(
     // First message includes the WA connection header (with optional edge routing)
     let framed = wacore::framing::encode_frame(&client_hello_bytes, Some(&header))
         .map_err(HandshakeError::Transport)?;
-    transport.send(framed).await?;
+    transport.send(bytes::Bytes::from(framed)).await?;
 
     // Wait for server response frame
     let resp_frame = loop {
-        match timeout(NOISE_HANDSHAKE_RESPONSE_TIMEOUT, transport_events.recv()).await {
+        match rt_timeout(
+            &*runtime,
+            NOISE_HANDSHAKE_RESPONSE_TIMEOUT,
+            transport_events.recv(),
+        )
+        .await
+        {
             Ok(Ok(TransportEvent::DataReceived(data))) => {
                 // Feed data into decoder
                 frame_decoder.feed(&data);
@@ -78,9 +98,7 @@ pub async fn do_handshake(
                 continue;
             }
             Ok(Ok(TransportEvent::Disconnected)) => {
-                return Err(HandshakeError::UnexpectedEvent(
-                    "Disconnected during handshake".to_string(),
-                ));
+                return Err(HandshakeError::Disconnected);
             }
             Ok(Err(_)) => return Err(HandshakeError::Timeout), // Channel closed
             Err(_) => return Err(HandshakeError::Timeout),
@@ -95,10 +113,12 @@ pub async fn do_handshake(
     // Subsequent messages don't need the header
     let framed = wacore::framing::encode_frame(&client_finish_bytes, None)
         .map_err(HandshakeError::Transport)?;
-    transport.send(framed).await?;
+    transport.send(bytes::Bytes::from(framed)).await?;
 
     let (write_key, read_key) = handshake_state.finish()?;
     info!("Handshake complete, switching to encrypted communication");
 
-    Ok(Arc::new(NoiseSocket::new(transport, write_key, read_key)))
+    Ok(Arc::new(NoiseSocket::new(
+        runtime, transport, write_key, read_key,
+    )))
 }

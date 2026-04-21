@@ -1,28 +1,28 @@
 //! Spam report types and node building.
 
-use crate::StringEnum;
+use crate::WireEnum;
+use wacore_binary::Jid;
+use wacore_binary::Node;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
-use wacore_binary::node::Node;
 
 /// The type of spam flow indicating the source of the report.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum SpamFlow {
     /// Report triggered from group spam banner
-    #[str = "GroupSpamBannerReport"]
+    #[wire = "GroupSpamBannerReport"]
     GroupSpamBannerReport,
     /// Report triggered from group info screen
-    #[str = "GroupInfoReport"]
+    #[wire = "GroupInfoReport"]
     GroupInfoReport,
     /// Report triggered from message context menu
-    #[string_default]
-    #[str = "MessageMenu"]
+    #[wire_default]
+    #[wire = "MessageMenu"]
     MessageMenu,
     /// Report triggered from contact info screen
-    #[str = "ContactInfo"]
+    #[wire = "ContactInfo"]
     ContactInfo,
     /// Report triggered from status view
-    #[str = "StatusReport"]
+    #[wire = "StatusReport"]
     StatusReport,
 }
 
@@ -124,7 +124,6 @@ pub fn build_spam_list_node(request: &SpamReportRequest) -> Node {
 }
 
 #[cfg(test)]
-#[allow(deprecated)]
 mod tests {
     use super::*;
 
@@ -150,13 +149,17 @@ mod tests {
         let node = build_spam_list_node(&request);
 
         assert_eq!(node.tag, "spam_list");
-        assert_eq!(node.attrs().string("spam_flow"), "MessageMenu");
+        assert!(
+            node.attrs
+                .get("spam_flow")
+                .is_some_and(|v| v == "MessageMenu")
+        );
 
         let message = node
             .get_optional_child_by_tag(&["message"])
             .expect("test node child should exist");
-        assert_eq!(message.attrs().string("id"), "TEST123");
-        assert_eq!(message.attrs().string("t"), "1234567890");
+        assert!(message.attrs.get("id").is_some_and(|v| v == "TEST123"));
+        assert!(message.attrs.get("t").is_some_and(|v| v == "1234567890"));
     }
 
     #[test]
@@ -179,8 +182,8 @@ mod tests {
             .get_optional_child_by_tag(&["raw"])
             .expect("test node child should exist");
 
-        assert_eq!(raw.attrs().string("v"), "3");
-        assert_eq!(raw.attrs().string("mediatype"), "image");
+        assert!(raw.attrs.get("v").is_some_and(|v| v == "3"));
+        assert!(raw.attrs.get("mediatype").is_some_and(|v| v == "image"));
     }
 
     #[test]
@@ -197,8 +200,16 @@ mod tests {
 
         let node = build_spam_list_node(&request);
 
-        assert_eq!(node.attrs().string("spam_flow"), "GroupInfoReport");
-        assert_eq!(node.attrs().string("jid"), "120363025918861132@g.us");
-        assert_eq!(node.attrs().string("subject"), "Test Group");
+        assert!(
+            node.attrs
+                .get("spam_flow")
+                .is_some_and(|v| v == "GroupInfoReport")
+        );
+        assert!(
+            node.attrs
+                .get("jid")
+                .is_some_and(|v| v == "120363025918861132@g.us")
+        );
+        assert!(node.attrs.get("subject").is_some_and(|v| v == "Test Group"));
     }
 }

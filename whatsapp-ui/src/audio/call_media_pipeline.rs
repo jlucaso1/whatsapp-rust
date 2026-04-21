@@ -84,9 +84,9 @@ impl std::fmt::Display for CallMediaPipelineError {
 impl std::error::Error for CallMediaPipelineError {}
 
 fn generate_transaction_id() -> [u8; 12] {
-    use rand::RngCore;
+    use rand::RngExt;
     let mut id = [0u8; 12];
-    rand::rng().fill_bytes(&mut id);
+    rand::rng().fill(&mut id);
     id
 }
 

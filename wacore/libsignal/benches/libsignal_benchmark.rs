@@ -33,7 +33,8 @@ impl InMemoryIdentityKeyStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl IdentityKeyStore for InMemoryIdentityKeyStore {
     async fn get_identity_key_pair(
         &self,
@@ -87,7 +88,8 @@ impl InMemoryPreKeyStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl PreKeyStore for InMemoryPreKeyStore {
     async fn get_pre_key(
         &self,
@@ -129,7 +131,8 @@ impl InMemorySignedPreKeyStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SignedPreKeyStore for InMemorySignedPreKeyStore {
     async fn get_signed_pre_key(
         &self,
@@ -163,7 +166,8 @@ impl InMemorySessionStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SessionStore for InMemorySessionStore {
     async fn load_session(
         &self,
@@ -172,12 +176,19 @@ impl SessionStore for InMemorySessionStore {
         Ok(self.sessions.get(address).cloned())
     }
 
+    async fn has_session(
+        &self,
+        address: &ProtocolAddress,
+    ) -> wacore_libsignal::protocol::error::Result<bool> {
+        Ok(self.sessions.contains_key(address))
+    }
+
     async fn store_session(
         &mut self,
         address: &ProtocolAddress,
-        record: &SessionRecord,
+        record: SessionRecord,
     ) -> wacore_libsignal::protocol::error::Result<()> {
-        self.sessions.insert(address.clone(), record.clone());
+        self.sessions.insert(address.clone(), record);
         Ok(())
     }
 }
@@ -194,20 +205,20 @@ impl InMemorySenderKeyStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SenderKeyStore for InMemorySenderKeyStore {
     async fn store_sender_key(
         &mut self,
         sender_key_name: &SenderKeyName,
-        record: &SenderKeyRecord,
+        record: SenderKeyRecord,
     ) -> wacore_libsignal::protocol::error::Result<()> {
-        self.sender_keys
-            .insert(sender_key_name.clone(), record.clone());
+        self.sender_keys.insert(sender_key_name.clone(), record);
         Ok(())
     }
 
     async fn load_sender_key(
-        &mut self,
+        &self,
         sender_key_name: &SenderKeyName,
     ) -> wacore_libsignal::protocol::error::Result<Option<SenderKeyRecord>> {
         Ok(self.sender_keys.get(sender_key_name).cloned())
@@ -230,7 +241,7 @@ struct User {
 
 impl User {
     fn new(name: &str, device_id: u32) -> Self {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
         let identity_key_pair = IdentityKeyPair::generate(&mut rng);
         let registration_id = rand::random::<u32>() & 0x3FFF;
@@ -310,7 +321,7 @@ fn setup_dm_session() -> (User, User) {
     let (mut alice, bob) = setup_dm_users();
 
     let bob_bundle = bob.get_prekey_bundle();
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     futures::executor::block_on(async {
         process_prekey_bundle(
@@ -363,7 +374,7 @@ fn setup_established_dm_session() -> (User, User) {
         let ct_msg = CiphertextMessage::PreKeySignalMessage(
             wacore_libsignal::protocol::PreKeySignalMessage::try_from(ct.serialize()).unwrap(),
         );
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         message_decrypt(
             &ct_msg,
             &alice.address,
@@ -393,7 +404,7 @@ fn setup_group_with_distribution() -> (User, User, SenderKeyName) {
     let mut bob = User::new("bob", 1);
 
     futures::executor::block_on(async {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let skdm = create_sender_key_distribution_message(
             &sender_key_name,
             &mut alice.sender_key_store,
@@ -423,7 +434,7 @@ fn setup_group_with_distribution() -> (User, User, SenderKeyName) {
 fn bench_dm_session_establishment(data: (User, User)) {
     let (mut alice, bob) = data;
     let bob_bundle = bob.get_prekey_bundle();
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     futures::executor::block_on(async {
         process_prekey_bundle(
@@ -465,7 +476,7 @@ fn bench_dm_encrypt_first_message(data: (User, User)) {
 #[bench::decrypt_prekey(setup = setup_dm_with_first_message)]
 fn bench_dm_decrypt_first_message(data: (User, User, Vec<u8>)) {
     let (alice, mut bob, ciphertext_bytes) = data;
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     let plaintext = futures::executor::block_on(async {
         let ciphertext = CiphertextMessage::PreKeySignalMessage(
@@ -513,7 +524,7 @@ fn bench_dm_encrypt_subsequent_message(data: (User, User)) {
 #[bench::create(setup = setup_group_sender)]
 fn bench_group_create_distribution_message(data: (User, SenderKeyName)) {
     let (mut alice, sender_key_name) = data;
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     let skdm = futures::executor::block_on(async {
         create_sender_key_distribution_message(
@@ -533,7 +544,7 @@ fn bench_group_create_distribution_message(data: (User, SenderKeyName)) {
 fn bench_group_encrypt_message(data: (User, User, SenderKeyName)) {
     let (mut alice, _bob, sender_key_name) = data;
     let plaintext = b"Hello group! This is a group message from Alice.";
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     let ciphertext = futures::executor::block_on(async {
         group_encrypt(
@@ -553,7 +564,7 @@ fn setup_group_with_encrypted_message() -> (User, User, SenderKeyName, Vec<u8>) 
     let (mut alice, bob, sender_key_name) = setup_group_with_distribution();
 
     let ciphertext = futures::executor::block_on(async {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let skm = group_encrypt(
             &mut alice.sender_key_store,
             &sender_key_name,
@@ -595,7 +606,7 @@ fn setup_conversation_data() -> (User, User) {
 #[bench::full(setup = setup_conversation_data)]
 fn bench_full_dm_conversation(data: (User, User)) {
     let (mut alice, mut bob) = data;
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     futures::executor::block_on(async {
         let bob_bundle = bob.get_prekey_bundle();
@@ -691,7 +702,7 @@ fn bench_full_dm_conversation(data: (User, User)) {
 
 // Signature-specific benchmarks to measure the XEdDSA optimization
 fn setup_keypair_with_message() -> (KeyPair, [u8; 64]) {
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
     let keypair = KeyPair::generate(&mut rng);
     let message = [0x42u8; 64]; // Fixed message for consistent benchmarking
     (keypair, message)
@@ -703,7 +714,7 @@ fn setup_keypair_with_message() -> (KeyPair, [u8; 64]) {
 #[bench::sign(setup = setup_keypair_with_message)]
 fn bench_signature_creation(data: (KeyPair, [u8; 64])) {
     let (keypair, message) = data;
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     // Sign multiple times to amortize any setup overhead
     for _ in 0..10 {
@@ -719,7 +730,7 @@ fn bench_signature_creation(data: (KeyPair, [u8; 64])) {
 #[bench::verify(setup = setup_keypair_with_message)]
 fn bench_signature_verification(data: (KeyPair, [u8; 64])) {
     let (keypair, message) = data;
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
     let signature = keypair
         .calculate_signature(&message, &mut rng)
         .expect("signature");
@@ -735,7 +746,7 @@ fn bench_signature_verification(data: (KeyPair, [u8; 64])) {
 #[library_benchmark]
 #[bench::keygen()]
 fn bench_key_generation() {
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
     for _ in 0..10 {
         let keypair = KeyPair::generate(&mut rng);
         black_box(keypair);
@@ -747,7 +758,7 @@ fn bench_key_generation() {
 fn setup_with_archived_sessions() -> (User, User, Vec<Vec<u8>>) {
     let mut alice = User::new("alice", 1);
     let mut bob = User::new("bob", 1);
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     // Store ciphertexts encrypted with each session version
     let mut old_ciphertexts = Vec::new();
@@ -872,7 +883,7 @@ fn setup_with_archived_sessions() -> (User, User, Vec<Vec<u8>>) {
 #[bench::previous_session(setup = setup_with_archived_sessions)]
 fn bench_decrypt_with_previous_session(data: (User, User, Vec<Vec<u8>>)) {
     let (alice, mut bob, ciphertexts) = data;
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     // Try to decrypt an old message (encrypted with a previous session)
     // This forces the decryption to iterate through previous sessions
@@ -907,7 +918,7 @@ fn setup_out_of_order_messages() -> (User, User, Vec<Vec<u8>>) {
     let mut messages = Vec::new();
 
     futures::executor::block_on(async {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
         // Alice sends initial PreKey message to Bob
         let msg = message_encrypt(
@@ -985,7 +996,7 @@ fn setup_out_of_order_messages() -> (User, User, Vec<Vec<u8>>) {
 #[bench::out_of_order(setup = setup_out_of_order_messages)]
 fn bench_out_of_order_decryption(data: (User, User, Vec<Vec<u8>>)) {
     let (alice, mut bob, messages) = data;
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     futures::executor::block_on(async {
         // Decrypt messages in reverse order (worst case for message key storage)
@@ -1017,7 +1028,7 @@ fn bench_out_of_order_decryption(data: (User, User, Vec<Vec<u8>>)) {
 fn setup_promote_matching_session() -> (User, User, Vec<u8>) {
     let mut alice = User::new("alice", 1);
     let mut bob = User::new("bob", 1);
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     let prekey_message = futures::executor::block_on(async {
         // Create initial session
@@ -1133,7 +1144,7 @@ fn setup_promote_matching_session() -> (User, User, Vec<u8>) {
 #[bench::promote(setup = setup_promote_matching_session)]
 fn bench_promote_matching_session(data: (User, User, Vec<u8>)) {
     let (alice, mut bob, prekey_message) = data;
-    let mut rng = rand::rng();
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
     futures::executor::block_on(async {
         // Process multiple PreKey messages to exercise promote_matching_session
@@ -1175,7 +1186,7 @@ fn create_test_session_state(
     version: u8,
     base_key: &wacore_libsignal::protocol::PublicKey,
 ) -> SessionState {
-    let mut csprng = rand::rng();
+    let mut csprng = rand::make_rng::<rand::rngs::StdRng>();
     let identity_keypair = KeyPair::generate(&mut csprng);
     let their_identity = IdentityKey::new(identity_keypair.public_key);
     let our_identity = IdentityKey::new(KeyPair::generate(&mut csprng).public_key);
@@ -1194,7 +1205,7 @@ fn create_test_session_state(
 /// Setup for message key eviction benchmark.
 /// Creates a session with a receiver chain pre-filled near capacity.
 fn setup_message_key_eviction() -> (SessionState, wacore_libsignal::protocol::PublicKey) {
-    let mut csprng = rand::rng();
+    let mut csprng = rand::make_rng::<rand::rngs::StdRng>();
     let base_key = KeyPair::generate(&mut csprng).public_key;
     let mut state = create_test_session_state(3, &base_key);
 

@@ -10,7 +10,7 @@
 //! - Session salt (112 bits)
 
 use aes::cipher::{KeyIvInit, StreamCipher};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
 
 use super::rtp::{RtpHeader, RtpPacket};

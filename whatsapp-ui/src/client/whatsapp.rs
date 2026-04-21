@@ -11,6 +11,7 @@ use wacore::types::events::Event;
 use wacore::types::presence::ReceiptType;
 use wacore_binary::jid::Jid;
 use waproto::whatsapp as wa;
+use whatsapp_rust::TokioRuntime;
 use whatsapp_rust::bot::Bot;
 use whatsapp_rust::calls::{CallOptions, EncType};
 use whatsapp_rust::client::Client;
@@ -212,11 +213,12 @@ impl WhatsAppClient {
             .with_backend(backend)
             .with_transport_factory(transport_factory)
             .with_http_client(http_client)
+            .with_runtime(TokioRuntime)
             .on_event(move |event, client| {
                 let ui_tx = ui_tx_clone.clone();
                 let media_manager = media_manager_clone.clone();
                 async move {
-                    Self::handle_event(event, client, ui_tx, media_manager).await;
+                    Self::handle_event((*event).clone(), client, ui_tx, media_manager).await;
                 }
             })
             .build()
@@ -680,8 +682,8 @@ impl WhatsAppClient {
                     };
 
                     match client.send_message(jid, message).await {
-                        Ok(msg_id) => {
-                            info!("Message sent successfully: {}", msg_id);
+                        Ok(result) => {
+                            info!("Message sent successfully: {}", result.message_id);
                         }
                         Err(e) => {
                             error!("Failed to send message: {}", e);
@@ -759,7 +761,10 @@ impl WhatsAppClient {
                 let guard = client_handle.lock().await;
                 if let Some(client) = guard.as_ref() {
                     // Upload the audio file
-                    let upload_result = match client.upload(audio_data, WaMediaType::Audio).await {
+                    let upload_result = match client
+                        .upload(audio_data, WaMediaType::Audio, Default::default())
+                        .await
+                    {
                         Ok(resp) => resp,
                         Err(e) => {
                             error!("Failed to upload audio: {}", e);
@@ -773,9 +778,9 @@ impl WhatsAppClient {
                     let audio_message = wa::message::AudioMessage {
                         url: Some(upload_result.url),
                         direct_path: Some(upload_result.direct_path),
-                        media_key: Some(upload_result.media_key),
-                        file_sha256: Some(upload_result.file_sha256),
-                        file_enc_sha256: Some(upload_result.file_enc_sha256),
+                        media_key: Some(upload_result.media_key.to_vec()),
+                        file_sha256: Some(upload_result.file_sha256.to_vec()),
+                        file_enc_sha256: Some(upload_result.file_enc_sha256.to_vec()),
                         file_length: Some(upload_result.file_length),
                         mimetype: Some("audio/ogg; codecs=opus".to_string()),
                         seconds: Some(duration_secs),
@@ -790,8 +795,8 @@ impl WhatsAppClient {
                     };
 
                     match client.send_message(jid, message).await {
-                        Ok(msg_id) => {
-                            info!("Audio message sent successfully: {}", msg_id);
+                        Ok(result) => {
+                            info!("Audio message sent successfully: {}", result.message_id);
                         }
                         Err(e) => {
                             error!("Failed to send audio message: {}", e);

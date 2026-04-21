@@ -1,0 +1,37 @@
+name: Claude Code Review
+
+# pull_request_target runs in the base repo context, giving access to secrets
+# and write tokens even for fork PRs. Safe here because the action reads PR
+# diffs via the GitHub API — no fork code is executed with elevated privileges.
+on:
+  pull_request_target:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+jobs:
+  claude-review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Run Claude Code Review
+        id: claude-review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # Explicit github_token bypasses OIDC exchange (which rejects
+          # pull_request_target events on the Anthropic side — see
+          # anthropics/claude-code-action#713)
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          claude_args: '--model claude-opus-4-6'
+

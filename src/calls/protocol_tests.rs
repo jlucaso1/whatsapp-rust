@@ -141,8 +141,14 @@ mod tests {
         let audio = accept_children.iter().find(|c| c.tag == "audio");
         assert!(audio.is_some(), "Accept must have <audio> element");
         let mut attrs = audio.unwrap().attrs();
-        assert_eq!(attrs.optional_string("enc"), Some("opus"));
-        assert_eq!(attrs.optional_string("rate"), Some("16000"));
+        assert_eq!(
+            attrs.optional_string("enc"),
+            Some(std::borrow::Cow::Borrowed("opus"))
+        );
+        assert_eq!(
+            attrs.optional_string("rate"),
+            Some(std::borrow::Cow::Borrowed("16000"))
+        );
     }
 
     #[test]
@@ -207,12 +213,12 @@ mod tests {
         let mut enc_attrs = enc_node.unwrap().attrs();
         assert_eq!(
             enc_attrs.optional_string("type"),
-            Some("msg"),
+            Some(std::borrow::Cow::Borrowed("msg")),
             "enc type should be 'msg'"
         );
         assert_eq!(
             enc_attrs.optional_string("v"),
-            Some("2"),
+            Some(std::borrow::Cow::Borrowed("2")),
             "enc version should be '2'"
         );
     }
@@ -297,8 +303,14 @@ mod tests {
             .find(|c| c.tag == "audio")
             .unwrap();
         let mut attrs = audio.attrs();
-        assert_eq!(attrs.optional_string("enc"), Some("opus"));
-        assert_eq!(attrs.optional_string("rate"), Some("16000"));
+        assert_eq!(
+            attrs.optional_string("enc"),
+            Some(std::borrow::Cow::Borrowed("opus"))
+        );
+        assert_eq!(
+            attrs.optional_string("rate"),
+            Some(std::borrow::Cow::Borrowed("16000"))
+        );
     }
 
     // ================================================================

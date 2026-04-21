@@ -7,81 +7,101 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
-  checks: write
+  deployments: write
+
+concurrency:
+  group: benchmark-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
 
 env:
-  CARGO_TERM_COLOR: always
+  CARGO_TERM_COLOR: never
+  IAI_CALLGRIND_COLOR: never
   PROTOC_VERSION: "3.25.3"
-  BENCHER_PROJECT: whatsapp-rust
-  BENCHER_TESTBED: ubuntu-latest
-  BENCHER_ADAPTER: rust_iai_callgrind
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: "sccache"
 
 jobs:
   benchmark:
+    name: iai-callgrind
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: nightly-2026-01-30
+          toolchain: nightly-2026-04-05
 
       - name: Install tools (protoc, valgrind, iai-callgrind-runner)
         uses: taiki-e/install-action@v2
         with:
           tool: protoc@${{ env.PROTOC_VERSION }},valgrind,iai-callgrind-runner@0.16.1
 
-      - name: Cache Rust dependencies
+      - name: Setup sccache
+        uses: mozilla-actions/sccache-action@v0.0.9
+
+      - name: Cache Rust registry
         uses: Swatinem/rust-cache@v2
         with:
           prefix-key: ${{ runner.os }}-cargo-bench
-
-      - uses: bencherdev/bencher@v0.5.9
+          cache-targets: "false"
 
       - name: Run benchmarks
-        env:
-          BENCHER_API_TOKEN: ${{ secrets.BENCHER_API_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: cargo bench -p wacore -p wacore-binary -p wacore-libsignal | tee bench_output.txt
+
+      - name: Parse results
         run: |
-          # Common bencher args (shared across all scenarios)
-          BENCHER_ARGS=(
-            --project "$BENCHER_PROJECT"
-            --testbed "$BENCHER_TESTBED"
-            --adapter "$BENCHER_ADAPTER"
-            --github-actions "$GITHUB_TOKEN"
-          )
+          python3 .github/scripts/iai-to-benchmark-json.py \
+            < bench_output.txt \
+            > bench_results.json
 
-          if [ "$GITHUB_EVENT_NAME" == "push" ]; then
-            # Push to main: establish baseline (no GitHub check posting)
-            bencher run \
-              --project "$BENCHER_PROJECT" \
-              --testbed "$BENCHER_TESTBED" \
-              --adapter "$BENCHER_ADAPTER" \
-              --token "$BENCHER_API_TOKEN" \
-              --branch main \
-              --threshold-measure instructions \
-              --threshold-test percentage \
-              --threshold-upper-boundary 0.05 \
-              --thresholds-reset \
-              "cargo bench --workspace"
+      - name: Upload benchmark artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: |
+            bench_output.txt
+            bench_results.json
+          retention-days: 30
 
-          elif [ -n "$BENCHER_API_TOKEN" ]; then
-            # Pull request with token available: full tracking
-            bencher run \
-              "${BENCHER_ARGS[@]}" \
-              --token "$BENCHER_API_TOKEN" \
-              --branch "${{ github.head_ref }}" \
-              --start-point "${{ github.base_ref }}" \
-              --start-point-hash "${{ github.event.pull_request.base.sha }}" \
-              --start-point-clone-thresholds \
-              --start-point-reset \
-              --ci-only-thresholds \
-              "cargo bench --workspace"
+      # Save PR number so the comment workflow can find the PR
+      - name: Save PR number
+        if: github.event_name == 'pull_request'
+        run: echo "${{ github.event.number }}" > pr_number.txt
 
-          else
-            # Pull request without token (fork PRs): run benchmarks locally
-            echo "::warning title=Bencher::BENCHER_API_TOKEN not available. Running benchmarks without analytics."
-            cargo bench --workspace
-          fi
+      - name: Upload PR metadata
+        if: github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pr-metadata
+          path: pr_number.txt
+
+      # Push to main: store baseline and update gh-pages charts
+      - name: Store baseline (push to main)
+        if: github.event_name == 'push'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: "whatsapp-rust benchmarks"
+          tool: "customSmallerIsBetter"
+          output-file-path: bench_results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          benchmark-data-dir-path: dev/bench
+          max-items-in-chart: 100
+          summary-always: true
+
+      # PR: compare against baseline (job summary only, comment posted
+      # by the separate benchmark-comment workflow which has write access)
+      - name: Compare against baseline (pull request)
+        if: github.event_name == 'pull_request'
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: "whatsapp-rust benchmarks"
+          tool: "customSmallerIsBetter"
+          output-file-path: bench_results.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: false
+          save-data-file: false
+          benchmark-data-dir-path: dev/bench
+          summary-always: true

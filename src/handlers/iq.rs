@@ -1,10 +1,9 @@
 use super::traits::StanzaHandler;
 use crate::client::Client;
 use async_trait::async_trait;
-use log::warn;
+use log::{debug, warn};
 use std::sync::Arc;
-use wacore::xml::DisplayableNode;
-use wacore_binary::node::Node;
+use wacore::xml::DisplayableNodeRef;
 
 /// Handler for `<iq>` (Info/Query) stanzas.
 ///
@@ -16,15 +15,29 @@ use wacore_binary::node::Node;
 #[derive(Default)]
 pub struct IqHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for IqHandler {
     fn tag(&self) -> &'static str {
         "iq"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        if !client.handle_iq(&node).await {
-            warn!("Received unhandled IQ: {}", DisplayableNode(&node));
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<wacore_binary::OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
+        let nr = node.get();
+        if !client.handle_iq(nr).await {
+            if nr.get_attr("type").is_some_and(|s| s.as_str() == "result") {
+                debug!(
+                    "Received late IQ response (waiter already removed): {}",
+                    DisplayableNodeRef(nr)
+                );
+            } else {
+                warn!("Received unhandled IQ: {}", DisplayableNodeRef(nr));
+            }
         }
         true
     }

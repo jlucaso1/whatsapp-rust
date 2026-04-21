@@ -1142,7 +1142,7 @@ impl CallStanzaBuilder {
         }
 
         for (k, v) in &self.extra_attrs {
-            sig_builder = sig_builder.attr(k.clone(), v.clone());
+            sig_builder = sig_builder.attr_dynamic(k.clone(), v.clone());
         }
 
         // Collect children to add
@@ -1304,9 +1304,10 @@ impl CallStanzaBuilder {
         // Generate stanza ID if not provided
         let stanza_id = self.stanza_id.unwrap_or_else(|| {
             // Generate a random 32-character hex ID (similar to WhatsApp format)
-            use rand::Rng;
+            use rand::RngExt;
             let mut rng = rand::rng();
-            let bytes: [u8; 16] = rng.random();
+            let mut bytes = [0u8; 16];
+            rng.fill(&mut bytes);
             bytes.iter().map(|b| format!("{:02X}", b)).collect()
         });
 
@@ -1513,8 +1514,11 @@ mod tests {
         assert_eq!(offer_node.tag, "offer");
 
         let mut attrs = offer_node.attrs();
-        assert_eq!(attrs.string("call-id"), call_id);
-        assert_eq!(attrs.string("call-creator"), creator.to_string());
+        assert_eq!(attrs.required_string("call-id").unwrap(), call_id);
+        assert_eq!(
+            attrs.required_string("call-creator").unwrap(),
+            creator.to_string()
+        );
 
         // Should have video child
         let offer_children = offer_node.children().unwrap();
@@ -1541,9 +1545,9 @@ mod tests {
         assert_eq!(receipt.tag, "receipt");
 
         let mut attrs = receipt.attrs();
-        assert_eq!(attrs.string("id"), "stanza123");
-        assert_eq!(attrs.string("to"), to.to_string());
-        assert_eq!(attrs.string("from"), from.to_string());
+        assert_eq!(attrs.required_string("id").unwrap(), "stanza123");
+        assert_eq!(attrs.required_string("to").unwrap(), to.to_string());
+        assert_eq!(attrs.required_string("from").unwrap(), from.to_string());
 
         // Should have inner offer node with call-id and call-creator
         let children = receipt.children().unwrap();
@@ -1552,7 +1556,7 @@ mod tests {
 
         let mut inner_attrs = children[0].attrs();
         assert_eq!(
-            inner_attrs.string("call-id"),
+            inner_attrs.required_string("call-id").unwrap(),
             "AC90CFD09DF712D981142B172706F9F2"
         );
     }
@@ -1568,10 +1572,10 @@ mod tests {
         assert_eq!(ack.tag, "ack");
 
         let mut attrs = ack.attrs();
-        assert_eq!(attrs.string("id"), "stanza456");
-        assert_eq!(attrs.string("to"), to.to_string());
-        assert_eq!(attrs.string("class"), "call");
-        assert_eq!(attrs.string("type"), "transport");
+        assert_eq!(attrs.required_string("id").unwrap(), "stanza456");
+        assert_eq!(attrs.required_string("to").unwrap(), to.to_string());
+        assert_eq!(attrs.required_string("class").unwrap(), "call");
+        assert_eq!(attrs.required_string("type").unwrap(), "transport");
 
         // Non-relaylatency ack should NOT have children
         assert!(ack.children().is_none());
@@ -1596,8 +1600,8 @@ mod tests {
         assert_eq!(ack.tag, "ack");
 
         let mut attrs = ack.attrs();
-        assert_eq!(attrs.string("type"), "relaylatency");
-        assert_eq!(attrs.string("class"), "call");
+        assert_eq!(attrs.required_string("type").unwrap(), "relaylatency");
+        assert_eq!(attrs.required_string("class").unwrap(), "call");
 
         // Should have child <relaylatency> element
         let children = ack
@@ -1607,8 +1611,11 @@ mod tests {
         assert_eq!(children[0].tag, "relaylatency");
 
         let mut child_attrs = children[0].attrs();
-        assert_eq!(child_attrs.string("call-id"), call_id);
-        assert_eq!(child_attrs.string("call-creator"), call_creator.to_string());
+        assert_eq!(child_attrs.required_string("call-id").unwrap(), call_id);
+        assert_eq!(
+            child_attrs.required_string("call-creator").unwrap(),
+            call_creator.to_string()
+        );
     }
 
     /// Test LID JID format used in calls.
@@ -2318,14 +2325,14 @@ mod tests {
         assert!(audio_node.is_some(), "Should have <audio> element");
         let audio_node = audio_node.unwrap();
         let mut audio_attrs = audio_node.attrs();
-        assert_eq!(audio_attrs.string("enc"), "opus");
-        assert_eq!(audio_attrs.string("rate"), "16000");
+        assert_eq!(audio_attrs.required_string("enc").unwrap(), "opus");
+        assert_eq!(audio_attrs.required_string("rate").unwrap(), "16000");
 
         let video_node = accept_children.iter().find(|c| c.tag == "video");
         assert!(video_node.is_some(), "Should have <video> element");
         let video_node = video_node.unwrap();
         let mut video_attrs = video_node.attrs();
-        assert_eq!(video_attrs.string("enc"), "vp8");
+        assert_eq!(video_attrs.required_string("enc").unwrap(), "vp8");
     }
 
     /// Test building accept stanza without optional params falls back to defaults.
@@ -2385,8 +2392,11 @@ mod tests {
         assert_eq!(preaccept_node.tag, "preaccept");
 
         let mut attrs = preaccept_node.attrs();
-        assert_eq!(attrs.string("call-id"), call_id);
-        assert_eq!(attrs.string("call-creator"), creator.to_string());
+        assert_eq!(attrs.required_string("call-id").unwrap(), call_id);
+        assert_eq!(
+            attrs.required_string("call-creator").unwrap(),
+            creator.to_string()
+        );
 
         let preaccept_children = preaccept_node.children().unwrap();
 
@@ -2394,18 +2404,18 @@ mod tests {
         let audio = preaccept_children.iter().find(|c| c.tag == "audio");
         assert!(audio.is_some(), "Should have <audio> element");
         let mut audio_attrs = audio.unwrap().attrs();
-        assert_eq!(audio_attrs.string("enc"), "opus");
-        assert_eq!(audio_attrs.string("rate"), "16000");
+        assert_eq!(audio_attrs.required_string("enc").unwrap(), "opus");
+        assert_eq!(audio_attrs.required_string("rate").unwrap(), "16000");
 
         let encopt = preaccept_children.iter().find(|c| c.tag == "encopt");
         assert!(encopt.is_some(), "Should have <encopt> element");
         let mut encopt_attrs = encopt.unwrap().attrs();
-        assert_eq!(encopt_attrs.string("keygen"), "2");
+        assert_eq!(encopt_attrs.required_string("keygen").unwrap(), "2");
 
         let capability = preaccept_children.iter().find(|c| c.tag == "capability");
         assert!(capability.is_some(), "Should have <capability> element");
         let mut cap_attrs = capability.unwrap().attrs();
-        assert_eq!(cap_attrs.string("ver"), "1");
+        assert_eq!(cap_attrs.required_string("ver").unwrap(), "1");
     }
 
     /// Test RELAYLATENCY stanza building.
@@ -2446,9 +2456,9 @@ mod tests {
         assert_eq!(te_nodes.len(), 1);
 
         let mut te_attrs = te_nodes[0].attrs();
-        assert_eq!(te_attrs.string("relay_name"), "for2c02");
+        assert_eq!(te_attrs.required_string("relay_name").unwrap(), "for2c02");
         // Latency should be 0x2000000 + 45 = 33554477
-        assert_eq!(te_attrs.string("latency"), "33554477");
+        assert_eq!(te_attrs.required_string("latency").unwrap(), "33554477");
     }
 
     /// Test relay latency encoding.
@@ -2501,16 +2511,22 @@ mod tests {
         assert_eq!(transport_node.tag, "transport");
 
         let mut attrs = transport_node.attrs();
-        assert_eq!(attrs.optional_string("p2p-cand-round"), Some("1"));
-        assert_eq!(attrs.optional_string("transport-message-type"), Some("0"));
+        assert_eq!(
+            attrs.optional_string("p2p-cand-round"),
+            Some(std::borrow::Cow::Borrowed("1"))
+        );
+        assert_eq!(
+            attrs.optional_string("transport-message-type"),
+            Some(std::borrow::Cow::Borrowed("0"))
+        );
 
         // Should have net element
         let transport_children = transport_node.children().unwrap();
         let net_node = transport_children.iter().find(|c| c.tag == "net");
         assert!(net_node.is_some(), "Should have <net> element");
         let mut net_attrs = net_node.unwrap().attrs();
-        assert_eq!(net_attrs.string("protocol"), "0");
-        assert_eq!(net_attrs.string("medium"), "2");
+        assert_eq!(net_attrs.required_string("protocol").unwrap(), "0");
+        assert_eq!(net_attrs.required_string("medium").unwrap(), "2");
     }
 
     /// Test MUTE_V2 stanza building.
@@ -2531,7 +2547,7 @@ mod tests {
         assert_eq!(mute_node.tag, "mute_v2");
 
         let mut attrs = mute_node.attrs();
-        assert_eq!(attrs.string("mute-state"), "0");
+        assert_eq!(attrs.required_string("mute-state").unwrap(), "0");
 
         // Test muted
         let node_muted =
@@ -2542,7 +2558,7 @@ mod tests {
         let children_muted = node_muted.children().unwrap();
         let mute_node_muted = &children_muted[0];
         let mut attrs_muted = mute_node_muted.attrs();
-        assert_eq!(attrs_muted.string("mute-state"), "1");
+        assert_eq!(attrs_muted.required_string("mute-state").unwrap(), "1");
     }
 
     /// Test ACCEPT stanza with net and encopt elements.
@@ -2574,12 +2590,12 @@ mod tests {
         let net = accept_children.iter().find(|c| c.tag == "net");
         assert!(net.is_some(), "Should have <net> element");
         let mut net_attrs = net.unwrap().attrs();
-        assert_eq!(net_attrs.string("medium"), "2");
+        assert_eq!(net_attrs.required_string("medium").unwrap(), "2");
 
         let encopt = accept_children.iter().find(|c| c.tag == "encopt");
         assert!(encopt.is_some(), "Should have <encopt> element");
         let mut encopt_attrs = encopt.unwrap().attrs();
-        assert_eq!(encopt_attrs.string("keygen"), "2");
+        assert_eq!(encopt_attrs.required_string("keygen").unwrap(), "2");
     }
 
     /// Test default PreacceptParams.
@@ -2643,15 +2659,15 @@ mod tests {
         let audio_nodes: Vec<_> = offer_children.iter().filter(|c| c.tag == "audio").collect();
         assert_eq!(audio_nodes.len(), 2, "Offer should have 2 audio elements");
         let mut audio0_attrs = audio_nodes[0].attrs();
-        assert_eq!(audio0_attrs.string("rate"), "8000");
+        assert_eq!(audio0_attrs.required_string("rate").unwrap(), "8000");
         let mut audio1_attrs = audio_nodes[1].attrs();
-        assert_eq!(audio1_attrs.string("rate"), "16000");
+        assert_eq!(audio1_attrs.required_string("rate").unwrap(), "16000");
 
         // Check <net medium="3"/>
         let net = offer_children.iter().find(|c| c.tag == "net");
         assert!(net.is_some(), "Should have <net> element");
         let mut net_attrs = net.unwrap().attrs();
-        assert_eq!(net_attrs.string("medium"), "3");
+        assert_eq!(net_attrs.required_string("medium").unwrap(), "3");
 
         // Check <capability>
         let capability = offer_children.iter().find(|c| c.tag == "capability");
@@ -2662,7 +2678,7 @@ mod tests {
         assert!(encopt.is_some(), "Should have <encopt> element");
 
         // Verify element order: privacy < audio < net < capability < encopt
-        let tags: Vec<&str> = offer_children.iter().map(|c| c.tag.as_str()).collect();
+        let tags: Vec<&str> = offer_children.iter().map(|c| &*c.tag).collect();
         let privacy_idx = tags.iter().position(|&t| t == "privacy").unwrap();
         let first_audio_idx = tags.iter().position(|&t| t == "audio").unwrap();
         let net_idx = tags.iter().position(|&t| t == "net").unwrap();

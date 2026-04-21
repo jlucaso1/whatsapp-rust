@@ -3,7 +3,7 @@
 //! Provides type-safe message stanzas with JID-aware attributes.
 
 use crate::ProtocolNode;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 /// Typed 1-to-1 or generic message stanza with JID-safe attributes.
 ///
@@ -49,4 +49,8 @@ pub struct MessageStanza {
     /// Optional addressing mode (e.g., "lid")
     #[attr(name = "addressing_mode", optional)]
     pub addressing_mode: Option<String>,
+
+    /// Optional push name of sender (server-injected on forwarded messages)
+    #[attr(name = "notify", optional)]
+    pub notify: Option<String>,
 }

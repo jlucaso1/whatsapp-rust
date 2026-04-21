@@ -19,18 +19,18 @@
 //! - Ephemeral encryption: AES-256-CTR
 //! - Bundle encryption: AES-256-GCM after HKDF key derivation
 
-use crate::StringEnum;
+use crate::WireEnum;
+use crate::libsignal::crypto::aes_256_gcm_encrypt;
 use crate::libsignal::protocol::{KeyPair, PublicKey};
 use aes::cipher::{KeyIvInit, StreamCipher};
-use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::{Aead, KeyInit};
 use ctr::Ctr128BE;
 use hkdf::Hkdf;
-use rand::Rng;
+use hmac::{Hmac, Mac};
+use rand::RngExt;
 use sha2::Sha256;
+use wacore_binary::SERVER_JID;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::SERVER_JID;
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::{Node, NodeContentRef, NodeRef};
 
 // Type aliases
 type Aes256Ctr = Ctr128BE<aes::Aes256>;
@@ -49,34 +49,60 @@ const PAIR_CODE_IV_SIZE: usize = 16;
 /// Excludes 0, I, O, U to prevent visual confusion.
 const CROCKFORD_ALPHABET: &[u8; 32] = b"123456789ABCDEFGHJKLMNPQRSTVWXYZ";
 
+/// RFC 2898 PBKDF2 using HMAC-SHA256. Replaces the `pbkdf2` crate dependency
+/// which hasn't released a digest 0.11-compatible stable version yet.
+fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], rounds: u32, output: &mut [u8]) {
+    use hmac::KeyInit as _;
+    for (i, chunk) in output.chunks_mut(32).enumerate() {
+        let mut u = {
+            let mut mac =
+                Hmac::<Sha256>::new_from_slice(password).expect("HMAC accepts any key length");
+            mac.update(salt);
+            mac.update(&((i as u32) + 1).to_be_bytes());
+            let result: [u8; 32] = mac.finalize().into_bytes().into();
+            result
+        };
+        chunk.copy_from_slice(&u[..chunk.len()]);
+        for _ in 1..rounds {
+            let mut mac =
+                Hmac::<Sha256>::new_from_slice(password).expect("HMAC accepts any key length");
+            mac.update(&u);
+            u = mac.finalize().into_bytes().into();
+            for (a, b) in chunk.iter_mut().zip(u.iter()) {
+                *a ^= b;
+            }
+        }
+    }
+}
+
 /// Validity duration for pair codes (approximately).
 const PAIR_CODE_VALIDITY_SECS: u64 = 180;
 
 /// Platform identifiers for companion devices.
 /// These match the DeviceProps.PlatformType protobuf enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 #[repr(u8)]
 pub enum PlatformId {
-    #[str = "0"]
+    #[wire = "0"]
     Unknown = 0,
-    #[string_default]
-    #[str = "1"]
+    #[wire_default]
+    #[wire = "1"]
     Chrome = 1,
-    #[str = "2"]
+    #[wire = "2"]
     Firefox = 2,
-    #[str = "3"]
+    #[wire = "3"]
     InternetExplorer = 3,
-    #[str = "4"]
+    #[wire = "4"]
     Opera = 4,
-    #[str = "5"]
+    #[wire = "5"]
     Safari = 5,
-    #[str = "6"]
+    #[wire = "6"]
     Edge = 6,
-    #[str = "7"]
+    #[wire = "7"]
     Electron = 7,
-    #[str = "8"]
+    #[wire = "8"]
     Uwp = 8,
-    #[str = "9"]
+    #[wire = "9"]
     OtherWebClient = 9,
 }
 
@@ -153,7 +179,7 @@ impl PairCodeUtils {
     /// which excludes 0, I, O, and U to prevent visual confusion.
     pub fn generate_code() -> String {
         let mut bytes = [0u8; 5];
-        rand::rng().fill(&mut bytes);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut bytes);
         Self::encode_crockford(&bytes)
     }
 
@@ -193,7 +219,7 @@ impl PairCodeUtils {
     /// Consider wrapping in `spawn_blocking` for async contexts.
     pub fn derive_key(code: &str, salt: &[u8; PAIR_CODE_SALT_SIZE]) -> [u8; 32] {
         let mut key = [0u8; 32];
-        pbkdf2::pbkdf2_hmac::<Sha256>(code.as_bytes(), salt, PAIR_CODE_PBKDF2_ITERATIONS, &mut key);
+        pbkdf2_hmac_sha256(code.as_bytes(), salt, PAIR_CODE_PBKDF2_ITERATIONS, &mut key);
         key
     }
 
@@ -204,8 +230,8 @@ impl PairCodeUtils {
         // Generate random salt and IV
         let mut salt = [0u8; PAIR_CODE_SALT_SIZE];
         let mut iv = [0u8; PAIR_CODE_IV_SIZE];
-        rand::rng().fill(&mut salt);
-        rand::rng().fill(&mut iv);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut salt);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut iv);
 
         // Derive key from code and encrypt with AES-256-CTR
         let key = Self::derive_key(code, &salt);
@@ -314,12 +340,11 @@ impl PairCodeUtils {
     }
 
     /// Parses the stage 1 response to extract the pairing ref.
-    pub fn parse_companion_hello_response(node: &Node) -> Option<Vec<u8>> {
+    pub fn parse_companion_hello_response(node: &NodeRef<'_>) -> Option<Vec<u8>> {
         node.get_optional_child_by_tag(&["link_code_companion_reg"])
             .and_then(|n| n.get_optional_child_by_tag(&["link_code_pairing_ref"]))
-            .and_then(|n| n.content.as_ref())
-            .and_then(|c| match c {
-                NodeContent::Bytes(b) => Some(b.clone()),
+            .and_then(|n| match n.content.as_deref() {
+                Some(NodeContentRef::Bytes(b)) => Some(b.to_vec()),
                 _ => None,
             })
     }
@@ -403,7 +428,7 @@ impl PairCodeUtils {
 
         // Generate random bytes for ADV secret derivation
         let mut random_bytes = [0u8; 32];
-        rand::rng().fill(&mut random_bytes);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut random_bytes);
 
         // Derive ADV secret using HKDF
         // Combined secret = ephemeral_shared + identity_shared + random_bytes
@@ -426,7 +451,7 @@ impl PairCodeUtils {
 
         // Generate salt for HKDF
         let mut key_bundle_salt = [0u8; 32];
-        rand::rng().fill(&mut key_bundle_salt);
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut key_bundle_salt);
 
         // Derive bundle encryption key using HKDF
         // HKDF(IKM=ephemeral_shared, salt=random_salt, info="link_code_pairing_key_bundle_encryption_key")
@@ -440,21 +465,14 @@ impl PairCodeUtils {
 
         // Generate random IV for AES-GCM (12 bytes)
         let mut iv = [0u8; 12];
-        rand::rng().fill(&mut iv);
-
-        // AES-GCM encrypt the bundle
-        let cipher = Aes256Gcm::new_from_slice(&enc_key)
-            .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM init failed: {e}")))?;
-        let nonce = aes_gcm::Nonce::from_slice(&iv);
-        let encrypted_bundle = cipher
-            .encrypt(nonce, bundle.as_slice())
-            .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM encryption failed: {e}")))?;
+        rand::make_rng::<rand::rngs::StdRng>().fill(&mut iv);
 
         // Wrapped bundle = salt (32) + iv (12) + encrypted_bundle (96 + 16 = 112)
-        let mut wrapped_bundle = Vec::with_capacity(32 + 12 + encrypted_bundle.len());
+        let mut wrapped_bundle = Vec::with_capacity(32 + 12 + bundle.len() + 16);
         wrapped_bundle.extend_from_slice(&key_bundle_salt);
         wrapped_bundle.extend_from_slice(&iv);
-        wrapped_bundle.extend_from_slice(&encrypted_bundle);
+        aes_256_gcm_encrypt(&enc_key, &iv, b"", &bundle, &mut wrapped_bundle)
+            .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM encryption failed: {e}")))?;
 
         Ok((wrapped_bundle, new_adv_secret))
     }
@@ -598,7 +616,7 @@ mod tests {
 
     #[test]
     fn test_platform_id_string_enum() {
-        // StringEnum derive works correctly
+        // WireEnum derive works correctly
         assert_eq!(PlatformId::Chrome.as_str(), "1");
         assert_eq!(PlatformId::Firefox.to_string(), "2");
         assert_eq!(PlatformId::default(), PlatformId::Chrome);

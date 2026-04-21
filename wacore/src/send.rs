@@ -1,30 +1,253 @@
 use crate::client::context::{GroupInfo, SendContextResolver};
 use crate::libsignal::protocol::{
-    CiphertextMessage, SENDERKEY_MESSAGE_CURRENT_VERSION, SenderKeyDistributionMessage,
-    SenderKeyMessage, SenderKeyRecord, SenderKeyStore, SignalProtocolError, UsePQRatchet,
-    message_encrypt, process_prekey_bundle,
+    CiphertextMessage, ProtocolAddress, SENDERKEY_MESSAGE_CURRENT_VERSION, SenderKeyMessage,
+    SenderKeyStore, SignalProtocolError, UsePQRatchet, message_encrypt, process_prekey_bundle,
 };
-use crate::libsignal::store::sender_key_name::SenderKeyName;
 use crate::messages::MessageUtils;
 use crate::reporting_token::{
     build_reporting_node, generate_reporting_token, prepare_message_with_context,
 };
 use crate::types::jid::JidExt;
+use crate::types::jid::make_sender_key_name;
 use anyhow::{Result, anyhow};
 use prost::Message as ProtoMessage;
-use rand::{CryptoRng, Rng, TryRngCore as _};
+use rand::{CryptoRng, Rng};
 use std::collections::HashSet;
+use wacore_binary::Node;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, JidExt as _};
-use wacore_binary::node::{Attrs, Node};
+use wacore_binary::{Jid, JidExt as _};
 use wacore_libsignal::crypto::aes_256_cbc_encrypt_into;
 use waproto::whatsapp as wa;
 use waproto::whatsapp::message::DeviceSentMessage;
 
+/// Wire-format constants (MsgCreateDeviceStanza.js).
+pub(crate) mod stanza {
+    pub const ENC_VERSION: &str = "2";
+    pub const MSG_TYPE_TEXT: &str = "text";
+    pub const MSG_TYPE_MEDIA: &str = "media";
+    pub const MSG_TYPE_REACTION: &str = "reaction";
+    pub const MSG_TYPE_POLL: &str = "poll";
+    pub const MSG_TYPE_EVENT: &str = "event";
+    pub const ENC_TYPE_MSG: &str = "msg";
+    pub const ENC_TYPE_PKMSG: &str = "pkmsg";
+    pub const ENC_TYPE_SKMSG: &str = "skmsg";
+}
+
+/// Extract (enc_type, is_prekey, serialized) from a CiphertextMessage.
+pub fn extract_ciphertext(msg: CiphertextMessage) -> Option<(&'static str, bool, Box<[u8]>)> {
+    match msg {
+        CiphertextMessage::SignalMessage(m) => {
+            Some((stanza::ENC_TYPE_MSG, false, m.into_serialized()))
+        }
+        CiphertextMessage::PreKeySignalMessage(m) => {
+            Some((stanza::ENC_TYPE_PKMSG, true, m.into_serialized()))
+        }
+        _ => None,
+    }
+}
+
+/// Unwrap wrapper message types to reach the inner message.
+/// Matches WA Web's getUnwrappedProtobufMessage (EProtoUtils.js:19-35).
+fn unwrap_message(msg: &wa::Message) -> &wa::Message {
+    macro_rules! try_unwrap {
+        ($($field:ident),+ $(,)?) => {
+            $(
+                if let Some(ref w) = msg.$field {
+                    if let Some(ref inner) = w.message {
+                        return unwrap_message(inner);
+                    }
+                }
+            )+
+        };
+    }
+    try_unwrap!(
+        ephemeral_message,
+        view_once_message,
+        view_once_message_v2,
+        view_once_message_v2_extension,
+        document_with_caption_message,
+        group_mentioned_message,
+        bot_invoke_message,
+        associated_child_message,
+        poll_creation_option_image_message,
+    );
+    if let Some(ref dsm) = msg.device_sent_message
+        && let Some(ref inner) = dsm.message
+    {
+        return unwrap_message(inner);
+    }
+    msg
+}
+
+/// Matches WAWebE2EProtoUtils.typeAttributeFromProtobuf.
+pub fn stanza_type_from_message(msg: &wa::Message) -> &'static str {
+    let msg = unwrap_message(msg);
+
+    if msg.reaction_message.is_some() || msg.enc_reaction_message.is_some() {
+        return stanza::MSG_TYPE_REACTION;
+    }
+    if msg.event_message.is_some() || msg.enc_event_response_message.is_some() {
+        return stanza::MSG_TYPE_EVENT;
+    }
+    if let Some(ref sec) = msg.secret_encrypted_message {
+        use wa::message::secret_encrypted_message::SecretEncType;
+        match SecretEncType::try_from(sec.secret_enc_type.unwrap_or(0)) {
+            Ok(SecretEncType::EventEdit) => return stanza::MSG_TYPE_EVENT,
+            Ok(SecretEncType::MessageEdit) => return stanza::MSG_TYPE_TEXT,
+            Ok(SecretEncType::PollEdit) => return stanza::MSG_TYPE_POLL,
+            _ => {}
+        }
+    }
+    if msg.poll_creation_message.is_some()
+        || msg.poll_creation_message_v2.is_some()
+        || msg.poll_creation_message_v3.is_some()
+        || msg.poll_creation_message_v5.is_some()
+        || msg.poll_update_message.is_some()
+    {
+        return stanza::MSG_TYPE_POLL;
+    }
+    if msg.conversation.is_some()
+        || msg.protocol_message.is_some()
+        || msg.keep_in_chat_message.is_some()
+        || msg.edited_message.is_some()
+        || msg.pin_in_chat_message.is_some()
+        || msg.interactive_message.is_some()
+        || msg.template_button_reply_message.is_some()
+        || msg.request_phone_number_message.is_some()
+        || msg.enc_comment_message.is_some()
+        || msg.newsletter_admin_invite_message.is_some()
+        || msg.newsletter_follower_invite_message_v2.is_some()
+        || msg.message_history_notice.is_some()
+    {
+        return stanza::MSG_TYPE_TEXT;
+    }
+    // pollResultSnapshotMessage maps to "text" by default in WA Web
+    // (gated behind isPollResultSnapshotPollTypeEnvelopeEnabled for "poll")
+    if msg.poll_result_snapshot_message.is_some() || msg.poll_result_snapshot_message_v3.is_some() {
+        return stanza::MSG_TYPE_TEXT;
+    }
+    if let Some(ref ext) = msg.extended_text_message {
+        if ext
+            .matched_text
+            .as_ref()
+            .is_some_and(|t| !t.trim().is_empty())
+        {
+            return stanza::MSG_TYPE_MEDIA;
+        }
+        return stanza::MSG_TYPE_TEXT;
+    }
+    stanza::MSG_TYPE_MEDIA
+}
+
+/// Matches WAWebBackendJobsCommon.mediaTypeFromProtobuf + encodeMaybeMediaType.
+/// Returns `None` when the attribute should be omitted.
+pub fn media_type_from_message(msg: &wa::Message) -> Option<&'static str> {
+    let msg = unwrap_message(msg);
+
+    if msg.image_message.is_some() {
+        return Some("image");
+    }
+    if let Some(ref vid) = msg.video_message {
+        return if vid.gif_playback == Some(true) {
+            Some("gif")
+        } else {
+            Some("video")
+        };
+    }
+    if msg.ptv_message.is_some() {
+        return Some("ptv");
+    }
+    if let Some(ref audio) = msg.audio_message {
+        return if audio.ptt == Some(true) {
+            Some("ptt")
+        } else {
+            Some("audio")
+        };
+    }
+    if msg.document_message.is_some() {
+        return Some("document");
+    }
+    if msg.sticker_message.is_some() {
+        return Some("sticker");
+    }
+    if msg.sticker_pack_message.is_some() {
+        return Some("sticker_pack");
+    }
+    if let Some(ref loc) = msg.location_message {
+        return if loc.is_live == Some(true) {
+            Some("livelocation")
+        } else {
+            Some("location")
+        };
+    }
+    if msg.live_location_message.is_some() {
+        return Some("livelocation");
+    }
+    if msg.contact_message.is_some() {
+        return Some("vcard");
+    }
+    if msg.contacts_array_message.is_some() {
+        return Some("contact_array");
+    }
+    if let Some(ref ext) = msg.extended_text_message
+        && ext
+            .matched_text
+            .as_ref()
+            .is_some_and(|t| !t.trim().is_empty())
+    {
+        return Some("url");
+    }
+    if msg.group_invite_message.is_some() {
+        return Some("url");
+    }
+    None
+}
+
+/// Infrastructure messages get decrypt-fail="hide" so recipients don't see
+/// "waiting for this message" placeholders for things like reactions or pin changes.
+pub fn should_hide_decrypt_fail(msg: &wa::Message) -> bool {
+    let msg = unwrap_message(msg);
+
+    use wa::message::protocol_message::Type as ProtocolType;
+    use wa::message::secret_encrypted_message::SecretEncType;
+
+    msg.reaction_message.is_some()
+        || msg.enc_reaction_message.is_some()
+        || msg.pin_in_chat_message.is_some()
+        || msg.edited_message.is_some()
+        || msg.keep_in_chat_message.is_some()
+        || msg.enc_event_response_message.is_some()
+        || msg
+            .poll_update_message
+            .as_ref()
+            .is_some_and(|p| p.vote.is_some())
+        || msg.message_history_notice.is_some()
+        || msg.secret_encrypted_message.as_ref().is_some_and(|s| {
+            matches!(
+                SecretEncType::try_from(s.secret_enc_type.unwrap_or(0)),
+                Ok(SecretEncType::EventEdit | SecretEncType::PollEdit)
+            )
+        })
+        || msg
+            .bot_invoke_message
+            .as_ref()
+            .and_then(|b| b.message.as_ref())
+            .and_then(|m| m.protocol_message.as_ref())
+            .is_some_and(|p| p.r#type == Some(ProtocolType::RequestWelcomeMessage as i32))
+        || msg.protocol_message.as_ref().is_some_and(|p| {
+            matches!(
+                p.r#type,
+                Some(t) if t == ProtocolType::EphemeralSyncResponse as i32
+                    || t == ProtocolType::RequestWelcomeMessage as i32
+                    || t == ProtocolType::GroupMemberLabelChange as i32
+            ) || p.edited_message.is_some()
+        })
+}
+
 pub async fn encrypt_group_message<S, R>(
     sender_key_store: &mut S,
     group_jid: &Jid,
-    sender_jid: &Jid,
+    sender_address: &ProtocolAddress,
     plaintext: &[u8],
     csprng: &mut R,
 ) -> Result<SenderKeyMessage>
@@ -32,8 +255,7 @@ where
     S: SenderKeyStore + ?Sized,
     R: Rng + CryptoRng,
 {
-    let sender_address = sender_jid.to_protocol_address();
-    let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+    let sender_key_name = make_sender_key_name(group_jid, sender_address);
     log::debug!(
         "Attempting to load sender key for group {} sender {}",
         sender_key_name.group_id(),
@@ -86,7 +308,7 @@ where
     sender_key_state.set_sender_chain_key(sender_chain_key.next()?);
 
     sender_key_store
-        .store_sender_key(&sender_key_name, &record)
+        .store_sender_key(&sender_key_name, record)
         .await?;
 
     Ok(skm)
@@ -100,13 +322,33 @@ pub struct SignalStores<'a, S, I, P, SP> {
     pub signed_prekey_store: &'a SP,
 }
 
-async fn encrypt_for_devices<'a, S, I, P, SP>(
+/// Check if an anyhow error is a 406 "not-acceptable" server error (device unregistered).
+/// Uses typed downcast to `ServerErrorCode` — the shared error type that the
+/// `SendContextResolver` impl wraps server errors in.
+pub(crate) fn is_device_unregistered_error(err: &anyhow::Error) -> bool {
+    crate::request::ServerErrorCode::from_anyhow(err).is_some_and(|e| e.code == 406)
+}
+
+pub struct EncryptResult {
+    pub participant_nodes: Vec<Node>,
+    pub includes_prekey_message: bool,
+    pub encrypted_devices: Vec<Jid>,
+    /// True if any device returned 406 (unregistered) during prekey fetch.
+    pub had_unregistered_device: bool,
+}
+
+/// Encrypt padded plaintext for each device JID, producing participant `<to>` nodes.
+///
+/// Callers must hold per-device session locks before calling this function —
+/// concurrent ratchet mutations will corrupt Signal session state.
+pub async fn encrypt_for_devices<'a, S, I, P, SP>(
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
     devices: &[Jid],
     plaintext_to_encrypt: &[u8],
-    enc_extra_attrs: &Attrs,
-) -> Result<(Vec<Node>, bool)>
+    hide_decrypt_fail: bool,
+    mediatype: Option<&str>,
+) -> Result<EncryptResult>
 where
     S: crate::libsignal::protocol::SessionStore + Send + Sync,
     I: crate::libsignal::protocol::IdentityKeyStore + Send + Sync,
@@ -117,9 +359,12 @@ where
     // For phone number JIDs, check if we have an existing session under the corresponding LID.
     // This handles the case where a session was established via a message with sender_lid,
     // and now we're sending a reply using the phone number address.
-    let mut jid_to_encryption_jid: std::collections::HashMap<Jid, Jid> =
-        std::collections::HashMap::new();
-    let mut jids_needing_prekeys = Vec::new();
+    let mut jid_to_encryption_jid: std::collections::HashMap<&Jid, Jid> =
+        std::collections::HashMap::with_capacity(devices.len());
+    let mut jids_needing_prekeys = Vec::with_capacity(devices.len());
+    let mut had_406 = false;
+
+    let mut reusable_addr = crate::types::jid::make_reusable_protocol_address();
 
     for device_jid in devices {
         // WhatsApp Web's SignalAddress.toString() normalizes PN → LID before
@@ -130,35 +375,21 @@ where
         {
             // Construct the LID JID with the same device ID
             let lid_jid = Jid::lid_device(lid_user, device_jid.device);
-            let lid_address = lid_jid.to_protocol_address();
+            lid_jid.reset_protocol_address(&mut reusable_addr);
 
-            if stores
-                .session_store
-                .load_session(&lid_address)
-                .await?
-                .is_some()
-            {
-                // Found existing session under LID address - use it!
+            if stores.session_store.has_session(&reusable_addr).await? {
                 log::debug!(
                     "Using LID session {} for PN {} (LID-first lookup)",
                     lid_jid,
                     device_jid
                 );
-                jid_to_encryption_jid.insert(device_jid.clone(), lid_jid);
+                jid_to_encryption_jid.insert(device_jid, lid_jid);
                 continue;
             }
         }
 
-        // Fall back to direct address lookup (for LID JIDs or PN without LID mapping)
-        let signal_address = device_jid.to_protocol_address();
-        if stores
-            .session_store
-            .load_session(&signal_address)
-            .await?
-            .is_some()
-        {
-            // Session exists under direct address, use it
-            jid_to_encryption_jid.insert(device_jid.clone(), device_jid.clone());
+        device_jid.reset_protocol_address(&mut reusable_addr);
+        if stores.session_store.has_session(&reusable_addr).await? {
             continue;
         }
 
@@ -180,7 +411,7 @@ where
         } else {
             device_jid.clone()
         };
-        jid_to_encryption_jid.insert(device_jid.clone(), encryption_jid);
+        jid_to_encryption_jid.insert(device_jid, encryption_jid);
         // Use original device_jid for prekey fetch (HashMap key match)
         jids_needing_prekeys.push(device_jid.clone());
     }
@@ -190,9 +421,25 @@ where
             "Fetching prekeys for {} devices without sessions",
             jids_needing_prekeys.len()
         );
-        let prekey_bundles = resolver
+        // 406 on this batch is all-or-nothing — per-device retries just wasted
+        // N·RTT with the same failure. Mark `had_406` so the caller invalidates
+        // the users and the next send re-fetches. Matches WA Web's
+        // `GroupSkmsgJob`: log, continue without those devices.
+        let prekey_bundles = match resolver
             .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
-            .await?;
+            .await
+        {
+            Ok(bundles) => bundles,
+            Err(e) if is_device_unregistered_error(&e) => {
+                log::warn!(
+                    "Prekey fetch returned 406 for {} device(s); skipping them this round",
+                    jids_needing_prekeys.len()
+                );
+                had_406 = true;
+                std::collections::HashMap::new()
+            }
+            Err(e) => return Err(e),
+        };
 
         for device_jid in &jids_needing_prekeys {
             // Use the LID-normalized encryption JID for session creation
@@ -207,18 +454,16 @@ where
                 encryption_jid.agent = 0;
             }
 
-            let signal_address = encryption_jid.to_protocol_address();
-            // Fix: Use the normalized device_jid to lookup the bundle
-            // Use centralized normalization logic to avoid mismatches
+            encryption_jid.reset_protocol_address(&mut reusable_addr);
             let lookup_jid = device_jid.normalize_for_prekey_bundle();
             match prekey_bundles.get(&lookup_jid) {
                 Some(bundle) => {
                     match process_prekey_bundle(
-                        &signal_address,
+                        &reusable_addr,
                         stores.session_store,
                         stores.identity_store,
                         bundle,
-                        &mut rand::rngs::OsRng.unwrap_err(),
+                        &mut rand::make_rng::<rand::rngs::StdRng>(),
                         UsePQRatchet::No,
                     )
                     .await
@@ -252,7 +497,7 @@ where
                             // Save the new identity (this replaces the old one)
                             if let Err(e) = stores
                                 .identity_store
-                                .save_identity(&signal_address, new_identity)
+                                .save_identity(&reusable_addr, new_identity)
                                 .await
                             {
                                 log::warn!(
@@ -270,11 +515,11 @@ where
 
                             // Retry processing the prekey bundle with the updated identity
                             match process_prekey_bundle(
-                                &signal_address,
+                                &reusable_addr,
                                 stores.session_store,
                                 stores.identity_store,
                                 bundle,
-                                &mut rand::rngs::OsRng.unwrap_err(),
+                                &mut rand::make_rng::<rand::rngs::StdRng>(),
                                 UsePQRatchet::No,
                             )
                             .await
@@ -299,7 +544,7 @@ where
                             // Propagate other unexpected errors
                             return Err(anyhow::anyhow!(
                                 "Failed to process pre-key bundle for {}: {:?}",
-                                signal_address,
+                                reusable_addr,
                                 e
                             ));
                         }
@@ -308,72 +553,111 @@ where
                 None => {
                     log::warn!(
                         "No pre-key bundle returned for device {}. This device will be skipped for encryption.",
-                        &signal_address
+                        &reusable_addr
                     );
                 }
             }
         }
     }
 
-    let mut participant_nodes = Vec::new();
+    let mut participant_nodes = Vec::with_capacity(devices.len());
     let mut includes_prekey_message = false;
+    let mut encrypted_devices = Vec::with_capacity(devices.len());
 
     for device_jid in devices {
-        // Use the effective encryption JID (may be LID if we found an existing LID session)
         let encryption_jid = jid_to_encryption_jid.get(device_jid).unwrap_or(device_jid);
-        let signal_address = encryption_jid.to_protocol_address();
+        encryption_jid.reset_protocol_address(&mut reusable_addr);
 
-        // Try to encrypt for this device. If it fails (e.g., no session established),
-        // log a warning and skip this device instead of failing the entire operation.
         match message_encrypt(
             plaintext_to_encrypt,
-            &signal_address,
+            &reusable_addr,
             stores.session_store,
             stores.identity_store,
         )
         .await
         {
             Ok(encrypted_payload) => {
-                let (enc_type, serialized_bytes) = match encrypted_payload {
-                    CiphertextMessage::PreKeySignalMessage(msg) => {
-                        includes_prekey_message = true;
-                        ("pkmsg", msg.serialized().to_vec())
-                    }
-                    CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
-                    _ => continue,
+                let Some((enc_type, is_prekey, serialized_bytes)) =
+                    extract_ciphertext(encrypted_payload)
+                else {
+                    continue;
                 };
+                includes_prekey_message |= is_prekey;
 
-                let mut enc_attrs = Attrs::new();
-                enc_attrs.insert("v".to_string(), "2".to_string());
-                enc_attrs.insert("type".to_string(), enc_type.to_string());
-                for (k, v) in enc_extra_attrs.iter() {
-                    enc_attrs.insert(k.clone(), v.clone());
+                let mut enc_builder = NodeBuilder::new("enc")
+                    .attr("v", stanza::ENC_VERSION)
+                    .attr("type", enc_type);
+                if let Some(mt) = mediatype {
+                    enc_builder = enc_builder.attr("mediatype", mt);
                 }
+                if hide_decrypt_fail {
+                    enc_builder = enc_builder.attr("decrypt-fail", "hide");
+                }
+                let enc_node = enc_builder.bytes(serialized_bytes).build();
 
-                let enc_node = NodeBuilder::new("enc")
-                    .attrs(enc_attrs)
-                    .bytes(serialized_bytes)
-                    .build();
-                // Use the original device_jid for the `to` attribute (what the server expects),
-                // but we encrypted using the encryption_jid's session
                 participant_nodes.push(
                     NodeBuilder::new("to")
-                        .attr("jid", device_jid.to_string())
+                        .attr("jid", device_jid.clone())
                         .children([enc_node])
                         .build(),
                 );
+                encrypted_devices.push(device_jid.clone());
             }
             Err(e) => {
                 log::warn!(
-                    "Failed to encrypt message for device {}: {}. Skipping this device.",
-                    &signal_address,
+                    "Failed to encrypt for device {}: {}. Skipping.",
+                    &reusable_addr,
                     e
                 );
             }
         }
     }
 
-    Ok((participant_nodes, includes_prekey_message))
+    Ok(EncryptResult {
+        participant_nodes,
+        includes_prekey_message,
+        encrypted_devices,
+        had_unregistered_device: had_406,
+    })
+}
+
+fn is_exact_dm_sender_device(device_jid: &Jid, own_jid: &Jid, own_lid: Option<&Jid>) -> bool {
+    (device_jid.is_same_user_as(own_jid) && device_jid.device == own_jid.device)
+        || own_lid
+            .is_some_and(|lid| device_jid.is_same_user_as(lid) && device_jid.device == lid.device)
+}
+
+fn partition_dm_devices(
+    all_devices: Vec<Jid>,
+    own_jid: &Jid,
+    own_lid: Option<&Jid>,
+) -> (Vec<Jid>, Vec<Jid>) {
+    let mut recipient_devices = Vec::with_capacity(all_devices.len());
+    let mut own_other_devices = Vec::with_capacity(4);
+
+    for device_jid in all_devices {
+        if is_exact_dm_sender_device(&device_jid, own_jid, own_lid) {
+            continue;
+        }
+
+        if device_jid.matches_user_or_lid(own_jid, own_lid) {
+            own_other_devices.push(device_jid);
+        } else {
+            recipient_devices.push(device_jid);
+        }
+    }
+
+    (recipient_devices, own_other_devices)
+}
+
+/// Result of `prepare_dm_stanza` — carries the stanza node and the
+/// locally computed phash for server ACK validation.
+pub struct PreparedDmStanza {
+    pub node: Node,
+    /// Locally computed phash from the sent device set. Not sent on the
+    /// wire (WA Web only sends phash for groups). Used by the caller to
+    /// compare against the server's ACK phash for device-list drift detection.
+    pub phash: Option<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -387,91 +671,90 @@ pub async fn prepare_dm_stanza<
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
     own_jid: &Jid,
+    own_lid: Option<&Jid>,
     account: Option<&wa::AdvSignedDeviceIdentity>,
     to_jid: Jid,
     message: &wa::Message,
     request_id: String,
     edit: Option<crate::types::message::EditAttribute>,
-    extra_stanza_nodes: Vec<Node>,
-) -> Result<Node> {
-    // Generate reporting token if the message type supports it
-    // For DMs, both sender_jid and remote_jid are the recipient (to_jid) per Baileys implementation
+    extra_stanza_nodes: &[Node],
+    all_devices: Vec<Jid>,
+) -> Result<PreparedDmStanza> {
     let reporting_result = generate_reporting_token(message, &request_id, &to_jid, &to_jid, None);
 
-    // Prepare message with MessageContextInfo containing the message secret
     let message_for_encryption = if let Some(ref result) = reporting_result {
         prepare_message_with_context(message, &result.message_secret)
     } else {
         message.clone()
     };
 
-    let recipient_plaintext = MessageUtils::pad_message_v2(message_for_encryption.encode_to_vec());
+    let recipient_plaintext = MessageUtils::encode_and_pad(&message_for_encryption);
+
+    // Partition first so phash reflects the actual sent set (sender excluded)
+    let total_devices = all_devices.len();
+    let (recipient_devices, own_other_devices) =
+        partition_dm_devices(all_devices, own_jid, own_lid);
+
+    let phash = {
+        let mut sent = Vec::with_capacity(recipient_devices.len() + own_other_devices.len());
+        sent.extend_from_slice(&recipient_devices);
+        sent.extend_from_slice(&own_other_devices);
+        MessageUtils::participant_list_hash(&sent).ok()
+    };
 
     let dsm = wa::Message {
         device_sent_message: Some(Box::new(DeviceSentMessage {
             destination_jid: Some(to_jid.to_string()),
-            message: Some(Box::new(message_for_encryption.clone())),
-            phash: Some("".to_string()),
+            message: Some(Box::new(message_for_encryption)),
+            phash: None, // WA Web only sets DSM phash for groups
         })),
         ..Default::default()
     };
 
-    let own_devices_plaintext = MessageUtils::pad_message_v2(dsm.encode_to_vec());
+    let own_devices_plaintext = MessageUtils::encode_and_pad(&dsm);
 
-    let participants = vec![to_jid.clone(), own_jid.clone()];
-    let all_devices = resolver.resolve_devices(&participants).await?;
-
-    let mut recipient_devices = Vec::new();
-    let mut own_other_devices = Vec::new();
-    for device_jid in &all_devices {
-        // Skip the current device (sender) to prevent self-encryption loops
-        if device_jid.user == own_jid.user && device_jid.device == own_jid.device {
-            continue;
-        }
-
-        let is_own_device = device_jid.user == own_jid.user;
-        if is_own_device {
-            own_other_devices.push(device_jid.clone());
-        } else {
-            recipient_devices.push(device_jid.clone());
-        }
-    }
-
-    let mut participant_nodes = Vec::new();
+    let mut participant_nodes = Vec::with_capacity(total_devices);
     let mut includes_prekey_message = false;
 
-    // If this is an edit-like message, set decrypt-fail="hide" on enc nodes
-    let mut enc_extra_attrs = Attrs::new();
-    if let Some(edit_attr) = &edit
-        && *edit_attr != crate::types::message::EditAttribute::Empty
-    {
-        enc_extra_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
-    }
+    let hide_decrypt_fail = edit
+        .as_ref()
+        .is_some_and(|e| *e != crate::types::message::EditAttribute::Empty)
+        || should_hide_decrypt_fail(message);
+
+    let mediatype = media_type_from_message(message);
+
+    // NOTE: WA Web has a bare-<enc> fast path for single primary device
+    // (WAWebSendMsgCreateFanoutStanza). Not implemented here because
+    // encrypt_for_devices always wraps in <to jid=...> nodes;
+    // a bare-enc mode would require refactoring the encryption layer.
+    // The <participants> form is accepted by the server regardless.
 
     if !recipient_devices.is_empty() {
-        let (nodes, inc) = encrypt_for_devices(
+        let result = encrypt_for_devices(
             stores,
             resolver,
             &recipient_devices,
             &recipient_plaintext,
-            &enc_extra_attrs,
+            hide_decrypt_fail,
+            mediatype,
         )
         .await?;
-        participant_nodes.extend(nodes);
-        includes_prekey_message = includes_prekey_message || inc;
+        participant_nodes.extend(result.participant_nodes);
+        includes_prekey_message = includes_prekey_message || result.includes_prekey_message;
     }
 
     if !own_other_devices.is_empty() {
-        let (nodes, inc) = encrypt_for_devices(
+        let result = encrypt_for_devices(
             stores,
             resolver,
             &own_other_devices,
             &own_devices_plaintext,
-            &enc_extra_attrs,
+            hide_decrypt_fail,
+            mediatype,
         )
         .await?;
-        participant_nodes.extend(nodes);
-        includes_prekey_message = includes_prekey_message || inc;
+        participant_nodes.extend(result.participant_nodes);
+        includes_prekey_message = includes_prekey_message || result.includes_prekey_message;
     }
 
     let mut message_content_nodes = vec![
@@ -495,32 +778,34 @@ pub async fn prepare_dm_stanza<
     }
 
     // Add any extra stanza nodes provided by the caller
-    message_content_nodes.extend(extra_stanza_nodes);
+    message_content_nodes.extend(extra_stanza_nodes.iter().cloned());
 
-    let mut stanza_attrs = Attrs::new();
-    stanza_attrs.insert("to".to_string(), to_jid.to_string());
-    stanza_attrs.insert("id".to_string(), request_id);
-    stanza_attrs.insert("type".to_string(), "text".to_string());
+    let stanza_type = stanza_type_from_message(message);
+
+    let mut stanza_builder = NodeBuilder::new("message")
+        .attr("to", to_jid)
+        .attr("id", request_id)
+        .attr("type", stanza_type);
 
     if let Some(edit_attr) = edit
         && edit_attr != crate::types::message::EditAttribute::Empty
     {
-        stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
+        stanza_builder = stanza_builder.attr("edit", edit_attr.to_string_val());
     }
 
-    let stanza = NodeBuilder::new("message")
-        .attrs(stanza_attrs.into_iter())
-        .children(message_content_nodes)
-        .build();
+    let stanza = stanza_builder.children(message_content_nodes).build();
 
-    Ok(stanza)
+    Ok(PreparedDmStanza {
+        node: stanza,
+        phash,
+    })
 }
 
 pub async fn prepare_peer_stanza<S, I>(
     session_store: &mut S,
     identity_store: &mut I,
     transport_jid: Jid,
-    encryption_jid: Jid,
+    signal_address: &ProtocolAddress,
     message: &wa::Message,
     request_id: String,
 ) -> Result<Node>
@@ -528,17 +813,13 @@ where
     S: crate::libsignal::protocol::SessionStore,
     I: crate::libsignal::protocol::IdentityKeyStore,
 {
-    let plaintext = MessageUtils::pad_message_v2(message.encode_to_vec());
-    let signal_address = encryption_jid.to_protocol_address();
+    let plaintext = MessageUtils::encode_and_pad(message);
 
     let encrypted_message =
-        message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
+        message_encrypt(&plaintext, signal_address, session_store, identity_store).await?;
 
-    let (enc_type, serialized_bytes) = match encrypted_message {
-        CiphertextMessage::SignalMessage(msg) => ("msg", msg.serialized().to_vec()),
-        CiphertextMessage::PreKeySignalMessage(msg) => ("pkmsg", msg.serialized().to_vec()),
-        _ => return Err(anyhow!("Unexpected peer encryption message type")),
-    };
+    let (enc_type, _, serialized_bytes) = extract_ciphertext(encrypted_message)
+        .ok_or_else(|| anyhow!("Unexpected peer encryption message type"))?;
 
     let enc_node = NodeBuilder::new("enc")
         .attrs([("v", "2"), ("type", enc_type)])
@@ -546,16 +827,152 @@ where
         .build();
 
     let stanza = NodeBuilder::new("message")
-        .attrs([
-            ("to", transport_jid.to_string()),
-            ("id", request_id),
-            ("type", "text".to_string()),
-            ("category", "peer".to_string()),
-        ])
+        .attr("to", transport_jid)
+        .attr("id", request_id)
+        .attr("type", stanza::MSG_TYPE_TEXT)
+        .attr("category", "peer")
         .children([enc_node])
         .build();
 
     Ok(stanza)
+}
+
+/// Pairwise-encrypted retry stanza for a single DM recipient device.
+/// WA Web retries target only the failing device, not a full DM fanout.
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_dm_retry_stanza<S, I>(
+    session_store: &mut S,
+    identity_store: &mut I,
+    to_jid: Jid,
+    requester_jid: Jid,
+    encryption_jid: Jid,
+    message: &wa::Message,
+    message_id: String,
+    retry_count: u8,
+    account: Option<&wa::AdvSignedDeviceIdentity>,
+) -> Result<Node>
+where
+    S: crate::libsignal::protocol::SessionStore,
+    I: crate::libsignal::protocol::IdentityKeyStore,
+{
+    let plaintext = MessageUtils::encode_and_pad(message);
+    let signal_address = encryption_jid.to_protocol_address();
+
+    let encrypted =
+        message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
+
+    let (enc_type, is_prekey, serialized) = extract_ciphertext(encrypted)
+        .ok_or_else(|| anyhow!("Unexpected encryption message type for DM retry"))?;
+
+    let mut enc_builder = NodeBuilder::new("enc")
+        .attr("v", stanza::ENC_VERSION)
+        .attr("type", enc_type)
+        .attr("count", retry_count.to_string());
+    if let Some(mt) = media_type_from_message(message) {
+        enc_builder = enc_builder.attr("mediatype", mt);
+    }
+    let enc_node = enc_builder.bytes(serialized).build();
+
+    let participant_node = NodeBuilder::new("to")
+        .attr("jid", requester_jid)
+        .children([enc_node])
+        .build();
+
+    let mut children = vec![
+        NodeBuilder::new("participants")
+            .children([participant_node])
+            .build(),
+    ];
+
+    if is_prekey && let Some(acc) = account {
+        children.push(
+            NodeBuilder::new("device-identity")
+                .bytes(acc.encode_to_vec())
+                .build(),
+        );
+    }
+
+    Ok(NodeBuilder::new("message")
+        .attr("to", to_jid)
+        .attr("id", message_id)
+        .attr("type", stanza_type_from_message(message))
+        .children(children)
+        .build())
+}
+
+/// Pairwise-encrypted retry stanza for a single group participant.
+/// WA Web sends retries to the failing device only (RetryMsgJob.js:71),
+/// NOT as a sender-key broadcast to all participants.
+#[allow(clippy::too_many_arguments)]
+pub async fn prepare_group_retry_stanza<S, I>(
+    session_store: &mut S,
+    identity_store: &mut I,
+    group_jid: Jid,
+    participant_jid: Jid,
+    encryption_jid: Jid,
+    message: &wa::Message,
+    message_id: String,
+    retry_count: u8,
+    account: Option<&wa::AdvSignedDeviceIdentity>,
+    addressing_mode: crate::types::message::AddressingMode,
+) -> Result<Node>
+where
+    S: crate::libsignal::protocol::SessionStore,
+    I: crate::libsignal::protocol::IdentityKeyStore,
+{
+    let plaintext = MessageUtils::encode_and_pad(message);
+    let signal_address = encryption_jid.to_protocol_address();
+
+    let encrypted =
+        message_encrypt(&plaintext, &signal_address, session_store, identity_store).await?;
+
+    let (enc_type, is_prekey, serialized) = extract_ciphertext(encrypted)
+        .ok_or_else(|| anyhow!("Unexpected encryption message type for group retry"))?;
+
+    // count="N" distinguishes retries from normal sends (MsgCreateDeviceStanza.js:150-153)
+    let mut enc_builder = NodeBuilder::new("enc")
+        .attr("v", stanza::ENC_VERSION)
+        .attr("type", enc_type)
+        .attr("count", retry_count.to_string());
+    if let Some(mt) = media_type_from_message(message) {
+        enc_builder = enc_builder.attr("mediatype", mt);
+    }
+    let enc_node = enc_builder.bytes(serialized).build();
+
+    let mut children = vec![enc_node];
+
+    if is_prekey && let Some(acc) = account {
+        children.push(
+            NodeBuilder::new("device-identity")
+                .bytes(acc.encode_to_vec())
+                .build(),
+        );
+    }
+
+    let stanza_type = stanza_type_from_message(message);
+    let mut stanza_builder = NodeBuilder::new("message")
+        .attr("to", group_jid)
+        .attr("participant", participant_jid)
+        .attr("id", message_id)
+        .attr("type", stanza_type);
+
+    // WA Web always sets addressing_mode for groups (MsgCreateDeviceStanza.js:131-135)
+    stanza_builder = stanza_builder.attr("addressing_mode", addressing_mode.as_str());
+
+    Ok(stanza_builder.children(children).build())
+}
+
+/// Result of `prepare_group_stanza` — carries the stanza node and the exact
+/// device list used for SKDM distribution, so callers can persist sender key
+/// tracking without re-resolving devices.
+pub struct PreparedGroupStanza {
+    pub node: Node,
+    /// Devices that actually received SKDM (successfully encrypted).
+    pub skdm_devices: Vec<Jid>,
+    /// Users whose device registry should be invalidated because their
+    /// devices returned 406 (unregistered) during SKDM prekey fetch.
+    /// Empty when no 406 occurred.
+    pub stale_device_users: Vec<String>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -578,8 +995,8 @@ pub async fn prepare_group_stanza<
     force_skdm_distribution: bool,
     skdm_target_devices: Option<Vec<Jid>>,
     edit: Option<crate::types::message::EditAttribute>,
-    extra_stanza_nodes: Vec<Node>,
-) -> Result<Node> {
+    extra_stanza_nodes: &[Node],
+) -> Result<PreparedGroupStanza> {
     let (own_sending_jid, _) = match group_info.addressing_mode {
         crate::types::message::AddressingMode::Lid => (own_lid.clone(), "lid"),
         crate::types::message::AddressingMode::Pn => (own_jid.clone(), "pn"),
@@ -607,7 +1024,10 @@ pub async fn prepare_group_stanza<
 
     let mut message_children: Vec<Node> = Vec::new();
     let mut includes_prekey_message = false;
-    let mut resolved_devices_for_phash: Option<Vec<Jid>> = None;
+    let mut phash_for_stanza: Option<String> = None;
+    let mut skdm_encrypted_devices: Vec<Jid> = Vec::new();
+
+    let sender_address = own_sending_jid.to_protocol_address();
 
     // Determine if we need to distribute SKDM and to which devices
     let distribution_list: Option<Vec<Jid>> = if let Some(target_devices) = skdm_target_devices {
@@ -646,25 +1066,26 @@ pub async fn prepare_group_stanza<
             })
             .collect();
 
-        // Determine what JID to check for - use phone number if we're in LID mode and have a mapping
-        let own_jid_to_check = if own_base_jid.is_lid() {
-            group_info
-                .phone_jid_for_lid_user(&own_base_jid.user)
-                .map(|pn| pn.to_non_ad())
-                .unwrap_or_else(|| own_base_jid.clone())
+        // Determine what user to check for — use the PN user when own is LID
+        // and we have a mapping. Keeping this as a borrow avoids allocating a
+        // throwaway Jid when own is already in the list.
+        let own_pn_mapping = if own_base_jid.is_lid() {
+            group_info.phone_jid_for_lid_user(&own_base_jid.user)
         } else {
-            own_base_jid.clone()
+            None
         };
+        let own_check_user = own_pn_mapping
+            .map(|pn| pn.user.as_str())
+            .unwrap_or(own_base_jid.user.as_str());
 
-        if !jids_to_resolve
-            .iter()
-            .any(|participant| participant.is_same_user_as(&own_jid_to_check))
-        {
-            jids_to_resolve.push(own_jid_to_check);
+        if !jids_to_resolve.iter().any(|p| p.user == own_check_user) {
+            jids_to_resolve.push(match own_pn_mapping {
+                Some(pn) => pn.to_non_ad(),
+                None => own_base_jid.clone(),
+            });
         }
 
-        let mut seen_users = HashSet::new();
-        jids_to_resolve.retain(|jid| seen_users.insert((jid.user.clone(), jid.server.clone())));
+        crate::types::jid::sort_dedup_by_user(&mut jids_to_resolve);
 
         log::debug!(
             "Resolving devices for {} participants",
@@ -689,9 +1110,10 @@ pub async fn prepare_group_stanza<
 
         // Dedup AFTER LID conversion to avoid duplicates when both phone and LID
         // queries return the same user (e.g., 559980000003:33 and 100000037037034:33
-        // both convert to 100000037037034:33@lid)
-        let mut seen = HashSet::new();
-        resolved_list.retain(|jid| seen.insert(jid.to_string()));
+        // both convert to 100000037037034:33@lid).
+        // Key on (user, server, agent, device) — excludes `integrator` which is not
+        // part of the wire JID identity used in <to jid> and phash.
+        crate::types::jid::sort_dedup_by_device(&mut resolved_list);
 
         // Filter devices for SKDM distribution:
         // - Exclude the exact sending device (own_sending_jid) - we already have our own sender key
@@ -699,11 +1121,11 @@ pub async fn prepare_group_stanza<
         //   because they need the SKDM to decrypt messages we send from this device
         // - Exclude hosted/Cloud API devices (device ID 99 or @hosted server) - they don't
         //   participate in group E2EE, only in 1:1 chats
-        let own_user = own_sending_jid.user.clone();
+        let own_user = &own_sending_jid.user;
         let own_device = own_sending_jid.device;
         let before_filter = resolved_list.len();
         resolved_list.retain(|device_jid| {
-            let is_exact_sender = device_jid.user == own_user && device_jid.device == own_device;
+            let is_exact_sender = device_jid.user == *own_user && device_jid.device == own_device;
             let is_hosted = device_jid.is_hosted();
             // Exclude the exact sending device and hosted devices
             !is_exact_sender && !is_hosted
@@ -727,12 +1149,19 @@ pub async fn prepare_group_stanza<
         None
     };
 
+    let mut had_unregistered_devices = false;
+
     if let Some(ref distribution_list) = distribution_list {
-        resolved_devices_for_phash = Some(distribution_list.clone());
+        // WA Web computes phash from the full distribution list (target set at
+        // send time), not the actual encrypted outcome
+        match MessageUtils::participant_list_hash(distribution_list) {
+            Ok(phash) => phash_for_stanza = Some(phash),
+            Err(e) => log::warn!("Failed to compute phash for group {}: {:?}", to_jid, e),
+        }
         let axolotl_skdm_bytes = create_sender_key_distribution_message_for_group(
             stores.sender_key_store,
             &to_jid,
-            &own_sending_jid,
+            &sender_address,
         )
         .await?;
 
@@ -743,79 +1172,98 @@ pub async fn prepare_group_stanza<
             }),
             ..Default::default()
         };
-        let skdm_plaintext_to_encrypt =
-            MessageUtils::pad_message_v2(skdm_wrapper_msg.encode_to_vec());
+        let skdm_plaintext_to_encrypt = MessageUtils::encode_and_pad(&skdm_wrapper_msg);
 
-        // For SKDM distribution we don't set decrypt-fail; use empty attrs
-        let empty_attrs = Attrs::new();
-        let (participant_nodes, inc) = encrypt_for_devices(
+        // WA Web's GroupSkmsgJob wraps ensureE2ESessions in try/catch — logs error
+        // but does NOT rethrow. SKDM distribution failure must not prevent the group
+        // message from being sent. Only successfully encrypted devices are tracked.
+        match encrypt_for_devices(
             stores,
             resolver,
             distribution_list,
             &skdm_plaintext_to_encrypt,
-            &empty_attrs,
+            true,
+            None,
         )
-        .await?;
-        includes_prekey_message = includes_prekey_message || inc;
+        .await
+        {
+            Ok(result) => {
+                includes_prekey_message = includes_prekey_message || result.includes_prekey_message;
+                if result.had_unregistered_device {
+                    had_unregistered_devices = true;
+                }
+                skdm_encrypted_devices = result.encrypted_devices;
 
-        // Add participants list as part of the single hybrid stanza
-        message_children.push(
-            NodeBuilder::new("participants")
-                .children(participant_nodes)
-                .build(),
-        );
-        if includes_prekey_message && let Some(acc) = account {
-            message_children.push(
-                NodeBuilder::new("device-identity")
-                    .bytes(acc.encode_to_vec())
-                    .build(),
-            );
+                if !result.participant_nodes.is_empty() {
+                    message_children.push(
+                        NodeBuilder::new("participants")
+                            .children(result.participant_nodes)
+                            .build(),
+                    );
+                    if includes_prekey_message && let Some(acc) = account {
+                        message_children.push(
+                            NodeBuilder::new("device-identity")
+                                .bytes(acc.encode_to_vec())
+                                .build(),
+                        );
+                    }
+                }
+            }
+            Err(e) => {
+                log::warn!(
+                    "SKDM distribution failed for group {}, continuing without it: {e}",
+                    to_jid
+                );
+                if is_device_unregistered_error(&e) {
+                    had_unregistered_devices = true;
+                }
+            }
         }
     }
 
-    let plaintext = MessageUtils::pad_message_v2(message_for_encryption.encode_to_vec());
+    let plaintext = MessageUtils::encode_and_pad(&message_for_encryption);
     let skmsg = encrypt_group_message(
         stores.sender_key_store,
         &to_jid,
-        &own_sending_jid,
+        &sender_address,
         &plaintext,
-        &mut rand::rngs::OsRng.unwrap_err(),
+        &mut rand::make_rng::<rand::rngs::StdRng>(),
     )
     .await?;
 
-    let skmsg_ciphertext = skmsg.serialized().to_vec();
+    let skmsg_ciphertext = skmsg.into_serialized();
 
-    // Add decrypt-fail="hide" for edited group messages, but NOT for admin revokes
-    // WhatsApp Web does not include decrypt-fail="hide" for admin revoke messages
-    let mut sk_enc_attrs = Attrs::new();
-    sk_enc_attrs.insert("v".to_string(), "2".to_string());
-    sk_enc_attrs.insert("type".to_string(), "skmsg".to_string());
+    let mediatype = media_type_from_message(message);
+    let hide_decrypt_fail = (edit.as_ref().is_some_and(|e| {
+        *e != crate::types::message::EditAttribute::Empty
+            && *e != crate::types::message::EditAttribute::AdminRevoke
+    })) || should_hide_decrypt_fail(message);
+
+    let mut enc_builder = NodeBuilder::new("enc")
+        .attr("v", stanza::ENC_VERSION)
+        .attr("type", stanza::ENC_TYPE_SKMSG);
+    if let Some(mt) = mediatype {
+        enc_builder = enc_builder.attr("mediatype", mt);
+    }
+    enc_builder = enc_builder.bytes(skmsg_ciphertext);
+    if hide_decrypt_fail {
+        enc_builder = enc_builder.attr("decrypt-fail", "hide");
+    }
+    let content_node = enc_builder.build();
+
+    let stanza_type = stanza_type_from_message(message);
+    let mut stanza_builder = NodeBuilder::new("message")
+        .attr("to", to_jid)
+        .attr("id", request_id)
+        .attr("type", stanza_type);
+
+    // WA Web always sets addressing_mode for groups (MsgCreateDeviceStanza.js:131-135)
+    stanza_builder = stanza_builder.attr("addressing_mode", group_info.addressing_mode.as_str());
+
     if let Some(edit_attr) = &edit
         && *edit_attr != crate::types::message::EditAttribute::Empty
-        && *edit_attr != crate::types::message::EditAttribute::AdminRevoke
     {
-        sk_enc_attrs.insert("decrypt-fail".to_string(), "hide".to_string());
-    }
-
-    let content_node = NodeBuilder::new("enc")
-        .attrs(sk_enc_attrs)
-        .bytes(skmsg_ciphertext)
-        .build();
-
-    let mut stanza_attrs = Attrs::new();
-    stanza_attrs.insert("to".to_string(), to_jid.to_string());
-    stanza_attrs.insert("id".to_string(), request_id);
-    stanza_attrs.insert("type".to_string(), "text".to_string());
-
-    // Add addressing_mode attribute for LID groups (matches WhatsApp Web behavior)
-    if group_info.addressing_mode == crate::types::message::AddressingMode::Lid {
-        stanza_attrs.insert("addressing_mode".to_string(), "lid".to_string());
-    }
-
-    if let Some(edit_attr) = &edit
-        && *edit_attr != crate::types::message::EditAttribute::Empty
-    {
-        stanza_attrs.insert("edit".to_string(), edit_attr.to_string_val().to_string());
+        stanza_builder = stanza_builder.attr("edit", edit_attr.to_string_val());
     }
     // NOTE: WhatsApp Web does NOT include participant attribute on initial admin revoke send
     // The participant attribute only appears on retry/fanout messages
@@ -828,86 +1276,220 @@ pub async fn prepare_group_stanza<
     }
 
     // Add phash if we distributed keys in this message
-    if let Some(devices) = &resolved_devices_for_phash {
-        match MessageUtils::participant_list_hash(devices) {
-            Ok(phash) => {
-                stanza_attrs.insert("phash".to_string(), phash);
-            }
-            Err(e) => {
-                log::warn!("Failed to compute phash for group {}: {:?}", to_jid, e);
-            }
-        }
+    if let Some(phash) = phash_for_stanza {
+        stanza_builder = stanza_builder.attr("phash", phash);
     }
 
     // Add any extra stanza nodes provided by the caller
-    message_children.extend(extra_stanza_nodes);
+    message_children.extend(extra_stanza_nodes.iter().cloned());
 
-    let stanza = NodeBuilder::new("message")
-        .attrs(stanza_attrs.into_iter())
-        .children(message_children)
-        .build();
+    let stanza = stanza_builder.children(message_children).build();
 
-    Ok(stanza)
+    let stale_users = if had_unregistered_devices {
+        collect_stale_device_users(
+            distribution_list.as_deref(),
+            &skdm_encrypted_devices,
+            group_info,
+        )
+    } else {
+        Vec::new()
+    };
+
+    Ok(PreparedGroupStanza {
+        node: stanza,
+        skdm_devices: skdm_encrypted_devices,
+        stale_device_users: stale_users,
+    })
+}
+
+/// Collect users whose devices failed SKDM so the caller can invalidate their
+/// registry entries. In LID-mode groups, both the LID and PN aliases are
+/// emitted when the group knows the mapping — `invalidate_device_cache` needs
+/// both to clean up zombie records that were stored under whichever alias
+/// `update_device_list` canonicalised to at the time of the write.
+pub(crate) fn collect_stale_device_users(
+    distribution_list: Option<&[Jid]>,
+    skdm_encrypted_devices: &[Jid],
+    group_info: &GroupInfo,
+) -> Vec<String> {
+    let Some(dist) = distribution_list else {
+        return Vec::new();
+    };
+    let is_lid_mode = group_info.addressing_mode == crate::types::message::AddressingMode::Lid;
+    let encrypted_set: HashSet<&Jid> = skdm_encrypted_devices.iter().collect();
+    let mut user_set: HashSet<String> = HashSet::new();
+    for d in dist {
+        if encrypted_set.contains(d) {
+            continue;
+        }
+        user_set.insert(d.user.to_string());
+        if is_lid_mode
+            && d.is_lid()
+            && let Some(pn_jid) = group_info.phone_jid_for_lid_user(&d.user)
+            && pn_jid.is_pn()
+        {
+            user_set.insert(pn_jid.user.to_string());
+        }
+    }
+    user_set.into_iter().collect()
 }
 
 pub async fn create_sender_key_distribution_message_for_group(
     store: &mut (dyn SenderKeyStore + Send + Sync),
     group_jid: &Jid,
-    own_sending_jid: &Jid,
+    sender_address: &ProtocolAddress,
 ) -> Result<Vec<u8>> {
-    let sender_address = own_sending_jid.to_protocol_address();
+    let sender_key_name = make_sender_key_name(group_jid, sender_address);
+    let mut rng = rand::make_rng::<rand::rngs::StdRng>();
 
-    let sender_key_name = SenderKeyName::new(group_jid.to_string(), sender_address.to_string());
+    let skdm = crate::libsignal::protocol::create_sender_key_distribution_message(
+        &sender_key_name,
+        store,
+        &mut rng,
+    )
+    .await?;
 
-    let mut record = store
-        .load_sender_key(&sender_key_name)
-        .await?
-        .unwrap_or_else(SenderKeyRecord::new_empty);
+    Ok(skdm.into_serialized().into_vec())
+}
 
-    if record.sender_key_state().is_err() {
-        log::info!(
-            "No sender key found for self in group {}. Creating a new sender key state.",
-            group_jid
-        );
+/// Ensure the status stanza has a `<participants>` node listing all recipient
+/// user JIDs. WhatsApp Web's `participantList` uses bare USER JIDs (not
+/// device JIDs) -- `<to jid="user@s.whatsapp.net"/>` -- to tell the server
+/// which users should receive the skmsg. The SKDM distribution list
+/// (already in `<participants>`) uses device JIDs with `<enc>` children.
+///
+/// This is a pure function (no runtime or client dependencies).
+pub fn ensure_status_participants(
+    mut stanza: Node,
+    group_info: &crate::client::context::GroupInfo,
+) -> Node {
+    use wacore_binary::NodeContent;
+    use wacore_binary::builder::NodeBuilder;
 
-        let mut rng = rand::rngs::OsRng.unwrap_err();
-        let signing_key = crate::libsignal::protocol::KeyPair::generate(&mut rng);
+    // Build bare <to jid="USER_JID"/> entries for each participant.
+    // WhatsApp Web uses USER_JID (not DEVICE_JID) for the participantList.
+    let bare_to_nodes: Vec<Node> = group_info
+        .participants
+        .iter()
+        .map(|jid| NodeBuilder::new("to").attr("jid", jid.to_non_ad()).build())
+        .collect();
 
-        let chain_id = (rng.random::<u32>()) >> 1;
-        let sender_key_seed: [u8; 32] = rng.random();
-        record.add_sender_key_state(
-            SENDERKEY_MESSAGE_CURRENT_VERSION,
-            chain_id,
-            0,
-            &sender_key_seed,
-            signing_key.public_key,
-            Some(signing_key.private_key),
-        );
-        store.store_sender_key(&sender_key_name, &record).await?;
+    // Check if <participants> already exists in the stanza children
+    let children = match &mut stanza.content {
+        Some(NodeContent::Nodes(nodes)) => nodes,
+        _ => {
+            stanza.content = Some(NodeContent::Nodes(vec![]));
+            match &mut stanza.content {
+                Some(NodeContent::Nodes(nodes)) => nodes,
+                _ => unreachable!(),
+            }
+        }
+    };
+
+    if let Some(participants_node) = children.iter_mut().find(|n| n.tag == "participants") {
+        // <participants> already exists (from SKDM distribution).
+        // Add bare <to> user JID entries for users whose devices are NOT
+        // already represented by SKDM device-level entries.
+        let existing_users: std::collections::HashSet<wacore_binary::CompactString> =
+            participants_node
+                .children()
+                .unwrap_or_default()
+                .iter()
+                .filter_map(|n| n.attrs.get("jid").and_then(|v| v.to_jid()).map(|j| j.user))
+                .collect();
+
+        let new_to_nodes: Vec<Node> = bare_to_nodes
+            .into_iter()
+            .filter(|n| {
+                n.attrs
+                    .get("jid")
+                    .and_then(|v| v.to_jid())
+                    .is_some_and(|j| !existing_users.contains(&j.user))
+            })
+            .collect();
+
+        if !new_to_nodes.is_empty() {
+            match &mut participants_node.content {
+                Some(NodeContent::Nodes(nodes)) => nodes.extend(new_to_nodes),
+                _ => {
+                    participants_node.content = Some(NodeContent::Nodes(new_to_nodes));
+                }
+            }
+        }
+    } else {
+        // No <participants> node — create one with bare <to> entries.
+        let participants_node = NodeBuilder::new("participants")
+            .children(bare_to_nodes)
+            .build();
+        children.insert(0, participants_node);
     }
 
-    let state = record
-        .sender_key_state()
-        .map_err(|e| anyhow!("Invalid SK state: {:?}", e))?;
-    let chain_key = state
-        .sender_chain_key()
-        .ok_or_else(|| anyhow!("Missing chain key"))?;
+    stanza
+}
 
-    let message_version = state
-        .message_version()
-        .try_into()
-        .map_err(|e| anyhow!("Invalid sender key message version: {e}"))?;
-    let skdm = SenderKeyDistributionMessage::new(
-        message_version,
-        state.chain_id(),
-        chain_key.iteration(),
-        *chain_key.seed(),
-        state
-            .signing_key_public()
-            .map_err(|e| anyhow!("Missing pub key: {:?}", e))?,
-    )?;
+/// True when a `status@broadcast` message should carry the
+/// `<meta status_setting="..."/>` child. Only applies to actual status posts:
+/// reactions (handled server-side as addons) and revokes must omit it, per
+/// `WAWebEncryptAndSendStatusMsg` vs `WAWebSendReactionMsgAction`.
+///
+/// Descends `ephemeral_message` / `device_sent_message` / view-once wrappers
+/// before classifying (same as `stanza_type_from_message`), so a reaction
+/// nested inside a wrapper cannot slip past and re-trigger 479.
+pub fn status_carries_privacy_meta(message: &wa::Message) -> bool {
+    let msg = unwrap_message(message);
+    let is_revoke = msg
+        .protocol_message
+        .as_ref()
+        .is_some_and(|pm| pm.r#type == Some(wa::message::protocol_message::Type::Revoke as i32));
+    let is_reaction = msg.reaction_message.is_some() || msg.enc_reaction_message.is_some();
+    !is_revoke && !is_reaction
+}
 
-    Ok(skdm.serialized().to_vec())
+/// Dedup a pre-resolved status recipient list by user, then anchor the sender's
+/// own LID. Errors when no recipient was resolvable (matches WA Web's
+/// `WAWebLidMigrationUtils.toUserLid` + `compactMap` dropping unresolvable
+/// entries; an empty result means "nothing to send to").
+///
+/// Pure function: no allocations besides the returned `Vec` and (when needed)
+/// the own-LID push. Dedup is a linear Vec scan — status lists stay small
+/// enough that a HashSet is not worth its allocation.
+pub fn assemble_status_participants<I>(resolved: I, own_lid: &Jid) -> anyhow::Result<Vec<Jid>>
+where
+    I: IntoIterator<Item = Option<Jid>>,
+{
+    let iter = resolved.into_iter();
+    let (lower, _upper) = iter.size_hint();
+    let mut out: Vec<Jid> = Vec::with_capacity(lower.saturating_add(1));
+    for jid in iter.flatten() {
+        if !out.iter().any(|r| r.user == jid.user) {
+            out.push(jid);
+        }
+    }
+    if out.is_empty() {
+        anyhow::bail!("No valid status recipients after LID resolution");
+    }
+    if !out.iter().any(|r| r.user == own_lid.user) {
+        out.push(own_lid.to_non_ad());
+    }
+    Ok(out)
+}
+
+/// Build a `Message.ProtocolMessage` for `GROUP_MEMBER_LABEL_CHANGE`.
+///
+/// Sent via the standard E2EE fanout, not an IQ. Empty `label` clears.
+/// `ts_secs` is unix seconds, matching WA Web's `unixTime()`.
+pub fn build_member_label_message(label: String, ts_secs: i64) -> wa::Message {
+    wa::Message {
+        protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+            r#type: Some(wa::message::protocol_message::Type::GroupMemberLabelChange as i32),
+            member_label: Some(wa::MemberLabel {
+                label: Some(label),
+                label_timestamp: Some(ts_secs),
+            }),
+            ..Default::default()
+        })),
+        ..Default::default()
+    }
 }
 
 #[cfg(test)]
@@ -916,7 +1498,245 @@ mod tests {
     use crate::client::context::{GroupInfo, SendContextResolver};
     use crate::libsignal::protocol::{IdentityKeyPair, KeyPair, PreKeyBundle};
     use std::collections::HashMap;
-    use wacore_binary::jid::Jid;
+    use wacore_binary::Jid;
+
+    mod assemble_status_participants {
+        use super::*;
+
+        fn lid(u: &str) -> Jid {
+            u.parse().expect("parse LID jid")
+        }
+
+        #[test]
+        fn dedup_keeps_first_entry_per_user_and_anchors_own() {
+            let own = lid("99999999999999@lid");
+            let out = assemble_status_participants(
+                vec![
+                    Some(lid("111@lid")),
+                    Some(lid("222@lid")),
+                    Some(lid("111@lid")),
+                    Some(lid("333@lid")),
+                ],
+                &own,
+            )
+            .expect("should succeed");
+            let users: Vec<&str> = out.iter().map(|j| j.user.as_str()).collect();
+            assert_eq!(users, ["111", "222", "333", "99999999999999"]);
+        }
+
+        #[test]
+        fn skips_none_entries_matching_wa_web_compactmap() {
+            // Unresolvable recipients arrive as `None` and must be silently
+            // dropped — mirrors WA Web's `compactMap(list, toUserLid)`.
+            let own = lid("me@lid");
+            let out = assemble_status_participants(
+                vec![None, Some(lid("111@lid")), None, Some(lid("222@lid"))],
+                &own,
+            )
+            .expect("should succeed");
+            let users: Vec<&str> = out.iter().map(|j| j.user.as_str()).collect();
+            assert_eq!(users, ["111", "222", "me"]);
+        }
+
+        #[test]
+        fn does_not_duplicate_own_when_already_in_list() {
+            let own = lid("me@lid");
+            let out =
+                assemble_status_participants(vec![Some(lid("111@lid")), Some(lid("me@lid"))], &own)
+                    .expect("should succeed");
+            let users: Vec<&str> = out.iter().map(|j| j.user.as_str()).collect();
+            assert_eq!(users, ["111", "me"]);
+        }
+
+        #[test]
+        fn errors_when_every_recipient_is_unresolvable() {
+            // Regression guard for the original bug: a single LID-only
+            // contact used to hard-abort the send with
+            // `No PN mapping for LID ...`. The new contract is softer —
+            // individual unresolvable entries are dropped — but we still
+            // refuse to send when the entire list came back empty, rather
+            // than silently broadcasting to own devices only.
+            let own = lid("me@lid");
+            let err = assemble_status_participants(vec![None, None, None], &own)
+                .expect_err("all-None list must error");
+            assert!(err.to_string().contains("No valid status recipients"));
+        }
+
+        #[test]
+        fn errors_when_list_is_empty() {
+            let own = lid("me@lid");
+            let err = assemble_status_participants(Vec::<Option<Jid>>::new(), &own)
+                .expect_err("empty list must error");
+            assert!(err.to_string().contains("No valid status recipients"));
+        }
+
+        #[test]
+        fn strips_device_suffix_from_own_lid() {
+            // Snapshot lid from the device store carries a device id; the
+            // participant list uses bare USER JIDs.
+            let own: Jid = "me:5@lid".parse().unwrap();
+            let out = assemble_status_participants(vec![Some(lid("111@lid"))], &own)
+                .expect("should succeed");
+            let me = out
+                .iter()
+                .find(|j| j.user.as_str() == "me")
+                .expect("own LID should be present");
+            assert_eq!(me.device, 0, "own LID should be non-ad (device=0)");
+        }
+    }
+
+    mod status_carries_privacy_meta {
+        use super::*;
+
+        #[test]
+        fn true_for_text_post() {
+            let msg = wa::Message {
+                extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                    text: Some("hi".into()),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn true_for_image_post() {
+            let msg = wa::Message {
+                image_message: Some(Box::new(wa::message::ImageMessage::default())),
+                ..Default::default()
+            };
+            assert!(status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn false_for_reaction() {
+            let msg = wa::Message {
+                reaction_message: Some(wa::message::ReactionMessage {
+                    text: Some("💚".into()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(
+                !status_carries_privacy_meta(&msg),
+                "reactions must omit <meta status_setting> (479 SmaxInvalid otherwise)"
+            );
+        }
+
+        #[test]
+        fn false_for_enc_reaction() {
+            let msg = wa::Message {
+                enc_reaction_message: Some(wa::message::EncReactionMessage::default()),
+                ..Default::default()
+            };
+            assert!(!status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn false_for_revoke() {
+            let msg = wa::Message {
+                protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                    r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(!status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn true_for_non_revoke_protocol_message() {
+            // Other ProtocolMessage types (e.g., EphemeralSettings) aren't
+            // reactions and aren't revokes — treat as posts for now.
+            let msg = wa::Message {
+                protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                    r#type: Some(wa::message::protocol_message::Type::EphemeralSetting as i32),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn false_for_reaction_inside_ephemeral_wrapper() {
+            let inner = wa::Message {
+                reaction_message: Some(wa::message::ReactionMessage::default()),
+                ..Default::default()
+            };
+            let msg = wa::Message {
+                ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
+                    message: Some(Box::new(inner)),
+                })),
+                ..Default::default()
+            };
+            assert!(!status_carries_privacy_meta(&msg));
+        }
+
+        #[test]
+        fn false_for_revoke_inside_device_sent_wrapper() {
+            let inner = wa::Message {
+                protocol_message: Some(Box::new(wa::message::ProtocolMessage {
+                    r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            let msg = wa::Message {
+                device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                    destination_jid: Some(String::new()),
+                    message: Some(Box::new(inner)),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            };
+            assert!(!status_carries_privacy_meta(&msg));
+        }
+    }
+
+    #[test]
+    fn build_member_label_message_sets_fields() {
+        let msg = build_member_label_message("VIP".to_string(), 1_766_847_151);
+        let pm = msg.protocol_message.as_ref().expect("protocol_message set");
+        assert_eq!(
+            pm.r#type,
+            Some(wa::message::protocol_message::Type::GroupMemberLabelChange as i32)
+        );
+        let ml = pm.member_label.as_ref().expect("member_label set");
+        assert_eq!(ml.label.as_deref(), Some("VIP"));
+        assert_eq!(ml.label_timestamp, Some(1_766_847_151));
+        assert!(
+            pm.key.is_none(),
+            "MessageKey must NOT be set (WA Web parity)"
+        );
+    }
+
+    #[test]
+    fn build_member_label_message_clear_uses_empty_string() {
+        let msg = build_member_label_message(String::new(), 1);
+        let ml = msg
+            .protocol_message
+            .as_ref()
+            .unwrap()
+            .member_label
+            .as_ref()
+            .unwrap();
+        assert_eq!(ml.label.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn build_member_label_message_preserves_unicode() {
+        let msg = build_member_label_message("🚀 BOT".to_string(), 2);
+        let ml = msg
+            .protocol_message
+            .as_ref()
+            .unwrap()
+            .member_label
+            .as_ref()
+            .unwrap();
+        assert_eq!(ml.label.as_deref(), Some("🚀 BOT"));
+    }
 
     /// Mock implementation of SendContextResolver for testing
     struct MockSendContextResolver {
@@ -1305,7 +2125,7 @@ mod tests {
 
     /// Helper function to create a mock PreKeyBundle with valid types
     fn create_mock_bundle() -> PreKeyBundle {
-        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let identity_pair = IdentityKeyPair::generate(&mut rng);
         let signed_prekey_pair = KeyPair::generate(&mut rng);
         let prekey_pair = KeyPair::generate(&mut rng);
@@ -1411,7 +2231,10 @@ mod tests {
         let pn_device_jid = Jid::pn_device(phone, device_id);
 
         // Step 1: Look up LID for the phone number (using direct HashMap access)
-        let lid_user = resolver.phone_to_lid.get(&pn_device_jid.user).cloned();
+        let lid_user = resolver
+            .phone_to_lid
+            .get(pn_device_jid.user.as_str())
+            .cloned();
         assert!(lid_user.is_some(), "Should find LID for phone");
         let lid_user = lid_user.expect("phone should have LID mapping");
 
@@ -1461,7 +2284,10 @@ mod tests {
         let pn_device_jid = Jid::pn_device(phone, companion_device_id);
 
         // Look up LID using direct HashMap access
-        let lid_user = resolver.phone_to_lid.get(&pn_device_jid.user).cloned();
+        let lid_user = resolver
+            .phone_to_lid
+            .get(pn_device_jid.user.as_str())
+            .cloned();
 
         // Construct LID JID
         let lid_jid = Jid::lid_device(
@@ -1545,23 +2371,8 @@ mod tests {
             Jid::lid_device("987654321".to_string(), 0),          // Recipient
         ];
 
-        // The logic under test (from prepare_dm_stanza):
-        let mut recipient_devices = Vec::new();
-        let mut own_other_devices = Vec::new();
-
-        for device_jid in &all_devices {
-            // Fix check: Skip the current device (sender) to prevent self-encryption loops
-            if device_jid.user == own_jid.user && device_jid.device == own_jid.device {
-                continue;
-            }
-
-            let is_own_device = device_jid.user == own_jid.user;
-            if is_own_device {
-                own_other_devices.push(device_jid.clone());
-            } else {
-                recipient_devices.push(device_jid.clone());
-            }
-        }
+        let (recipient_devices, own_other_devices) =
+            partition_dm_devices(all_devices, &own_jid, None);
 
         // Verifications
 
@@ -1595,6 +2406,46 @@ mod tests {
         );
 
         println!("✅ Self-encryption regression test passed: Sender device correctly excluded.");
+    }
+
+    #[test]
+    fn test_dm_encryption_treats_own_lid_devices_as_self() {
+        let own_pn = Jid::pn_device("559980000001".to_string(), 18);
+        let own_lid = Jid::lid_device("123456789012345".to_string(), 18);
+
+        let all_devices = vec![
+            Jid::lid_device("123456789012345".to_string(), 18), // Exact sender device via LID
+            Jid::lid_device("123456789012345".to_string(), 0),  // Other own device via LID
+            Jid::lid_device("987654321012345".to_string(), 0),  // Recipient
+        ];
+
+        let (recipient_devices, own_other_devices) =
+            partition_dm_devices(all_devices, &own_pn, Some(&own_lid));
+
+        assert!(
+            !own_other_devices
+                .iter()
+                .any(|d| d.user == own_lid.user && d.device == 18),
+            "Exact sender LID device should be excluded from own_other_devices"
+        );
+        assert!(
+            !recipient_devices
+                .iter()
+                .any(|d| d.user == own_lid.user && d.device == 18),
+            "Exact sender LID device should be excluded from recipient_devices"
+        );
+        assert!(
+            own_other_devices
+                .iter()
+                .any(|d| d.user == own_lid.user && d.device == 0),
+            "Other own LID devices should be routed through DSM as own_other_devices"
+        );
+        assert!(
+            recipient_devices
+                .iter()
+                .any(|d| d.user == "987654321012345" && d.device == 0),
+            "Non-self devices must remain in recipient_devices"
+        );
     }
 
     /// Test case: LID Prekey Lookup Normalization
@@ -1697,5 +2548,569 @@ mod tests {
         );
 
         println!("✅ LID Prekey Lookup Normalization passed");
+    }
+
+    mod group_retry {
+        use super::*;
+        use crate::libsignal::protocol::{
+            Direction, IdentityChange, IdentityKey, IdentityKeyPair, IdentityKeyStore, KeyPair,
+            PreKeyBundle, ProtocolAddress, SessionStore, process_prekey_bundle,
+        };
+        use crate::types::message::AddressingMode;
+        use std::collections::HashMap;
+        use wacore_binary::NodeContent;
+
+        struct MemSessionStore(HashMap<ProtocolAddress, Vec<u8>>);
+        impl MemSessionStore {
+            fn new() -> Self {
+                Self(HashMap::new())
+            }
+        }
+        #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+        impl SessionStore for MemSessionStore {
+            async fn load_session(
+                &self,
+                a: &ProtocolAddress,
+            ) -> crate::libsignal::protocol::error::Result<
+                Option<crate::libsignal::protocol::SessionRecord>,
+            > {
+                Ok(self
+                    .0
+                    .get(a)
+                    .and_then(|b| crate::libsignal::protocol::SessionRecord::deserialize(b).ok()))
+            }
+            async fn has_session(
+                &self,
+                a: &ProtocolAddress,
+            ) -> crate::libsignal::protocol::error::Result<bool> {
+                Ok(self.0.contains_key(a))
+            }
+            async fn store_session(
+                &mut self,
+                a: &ProtocolAddress,
+                r: crate::libsignal::protocol::SessionRecord,
+            ) -> crate::libsignal::protocol::error::Result<()> {
+                self.0.insert(a.clone(), r.serialize()?);
+                Ok(())
+            }
+        }
+
+        struct MemIdentityStore {
+            pair: IdentityKeyPair,
+            reg_id: u32,
+            known: HashMap<ProtocolAddress, IdentityKey>,
+        }
+        #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
+        #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
+        impl IdentityKeyStore for MemIdentityStore {
+            async fn get_identity_key_pair(
+                &self,
+            ) -> crate::libsignal::protocol::error::Result<IdentityKeyPair> {
+                Ok(self.pair.clone())
+            }
+            async fn get_local_registration_id(
+                &self,
+            ) -> crate::libsignal::protocol::error::Result<u32> {
+                Ok(self.reg_id)
+            }
+            async fn save_identity(
+                &mut self,
+                a: &ProtocolAddress,
+                id: &IdentityKey,
+            ) -> crate::libsignal::protocol::error::Result<IdentityChange> {
+                self.known.insert(a.clone(), *id);
+                Ok(IdentityChange::from_changed(false))
+            }
+            async fn is_trusted_identity(
+                &self,
+                _: &ProtocolAddress,
+                _: &IdentityKey,
+                _: Direction,
+            ) -> crate::libsignal::protocol::error::Result<bool> {
+                Ok(true)
+            }
+            async fn get_identity(
+                &self,
+                a: &ProtocolAddress,
+            ) -> crate::libsignal::protocol::error::Result<Option<IdentityKey>> {
+                Ok(self.known.get(a).copied())
+            }
+        }
+
+        async fn setup_session() -> (MemSessionStore, MemIdentityStore, Jid) {
+            let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+            let sender = IdentityKeyPair::generate(&mut rng);
+            let receiver = IdentityKeyPair::generate(&mut rng);
+            let spk = KeyPair::generate(&mut rng);
+            let opk = KeyPair::generate(&mut rng);
+            let sig = receiver
+                .private_key()
+                .calculate_signature(&spk.public_key.serialize(), &mut rng)
+                .unwrap();
+            let bundle = PreKeyBundle::new(
+                1,
+                1u32.into(),
+                Some((1u32.into(), opk.public_key)),
+                1u32.into(),
+                spk.public_key,
+                sig.to_vec(),
+                *receiver.identity_key(),
+            )
+            .unwrap();
+            let jid: Jid = "559911112222@s.whatsapp.net".parse().unwrap();
+            let addr = jid.to_protocol_address();
+            let mut ss = MemSessionStore::new();
+            let mut is = MemIdentityStore {
+                pair: sender,
+                reg_id: 42,
+                known: HashMap::new(),
+            };
+            process_prekey_bundle(
+                &addr,
+                &mut ss,
+                &mut is,
+                &bundle,
+                &mut rand::make_rng::<rand::rngs::StdRng>(),
+                crate::libsignal::protocol::UsePQRatchet::No,
+            )
+            .await
+            .unwrap();
+            (ss, is, jid)
+        }
+
+        #[tokio::test]
+        async fn pkmsg_no_account() {
+            let (mut ss, mut is, jid) = setup_session().await;
+            let group: Jid = "120363098765432100@g.us".parse().unwrap();
+            let p: Jid = jid.to_string().parse().unwrap();
+            let n = prepare_group_retry_stanza(
+                &mut ss,
+                &mut is,
+                group.clone(),
+                p.clone(),
+                p.clone(),
+                &wa::Message::default(),
+                "3EB0ABC".into(),
+                1,
+                None,
+                AddressingMode::Pn,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(n.tag, "message");
+            let mut a = n.attrs();
+            assert_eq!(a.optional_string("to").unwrap().as_ref(), group.to_string());
+            assert_eq!(
+                a.optional_string("participant").unwrap().as_ref(),
+                p.to_string()
+            );
+            // Default (empty) message falls through to "media" per WA Web's typeAttributeFromProtobuf
+            assert_eq!(
+                a.optional_string("type").unwrap().as_ref(),
+                stanza::MSG_TYPE_MEDIA
+            );
+            assert!(a.optional_string("category").is_none());
+            assert_eq!(a.optional_string("addressing_mode").unwrap().as_ref(), "pn");
+            let enc = n.get_optional_child("enc").unwrap();
+            let mut ea = enc.attrs();
+            assert_eq!(
+                ea.optional_string("v").unwrap().as_ref(),
+                stanza::ENC_VERSION
+            );
+            assert_eq!(
+                ea.optional_string("type").unwrap().as_ref(),
+                stanza::ENC_TYPE_PKMSG
+            );
+            assert_eq!(ea.optional_string("count").unwrap().as_ref(), "1");
+            assert!(matches!(&enc.content, Some(NodeContent::Bytes(_))));
+            assert!(n.get_optional_child("device-identity").is_none());
+        }
+
+        #[tokio::test]
+        async fn dm_retry_pkmsg_targets_single_device() {
+            let (mut ss, mut is, jid) = setup_session().await;
+            let to: Jid = "559922223333@s.whatsapp.net".parse().unwrap();
+            let requester: Jid = jid.to_string().parse().unwrap();
+            let encryption = requester.clone();
+
+            let n = prepare_dm_retry_stanza(
+                &mut ss,
+                &mut is,
+                to.clone(),
+                requester.clone(),
+                encryption,
+                &wa::Message::default(),
+                "dm-retry-1".into(),
+                1,
+                None,
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(n.tag, "message");
+            let mut attrs = n.attrs();
+            assert_eq!(
+                attrs.optional_string("to").unwrap().as_ref(),
+                to.to_string()
+            );
+            assert_eq!(attrs.optional_string("id").unwrap().as_ref(), "dm-retry-1");
+            assert_eq!(
+                attrs.optional_string("type").unwrap().as_ref(),
+                stanza::MSG_TYPE_MEDIA
+            );
+            assert!(attrs.optional_string("participant").is_none());
+            assert!(attrs.optional_string("addressing_mode").is_none());
+
+            let participants = n.get_optional_child("participants").unwrap();
+            let targets = participants.children().unwrap();
+            assert_eq!(targets.len(), 1);
+            assert_eq!(targets[0].tag, "to");
+            assert_eq!(
+                targets[0].attrs().optional_string("jid").unwrap().as_ref(),
+                requester.to_string()
+            );
+
+            let enc = targets[0].get_optional_child("enc").unwrap();
+            let mut enc_attrs = enc.attrs();
+            assert_eq!(
+                enc_attrs.optional_string("type").unwrap().as_ref(),
+                stanza::ENC_TYPE_PKMSG
+            );
+            assert_eq!(enc_attrs.optional_string("count").unwrap().as_ref(), "1");
+            assert!(n.get_optional_child("device-identity").is_none());
+        }
+
+        #[tokio::test]
+        async fn dm_retry_pkmsg_with_account_has_device_identity() {
+            let (mut ss, mut is, jid) = setup_session().await;
+            let requester: Jid = jid.to_string().parse().unwrap();
+            let acc = wa::AdvSignedDeviceIdentity {
+                details: Some(b"t".to_vec()),
+                ..Default::default()
+            };
+
+            let n = prepare_dm_retry_stanza(
+                &mut ss,
+                &mut is,
+                "559922223333@s.whatsapp.net".parse().unwrap(),
+                requester.clone(),
+                requester,
+                &wa::Message::default(),
+                "dm-retry-2".into(),
+                2,
+                Some(&acc),
+            )
+            .await
+            .unwrap();
+
+            let participants = n.get_optional_child("participants").unwrap();
+            let enc = participants.children().unwrap()[0]
+                .get_optional_child("enc")
+                .unwrap();
+            assert_eq!(
+                enc.attrs().optional_string("type").unwrap().as_ref(),
+                stanza::ENC_TYPE_PKMSG
+            );
+            assert_eq!(enc.attrs().optional_string("count").unwrap().as_ref(), "2");
+            assert!(n.get_optional_child("device-identity").is_some());
+        }
+
+        #[tokio::test]
+        async fn pkmsg_with_account_has_device_identity() {
+            let (mut ss, mut is, jid) = setup_session().await;
+            let group: Jid = "120363098765432100@g.us".parse().unwrap();
+            let p: Jid = jid.to_string().parse().unwrap();
+            let acc = wa::AdvSignedDeviceIdentity {
+                details: Some(b"t".to_vec()),
+                ..Default::default()
+            };
+            let n = prepare_group_retry_stanza(
+                &mut ss,
+                &mut is,
+                group,
+                p.clone(),
+                p,
+                &wa::Message::default(),
+                "id2".into(),
+                2,
+                Some(&acc),
+                AddressingMode::Pn,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                n.get_optional_child("enc")
+                    .unwrap()
+                    .attrs()
+                    .optional_string("type")
+                    .unwrap()
+                    .as_ref(),
+                stanza::ENC_TYPE_PKMSG
+            );
+            assert!(n.get_optional_child("device-identity").is_some());
+            assert_eq!(
+                n.attrs()
+                    .optional_string("addressing_mode")
+                    .unwrap()
+                    .as_ref(),
+                "pn"
+            );
+        }
+
+        #[tokio::test]
+        async fn lid_addressing_mode() {
+            let (mut ss, mut is, jid) = setup_session().await;
+            let group: Jid = "120363098765432100@g.us".parse().unwrap();
+            let p: Jid = jid.to_string().parse().unwrap();
+            // Fresh session → pkmsg (pre-key), with LID addressing
+            let n = prepare_group_retry_stanza(
+                &mut ss,
+                &mut is,
+                group,
+                p.clone(),
+                p,
+                &wa::Message::default(),
+                "m2".into(),
+                3,
+                Some(&wa::AdvSignedDeviceIdentity::default()),
+                AddressingMode::Lid,
+            )
+            .await
+            .unwrap();
+            let mut ea = n.get_optional_child("enc").unwrap().attrs();
+            assert_eq!(ea.optional_string("count").unwrap().as_ref(), "3");
+            assert_eq!(
+                n.attrs()
+                    .optional_string("addressing_mode")
+                    .unwrap()
+                    .as_ref(),
+                "lid"
+            );
+        }
+    }
+
+    mod decrypt_fail {
+        use super::*;
+
+        #[test]
+        fn regular_message() {
+            let msg = wa::Message {
+                conversation: Some("hi".into()),
+                ..Default::default()
+            };
+            assert!(!should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn reaction() {
+            let msg = wa::Message {
+                reaction_message: Some(Default::default()),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn pin() {
+            let msg = wa::Message {
+                pin_in_chat_message: Some(Default::default()),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn poll_vote() {
+            let msg = wa::Message {
+                poll_update_message: Some(wa::message::PollUpdateMessage {
+                    vote: Some(Default::default()),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn poll_update_without_vote() {
+            let msg = wa::Message {
+                poll_update_message: Some(Default::default()),
+                ..Default::default()
+            };
+            assert!(!should_hide_decrypt_fail(&msg));
+        }
+
+        #[test]
+        fn reaction_inside_ephemeral_wrapper() {
+            let msg = wa::Message {
+                ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
+                    message: Some(Box::new(wa::Message {
+                        reaction_message: Some(Default::default()),
+                        ..Default::default()
+                    })),
+                })),
+                ..Default::default()
+            };
+            assert!(should_hide_decrypt_fail(&msg));
+        }
+    }
+
+    #[cfg(test)]
+    mod device_unregistered_tests {
+        use super::is_device_unregistered_error;
+        use crate::request::ServerErrorCode;
+
+        #[test]
+        fn detects_406_server_error_code() {
+            let err = anyhow::Error::new(ServerErrorCode {
+                code: 406,
+                text: "not-acceptable".to_string(),
+            });
+            assert!(is_device_unregistered_error(&err));
+        }
+
+        #[test]
+        fn rejects_non_406_server_error() {
+            let err = anyhow::Error::new(ServerErrorCode {
+                code: 404,
+                text: "not-found".to_string(),
+            });
+            assert!(!is_device_unregistered_error(&err));
+        }
+
+        #[test]
+        fn rejects_unrelated_error() {
+            let err = anyhow::anyhow!("some random error");
+            assert!(!is_device_unregistered_error(&err));
+        }
+
+        #[test]
+        fn rejects_wacore_iq_error_without_server_error_code_wrapper() {
+            // wacore::IqError::ServerError is NOT the same as ServerErrorCode.
+            // This simulates the old bug: if someone wraps wacore IqError directly
+            // without the ServerErrorCode wrapper, the check should not match.
+            let err = anyhow::Error::new(crate::request::IqError::ServerError {
+                code: 406,
+                text: "not-acceptable".to_string(),
+            });
+            // This would only match if we also checked IqError (we don't — we use ServerErrorCode)
+            // The SendContextResolver impl is responsible for wrapping in ServerErrorCode
+            assert!(!is_device_unregistered_error(&err));
+        }
+    }
+
+    mod collect_stale_device_users {
+        use super::super::collect_stale_device_users;
+        use crate::client::context::GroupInfo;
+        use crate::types::message::AddressingMode;
+        use std::collections::{HashMap, HashSet};
+        use wacore_binary::{CompactString, Jid};
+
+        fn lid_device(user: &str, dev: u16) -> Jid {
+            Jid::lid_device(user.to_string(), dev)
+        }
+
+        fn pn_user(user: &str) -> Jid {
+            Jid::pn(user)
+        }
+
+        fn group_info_lid(mapping: &[(&str, &str)]) -> GroupInfo {
+            let mut info = GroupInfo::new(Vec::new(), AddressingMode::Lid);
+            if !mapping.is_empty() {
+                let mut map: HashMap<CompactString, Jid> = HashMap::new();
+                for (lid_user, pn) in mapping {
+                    map.insert(CompactString::from(*lid_user), pn_user(pn));
+                }
+                info.set_lid_to_pn_map(map);
+            }
+            info
+        }
+
+        #[test]
+        fn emits_lid_and_pn_alias_when_mapping_known() {
+            let info = group_info_lid(&[("100000000000001", "15550000001")]);
+            let dist = vec![lid_device("100000000000001", 5)];
+            let out = collect_stale_device_users(Some(&dist), &[], &info);
+            let set: HashSet<String> = out.into_iter().collect();
+            assert!(set.contains("100000000000001"));
+            assert!(set.contains("15550000001"));
+            assert_eq!(set.len(), 2);
+        }
+
+        #[test]
+        fn emits_only_lid_when_mapping_unknown() {
+            let info = group_info_lid(&[]);
+            let dist = vec![lid_device("100000000000002", 7)];
+            let out = collect_stale_device_users(Some(&dist), &[], &info);
+            assert_eq!(out, vec!["100000000000002".to_string()]);
+        }
+
+        #[test]
+        fn dedups_multiple_devices_of_same_user() {
+            let info = group_info_lid(&[("100000000000003", "15550000003")]);
+            let dist = vec![
+                lid_device("100000000000003", 1),
+                lid_device("100000000000003", 2),
+                lid_device("100000000000003", 3),
+            ];
+            let out = collect_stale_device_users(Some(&dist), &[], &info);
+            let set: HashSet<String> = out.into_iter().collect();
+            assert_eq!(set.len(), 2);
+            assert!(set.contains("100000000000003"));
+            assert!(set.contains("15550000003"));
+        }
+
+        #[test]
+        fn skips_successfully_encrypted_devices() {
+            let info = group_info_lid(&[]);
+            let encrypted = lid_device("100000000000004", 5);
+            let dist = vec![encrypted.clone(), lid_device("100000000000005", 5)];
+            let encrypted_set = vec![encrypted];
+            let out = collect_stale_device_users(Some(&dist), &encrypted_set, &info);
+            assert_eq!(out, vec!["100000000000005".to_string()]);
+        }
+
+        #[test]
+        fn pn_mode_group_does_not_emit_alias() {
+            // In PN-mode groups the distribution list is already PN-form, so
+            // there's no LID↔PN duality to emit.
+            let mut info = GroupInfo::new(Vec::new(), AddressingMode::Pn);
+            let mut map: HashMap<CompactString, Jid> = HashMap::new();
+            map.insert(
+                CompactString::from("100000000000006"),
+                pn_user("15550000006"),
+            );
+            info.set_lid_to_pn_map(map);
+            let dist = vec![Jid::pn_device("15550000006", 3)];
+            let out = collect_stale_device_users(Some(&dist), &[], &info);
+            assert_eq!(out, vec!["15550000006".to_string()]);
+        }
+
+        #[test]
+        fn skips_non_pn_alias() {
+            // If phone_jid_for_lid_user returns a JID whose server isn't PN
+            // (malformed/adversarial server response), do not emit it.
+            let mut info = GroupInfo::new(Vec::new(), AddressingMode::Lid);
+            let mut map: HashMap<CompactString, Jid> = HashMap::new();
+            map.insert(
+                CompactString::from("100000000000007"),
+                Jid::lid("100000000000099"),
+            );
+            info.set_lid_to_pn_map(map);
+            let dist = vec![lid_device("100000000000007", 5)];
+            let out = collect_stale_device_users(Some(&dist), &[], &info);
+            assert_eq!(out, vec!["100000000000007".to_string()]);
+        }
+
+        #[test]
+        fn empty_distribution_list_yields_empty() {
+            let info = group_info_lid(&[]);
+            let out = collect_stale_device_users(None, &[], &info);
+            assert!(out.is_empty());
+            let out = collect_stale_device_users(Some(&[]), &[], &info);
+            assert!(out.is_empty());
+        }
     }
 }

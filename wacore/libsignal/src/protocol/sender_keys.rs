@@ -5,10 +5,9 @@
 
 use std::collections::VecDeque;
 
-use itertools::Itertools;
 use prost::Message;
 
-use hmac::{Hmac, Mac};
+use hmac::{HmacReset, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::protocol::crypto::hmac_sha256;
@@ -134,7 +133,7 @@ impl SenderChainKey {
             )
         })?;
 
-        let mut hmac = Hmac::<Sha256>::new_from_slice(&self.chain_key)
+        let mut hmac = HmacReset::<Sha256>::new_from_slice(&self.chain_key)
             .expect("HMAC-SHA256 should accept any size key");
 
         hmac.update(&[Self::MESSAGE_KEY_SEED]);
@@ -384,7 +383,7 @@ impl SenderKeyRecord {
     ///
     /// Skips any bad protobufs.
     fn remove_state(&mut self, chain_id: u32, signature_key: PublicKey) -> Option<SenderKeyState> {
-        let (index, _state) = self.states.iter().find_position(|state| {
+        let (index, _state) = self.states.iter().enumerate().find(|(_, state)| {
             state.chain_id() == chain_id && state.signing_key_public().ok() == Some(signature_key)
         })?;
 
@@ -512,7 +511,7 @@ mod tests {
     /// Test SenderKeyState basic operations
     #[test]
     fn test_sender_key_state_basic() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -529,7 +528,7 @@ mod tests {
     /// Test SenderKeyState with private signing key
     #[test]
     fn test_sender_key_state_with_private_key() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -549,7 +548,7 @@ mod tests {
     /// Test SenderKeyState chain key operations
     #[test]
     fn test_sender_key_state_chain_key_update() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -580,7 +579,7 @@ mod tests {
     /// Test SenderKeyState message key storage
     #[test]
     fn test_sender_key_state_message_key_storage() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -609,7 +608,7 @@ mod tests {
     /// Test SenderKeyState message key limit
     #[test]
     fn test_sender_key_state_message_key_limit() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -657,7 +656,7 @@ mod tests {
     /// Test SenderKeyRecord add and retrieve state
     #[test]
     fn test_sender_key_record_add_state() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 
@@ -680,7 +679,7 @@ mod tests {
     /// Test SenderKeyRecord state limit
     #[test]
     fn test_sender_key_record_state_limit() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let chain_key = [0x42u8; 32];
 
         let mut record = SenderKeyRecord::new_empty();
@@ -706,7 +705,7 @@ mod tests {
     /// Test SenderKeyRecord chain ID lookup
     #[test]
     fn test_sender_key_record_chain_id_lookup() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair1 = KeyPair::generate(&mut rng);
         let keypair2 = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
@@ -747,7 +746,7 @@ mod tests {
     /// Test SenderKeyRecord serialization roundtrip
     #[test]
     fn test_sender_key_record_serialization() {
-        let mut rng = rand::rng();
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
         let keypair = KeyPair::generate(&mut rng);
         let chain_key = [0x42u8; 32];
 

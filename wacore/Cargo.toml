@@ -1,6 +1,6 @@
 [package]
 name = "wacore"
-version = "0.2.0"
+version = "0.5.0"
 edition = "2024"
 authors = ["João Lucas <jlucaso@hotmail.com>"]
 license = "MIT"
@@ -8,34 +8,41 @@ repository = "https://github.com/jlucaso1/whatsapp-rust"
 description = "Core WhatsApp protocol implementation without runtime dependencies"
 
 [features]
-default = []
+default = ["simd"]
+simd = ["wacore-appstate/simd"]
+debug-diagnostics = []
 debug-snapshots = []
+# Enable JS-based random number generation for wasm32 targets.
+# Activates getrandom's wasm_js backend so rand works in the browser.
+js = ["getrandom/wasm_js"]
 
 [dependencies]
 aes = { workspace = true }
-aes-gcm = { workspace = true }
 anyhow = { workspace = true }
 async-channel = { workspace = true }
+async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 chrono = { workspace = true, features = ["now", "serde"] }
 ctr = { workspace = true }
+event-listener = { workspace = true }
 flate2 = { workspace = true }
+futures = { workspace = true, features = ["std"] }
+getrandom = { workspace = true, optional = true }
 hex = { workspace = true }
 hkdf = { workspace = true }
 hmac = { workspace = true }
+itoa = { workspace = true }
 log = { workspace = true }
 md5 = "0.8.0"
-once_cell = { version = "1.19", default-features = false, features = ["std"] }
-pbkdf2 = { version = "0.12", default-features = false, features = ["hmac"] }
+portable-atomic = { workspace = true }
 prost = { workspace = true }
-protobuf = { version = "3", default-features = false }
 rand = { workspace = true }
-rand_core = { workspace = true }
 serde = { workspace = true }
 serde-big-array = { workspace = true }
 serde_json = { workspace = true, features = ["std"] }
+sha1 = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 typed-builder = "0.23"
@@ -47,8 +54,15 @@ wacore-noise = { workspace = true }
 waproto = { workspace = true }
 
 [dev-dependencies]
+aes-gcm = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
 iai-callgrind = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [[bench]]
 name = "reporting_token_benchmark"
+harness = false
+
+[[bench]]
+name = "send_receive_benchmark"
 harness = false

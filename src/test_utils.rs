@@ -1,7 +1,20 @@
 use std::sync::Arc;
 
 use crate::Client;
+use wacore_binary::{Node, OwnedNodeRef};
+
+/// Marshal a `Node` into an `Arc<OwnedNodeRef>` for use in tests.
+pub fn node_to_owned_ref(node: &Node) -> Arc<OwnedNodeRef> {
+    let bytes = wacore_binary::marshal::marshal(node).expect("marshal should succeed");
+    // marshal() prepends a leading format byte; OwnedNodeRef::new expects raw protocol bytes
+    {
+        let mut bytes = bytes;
+        bytes.remove(0);
+        Arc::new(OwnedNodeRef::new(bytes).expect("OwnedNodeRef::new should succeed"))
+    }
+}
 use crate::http::{HttpClient, HttpRequest, HttpResponse};
+use crate::runtime_impl::TokioRuntime;
 use crate::store::SqliteStore;
 use crate::store::persistence_manager::PersistenceManager;
 use crate::store::traits::Backend;
@@ -35,7 +48,8 @@ pub async fn create_test_client() -> Arc<Client> {
 }
 
 pub async fn create_test_client_with_name(name: &str) -> Arc<Client> {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use portable_atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -59,6 +73,7 @@ pub async fn create_test_client_with_name(name: &str) -> Arc<Client> {
     );
 
     let (client, _rx) = Client::new(
+        Arc::new(TokioRuntime),
         pm,
         Arc::new(MockTransportFactory::new()),
         Arc::new(MockHttpClient),
@@ -70,7 +85,8 @@ pub async fn create_test_client_with_name(name: &str) -> Arc<Client> {
 }
 
 pub async fn create_test_client_with_failing_http(name: &str) -> Arc<Client> {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use portable_atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);
@@ -94,6 +110,7 @@ pub async fn create_test_client_with_failing_http(name: &str) -> Arc<Client> {
     );
 
     let (client, _rx) = Client::new(
+        Arc::new(TokioRuntime),
         pm,
         Arc::new(MockTransportFactory::new()),
         Arc::new(FailingMockHttpClient),
@@ -104,8 +121,35 @@ pub async fn create_test_client_with_failing_http(name: &str) -> Arc<Client> {
     client
 }
 
+use std::sync::Mutex;
+use wacore::types::events::{Event, EventHandler};
+
+#[derive(Default)]
+pub struct TestEventCollector {
+    events: Mutex<Vec<Arc<Event>>>,
+}
+
+impl EventHandler for TestEventCollector {
+    fn handle_event(&self, event: Arc<Event>) {
+        self.events
+            .lock()
+            .expect("collector mutex should not be poisoned")
+            .push(event);
+    }
+}
+
+impl TestEventCollector {
+    pub fn events(&self) -> Vec<Arc<Event>> {
+        self.events
+            .lock()
+            .expect("collector mutex should not be poisoned")
+            .clone()
+    }
+}
+
 pub async fn create_test_backend() -> Arc<dyn Backend> {
-    use std::sync::atomic::{AtomicU64, Ordering};
+    use portable_atomic::AtomicU64;
+    use std::sync::atomic::Ordering;
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
     let unique_id = COUNTER.fetch_add(1, Ordering::SeqCst);

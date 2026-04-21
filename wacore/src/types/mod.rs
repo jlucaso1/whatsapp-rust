@@ -3,7 +3,6 @@ pub mod events;
 pub mod jid;
 pub mod lid_pn;
 pub mod message;
-pub mod newsletter;
 pub mod presence;
 pub mod spam_report;
 pub mod user;

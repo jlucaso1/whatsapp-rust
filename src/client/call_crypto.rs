@@ -35,7 +35,7 @@ impl Client {
             )));
         }
 
-        self.ensure_e2e_sessions(devices.clone())
+        self.ensure_e2e_sessions(&devices)
             .await
             .map_err(|e| CallError::Encryption(format!("Failed to establish session: {}", e)))?;
 
@@ -63,8 +63,10 @@ impl Client {
         let device_store = self.persistence_manager.get_device_arc().await;
         let call_key = CallEncryptionKey::generate();
 
-        let mut adapter =
-            crate::store::signal_adapter::SignalProtocolStoreAdapter::new(device_store);
+        let mut adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
+            device_store,
+            self.signal_cache.clone(),
+        );
 
         let encrypted = encrypt_call_key(
             &mut adapter.session_store,
@@ -91,14 +93,14 @@ impl Client {
         ciphertext: &[u8],
         enc_type: EncType,
     ) -> Result<CallEncryptionKey, CallError> {
-        use rand::TryRngCore;
-
         let device_store = self.persistence_manager.get_device_arc().await;
 
-        let mut adapter =
-            crate::store::signal_adapter::SignalProtocolStoreAdapter::new(device_store);
+        let mut adapter = crate::store::signal_adapter::SignalProtocolStoreAdapter::new(
+            device_store,
+            self.signal_cache.clone(),
+        );
 
-        let mut rng = rand::rngs::OsRng.unwrap_err();
+        let mut rng: rand::rngs::StdRng = rand::make_rng();
         let call_key = decrypt_call_key(
             &mut adapter.session_store,
             &mut adapter.identity_store,

@@ -1,0 +1,141 @@
+{
+  "$schema": "https://github.com/longbridge/gpui-component/raw/refs/heads/main/.theme-schema.json",
+  "name": "Twilight",
+  "author": "MacroMates",
+  "url": "https://macromates.com",
+  "themes": [
+    {
+      "name": "Twilight",
+      "mode": "dark",
+      "colors": {
+        "accent.background": "#2b2b2b",
+        "accent.foreground": "#dcdcdc",
+        "background": "#141414",
+        "border": "#343434",
+        "foreground": "#dcdcdc",
+        "input.border": "#3e3e3e",
+        "list.active.background": "#CDA86911",
+        "list.active.border": "#CDA86988",
+        "list.even.background": "#1E1E1E99",
+        "muted.background": "#2e2e2e88",
+        "muted.foreground": "#828282",
+        "primary.background": "#CDA869",
+        "primary.foreground": "#1e1e1e",
+        "scrollbar.background": "#1e1e1e00",
+        "scrollbar.thumb.background": "#3e3e3e",
+        "secondary.background": "#262626",
+        "secondary.active.background": "#2a2a2a",
+        "secondary.foreground": "#dcdcdc",
+        "secondary.hover.background": "#272727",
+        "tab.active.background": "#141414",
+        "tab.active.foreground": "#dcdcdc",
+        "tab.background": "#1E1E1E00",
+        "tab.foreground": "#A9A9A9",
+        "tab_bar.background": "#1E1E1E",
+        "table.background": "#1e1e1e00",
+        "title_bar.background": "#1e1e1e",
+        "title_bar.border": "#343434",
+        "base.red": "#c06d44",
+        "base.red.light": "#de7c4c",
+        "base.green": "#afb97a",
+        "base.green.light": "#ccd88c",
+        "base.yellow": "#c2a86c",
+        "base.yellow.light": "#e2c47e",
+        "base.blue": "#44474a",
+        "base.blue.light": "#5a5e62",
+        "base.magenta": "#b4be7c",
+        "base.magenta.light": "#d0dc8e99",
+        "base.cyan": "#778385",
+        "base.cyan.light": "#8a989b"
+      },
+      "highlight": {
+        "editor.foreground": "#DDDDDD",
+        "editor.background": "#000000",
+        "editor.active_line.background": "#131313",
+        "editor.line_number": "#8F8F8F",
+        "editor.active_line_number": "#DDDDDD",
+        "editor.invisible": "#9E9E9E66",
+        "conflict": "#D2602D",
+        "created": "#3f72e2",
+        "hidden": "#9E9E9E",
+        "hint": "#b283f8",
+        "modified": "#B0A878",
+        "predictive": "#5D5945",
+        "syntax": {
+          "attribute": {
+            "color": "#be9a52"
+          },
+          "boolean": {
+            "color": "#E1D797"
+          },
+          "comment": {
+            "color": "#9E9E9E"
+          },
+          "comment.doc": {
+            "color": "#9E9E9E"
+          },
+          "constant": {
+            "color": "#E1D797"
+          },
+          "constructor": {
+            "color": "#b5af9a"
+          },
+          "embedded": {
+            "color": "#CACCCA"
+          },
+          "function": {
+            "color": "#E1D797"
+          },
+          "keyword": {
+            "color": "#E19773"
+          },
+          "link_text": {
+            "color": "#A86D3B",
+            "font_style": "normal"
+          },
+          "link_uri": {
+            "color": "#6F6D66",
+            "font_style": "italic"
+          },
+          "number": {
+            "color": "#E19773"
+          },
+          "string": {
+            "color": "#76BA53"
+          },
+          "string.escape": {
+            "color": "#76BA53"
+          },
+          "string.regex": {
+            "color": "#76BA53"
+          },
+          "string.special": {
+            "color": "#E1D797"
+          },
+          "string.special.symbol": {
+            "color": "#E1D797"
+          },
+          "tag": {
+            "color": "#b5af9a"
+          },
+          "text.literal": {
+            "color": "#E1D797"
+          },
+          "title": {
+            "color": "#A76D3B",
+            "font_weight": 600
+          },
+          "type": {
+            "color": "#A86D3B"
+          },
+          "property": {
+            "color": "#CACCCA"
+          },
+          "variable.special": {
+            "color": "#E19773"
+          }
+        }
+      }
+    }
+  ]
+}

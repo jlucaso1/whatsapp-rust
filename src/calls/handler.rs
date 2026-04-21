@@ -14,22 +14,29 @@ use log::{debug, info, warn};
 use std::sync::Arc;
 use wacore::types::call::CallId;
 use wacore::types::events::{CallAccepted, CallEnded, CallOffer, CallRejected, Event};
-use wacore_binary::node::Node;
+use wacore_binary::OwnedNodeRef;
 
 /// Handler for `<call>` stanzas.
 #[derive(Default)]
 pub struct CallHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for CallHandler {
     fn tag(&self) -> &'static str {
         "call"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, cancelled: &mut bool) -> bool {
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<OwnedNodeRef>,
+        cancelled: &mut bool,
+    ) -> bool {
         // Cancel the deferred ack - we send our own typed ack/receipt in send_response()
         *cancelled = true;
 
+        let node = node.to_owned_node();
         let parsed = match ParsedCallStanza::parse(&node) {
             Ok(p) => p,
             Err(e) => {
@@ -304,7 +311,7 @@ impl CallHandler {
             remote_meta: parsed.remote_meta(),
             group_jid: parsed.group_jid.clone(),
         });
-        client.core.event_bus.dispatch(&event);
+        client.core.event_bus.dispatch(event);
     }
 
     async fn handle_transport(&self, client: &Client, parsed: &ParsedCallStanza) {
@@ -351,7 +358,7 @@ impl CallHandler {
         client
             .core
             .event_bus
-            .dispatch(&Event::CallAccepted(CallAccepted {
+            .dispatch(Event::CallAccepted(CallAccepted {
                 meta: parsed.basic_meta(),
             }));
     }
@@ -372,7 +379,7 @@ impl CallHandler {
         client
             .core
             .event_bus
-            .dispatch(&Event::CallRejected(CallRejected {
+            .dispatch(Event::CallRejected(CallRejected {
                 meta: parsed.basic_meta(),
             }));
     }
@@ -390,7 +397,7 @@ impl CallHandler {
         // Close WebRTC/legacy transports to stop ICE keepalives
         call_manager.cleanup_call_transports(&call_id).await;
 
-        client.core.event_bus.dispatch(&Event::CallEnded(CallEnded {
+        client.core.event_bus.dispatch(Event::CallEnded(CallEnded {
             meta: parsed.basic_meta(),
         }));
     }

@@ -1,11 +1,12 @@
 use super::traits::StanzaHandler;
 use crate::client::Client;
-use crate::types::events::{Event, OfflineSyncCompleted, OfflineSyncPreview};
+use crate::types::events::{Event, OfflineSyncPreview};
 use async_trait::async_trait;
-use log::{debug, warn};
+use futures::FutureExt;
+use log::{debug, info, warn};
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
-use wacore_binary::node::{Node, NodeContent};
+use wacore::appstate::patch_decode::WAPatchName;
+use wacore::iq::dirty::{DirtyBit, DirtyType};
 
 /// Handler for `<ib>` (information broadcast) stanzas.
 ///
@@ -17,73 +18,118 @@ use wacore_binary::node::{Node, NodeContent};
 #[derive(Default)]
 pub struct IbHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for IbHandler {
     fn tag(&self) -> &'static str {
         "ib"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        handle_ib_impl(client, &node).await;
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<wacore_binary::OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
+        handle_ib_impl(client, node.get()).await;
         true
     }
 }
 
-async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
+async fn handle_ib_impl(client: Arc<Client>, node: &wacore_binary::NodeRef<'_>) {
     for child in node.children().unwrap_or_default() {
-        match child.tag.as_str() {
+        match child.tag.as_ref() {
             "dirty" => {
                 let mut attrs = child.attrs();
-                let dirty_type = match attrs.optional_string("type") {
+                let dirty_type_str = match attrs.optional_string("type") {
                     Some(t) => t.to_string(),
                     None => {
                         warn!("Dirty notification missing 'type' attribute");
                         continue;
                     }
                 };
-                let timestamp = attrs.optional_string("timestamp").map(|s| s.to_string());
+                let timestamp_str = attrs.optional_string("timestamp");
+
+                let bit = match DirtyBit::from_raw(&dirty_type_str, timestamp_str.as_deref()) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        warn!("Invalid dirty notification: {e}");
+                        continue;
+                    }
+                };
+
+                let needs_offline_wait = matches!(
+                    bit.dirty_type,
+                    DirtyType::Groups | DirtyType::NewsletterMetadata
+                );
+                let needs_resync = bit.dirty_type == DirtyType::SyncdAppState;
 
                 debug!(
-                    "Received dirty state notification for type: '{dirty_type}'. Sending clean IQ."
+                    "Received dirty state notification for type: '{dirty_type_str}'. Sending clean IQ."
                 );
 
                 let client_clone = client.clone();
 
-                tokio::spawn(async move {
-                    if let Err(e) = client_clone
-                        .clean_dirty_bits(&dirty_type, timestamp.as_deref())
-                        .await
-                    {
-                        warn!("Failed to send clean dirty bits IQ: {e:?}");
-                    }
-                });
+                // Groups/newsletter_metadata: wait for offline sync per WAWebHandleDirtyBits.
+                client
+                    .runtime
+                    .spawn(Box::pin(async move {
+                        if needs_offline_wait {
+                            client_clone.wait_for_offline_delivery_end().await;
+                        }
+                        if client_clone.is_shutting_down() {
+                            return;
+                        }
+                        if let Err(e) = client_clone.clean_dirty_bits(bit).await
+                            && !client_clone.is_shutting_down()
+                        {
+                            warn!("Failed to send clean dirty bits IQ: {e:?}");
+                        }
+
+                        if needs_resync && !client_clone.is_shutting_down() {
+                            info!("syncd_app_state dirty -- re-syncing all app state collections");
+                            if let Err(e) = client_clone
+                                .sync_collections_batched(vec![
+                                    WAPatchName::CriticalBlock,
+                                    WAPatchName::CriticalUnblockLow,
+                                    WAPatchName::RegularLow,
+                                    WAPatchName::RegularHigh,
+                                    WAPatchName::Regular,
+                                ])
+                                .await
+                                && !client_clone.is_shutting_down()
+                            {
+                                warn!("App state re-sync after dirty notification failed: {e:?}");
+                            }
+                        }
+                    }))
+                    .detach();
             }
             "edge_routing" => {
                 // Edge routing info is used for optimized reconnection to WhatsApp servers.
                 // When present, it should be sent as a pre-intro before the Noise handshake.
                 // Format on wire: ED (2 bytes) + length (3 bytes BE) + routing_data + WA header
-                if let Some(routing_info_node) = child.get_optional_child("routing_info") {
-                    if let Some(NodeContent::Bytes(routing_bytes)) = &routing_info_node.content {
-                        if !routing_bytes.is_empty() {
-                            debug!(
-                                "Received edge routing info ({} bytes), storing for reconnection",
-                                routing_bytes.len()
-                            );
-                            let routing_bytes = routing_bytes.clone();
-                            client
+                if let Some(routing_info_node) = child.get_optional_child("routing_info")
+                    && let Some(routing_bytes) = routing_info_node.content_bytes()
+                    && !routing_bytes.is_empty()
+                {
+                    debug!(
+                        "Received edge routing info ({} bytes), storing for reconnection",
+                        routing_bytes.len()
+                    );
+                    let routing_bytes = routing_bytes.to_vec();
+                    let client_clone = client.clone();
+                    client
+                        .runtime
+                        .spawn(Box::pin(async move {
+                            client_clone
                                 .persistence_manager
                                 .modify_device(|device| {
                                     device.edge_routing_info = Some(routing_bytes);
                                 })
                                 .await;
-                        } else {
-                            debug!("Received empty edge routing info, ignoring");
-                        }
-                    } else {
-                        debug!("Edge routing info node has no bytes content");
-                    }
-                } else {
-                    debug!("Edge routing stanza has no routing_info child");
+                        }))
+                        .detach();
                 }
             }
             "offline_preview" => {
@@ -103,7 +149,7 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 client
                     .core
                     .event_bus
-                    .dispatch(&Event::OfflineSyncPreview(OfflineSyncPreview {
+                    .dispatch(Event::OfflineSyncPreview(OfflineSyncPreview {
                         total,
                         app_data_changes,
                         messages,
@@ -116,20 +162,25 @@ async fn handle_ib_impl(client: Arc<Client>, node: &Node) {
                 let count = attrs.optional_u64("count").unwrap_or(0) as i32;
 
                 debug!(target: "Client/OfflineSync", "Offline sync completed, received {} items", count);
+                client.complete_offline_sync(count);
 
-                // Signal that offline sync is complete - post-login tasks are waiting for this.
-                // This mimics WhatsApp Web's offlineDeliveryEnd event.
-                client.offline_sync_completed.store(true, Ordering::Relaxed);
-                client.offline_sync_notifier.notify_waiters();
-
-                // NOTE: Session with primary phone (device 0) is established on login
-                // BEFORE offline messages arrive (see client.rs post-login task).
-                // This ensures PDO can send immediately when decryption fails.
-
+                let client_clone = Arc::clone(&client);
+                // Per-connection: the offline flush is tied to THIS connection.
+                // A reconnect fires the per-connection signal; the old task exits
+                // and the new connection spawns a fresh flush.
+                let shutdown = client_clone.connection_shutdown_signal();
                 client
-                    .core
-                    .event_bus
-                    .dispatch(&Event::OfflineSyncCompleted(OfflineSyncCompleted { count }));
+                    .runtime
+                    .spawn(Box::pin(async move {
+                        // WA Web: OFFLINE_DEVICE_SYNC_DELAY = 2000ms
+                        futures::select! {
+                            _ = client_clone.runtime.sleep(std::time::Duration::from_secs(2)).fuse() => {
+                                client_clone.flush_pending_device_sync().await;
+                            }
+                            _ = wacore::runtime::wait_for_shutdown(&shutdown).fuse() => {}
+                        }
+                    }))
+                    .detach();
             }
             "thread_metadata" => {
                 // Present in some sessions; safe to ignore for now until feature implemented.

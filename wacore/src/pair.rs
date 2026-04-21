@@ -1,16 +1,15 @@
+use crate::libsignal::crypto::aes_256_gcm_encrypt;
 use crate::libsignal::protocol::{KeyPair, PublicKey};
-use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::{Aead, KeyInit, Payload};
 use base64::Engine as _;
 use base64::prelude::*;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use prost::Message;
-use rand::TryRngCore;
+
 use sha2::Sha256;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::Node;
+use wacore_binary::{Jid, SERVER_JID};
+use wacore_binary::{Node, NodeRef};
 use waproto::whatsapp as wa;
 use waproto::whatsapp::AdvEncryptionType;
 
@@ -71,8 +70,8 @@ impl PairUtils {
             Some(
                 NodeBuilder::new("iq")
                     .attrs([
-                        ("to", to.to_string_value()),
-                        ("id", id.to_string_value()),
+                        ("to", to.to_string()),
+                        ("id", id.to_string()),
                         ("type", "result".to_string()),
                     ])
                     .build(),
@@ -80,6 +79,21 @@ impl PairUtils {
         } else {
             None
         }
+    }
+
+    /// Builds acknowledgment node for a pairing request from a NodeRef.
+    pub fn build_ack_node_ref(request_node: &NodeRef<'_>) -> Option<Node> {
+        let to = request_node.get_attr("from").map(|v| v.as_str())?;
+        let id = request_node.get_attr("id").map(|v| v.as_str())?;
+        Some(
+            NodeBuilder::new("iq")
+                .attrs([
+                    ("to", to.to_string()),
+                    ("id", id.to_string()),
+                    ("type", "result".to_string()),
+                ])
+                .build(),
+        )
     }
 
     /// Builds pair error node
@@ -114,14 +128,12 @@ impl PairUtils {
         let is_hosted_account = hmac_container.account_type.is_some()
             && hmac_container.account_type() == AdvEncryptionType::Hosted;
 
-        let mut mac =
-            <HmacSha256 as Mac>::new_from_slice(&device_state.adv_secret_key).map_err(|e| {
-                PairCryptoError {
-                    code: 500,
-                    text: "internal-error",
-                    source: e.into(),
-                }
-            })?;
+        let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(&device_state.adv_secret_key)
+            .map_err(|e| PairCryptoError {
+            code: 500,
+            text: "internal-error",
+            source: e.into(),
+        })?;
         // Get details and hmac as slices, handling potential None values
         let details_bytes = hmac_container
             .details
@@ -144,13 +156,11 @@ impl PairUtils {
             mac.update(ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE);
         }
         mac.update(details_bytes);
-        // if mac.verify_slice(hmac_bytes).is_err() {
-        //     return Err(PairCryptoError {
-        //         code: 401,
-        //         text: "hmac-mismatch",
-        //         source: anyhow::anyhow!("HMAC mismatch"),
-        //     });
-        // }
+        // TODO(security): HMAC verification skipped — adv_secret_key is only
+        // rotated in the pair-code flow (see handle_pair_code_notification() in
+        // pair_code.rs, via DeviceCommand::SetAdvSecretKey). QR pairing uses
+        // the initial random key from Device::new() which won't match.
+        // Re-enable once both pairing paths persist the correct key.
 
         // 2. Unmarshal inner container and verify account signature
         let mut signed_identity =
@@ -207,7 +217,7 @@ impl PairUtils {
         let device_signature = device_state
             .identity_key
             .private_key
-            .calculate_signature(&msg_to_sign, &mut rand::rngs::OsRng.unwrap_err())
+            .calculate_signature(&msg_to_sign, &mut rand::make_rng::<rand::rngs::StdRng>())
             .map_err(|e| PairCryptoError {
                 code: 500,
                 text: "internal-error",
@@ -292,7 +302,7 @@ impl PairUtils {
         let adv_key = &device_state.adv_secret_key;
         let identity_key = &device_state.identity_key;
 
-        let mut mac = <HmacSha256 as Mac>::new_from_slice(adv_key)
+        let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(adv_key)
             .map_err(|e| anyhow::anyhow!("Failed to init HMAC for master pairing: {e}"))?;
         mac.update(ADV_PREFIX_ACCOUNT_SIGNATURE);
         mac.update(dut_identity_pub);
@@ -304,30 +314,26 @@ impl PairUtils {
             .private_key
             .calculate_agreement(&their_public_key)?;
 
-        let mut final_message = Vec::new();
+        let mut final_message = Vec::with_capacity(64 + 32 + 32);
         final_message.extend_from_slice(&account_signature);
         final_message.extend_from_slice(master_ephemeral.public_key.public_key_bytes());
         final_message.extend_from_slice(identity_key.public_key.public_key_bytes());
 
         // Encrypt the final message
-        let encryption_key = {
-            let hk = Hkdf::<Sha256>::new(None, &shared_secret);
-            let mut result = vec![0u8; 32];
-            hk.expand(b"WA-Ads-Key", &mut result)
-                .map_err(|_| anyhow::anyhow!("HKDF expand failed"))?;
-            result
-        };
-        let cipher = Aes256Gcm::new_from_slice(&encryption_key)
-            .map_err(|_| anyhow::anyhow!("Invalid key size for AES-GCM"))?;
-        #[allow(deprecated)]
-        let nonce = aes_gcm::Nonce::from_slice(&[0; 12]);
-        let payload = Payload {
-            msg: &final_message,
-            aad: pairing_ref.as_bytes(),
-        };
-        let encrypted = cipher
-            .encrypt(nonce, payload)
-            .map_err(|_| anyhow::anyhow!("AES-GCM encryption failed"))?;
+        let mut encryption_key = [0u8; 32];
+        Hkdf::<Sha256>::new(None, &shared_secret)
+            .expand(b"WA-Ads-Key", &mut encryption_key)
+            .map_err(|_| anyhow::anyhow!("HKDF expand failed"))?;
+        let nonce = [0u8; 12];
+        let mut encrypted = Vec::with_capacity(final_message.len() + 16);
+        aes_256_gcm_encrypt(
+            &encryption_key,
+            &nonce,
+            pairing_ref.as_bytes(),
+            &final_message,
+            &mut encrypted,
+        )
+        .map_err(|e| anyhow::anyhow!("AES-GCM encryption failed: {e}"))?;
 
         Ok(encrypted)
     }
@@ -339,7 +345,7 @@ impl PairUtils {
         req_id: String,
     ) -> Node {
         let response_content = NodeBuilder::new("pair-device-sign")
-            .attr("jid", master_jid.to_string())
+            .attr("jid", master_jid)
             .bytes(encrypted_message)
             .build();
         NodeBuilder::new("iq")

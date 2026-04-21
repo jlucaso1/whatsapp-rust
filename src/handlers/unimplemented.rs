@@ -2,7 +2,6 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use async_trait::async_trait;
 use std::sync::Arc;
-use wacore_binary::node::Node;
 
 /// Handler for stanza types that are not yet fully implemented.
 ///
@@ -30,7 +29,8 @@ impl UnimplementedHandler {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for UnimplementedHandler {
     fn tag(&self) -> &'static str {
         // For multi-tag handlers, we'll register multiple instances
@@ -42,8 +42,13 @@ impl StanzaHandler for UnimplementedHandler {
         }
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        client.handle_unimplemented(&node.tag).await;
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<wacore_binary::OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
+        client.handle_unimplemented(node.tag()).await;
         true
     }
 }

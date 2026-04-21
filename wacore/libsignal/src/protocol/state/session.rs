@@ -4,6 +4,7 @@
 //
 
 use std::result::Result;
+use std::sync::Arc;
 
 use prost::Message;
 use subtle::ConstantTimeEq;
@@ -310,7 +311,7 @@ impl SessionState {
         // Using drain() for consistency, though with only 5 elements the difference is negligible.
         let len = self.session.receiver_chains.len();
         if len > consts::MAX_RECEIVER_CHAINS {
-            log::info!(
+            log::debug!(
                 "Trimming excessive receiver_chain for session with base key {}, chain count: {}",
                 self.sender_ratchet_key_for_logging()
                     .unwrap_or_else(|e| format!("<error: {}>", e.0)),
@@ -576,21 +577,21 @@ impl From<&SessionState> for SessionStructure {
 #[derive(Clone)]
 pub struct SessionRecord {
     current_session: Option<SessionState>,
-    previous_sessions: Vec<SessionStructure>,
+    previous_sessions: Arc<Vec<SessionStructure>>,
 }
 
 impl SessionRecord {
     pub fn new_fresh() -> Self {
         Self {
             current_session: None,
-            previous_sessions: Vec::new(),
+            previous_sessions: Arc::new(Vec::new()),
         }
     }
 
     pub fn new(state: SessionState) -> Self {
         Self {
             current_session: Some(state),
-            previous_sessions: Vec::new(),
+            previous_sessions: Arc::new(Vec::new()),
         }
     }
 
@@ -611,7 +612,7 @@ impl SessionRecord {
 
         Ok(Self {
             current_session: record.current_session.map(|s| s.into()),
-            previous_sessions: record.previous_sessions,
+            previous_sessions: Arc::new(record.previous_sessions),
         })
     }
 
@@ -676,7 +677,11 @@ impl SessionRecord {
     /// The session is converted from SessionStructure to SessionState.
     pub fn take_previous_session(&mut self, index: usize) -> Option<SessionState> {
         if index < self.previous_sessions.len() {
-            Some(self.previous_sessions.remove(index).into())
+            Some(
+                Arc::make_mut(&mut self.previous_sessions)
+                    .remove(index)
+                    .into(),
+            )
         } else {
             None
         }
@@ -692,11 +697,11 @@ impl SessionRecord {
     /// the caller is expected to restore only what was taken.
     pub fn restore_previous_session(&mut self, index: usize, state: SessionState) {
         let structure: SessionStructure = state.into();
-        if index <= self.previous_sessions.len() {
-            self.previous_sessions.insert(index, structure);
+        let sessions = Arc::make_mut(&mut self.previous_sessions);
+        if index <= sessions.len() {
+            sessions.insert(index, structure);
         } else {
-            // If index is out of bounds, just push to end
-            self.previous_sessions.push(structure);
+            sessions.push(structure);
         }
     }
 
@@ -739,7 +744,7 @@ impl SessionRecord {
     }
 
     pub fn promote_old_session(&mut self, old_session: usize, updated_session: SessionState) {
-        self.previous_sessions.remove(old_session);
+        Arc::make_mut(&mut self.previous_sessions).remove(old_session);
         self.promote_state(updated_session)
     }
 
@@ -748,16 +753,14 @@ impl SessionRecord {
         self.current_session = Some(new_state);
     }
 
-    // A non-fallible version of archive_current_state.
-    //
-    // Returns `true` if there was a session to archive, `false` if not.
     fn archive_current_state_inner(&mut self) -> bool {
         if let Some(mut current_session) = self.current_session.take() {
-            if self.previous_sessions.len() >= consts::ARCHIVED_STATES_MAX_LENGTH {
-                self.previous_sessions.pop();
+            let sessions = Arc::make_mut(&mut self.previous_sessions);
+            if sessions.len() >= consts::ARCHIVED_STATES_MAX_LENGTH {
+                sessions.pop();
             }
             current_session.clear_unacknowledged_pre_key_message();
-            self.previous_sessions.insert(0, current_session.session);
+            sessions.insert(0, current_session.session);
             true
         } else {
             false
@@ -772,11 +775,42 @@ impl SessionRecord {
     }
 
     pub fn serialize(&self) -> Result<Vec<u8>, SignalProtocolError> {
-        let record = RecordStructure {
-            current_session: self.current_session.as_ref().map(|s| s.into()),
-            previous_sessions: self.previous_sessions.clone(),
-        };
-        Ok(record.encode_to_vec())
+        let mut buf = Vec::new();
+        self.serialize_into(&mut buf);
+        Ok(buf)
+    }
+
+    /// Encode into a caller-supplied buffer (allows reuse across flushes).
+    pub fn serialize_into(&self, buf: &mut Vec<u8>) {
+        use prost::encoding::{encoded_len_varint, message::encode as encode_msg};
+
+        let current_len = self
+            .current_session
+            .as_ref()
+            .map(|s| {
+                let msg_len = s.session.encoded_len();
+                1 + encoded_len_varint(msg_len as u64) + msg_len
+            })
+            .unwrap_or(0);
+
+        let previous_len: usize = self
+            .previous_sessions
+            .iter()
+            .map(|s| {
+                let msg_len = s.encoded_len();
+                1 + encoded_len_varint(msg_len as u64) + msg_len
+            })
+            .sum();
+
+        buf.clear();
+        buf.reserve(current_len + previous_len);
+
+        if let Some(state) = &self.current_session {
+            encode_msg(1, &state.session, buf);
+        }
+        for session in self.previous_sessions.iter() {
+            encode_msg(2, session, buf);
+        }
     }
 
     pub fn remote_registration_id(&self) -> Result<u32, SignalProtocolError> {
@@ -898,8 +932,8 @@ mod tests {
     use crate::protocol::ratchet::keys::MessageKeyGenerator;
     use crate::protocol::{IdentityKey, KeyPair};
 
-    fn rng() -> impl rand::CryptoRng + rand::Rng {
-        rand::rng()
+    fn rng() -> impl rand::CryptoRng {
+        rand::make_rng::<rand::rngs::StdRng>()
     }
 
     /// Creates a minimal valid SessionState for testing.
@@ -1230,7 +1264,7 @@ mod tests {
         for _ in 0..(consts::ARCHIVED_STATES_MAX_LENGTH + 10) {
             let key = KeyPair::generate(&mut rng()).public_key;
             let state = create_test_session_state(3, &key);
-            record.previous_sessions.push(state.session);
+            Arc::make_mut(&mut record.previous_sessions).push(state.session);
         }
 
         // Serialize

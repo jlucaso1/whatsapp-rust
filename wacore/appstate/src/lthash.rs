@@ -1,3 +1,4 @@
+#[cfg(feature = "simd")]
 use core::simd::u16x8;
 use hkdf::Hkdf;
 use sha2::Sha256;
@@ -15,25 +16,30 @@ pub const WAPATCH_INTEGRITY: LTHash = LTHash {
 };
 
 impl LTHash {
-    pub fn subtract_then_add(&self, base: &[u8], subtract: &[Vec<u8>], add: &[Vec<u8>]) -> Vec<u8> {
+    pub fn subtract_then_add<S: AsRef<[u8]>, A: AsRef<[u8]>>(
+        &self,
+        base: &[u8],
+        subtract: &[S],
+        add: &[A],
+    ) -> Vec<u8> {
         let mut output = base.to_vec();
         self.subtract_then_add_in_place(&mut output, subtract, add);
         output
     }
 
-    pub fn subtract_then_add_in_place(
+    pub fn subtract_then_add_in_place<S: AsRef<[u8]>, A: AsRef<[u8]>>(
         &self,
         base: &mut [u8],
-        subtract: &[Vec<u8>],
-        add: &[Vec<u8>],
+        subtract: &[S],
+        add: &[A],
     ) {
         self.multiple_op(base, subtract, true);
         self.multiple_op(base, add, false);
     }
 
-    fn multiple_op(&self, base: &mut [u8], input: &[Vec<u8>], subtract: bool) {
+    fn multiple_op<T: AsRef<[u8]>>(&self, base: &mut [u8], input: &[T], subtract: bool) {
         for item in input {
-            let derived = hkdf_sha256(item, None, self.hkdf_info, self.hkdf_size);
+            let derived = hkdf_sha256(item.as_ref(), None, self.hkdf_info, self.hkdf_size);
             perform_pointwise_with_overflow(base, &derived, subtract);
         }
     }
@@ -41,48 +47,60 @@ impl LTHash {
 
 fn perform_pointwise_with_overflow(base: &mut [u8], input: &[u8], subtract: bool) {
     assert_eq!(base.len(), input.len(), "length mismatch");
-    assert!(base.len().is_multiple_of(2), "slice lengths must be even");
-
-    let (base_chunks, base_remainder) = base.as_chunks_mut::<16>();
-    let (input_chunks, input_remainder) = input.as_chunks::<16>();
-
-    for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
-        let base_simd = u16x8::from_array(bytemuck::cast(*base_chunk));
-        let input_simd = u16x8::from_array(bytemuck::cast(*input_chunk));
-
-        let result_simd = if subtract {
-            base_simd - input_simd
-        } else {
-            base_simd + input_simd
-        };
-
-        *base_chunk = bytemuck::cast(result_simd.to_array());
+    // Use `% 2` instead of `.is_multiple_of(2)` for stable Rust compatibility.
+    #[allow(clippy::manual_is_multiple_of)]
+    {
+        assert!(base.len() % 2 == 0, "slice lengths must be even");
     }
 
-    for (base_pair, input_pair) in base_remainder
-        .chunks_exact_mut(2)
-        .zip(input_remainder.chunks_exact(2))
+    #[allow(unused_mut, unused_assignments)]
+    let (mut base_remaining, mut input_remaining): (&mut [u8], &[u8]) = (base, input);
+
+    #[cfg(feature = "simd")]
     {
-        let x = u16::from_le_bytes([base_pair[0], base_pair[1]]);
-        let y = u16::from_le_bytes([input_pair[0], input_pair[1]]);
+        let (base_chunks, base_rem) = base_remaining.as_chunks_mut::<16>();
+        let (input_chunks, input_rem) = input_remaining.as_chunks::<16>();
+
+        for (base_chunk, input_chunk) in base_chunks.iter_mut().zip(input_chunks) {
+            let base_simd = u16x8::from_array(bytemuck::cast(*base_chunk));
+            let input_simd = u16x8::from_array(bytemuck::cast(*input_chunk));
+
+            let result_simd = if subtract {
+                base_simd - input_simd
+            } else {
+                base_simd + input_simd
+            };
+
+            *base_chunk = bytemuck::cast(result_simd.to_array());
+        }
+
+        base_remaining = base_rem;
+        input_remaining = input_rem;
+    }
+
+    // Use native endianness to match the SIMD path (bytemuck::cast reinterprets bytes as
+    // native-endian u16). The actual endianness doesn't matter for LTHash correctness —
+    // what matters is that SIMD and scalar paths agree.
+    for (base_pair, input_pair) in base_remaining
+        .chunks_exact_mut(2)
+        .zip(input_remaining.chunks_exact(2))
+    {
+        let x = u16::from_ne_bytes([base_pair[0], base_pair[1]]);
+        let y = u16::from_ne_bytes([input_pair[0], input_pair[1]]);
 
         let result = if subtract {
             x.wrapping_sub(y)
         } else {
             x.wrapping_add(y)
         };
-        let bytes = result.to_le_bytes();
+        let bytes = result.to_ne_bytes();
         base_pair[0] = bytes[0];
         base_pair[1] = bytes[1];
     }
 }
 
 fn hkdf_sha256(key: &[u8], salt: Option<&[u8]>, info: &[u8], length: u8) -> Vec<u8> {
-    let hk = if let Some(s) = salt {
-        Hkdf::<Sha256>::new(Some(s), key)
-    } else {
-        Hkdf::<Sha256>::new(None, key)
-    };
+    let hk = Hkdf::<Sha256>::new(salt, key);
     let mut okm = vec![0u8; length as usize];
     hk.expand(info, &mut okm).expect("hkdf expand");
     okm
@@ -92,15 +110,17 @@ fn hkdf_sha256(key: &[u8], salt: Option<&[u8]>, info: &[u8], length: u8) -> Vec<
 mod tests {
     use super::*;
 
+    const EMPTY: &[Vec<u8>] = &[];
+
     #[test]
     fn pointwise_add_and_subtract() {
         let mut base = vec![0u8; 128];
         let item = vec![1u8, 2, 3];
         let lth = WAPATCH_INTEGRITY;
-        lth.subtract_then_add_in_place(&mut base, &[], std::slice::from_ref(&item));
+        lth.subtract_then_add_in_place(&mut base, EMPTY, std::slice::from_ref(&item));
         let after_add = base.clone();
         assert_ne!(after_add, vec![0u8; 128]);
-        lth.subtract_then_add_in_place(&mut base, &[item], &[]);
+        lth.subtract_then_add_in_place(&mut base, &[item], EMPTY);
         assert_eq!(base, vec![0u8; 128]);
     }
 
@@ -152,13 +172,13 @@ mod tests {
             vec![9u8, 10, 11, 12],
         ];
 
-        lth.subtract_then_add_in_place(&mut base, &[], &items);
+        lth.subtract_then_add_in_place(&mut base, EMPTY, &items);
         let after_add = base.clone();
         assert_ne!(after_add, vec![0u8; 128]);
 
         let mut reverse_items = items.clone();
         reverse_items.reverse();
-        lth.subtract_then_add_in_place(&mut base, &reverse_items, &[]);
+        lth.subtract_then_add_in_place(&mut base, &reverse_items, EMPTY);
         assert_eq!(base, vec![0u8; 128]);
     }
 
@@ -171,10 +191,10 @@ mod tests {
 
         for item in items {
             let mut test_base = base.clone();
-            lth.subtract_then_add_in_place(&mut test_base, &[], std::slice::from_ref(&item));
+            lth.subtract_then_add_in_place(&mut test_base, EMPTY, std::slice::from_ref(&item));
             assert_ne!(test_base, vec![0u8; 128]);
 
-            lth.subtract_then_add_in_place(&mut test_base, &[item], &[]);
+            lth.subtract_then_add_in_place(&mut test_base, &[item], EMPTY);
             assert_eq!(test_base, vec![0u8; 128]);
         }
     }
@@ -189,10 +209,10 @@ mod tests {
 
         let subtract_items = vec![vec![1u8, 2, 3], vec![4u8, 5], vec![6u8, 7, 8, 9]];
 
-        lth.subtract_then_add_in_place(&mut base, &[], &add_items);
+        lth.subtract_then_add_in_place(&mut base, EMPTY, &add_items);
         assert_ne!(base, original);
 
-        lth.subtract_then_add_in_place(&mut base, &subtract_items, &[]);
+        lth.subtract_then_add_in_place(&mut base, &subtract_items, EMPTY);
         assert_eq!(base, original);
     }
 
@@ -202,7 +222,7 @@ mod tests {
         let original = base.clone();
         let lth = WAPATCH_INTEGRITY;
 
-        lth.subtract_then_add_in_place(&mut base, &[], &[]);
+        lth.subtract_then_add_in_place::<Vec<u8>, Vec<u8>>(&mut base, &[], &[]);
         assert_eq!(base, original);
     }
 

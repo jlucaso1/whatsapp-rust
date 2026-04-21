@@ -18,7 +18,7 @@
 //! - ice-pwd = relay_key (used for MESSAGE-INTEGRITY)
 
 use crc::{CRC_32_ISO_HDLC, Crc};
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha1::Sha1;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::sync::Arc;
@@ -1048,9 +1048,9 @@ impl StunBinder {
 
     /// Generate a random transaction ID.
     fn generate_transaction_id() -> [u8; 12] {
-        use rand::RngCore;
+        use rand::RngExt;
         let mut id = [0u8; 12];
-        rand::rng().fill_bytes(&mut id);
+        rand::rng().fill(&mut id);
         id
     }
 

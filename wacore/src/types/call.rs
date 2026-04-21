@@ -11,7 +11,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use wacore_binary::jid::Jid;
+use wacore_binary::Jid;
 
 // Re-export waproto call types for convenience
 pub use waproto::whatsapp::CallLogRecord;
@@ -37,6 +37,91 @@ pub struct CallRemoteMeta {
     pub remote_version: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct CallAudioCodec {
+    pub enc: String,
+    pub rate: u32,
+}
+
+/// Fields kept per-variant (not a shared `BasicCallMeta`) so the `serde` shape
+/// mirrors the stanza 1:1 for downstream JS consumers.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum CallAction {
+    Offer {
+        call_id: String,
+        call_creator: Jid,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        caller_pn: Option<Jid>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        caller_country_code: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        device_class: Option<String>,
+        joinable: bool,
+        is_video: bool,
+        audio: Vec<CallAudioCodec>,
+    },
+    PreAccept {
+        call_id: String,
+        call_creator: Jid,
+    },
+    Accept {
+        call_id: String,
+        call_creator: Jid,
+    },
+    Reject {
+        call_id: String,
+        call_creator: Jid,
+    },
+    Terminate {
+        call_id: String,
+        call_creator: Jid,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        duration: Option<u32>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        audio_duration: Option<u32>,
+    },
+}
+
+impl CallAction {
+    pub fn call_id(&self) -> &str {
+        match self {
+            Self::Offer { call_id, .. }
+            | Self::PreAccept { call_id, .. }
+            | Self::Accept { call_id, .. }
+            | Self::Reject { call_id, .. }
+            | Self::Terminate { call_id, .. } => call_id,
+        }
+    }
+
+    pub fn call_creator(&self) -> &Jid {
+        match self {
+            Self::Offer { call_creator, .. }
+            | Self::PreAccept { call_creator, .. }
+            | Self::Accept { call_creator, .. }
+            | Self::Reject { call_creator, .. }
+            | Self::Terminate { call_creator, .. } => call_creator,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct IncomingCall {
+    pub from: Jid,
+    /// Stanza id; distinct from `CallAction::call_id`.
+    pub stanza_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(with = "chrono::serde::ts_seconds")]
+    pub timestamp: DateTime<Utc>,
+    pub offline: bool,
+    pub action: CallAction,
+}
+
 /// Unique identifier for a call session.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CallId(pub String);
@@ -50,12 +135,10 @@ impl CallId {
     ///
     /// WhatsApp uses 32-character uppercase hexadecimal call IDs.
     /// Pattern: `[A-F0-9]{32}`
-    /// Examples: `AC90CFD09DF712D981142B172706F9F2`, `BC5BD1EDE9BBE601F408EF3795479E93`
     pub fn generate() -> Self {
-        use rand::RngCore;
+        use rand::RngExt;
         let mut bytes = [0u8; 16];
-        rand::rng().fill_bytes(&mut bytes);
-        // Convert to uppercase hex (16 bytes = 32 hex chars)
+        rand::rng().fill(&mut bytes);
         let id: String = bytes.iter().map(|b| format!("{:02X}", b)).collect();
         Self(id)
     }
@@ -157,6 +240,12 @@ impl From<&str> for CallPlatform {
     }
 }
 
+impl From<std::borrow::Cow<'_, str>> for CallPlatform {
+    fn from(s: std::borrow::Cow<'_, str>) -> Self {
+        Self::from(s.as_ref())
+    }
+}
+
 /// Information about a participant in a group call (runtime representation).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GroupCallParticipant {
@@ -183,21 +272,14 @@ impl GroupCallParticipant {
 mod tests {
     use super::*;
 
-    /// Test CallId format matches WhatsApp's 32-char uppercase hex format.
-    /// Real examples from logs:
-    /// - AC90CFD09DF712D981142B172706F9F2
-    /// - BC5BD1EDE9BBE601F408EF3795479E93
-    /// - ACCEA86C861462148DDDA364442F8584
     #[test]
     fn test_call_id_format() {
         for _ in 0..100 {
             let call_id = CallId::generate();
             let id = call_id.as_str();
 
-            // Must be exactly 32 characters
             assert_eq!(id.len(), 32, "CallId should be 32 chars, got {}", id.len());
 
-            // Must be uppercase hex only [A-F0-9]
             for c in id.chars() {
                 assert!(
                     c.is_ascii_hexdigit() && (c.is_ascii_digit() || c.is_ascii_uppercase()),
@@ -208,10 +290,8 @@ mod tests {
         }
     }
 
-    /// Test CallId parsing from real WhatsApp call IDs.
     #[test]
     fn test_call_id_from_real_examples() {
-        // Real call IDs from captured logs
         let real_ids = [
             "AC90CFD09DF712D981142B172706F9F2",
             "BC5BD1EDE9BBE601F408EF3795479E93",
@@ -227,20 +307,17 @@ mod tests {
         }
     }
 
-    /// Test EndCallReason values match WhatsApp Web JS enum.
     #[test]
     fn test_end_call_reason_values() {
-        // From WAWebVoipEndCallReasons in captured JS
         assert_eq!(EndCallReason::Unknown as u8, 0);
         assert_eq!(EndCallReason::Timeout as u8, 1);
-        assert_eq!(EndCallReason::UserEnded as u8, 2); // "Self" in JS
+        assert_eq!(EndCallReason::UserEnded as u8, 2);
         assert_eq!(EndCallReason::RejectDoNotDisturb as u8, 3);
         assert_eq!(EndCallReason::RejectBlocked as u8, 4);
         assert_eq!(EndCallReason::MicPermissionDenied as u8, 5);
         assert_eq!(EndCallReason::CameraPermissionDenied as u8, 6);
     }
 
-    /// Test EndCallReason to CallOutcome mapping.
     #[test]
     fn test_end_call_reason_to_outcome() {
         assert_eq!(
@@ -260,7 +337,6 @@ mod tests {
         );
     }
 
-    /// Test CallPlatform parsing from platform strings.
     #[test]
     fn test_call_platform_from_str() {
         assert_eq!(CallPlatform::from("android"), CallPlatform::Android);

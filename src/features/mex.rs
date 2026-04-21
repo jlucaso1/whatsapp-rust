@@ -9,7 +9,7 @@ use thiserror::Error;
 use wacore::iq::mex::MexQuerySpec;
 
 // Re-export types from wacore
-pub use wacore::iq::mex::{MexErrorExtensions, MexGraphQLError, MexResponse};
+pub use wacore::iq::mex::{MexDoc, MexErrorExtensions, MexGraphQLError, MexResponse};
 
 /// Error types for MEX operations.
 #[derive(Debug, Error)]
@@ -27,11 +27,12 @@ pub enum MexError {
     Json(#[from] serde_json::Error),
 }
 
-/// MEX request with document ID and variables.
+/// MEX request with persisted-query descriptor and variables.
 #[derive(Debug, Clone)]
-pub struct MexRequest<'a> {
-    /// GraphQL document ID.
-    pub doc_id: &'a str,
+pub struct MexRequest {
+    /// GraphQL persisted-query descriptor (name + id), from
+    /// [`wacore::iq::mex_ids`].
+    pub doc: MexDoc,
     /// Query variables.
     pub variables: Value,
 }
@@ -48,18 +49,18 @@ impl<'a> Mex<'a> {
 
     /// Execute a GraphQL query.
     #[inline]
-    pub async fn query(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError> {
+    pub async fn query(&self, request: MexRequest) -> Result<MexResponse, MexError> {
         self.execute_request(request).await
     }
 
     /// Execute a GraphQL mutation.
     #[inline]
-    pub async fn mutate(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError> {
+    pub async fn mutate(&self, request: MexRequest) -> Result<MexResponse, MexError> {
         self.execute_request(request).await
     }
 
-    async fn execute_request(&self, request: MexRequest<'_>) -> Result<MexResponse, MexError> {
-        let spec = MexQuerySpec::new(request.doc_id, request.variables);
+    async fn execute_request(&self, request: MexRequest) -> Result<MexResponse, MexError> {
+        let spec = MexQuerySpec::new(request.doc, request.variables);
 
         let response = self.client.execute(spec).await?;
 
@@ -89,14 +90,18 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_mex_request_borrows_doc_id() {
-        let doc_id = "29829202653362039";
+    fn test_mex_request_carries_doc() {
+        const DOC: MexDoc = MexDoc {
+            name: "WAWebMexTestQuery",
+            id: "29829202653362039",
+        };
         let request = MexRequest {
-            doc_id,
+            doc: DOC,
             variables: json!({}),
         };
 
-        assert_eq!(request.doc_id, "29829202653362039");
+        assert_eq!(request.doc.id, "29829202653362039");
+        assert_eq!(request.doc.name, "WAWebMexTestQuery");
     }
 
     #[test]
@@ -116,7 +121,8 @@ mod tests {
     }
 
     #[test]
-    fn test_mex_response_with_non_fatal_errors() {
+    fn test_mex_response_with_error_code_is_fatal() {
+        // WhatsApp Web treats any error with error_code as fatal
         let json_str = r#"{
             "data": null,
             "errors": [
@@ -135,13 +141,10 @@ mod tests {
         let response: MexResponse = serde_json::from_str(json_str).unwrap();
         assert!(!response.has_data());
         assert!(response.has_errors());
-        assert!(response.fatal_error().is_none());
 
-        let errors = response.errors.as_ref().unwrap();
-        assert_eq!(errors.len(), 1);
-        assert_eq!(errors[0].message, "User not found");
-        assert_eq!(errors[0].error_code(), Some(404));
-        assert!(!errors[0].is_fatal());
+        let fatal = response.fatal_error();
+        assert!(fatal.is_some());
+        assert_eq!(fatal.unwrap().error_code(), Some(404));
     }
 
     #[test]
@@ -170,7 +173,7 @@ mod tests {
         let fatal = fatal.unwrap();
         assert_eq!(fatal.message, "Fatal server error");
         assert_eq!(fatal.error_code(), Some(500));
-        assert!(fatal.is_fatal());
+        assert!(fatal.is_summary());
     }
 
     #[test]
@@ -187,7 +190,7 @@ mod tests {
                         },
                         "country_code": "BR",
                         "id": null,
-                        "jid": "559984726662@s.whatsapp.net",
+                        "jid": "551199887766@s.whatsapp.net",
                         "username_info": {
                             "__typename": "XWA2ResponseStatus",
                             "status": "EMPTY"
@@ -205,7 +208,7 @@ mod tests {
         let users = data["xwa2_fetch_wa_users"].as_array().unwrap();
         assert_eq!(users.len(), 1);
         assert_eq!(users[0]["country_code"], "BR");
-        assert_eq!(users[0]["jid"], "559984726662@s.whatsapp.net");
+        assert_eq!(users[0]["jid"], "551199887766@s.whatsapp.net");
     }
 
     #[test]

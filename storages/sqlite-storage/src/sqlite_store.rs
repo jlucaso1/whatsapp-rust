@@ -1,13 +1,13 @@
 use crate::schema::*;
 use async_trait::async_trait;
+use bytes::Bytes;
 use diesel::prelude::*;
 use diesel::r2d2::{ConnectionManager, Pool};
-use diesel::sql_query;
+use diesel::result::{DatabaseErrorKind, Error as DieselError};
 use diesel::sqlite::SqliteConnection;
 use diesel::upsert::excluded;
 use diesel_migrations::{EmbeddedMigrations, MigrationHarness, embed_migrations};
 use log::warn;
-use prost::Message;
 use std::sync::Arc;
 use wacore::appstate::hash::HashState;
 use wacore::appstate::processor::AppStateMutationMAC;
@@ -15,32 +15,74 @@ use wacore::libsignal::protocol::{KeyPair, PrivateKey, PublicKey};
 use wacore::store::Device as CoreDevice;
 use wacore::store::error::{Result, StoreError};
 use wacore::store::traits::*;
-use wacore_binary::jid::Jid;
-use waproto::whatsapp as wa;
+
+/// Internal error type that preserves the Diesel error for structured matching
+/// before converting to `StoreError`. Used in retry loops where we need to
+/// distinguish retriable SQLite lock errors from other failures.
+enum DieselOrStore {
+    Diesel(DieselError),
+    Store(StoreError),
+}
+
+impl From<DieselOrStore> for StoreError {
+    fn from(e: DieselOrStore) -> Self {
+        match e {
+            DieselOrStore::Diesel(e) => StoreError::Database(e.to_string()),
+            DieselOrStore::Store(e) => e,
+        }
+    }
+}
+
+/// Check if a Diesel error represents a retriable SQLite lock contention.
+///
+/// SQLite BUSY (error code 5) and LOCKED (error code 6) both map to
+/// `DatabaseError(Unknown, _)` in Diesel. We inspect the error message
+/// from `sqlite3_errmsg()` to distinguish them from other unknown errors.
+fn is_retriable_sqlite_error(error: &DieselError) -> bool {
+    match error {
+        DieselError::DatabaseError(DatabaseErrorKind::Unknown, info) => {
+            let msg = info.message();
+            msg.contains("locked") || msg.contains("busy")
+        }
+        _ => false,
+    }
+}
 
 const MIGRATIONS: EmbeddedMigrations = embed_migrations!("migrations");
 
 type SqlitePool = Pool<ConnectionManager<SqliteConnection>>;
-type DeviceRow = (
-    i32,
-    String,
-    String,
-    i32,
-    Vec<u8>,
-    Vec<u8>,
-    Vec<u8>,
-    i32,
-    Vec<u8>,
-    Vec<u8>,
-    Option<Vec<u8>>,
-    String,
-    i32,
-    i32,
-    i64,
-    i64,
-    Option<Vec<u8>>,
-    Option<String>,
-);
+
+/// Row representation for the `device` table.
+///
+/// Field order must match the column order in `schema::device`.
+/// Using a named struct instead of a positional tuple so fields are
+/// accessed by name, reducing the risk of mix-ups when columns are added.
+#[derive(Queryable, Selectable)]
+#[diesel(table_name = crate::schema::device)]
+#[allow(dead_code)]
+struct DeviceRow {
+    id: i32,
+    lid: String,
+    pn: String,
+    registration_id: i32,
+    noise_key: Vec<u8>,
+    identity_key: Vec<u8>,
+    signed_pre_key: Vec<u8>,
+    signed_pre_key_id: i32,
+    signed_pre_key_signature: Vec<u8>,
+    adv_secret_key: Vec<u8>,
+    account: Option<Vec<u8>>,
+    push_name: String,
+    app_version_primary: i32,
+    app_version_secondary: i32,
+    app_version_tertiary: i64,
+    app_version_last_fetched_ms: i64,
+    edge_routing_info: Option<Vec<u8>>,
+    props_hash: Option<String>,
+    next_pre_key_id: i32,
+    nct_salt: Option<Vec<u8>>,
+    server_has_prekeys: bool,
+}
 
 #[derive(Clone)]
 pub struct SqliteStore {
@@ -180,6 +222,58 @@ impl SqliteStore {
         Ok(result)
     }
 
+    /// Execute a database operation with semaphore serialization and retry on
+    /// transient SQLite lock/busy errors. Mirrors WhatsApp Web's PromiseQueue
+    /// pattern that serializes database commits to avoid concurrent write contention.
+    async fn with_retry<F, T>(&self, op_name: &str, make_op: F) -> Result<T>
+    where
+        F: Fn() -> Box<
+            dyn FnOnce(&mut SqliteConnection) -> std::result::Result<T, DieselError> + Send,
+        >,
+        T: Send + 'static,
+    {
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit = self
+                .db_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StoreError::Database(format!("Semaphore error: {}", e)))?;
+
+            let pool = self.pool.clone();
+            let op = make_op();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<T, DieselOrStore> {
+                    let _permit = permit;
+                    let mut conn = pool
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    op(&mut conn).map_err(DieselOrStore::Diesel)
+                })
+                .await;
+
+            match result {
+                Ok(Ok(val)) => return Ok(val),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(format!(
+            "{} exhausted retries",
+            op_name
+        )))
+    }
+
     fn serialize_keypair(&self, key_pair: &KeyPair) -> Result<Vec<u8>> {
         let mut bytes = Vec::with_capacity(64);
         bytes.extend_from_slice(key_pair.private_key.serialize());
@@ -208,164 +302,180 @@ impl SqliteStore {
         device_id: i32,
         device_data: &CoreDevice,
     ) -> Result<()> {
-        let pool = self.pool.clone();
-        let noise_key_data = self.serialize_keypair(&device_data.noise_key)?;
-        let identity_key_data = self.serialize_keypair(&device_data.identity_key)?;
-        let signed_pre_key_data = self.serialize_keypair(&device_data.signed_pre_key)?;
-        let account_data = device_data
+        // Use Arc so retry clones are just atomic increments, not deep copies.
+        let noise_key_data: Arc<[u8]> = self.serialize_keypair(&device_data.noise_key)?.into();
+        let identity_key_data: Arc<[u8]> =
+            self.serialize_keypair(&device_data.identity_key)?.into();
+        let signed_pre_key_data: Arc<[u8]> =
+            self.serialize_keypair(&device_data.signed_pre_key)?.into();
+        let account_data: Option<Arc<[u8]>> = device_data
             .account
             .as_ref()
-            .map(|account| account.encode_to_vec());
+            .map(|a| Arc::from(wacore::store::device::account_serde::to_bytes(a)));
         let registration_id = device_data.registration_id as i32;
         let signed_pre_key_id = device_data.signed_pre_key_id as i32;
-        let signed_pre_key_signature: Vec<u8> = device_data.signed_pre_key_signature.to_vec();
-        let adv_secret_key: Vec<u8> = device_data.adv_secret_key.to_vec();
-        let push_name = device_data.push_name.clone();
+        let signed_pre_key_signature: Arc<[u8]> =
+            Arc::from(&device_data.signed_pre_key_signature[..]);
+        let adv_secret_key: Arc<[u8]> = Arc::from(&device_data.adv_secret_key[..]);
+        let push_name: Arc<str> = Arc::from(device_data.push_name.as_str());
         let app_version_primary = device_data.app_version_primary as i32;
         let app_version_secondary = device_data.app_version_secondary as i32;
         let app_version_tertiary = device_data.app_version_tertiary as i64;
         let app_version_last_fetched_ms = device_data.app_version_last_fetched_ms;
-        let edge_routing_info = device_data.edge_routing_info.clone();
-        let props_hash = device_data.props_hash.clone();
-        let new_lid = device_data
-            .lid
-            .as_ref()
-            .map(|j| j.to_string())
-            .unwrap_or_default();
-        let new_pn = device_data
-            .pn
-            .as_ref()
-            .map(|j| j.to_string())
-            .unwrap_or_default();
+        let edge_routing_info: Option<Arc<[u8]>> =
+            device_data.edge_routing_info.as_deref().map(Arc::from);
+        let props_hash: Option<Arc<str>> = device_data.props_hash.as_deref().map(Arc::from);
+        let next_pre_key_id = device_data.next_pre_key_id as i32;
+        let server_has_prekeys = device_data.server_has_prekeys;
+        let nct_salt: Option<Arc<[u8]>> = device_data.nct_salt.as_deref().map(Arc::from);
+        let new_lid: Arc<str> = Arc::from(
+            device_data
+                .lid
+                .as_ref()
+                .map(|j| j.to_string())
+                .unwrap_or_default()
+                .as_str(),
+        );
+        let new_pn: Arc<str> = Arc::from(
+            device_data
+                .pn
+                .as_ref()
+                .map(|j| j.to_string())
+                .unwrap_or_default()
+                .as_str(),
+        );
 
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+        self.with_retry("save_device_data", || {
+            let noise_key_data = Arc::clone(&noise_key_data);
+            let identity_key_data = Arc::clone(&identity_key_data);
+            let signed_pre_key_data = Arc::clone(&signed_pre_key_data);
+            let account_data = account_data.clone();
+            let signed_pre_key_signature = Arc::clone(&signed_pre_key_signature);
+            let adv_secret_key = Arc::clone(&adv_secret_key);
+            let push_name = Arc::clone(&push_name);
+            let edge_routing_info = edge_routing_info.clone();
+            let props_hash = props_hash.clone();
+            let nct_salt = nct_salt.clone();
+            let new_lid = Arc::clone(&new_lid);
+            let new_pn = Arc::clone(&new_pn);
 
-            diesel::insert_into(device::table)
-                .values((
-                    device::id.eq(device_id),
-                    device::lid.eq(&new_lid),
-                    device::pn.eq(&new_pn),
-                    device::registration_id.eq(registration_id),
-                    device::noise_key.eq(&noise_key_data),
-                    device::identity_key.eq(&identity_key_data),
-                    device::signed_pre_key.eq(&signed_pre_key_data),
-                    device::signed_pre_key_id.eq(signed_pre_key_id),
-                    device::signed_pre_key_signature.eq(&signed_pre_key_signature[..]),
-                    device::adv_secret_key.eq(&adv_secret_key[..]),
-                    device::account.eq(account_data.clone()),
-                    device::push_name.eq(&push_name),
-                    device::app_version_primary.eq(app_version_primary),
-                    device::app_version_secondary.eq(app_version_secondary),
-                    device::app_version_tertiary.eq(app_version_tertiary),
-                    device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
-                    device::edge_routing_info.eq(edge_routing_info.clone()),
-                    device::props_hash.eq(props_hash.clone()),
-                ))
-                .on_conflict(device::id)
-                .do_update()
-                .set((
-                    device::lid.eq(&new_lid),
-                    device::pn.eq(&new_pn),
-                    device::registration_id.eq(registration_id),
-                    device::noise_key.eq(&noise_key_data),
-                    device::identity_key.eq(&identity_key_data),
-                    device::signed_pre_key.eq(&signed_pre_key_data),
-                    device::signed_pre_key_id.eq(signed_pre_key_id),
-                    device::signed_pre_key_signature.eq(&signed_pre_key_signature[..]),
-                    device::adv_secret_key.eq(&adv_secret_key[..]),
-                    device::account.eq(account_data.clone()),
-                    device::push_name.eq(&push_name),
-                    device::app_version_primary.eq(app_version_primary),
-                    device::app_version_secondary.eq(app_version_secondary),
-                    device::app_version_tertiary.eq(app_version_tertiary),
-                    device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
-                    device::edge_routing_info.eq(edge_routing_info),
-                    device::props_hash.eq(props_hash),
-                ))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-
-            Ok(())
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::insert_into(device::table)
+                    .values((
+                        device::id.eq(device_id),
+                        device::lid.eq(&*new_lid),
+                        device::pn.eq(&*new_pn),
+                        device::registration_id.eq(registration_id),
+                        device::noise_key.eq(&*noise_key_data),
+                        device::identity_key.eq(&*identity_key_data),
+                        device::signed_pre_key.eq(&*signed_pre_key_data),
+                        device::signed_pre_key_id.eq(signed_pre_key_id),
+                        device::signed_pre_key_signature.eq(&*signed_pre_key_signature),
+                        device::adv_secret_key.eq(&*adv_secret_key),
+                        device::account.eq(account_data.as_deref()),
+                        device::push_name.eq(&*push_name),
+                        device::app_version_primary.eq(app_version_primary),
+                        device::app_version_secondary.eq(app_version_secondary),
+                        device::app_version_tertiary.eq(app_version_tertiary),
+                        device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                        device::edge_routing_info.eq(edge_routing_info.as_deref()),
+                        device::props_hash.eq(props_hash.as_deref()),
+                        device::next_pre_key_id.eq(next_pre_key_id),
+                        device::server_has_prekeys.eq(server_has_prekeys),
+                        device::nct_salt.eq(nct_salt.as_deref()),
+                    ))
+                    .on_conflict(device::id)
+                    .do_update()
+                    .set((
+                        device::lid.eq(excluded(device::lid)),
+                        device::pn.eq(excluded(device::pn)),
+                        device::registration_id.eq(excluded(device::registration_id)),
+                        device::noise_key.eq(excluded(device::noise_key)),
+                        device::identity_key.eq(excluded(device::identity_key)),
+                        device::signed_pre_key.eq(excluded(device::signed_pre_key)),
+                        device::signed_pre_key_id.eq(excluded(device::signed_pre_key_id)),
+                        device::signed_pre_key_signature
+                            .eq(excluded(device::signed_pre_key_signature)),
+                        device::adv_secret_key.eq(excluded(device::adv_secret_key)),
+                        device::account.eq(excluded(device::account)),
+                        device::push_name.eq(excluded(device::push_name)),
+                        device::app_version_primary.eq(excluded(device::app_version_primary)),
+                        device::app_version_secondary.eq(excluded(device::app_version_secondary)),
+                        device::app_version_tertiary.eq(excluded(device::app_version_tertiary)),
+                        device::app_version_last_fetched_ms
+                            .eq(excluded(device::app_version_last_fetched_ms)),
+                        device::edge_routing_info.eq(excluded(device::edge_routing_info)),
+                        device::props_hash.eq(excluded(device::props_hash)),
+                        device::next_pre_key_id.eq(excluded(device::next_pre_key_id)),
+                        device::server_has_prekeys.eq(excluded(device::server_has_prekeys)),
+                        device::nct_salt.eq(excluded(device::nct_salt)),
+                    ))
+                    .execute(conn)
+                    .map(|_| ())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-
-        Ok(())
     }
 
     pub async fn create_new_device(&self) -> Result<i32> {
-        use crate::schema::device;
+        let device_id = self.device_id;
+        let new_device = wacore::store::Device::new();
 
-        let pool = self.pool.clone();
-        tokio::task::spawn_blocking(move || -> Result<i32> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+        let noise_key_data: Arc<[u8]> = self.serialize_keypair(&new_device.noise_key)?.into();
+        let identity_key_data: Arc<[u8]> = self.serialize_keypair(&new_device.identity_key)?.into();
+        let signed_pre_key_data: Arc<[u8]> =
+            self.serialize_keypair(&new_device.signed_pre_key)?.into();
+        let registration_id = new_device.registration_id as i32;
+        let signed_pre_key_id = new_device.signed_pre_key_id as i32;
+        let signed_pre_key_signature: Arc<[u8]> =
+            Arc::from(&new_device.signed_pre_key_signature[..]);
+        let adv_secret_key: Arc<[u8]> = Arc::from(&new_device.adv_secret_key[..]);
+        let push_name: Arc<str> = Arc::from(new_device.push_name.as_str());
+        let app_version_primary = new_device.app_version_primary as i32;
+        let app_version_secondary = new_device.app_version_secondary as i32;
+        let app_version_tertiary = new_device.app_version_tertiary as i64;
+        let app_version_last_fetched_ms = new_device.app_version_last_fetched_ms;
+        let next_pre_key_id = new_device.next_pre_key_id as i32;
+        let server_has_prekeys = new_device.server_has_prekeys;
 
-            let new_device = wacore::store::Device::new();
+        self.with_retry("create_new_device", || {
+            let noise_key_data = Arc::clone(&noise_key_data);
+            let identity_key_data = Arc::clone(&identity_key_data);
+            let signed_pre_key_data = Arc::clone(&signed_pre_key_data);
+            let signed_pre_key_signature = Arc::clone(&signed_pre_key_signature);
+            let adv_secret_key = Arc::clone(&adv_secret_key);
+            let push_name = Arc::clone(&push_name);
 
-            let noise_key_data = {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(new_device.noise_key.private_key.serialize());
-                bytes.extend_from_slice(new_device.noise_key.public_key.public_key_bytes());
-                bytes
-            };
-            let identity_key_data = {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(new_device.identity_key.private_key.serialize());
-                bytes.extend_from_slice(new_device.identity_key.public_key.public_key_bytes());
-                bytes
-            };
-            let signed_pre_key_data = {
-                let mut bytes = Vec::with_capacity(64);
-                bytes.extend_from_slice(new_device.signed_pre_key.private_key.serialize());
-                bytes.extend_from_slice(new_device.signed_pre_key.public_key.public_key_bytes());
-                bytes
-            };
-
-            diesel::insert_into(device::table)
-                .values((
-                    device::lid.eq(""),
-                    device::pn.eq(""),
-                    device::registration_id.eq(new_device.registration_id as i32),
-                    device::noise_key.eq(&noise_key_data),
-                    device::identity_key.eq(&identity_key_data),
-                    device::signed_pre_key.eq(&signed_pre_key_data),
-                    device::signed_pre_key_id.eq(new_device.signed_pre_key_id as i32),
-                    device::signed_pre_key_signature.eq(&new_device.signed_pre_key_signature[..]),
-                    device::adv_secret_key.eq(&new_device.adv_secret_key[..]),
-                    device::account.eq(None::<Vec<u8>>),
-                    device::push_name.eq(&new_device.push_name),
-                    device::app_version_primary.eq(new_device.app_version_primary as i32),
-                    device::app_version_secondary.eq(new_device.app_version_secondary as i32),
-                    device::app_version_tertiary.eq(new_device.app_version_tertiary as i64),
-                    device::app_version_last_fetched_ms.eq(new_device.app_version_last_fetched_ms),
-                    device::edge_routing_info.eq(None::<Vec<u8>>),
-                    device::props_hash.eq(None::<String>),
-                ))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-
-            use diesel::sql_types::Integer;
-
-            #[derive(QueryableByName)]
-            struct LastInsertedId {
-                #[diesel(sql_type = Integer)]
-                last_insert_rowid: i32,
-            }
-
-            let device_id: i32 = sql_query("SELECT last_insert_rowid() as last_insert_rowid")
-                .get_result::<LastInsertedId>(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?
-                .last_insert_rowid;
-
-            Ok(device_id)
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::insert_into(device::table)
+                    .values((
+                        device::id.eq(device_id),
+                        device::lid.eq(""),
+                        device::pn.eq(""),
+                        device::registration_id.eq(registration_id),
+                        device::noise_key.eq(&*noise_key_data),
+                        device::identity_key.eq(&*identity_key_data),
+                        device::signed_pre_key.eq(&*signed_pre_key_data),
+                        device::signed_pre_key_id.eq(signed_pre_key_id),
+                        device::signed_pre_key_signature.eq(&*signed_pre_key_signature),
+                        device::adv_secret_key.eq(&*adv_secret_key),
+                        device::account.eq(None::<&[u8]>),
+                        device::push_name.eq(&*push_name),
+                        device::app_version_primary.eq(app_version_primary),
+                        device::app_version_secondary.eq(app_version_secondary),
+                        device::app_version_tertiary.eq(app_version_tertiary),
+                        device::app_version_last_fetched_ms.eq(app_version_last_fetched_ms),
+                        device::edge_routing_info.eq(None::<&[u8]>),
+                        device::props_hash.eq(None::<&str>),
+                        device::next_pre_key_id.eq(next_pre_key_id),
+                        device::server_has_prekeys.eq(server_has_prekeys),
+                        device::nct_salt.eq(None::<&[u8]>),
+                    ))
+                    .execute(conn)
+                    .map(|_| device_id)
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
     pub async fn device_exists(&self, device_id: i32) -> Result<bool> {
@@ -407,80 +517,65 @@ impl SqliteStore {
         .await
         .map_err(|e| StoreError::Database(e.to_string()))??;
 
-        if let Some((
-            _device_id,
-            lid_str,
-            pn_str,
-            registration_id,
-            noise_key_data,
-            identity_key_data,
-            signed_pre_key_data,
-            signed_pre_key_id,
-            signed_pre_key_signature_data,
-            adv_secret_key_data,
-            account_data,
-            push_name,
-            app_version_primary,
-            app_version_secondary,
-            app_version_tertiary,
-            app_version_last_fetched_ms,
-            edge_routing_info,
-            props_hash,
-        )) = row
-        {
-            let id = if !pn_str.is_empty() {
-                pn_str.parse().ok()
+        if let Some(row) = row {
+            let pn = if !row.pn.is_empty() {
+                row.pn.parse().ok()
             } else {
                 None
             };
-            let lid = if !lid_str.is_empty() {
-                lid_str.parse().ok()
+            let lid = if !row.lid.is_empty() {
+                row.lid.parse().ok()
             } else {
                 None
             };
 
-            let noise_key = self.deserialize_keypair(&noise_key_data)?;
-            let identity_key = self.deserialize_keypair(&identity_key_data)?;
-            let signed_pre_key = self.deserialize_keypair(&signed_pre_key_data)?;
+            let noise_key = self.deserialize_keypair(&row.noise_key)?;
+            let identity_key = self.deserialize_keypair(&row.identity_key)?;
+            let signed_pre_key = self.deserialize_keypair(&row.signed_pre_key)?;
 
             let signed_pre_key_signature: [u8; 64] =
-                signed_pre_key_signature_data.try_into().map_err(|_| {
+                row.signed_pre_key_signature.try_into().map_err(|_| {
                     StoreError::Serialization("Invalid signed_pre_key_signature length".to_string())
                 })?;
 
-            let adv_secret_key: [u8; 32] = adv_secret_key_data.try_into().map_err(|_| {
+            let adv_secret_key: [u8; 32] = row.adv_secret_key.try_into().map_err(|_| {
                 StoreError::Serialization("Invalid adv_secret_key length".to_string())
             })?;
 
-            let account = account_data
+            let account = row
+                .account
                 .map(|data| {
-                    wa::AdvSignedDeviceIdentity::decode(&data[..])
+                    wacore::store::device::account_serde::from_bytes(&data)
                         .map_err(|e| StoreError::Serialization(e.to_string()))
                 })
                 .transpose()?;
 
             Ok(Some(CoreDevice {
-                pn: id,
+                pn,
                 lid,
-                registration_id: registration_id as u32,
+                registration_id: row.registration_id as u32,
                 noise_key,
                 identity_key,
                 signed_pre_key,
-                signed_pre_key_id: signed_pre_key_id as u32,
+                signed_pre_key_id: row.signed_pre_key_id as u32,
                 signed_pre_key_signature,
                 adv_secret_key,
                 account,
-                push_name,
-                app_version_primary: app_version_primary as u32,
-                app_version_secondary: app_version_secondary as u32,
-                app_version_tertiary: app_version_tertiary.try_into().unwrap_or(0u32),
-                app_version_last_fetched_ms,
+                push_name: row.push_name,
+                app_version_primary: row.app_version_primary as u32,
+                app_version_secondary: row.app_version_secondary as u32,
+                app_version_tertiary: row.app_version_tertiary.try_into().unwrap_or(0u32),
+                app_version_last_fetched_ms: row.app_version_last_fetched_ms,
                 device_props: {
                     use wacore::store::device::DEVICE_PROPS;
                     DEVICE_PROPS.clone()
                 },
-                edge_routing_info,
-                props_hash,
+                edge_routing_info: row.edge_routing_info,
+                props_hash: row.props_hash,
+                next_pre_key_id: row.next_pre_key_id as u32,
+                server_has_prekeys: row.server_has_prekeys,
+                nct_salt: row.nct_salt,
+                nct_salt_sync_seen: false,
             }))
         } else {
             Ok(None)
@@ -510,47 +605,43 @@ impl SqliteStore {
             let address_clone = address_owned.clone();
             let key_clone = key_vec.clone();
 
-            let result = tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut conn = pool_clone
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                diesel::insert_into(identities::table)
-                    .values((
-                        identities::address.eq(address_clone),
-                        identities::key.eq(&key_clone[..]),
-                        identities::device_id.eq(device_id),
-                    ))
-                    .on_conflict((identities::address, identities::device_id))
-                    .do_update()
-                    .set(identities::key.eq(&key_clone[..]))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(())
-            })
-            .await;
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::insert_into(identities::table)
+                        .values((
+                            identities::address.eq(address_clone),
+                            identities::key.eq(&key_clone[..]),
+                            identities::device_id.eq(device_id),
+                        ))
+                        .on_conflict((identities::address, identities::device_id))
+                        .do_update()
+                        .set(identities::key.eq(&key_clone[..]))
+                        .execute(&mut conn)
+                        .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
 
             drop(permit);
 
             match result {
                 Ok(Ok(())) => return Ok(()),
-                Ok(Err(e)) => {
-                    let error_msg = e.to_string();
-                    if (error_msg.contains("locked") || error_msg.contains("busy"))
-                        && attempt < MAX_RETRIES
-                    {
-                        let delay_ms = 10 * 2u64.pow(attempt);
-                        warn!(
-                            "Identity write failed (attempt {}/{}): {}. Retrying in {}ms...",
-                            attempt + 1,
-                            MAX_RETRIES + 1,
-                            error_msg,
-                            delay_ms
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        continue;
-                    }
-                    return Err(e);
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10 * 2u64.pow(attempt);
+                    warn!(
+                        "Identity write failed (attempt {}/{}): {e}. Retrying in {delay_ms}ms...",
+                        attempt + 1,
+                        MAX_RETRIES + 1,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    continue;
                 }
+                Ok(Err(e)) => return Err(e.into()),
                 Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
             }
         }
@@ -660,49 +751,43 @@ impl SqliteStore {
             let address_clone = address_owned.clone();
             let session_clone = session_vec.clone();
 
-            let result = tokio::task::spawn_blocking(move || -> Result<()> {
-                let mut conn = pool_clone
-                    .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
-                diesel::insert_into(sessions::table)
-                    .values((
-                        sessions::address.eq(address_clone),
-                        sessions::record.eq(&session_clone),
-                        sessions::device_id.eq(device_id),
-                    ))
-                    .on_conflict((sessions::address, sessions::device_id))
-                    .do_update()
-                    .set(sessions::record.eq(&session_clone))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-                Ok(())
-            })
-            .await;
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::insert_into(sessions::table)
+                        .values((
+                            sessions::address.eq(address_clone),
+                            sessions::record.eq(&session_clone),
+                            sessions::device_id.eq(device_id),
+                        ))
+                        .on_conflict((sessions::address, sessions::device_id))
+                        .do_update()
+                        .set(sessions::record.eq(&session_clone))
+                        .execute(&mut conn)
+                        .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
 
             drop(permit);
 
             match result {
-                Ok(Ok(())) => {
-                    return Ok(());
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10 * 2u64.pow(attempt);
+                    warn!(
+                        "Session write failed (attempt {}/{}): {e}. Retrying in {delay_ms}ms...",
+                        attempt + 1,
+                        MAX_RETRIES + 1,
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                    continue;
                 }
-                Ok(Err(e)) => {
-                    let error_msg = e.to_string();
-                    if (error_msg.contains("locked") || error_msg.contains("busy"))
-                        && attempt < MAX_RETRIES
-                    {
-                        let delay_ms = 10 * 2u64.pow(attempt);
-                        warn!(
-                            "Session write failed (attempt {}/{}): {}. Retrying in {}ms...",
-                            attempt + 1,
-                            MAX_RETRIES + 1,
-                            error_msg,
-                            delay_ms
-                        );
-                        tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-                        continue;
-                    }
-                    return Err(e);
-                }
+                Ok(Err(e)) => return Err(e.into()),
                 Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
             }
         }
@@ -877,6 +962,30 @@ impl SqliteStore {
         Ok(())
     }
 
+    pub async fn get_latest_app_state_sync_key_id_for_device(
+        &self,
+        device_id: i32,
+    ) -> Result<Option<Vec<u8>>> {
+        let pool = self.pool.clone();
+        let res: Option<Vec<u8>> =
+            tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+                let mut conn = pool
+                    .get()
+                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                let res: Option<Vec<u8>> = app_state_keys::table
+                    .select(app_state_keys::key_id)
+                    .filter(app_state_keys::device_id.eq(device_id))
+                    .order(app_state_keys::key_id.desc())
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                Ok(res)
+            })
+            .await
+            .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(res)
+    }
+
     pub async fn get_app_state_version_for_device(
         &self,
         name: &str,
@@ -916,30 +1025,27 @@ impl SqliteStore {
         state: HashState,
         device_id: i32,
     ) -> Result<()> {
-        let pool = self.pool.clone();
         let name = name.to_string();
         let data = bincode::serde::encode_to_vec(&state, bincode::config::standard())
             .map_err(|e| StoreError::Serialization(e.to_string()))?;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(app_state_versions::table)
-                .values((
-                    app_state_versions::name.eq(&name),
-                    app_state_versions::state_data.eq(&data),
-                    app_state_versions::device_id.eq(device_id),
-                ))
-                .on_conflict((app_state_versions::name, app_state_versions::device_id))
-                .do_update()
-                .set(app_state_versions::state_data.eq(&data))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
+        self.with_retry("set_app_state_version", || {
+            let name = name.clone();
+            let data = data.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::insert_into(app_state_versions::table)
+                    .values((
+                        app_state_versions::name.eq(&name),
+                        app_state_versions::state_data.eq(&data),
+                        app_state_versions::device_id.eq(device_id),
+                    ))
+                    .on_conflict((app_state_versions::name, app_state_versions::device_id))
+                    .do_update()
+                    .set(app_state_versions::state_data.eq(&data))
+                    .execute(conn)?;
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     pub async fn put_app_state_mutation_macs_for_device(
@@ -952,54 +1058,50 @@ impl SqliteStore {
         if mutations.is_empty() {
             return Ok(());
         }
-        let pool = self.pool.clone();
         let name = name.to_string();
         let mutations: Vec<AppStateMutationMAC> = mutations.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+        self.with_retry("put_app_state_mutation_macs", || {
+            let name = name.clone();
+            let mutations = mutations.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                let records: Vec<_> = mutations
+                    .iter()
+                    .map(|m| {
+                        (
+                            app_state_mutation_macs::name.eq(&name),
+                            app_state_mutation_macs::version.eq(version as i64),
+                            app_state_mutation_macs::index_mac.eq(&m.index_mac),
+                            app_state_mutation_macs::value_mac.eq(&m.value_mac),
+                            app_state_mutation_macs::device_id.eq(device_id),
+                        )
+                    })
+                    .collect();
 
-            let records: Vec<_> = mutations
-                .iter()
-                .map(|m| {
-                    (
-                        app_state_mutation_macs::name.eq(&name),
-                        app_state_mutation_macs::version.eq(version as i64),
-                        app_state_mutation_macs::index_mac.eq(&m.index_mac),
-                        app_state_mutation_macs::value_mac.eq(&m.value_mac),
-                        app_state_mutation_macs::device_id.eq(device_id),
-                    )
-                })
-                .collect();
+                // SQLite variable limit is typically 999 or 32766.
+                // Each row has 5 columns. 100 rows * 5 = 500 params, which is safe.
+                const CHUNK_SIZE: usize = 100;
 
-            // SQLite variable limit is typically 999 or 32766.
-            // Each row has 5 columns. 100 rows * 5 = 500 params, which is safe.
-            const CHUNK_SIZE: usize = 100;
-
-            for chunk in records.chunks(CHUNK_SIZE) {
-                diesel::insert_into(app_state_mutation_macs::table)
-                    .values(chunk)
-                    .on_conflict((
-                        app_state_mutation_macs::name,
-                        app_state_mutation_macs::index_mac,
-                        app_state_mutation_macs::device_id,
-                    ))
-                    .do_update()
-                    .set((
-                        app_state_mutation_macs::version
-                            .eq(excluded(app_state_mutation_macs::version)),
-                        app_state_mutation_macs::value_mac
-                            .eq(excluded(app_state_mutation_macs::value_mac)),
-                    ))
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            Ok(())
+                for chunk in records.chunks(CHUNK_SIZE) {
+                    diesel::insert_into(app_state_mutation_macs::table)
+                        .values(chunk)
+                        .on_conflict((
+                            app_state_mutation_macs::name,
+                            app_state_mutation_macs::index_mac,
+                            app_state_mutation_macs::device_id,
+                        ))
+                        .do_update()
+                        .set((
+                            app_state_mutation_macs::version
+                                .eq(excluded(app_state_mutation_macs::version)),
+                            app_state_mutation_macs::value_mac
+                                .eq(excluded(app_state_mutation_macs::value_mac)),
+                        ))
+                        .execute(conn)?;
+                }
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     pub async fn delete_app_state_mutation_macs_for_device(
@@ -1011,35 +1113,31 @@ impl SqliteStore {
         if index_macs.is_empty() {
             return Ok(());
         }
-        let pool = self.pool.clone();
         let name = name.to_string();
         let index_macs: Vec<Vec<u8>> = index_macs.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+        self.with_retry("delete_app_state_mutation_macs", || {
+            let name = name.clone();
+            let index_macs = index_macs.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                // SQLite variable limit is usually 999 or higher.
+                // We use a safe chunk size to stay well within limits.
+                const CHUNK_SIZE: usize = 500;
 
-            // SQLite variable limit is usually 999 or higher.
-            // We use a safe chunk size to stay well within limits.
-            const CHUNK_SIZE: usize = 500;
-
-            for chunk in index_macs.chunks(CHUNK_SIZE) {
-                diesel::delete(
-                    app_state_mutation_macs::table.filter(
-                        app_state_mutation_macs::name
-                            .eq(&name)
-                            .and(app_state_mutation_macs::index_mac.eq_any(chunk))
-                            .and(app_state_mutation_macs::device_id.eq(device_id)),
-                    ),
-                )
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            Ok(())
+                for chunk in index_macs.chunks(CHUNK_SIZE) {
+                    diesel::delete(
+                        app_state_mutation_macs::table.filter(
+                            app_state_mutation_macs::name
+                                .eq(&name)
+                                .and(app_state_mutation_macs::index_mac.eq_any(chunk))
+                                .and(app_state_mutation_macs::device_id.eq(device_id)),
+                        ),
+                    )
+                    .execute(conn)?;
+                }
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     pub async fn get_app_state_mutation_mac_for_device(
@@ -1070,15 +1168,28 @@ impl SqliteStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SignalStore for SqliteStore {
     async fn put_identity(&self, address: &str, key: [u8; 32]) -> Result<()> {
         self.put_identity_for_device(address, key, self.device_id)
             .await
     }
 
-    async fn load_identity(&self, address: &str) -> Result<Option<Vec<u8>>> {
-        self.load_identity_for_device(address, self.device_id).await
+    async fn load_identity(&self, address: &str) -> Result<Option<[u8; 32]>> {
+        let blob = self
+            .load_identity_for_device(address, self.device_id)
+            .await?;
+        match blob {
+            None => Ok(None),
+            Some(v) => Ok(Some(v.try_into().map_err(|v: Vec<u8>| {
+                StoreError::Serialization(format!(
+                    "identity key for '{}' has invalid length {} (expected 32)",
+                    address,
+                    v.len()
+                ))
+            })?)),
+        }
     }
 
     async fn delete_identity(&self, address: &str) -> Result<()> {
@@ -1086,8 +1197,31 @@ impl SignalStore for SqliteStore {
             .await
     }
 
-    async fn get_session(&self, address: &str) -> Result<Option<Vec<u8>>> {
-        self.get_session_for_device(address, self.device_id).await
+    async fn get_session(&self, address: &str) -> Result<Option<bytes::Bytes>> {
+        Ok(self
+            .get_session_for_device(address, self.device_id)
+            .await?
+            .map(bytes::Bytes::from))
+    }
+
+    async fn has_session(&self, address: &str) -> Result<bool> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let address_owned = address.to_string();
+        self.with_semaphore(move || -> Result<bool> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let exists = diesel::select(diesel::dsl::exists(
+                sessions::table
+                    .filter(sessions::address.eq(&address_owned))
+                    .filter(sessions::device_id.eq(device_id)),
+            ))
+            .get_result(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(exists)
+        })
+        .await
     }
 
     async fn put_session(&self, address: &str, session: &[u8]) -> Result<()> {
@@ -1102,35 +1236,139 @@ impl SignalStore for SqliteStore {
 
     async fn store_prekey(&self, id: u32, record: &[u8], uploaded: bool) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
         let record = record.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(prekeys::table)
-                .values((
-                    prekeys::id.eq(id as i32),
-                    prekeys::key.eq(&record),
-                    prekeys::uploaded.eq(uploaded),
-                    prekeys::device_id.eq(device_id),
-                ))
-                .on_conflict((prekeys::id, prekeys::device_id))
-                .do_update()
-                .set((prekeys::key.eq(&record), prekeys::uploaded.eq(uploaded)))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let record_clone = record.clone();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::insert_into(prekeys::table)
+                        .values((
+                            prekeys::id.eq(id as i32),
+                            prekeys::key.eq(&record_clone),
+                            prekeys::uploaded.eq(uploaded),
+                            prekeys::device_id.eq(device_id),
+                        ))
+                        .on_conflict((prekeys::id, prekeys::device_id))
+                        .do_update()
+                        .set((
+                            prekeys::key.eq(&record_clone),
+                            prekeys::uploaded.eq(uploaded),
+                        ))
+                        .execute(&mut conn)
+                        .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "store_prekey exhausted retries".to_string(),
+        ))
     }
 
-    async fn load_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
+    async fn store_prekeys_batch(&self, keys: &[(u32, Bytes)], uploaded: bool) -> Result<()> {
+        if keys.is_empty() {
+            return Ok(());
+        }
+
+        let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
+        let device_id = self.device_id;
+        let keys: Vec<(u32, Bytes)> = keys.to_vec();
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let keys_clone = keys.clone();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+
+                    conn.transaction(|conn| {
+                        for (id, record) in &keys_clone {
+                            diesel::insert_into(prekeys::table)
+                                .values((
+                                    prekeys::id.eq(*id as i32),
+                                    prekeys::key.eq(record.as_ref()),
+                                    prekeys::uploaded.eq(uploaded),
+                                    prekeys::device_id.eq(device_id),
+                                ))
+                                .on_conflict((prekeys::id, prekeys::device_id))
+                                .do_update()
+                                .set((
+                                    prekeys::key.eq(record.as_ref()),
+                                    prekeys::uploaded.eq(uploaded),
+                                ))
+                                .execute(conn)?;
+                        }
+                        Ok::<(), diesel::result::Error>(())
+                    })
+                    .map_err(DieselOrStore::Diesel)
+                })
+                .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "store_prekeys_batch exhausted retries".to_string(),
+        ))
+    }
+
+    async fn load_prekey(&self, id: u32) -> Result<Option<Bytes>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
-        tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
+        tokio::task::spawn_blocking(move || -> Result<Option<Bytes>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
@@ -1141,57 +1379,168 @@ impl SignalStore for SqliteStore {
                 .first(&mut conn)
                 .optional()
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(res)
+            Ok(res.map(Bytes::from))
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
-    async fn remove_prekey(&self, id: u32) -> Result<()> {
+    async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Bytes)>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
         let pool = self.pool.clone();
         let device_id = self.device_id;
-        tokio::task::spawn_blocking(move || -> Result<()> {
+        let ids: Vec<i32> = ids.iter().map(|&id| id as i32).collect();
+        self.with_semaphore(move || -> Result<Vec<(u32, Bytes)>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(
-                prekeys::table
-                    .filter(prekeys::id.eq(id as i32))
-                    .filter(prekeys::device_id.eq(device_id)),
-            )
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
+            let rows: Vec<(i32, Vec<u8>)> = prekeys::table
+                .select((prekeys::id, prekeys::key))
+                .filter(prekeys::id.eq_any(&ids))
+                .filter(prekeys::device_id.eq(device_id))
+                .load(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(rows
+                .into_iter()
+                .map(|(id, key)| (id as u32, Bytes::from(key)))
+                .collect())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+    }
+
+    async fn remove_prekey(&self, id: u32) -> Result<()> {
+        let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
+        let device_id = self.device_id;
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::delete(
+                        prekeys::table
+                            .filter(prekeys::id.eq(id as i32))
+                            .filter(prekeys::device_id.eq(device_id)),
+                    )
+                    .execute(&mut conn)
+                    .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "remove_prekey exhausted retries".to_string(),
+        ))
+    }
+
+    async fn get_max_prekey_id(&self) -> Result<u32> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let db_semaphore = self.db_semaphore.clone();
+        let _permit = db_semaphore
+            .acquire()
+            .await
+            .map_err(|e| StoreError::Database(format!("Failed to acquire semaphore: {}", e)))?;
+
+        tokio::task::spawn_blocking(move || -> Result<u32> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            use diesel::dsl::max;
+            let result: Option<i32> = prekeys::table
+                .filter(prekeys::device_id.eq(device_id))
+                .select(max(prekeys::id))
+                .first(&mut conn)
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(result.unwrap_or(0) as u32)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
     async fn store_signed_prekey(&self, id: u32, record: &[u8]) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
         let record = record.to_vec();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(signed_prekeys::table)
-                .values((
-                    signed_prekeys::id.eq(id as i32),
-                    signed_prekeys::record.eq(&record),
-                    signed_prekeys::device_id.eq(device_id),
-                ))
-                .on_conflict((signed_prekeys::id, signed_prekeys::device_id))
-                .do_update()
-                .set(signed_prekeys::record.eq(&record))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+            let record_clone = record.clone();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::insert_into(signed_prekeys::table)
+                        .values((
+                            signed_prekeys::id.eq(id as i32),
+                            signed_prekeys::record.eq(&record_clone),
+                            signed_prekeys::device_id.eq(device_id),
+                        ))
+                        .on_conflict((signed_prekeys::id, signed_prekeys::device_id))
+                        .do_update()
+                        .set(signed_prekeys::record.eq(&record_clone))
+                        .execute(&mut conn)
+                        .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "store_signed_prekey exhausted retries".to_string(),
+        ))
     }
 
     async fn load_signed_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
@@ -1237,23 +1586,53 @@ impl SignalStore for SqliteStore {
 
     async fn remove_signed_prekey(&self, id: u32) -> Result<()> {
         let pool = self.pool.clone();
+        let db_semaphore = self.db_semaphore.clone();
         let device_id = self.device_id;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(
-                signed_prekeys::table
-                    .filter(signed_prekeys::id.eq(id as i32))
-                    .filter(signed_prekeys::device_id.eq(device_id)),
-            )
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
-        })
-        .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+
+        const MAX_RETRIES: u32 = 5;
+
+        for attempt in 0..=MAX_RETRIES {
+            let permit =
+                db_semaphore.clone().acquire_owned().await.map_err(|e| {
+                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
+                })?;
+
+            let pool_clone = pool.clone();
+
+            let result =
+                tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
+                    let mut conn = pool_clone
+                        .get()
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                    diesel::delete(
+                        signed_prekeys::table
+                            .filter(signed_prekeys::id.eq(id as i32))
+                            .filter(signed_prekeys::device_id.eq(device_id)),
+                    )
+                    .execute(&mut conn)
+                    .map_err(DieselOrStore::Diesel)?;
+                    Ok(())
+                })
+                .await;
+
+            drop(permit);
+
+            match result {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(DieselOrStore::Diesel(ref e)))
+                    if is_retriable_sqlite_error(e) && attempt < MAX_RETRIES =>
+                {
+                    let delay_ms = 10u64 * (1u64 << attempt.min(4));
+                    tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+                }
+                Ok(Err(e)) => return Err(e.into()),
+                Err(e) => return Err(StoreError::Database(e.to_string())),
+            }
+        }
+
+        Err(StoreError::Database(
+            "remove_signed_prekey exhausted retries".to_string(),
+        ))
     }
 
     async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()> {
@@ -1272,7 +1651,8 @@ impl SignalStore for SqliteStore {
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl AppSyncStore for SqliteStore {
     async fn get_sync_key(&self, key_id: &[u8]) -> Result<Option<AppStateSyncKey>> {
         self.get_app_state_sync_key_for_device(key_id, self.device_id)
@@ -1313,110 +1693,126 @@ impl AppSyncStore for SqliteStore {
         self.delete_app_state_mutation_macs_for_device(name, index_macs, self.device_id)
             .await
     }
+
+    async fn get_latest_sync_key_id(&self) -> Result<Option<Vec<u8>>> {
+        self.get_latest_app_state_sync_key_id_for_device(self.device_id)
+            .await
+    }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl ProtocolStore for SqliteStore {
-    async fn get_skdm_recipients(&self, group_jid: &str) -> Result<Vec<Jid>> {
+    async fn get_sender_key_devices(&self, group_jid: &str) -> Result<Vec<(String, bool)>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        tokio::task::spawn_blocking(move || -> Result<Vec<Jid>> {
+        tokio::task::spawn_blocking(move || -> Result<Vec<(String, bool)>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let recipients: Vec<String> = skdm_recipients::table
-                .select(skdm_recipients::device_jid)
-                .filter(skdm_recipients::group_jid.eq(&group_jid))
-                .filter(skdm_recipients::device_id.eq(device_id))
+            let rows: Vec<(String, i32)> = sender_key_devices::table
+                .select((sender_key_devices::device_jid, sender_key_devices::has_key))
+                .filter(sender_key_devices::group_jid.eq(&group_jid))
+                .filter(sender_key_devices::device_id.eq(device_id))
                 .load(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            let jids: Vec<Jid> = recipients
-                .iter()
-                .filter_map(|s| match s.parse::<Jid>() {
-                    Ok(jid) => Some(jid),
-                    Err(e) => {
-                        warn!("Failed to parse SKDM recipient '{}': {}", s, e);
-                        None
-                    }
-                })
-                .collect();
-            Ok(jids)
+            Ok(rows
+                .into_iter()
+                .map(|(jid, has_key)| (jid, has_key != 0))
+                .collect())
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
-    async fn add_skdm_recipients(&self, group_jid: &str, device_jids: &[Jid]) -> Result<()> {
-        if device_jids.is_empty() {
+    async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()> {
+        if entries.is_empty() {
             return Ok(());
         }
-        let pool = self.pool.clone();
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        let device_jid_strs: Vec<String> = device_jids.iter().map(|j| j.to_string()).collect();
+        let owned_entries: Arc<Vec<(String, bool)>> = Arc::new(
+            entries
+                .iter()
+                .map(|(jid, has_key)| (jid.to_string(), *has_key))
+                .collect(),
+        );
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_secs() as i32;
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            .as_secs() as i64;
+        self.with_retry("set_sender_key_status", || {
+            let group_jid = group_jid.clone();
+            let owned_entries = Arc::clone(&owned_entries);
+            Box::new(move |conn: &mut SqliteConnection| {
+                let values: Vec<_> = owned_entries
+                    .iter()
+                    .map(|(device_jid, has_key)| {
+                        (
+                            sender_key_devices::group_jid.eq(&group_jid),
+                            sender_key_devices::device_jid.eq(device_jid),
+                            sender_key_devices::has_key.eq(i32::from(*has_key)),
+                            sender_key_devices::device_id.eq(device_id),
+                            sender_key_devices::updated_at.eq(now),
+                        )
+                    })
+                    .collect();
 
-            let values: Vec<_> = device_jid_strs
-                .iter()
-                .map(|device_jid| {
-                    (
-                        skdm_recipients::group_jid.eq(&group_jid),
-                        skdm_recipients::device_jid.eq(device_jid),
-                        skdm_recipients::device_id.eq(device_id),
-                        skdm_recipients::created_at.eq(now),
-                    )
-                })
-                .collect();
+                const CHUNK_SIZE: usize = 190;
 
-            const CHUNK_SIZE: usize = 200; // SQLite variable limit ~999, 4 cols/row
-
-            for chunk in values.chunks(CHUNK_SIZE) {
-                diesel::insert_into(skdm_recipients::table)
-                    .values(chunk)
-                    .on_conflict((
-                        skdm_recipients::group_jid,
-                        skdm_recipients::device_jid,
-                        skdm_recipients::device_id,
-                    ))
-                    .do_nothing()
-                    .execute(&mut conn)
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
-            }
-            Ok(())
+                for chunk in values.chunks(CHUNK_SIZE) {
+                    diesel::insert_into(sender_key_devices::table)
+                        .values(chunk)
+                        .on_conflict((
+                            sender_key_devices::group_jid,
+                            sender_key_devices::device_jid,
+                            sender_key_devices::device_id,
+                        ))
+                        .do_update()
+                        .set((
+                            sender_key_devices::has_key
+                                .eq(diesel::upsert::excluded(sender_key_devices::has_key)),
+                            sender_key_devices::updated_at.eq(now),
+                        ))
+                        .execute(conn)?;
+                }
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
-    async fn clear_skdm_recipients(&self, group_jid: &str) -> Result<()> {
-        let pool = self.pool.clone();
+    async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()> {
         let device_id = self.device_id;
         let group_jid = group_jid.to_string();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::delete(
-                skdm_recipients::table
-                    .filter(skdm_recipients::group_jid.eq(&group_jid))
-                    .filter(skdm_recipients::device_id.eq(device_id)),
-            )
-            .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
+        self.with_retry("clear_sender_key_devices", || {
+            let group_jid = group_jid.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::delete(
+                    sender_key_devices::table
+                        .filter(sender_key_devices::group_jid.eq(&group_jid))
+                        .filter(sender_key_devices::device_id.eq(device_id)),
+                )
+                .execute(conn)?;
+                Ok(())
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
+    }
+
+    async fn clear_all_sender_key_devices(&self) -> Result<()> {
+        let device_id = self.device_id;
+        self.with_retry("clear_all_sender_key_devices", || {
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::delete(
+                    sender_key_devices::table.filter(sender_key_devices::device_id.eq(device_id)),
+                )
+                .execute(conn)?;
+                Ok(())
+            })
+        })
+        .await
     }
 
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>> {
@@ -1491,36 +1887,46 @@ impl ProtocolStore for SqliteStore {
     }
 
     async fn put_lid_mapping(&self, entry: &LidPnMappingEntry) -> Result<()> {
-        let pool = self.pool.clone();
+        self.put_lid_mappings(std::slice::from_ref(entry)).await
+    }
+
+    async fn put_lid_mappings(&self, entries: &[LidPnMappingEntry]) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
         let device_id = self.device_id;
-        let entry = entry.clone();
-        tokio::task::spawn_blocking(move || -> Result<()> {
-            let mut conn = pool
-                .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(lid_pn_mapping::table)
-                .values((
-                    lid_pn_mapping::lid.eq(&entry.lid),
-                    lid_pn_mapping::phone_number.eq(&entry.phone_number),
-                    lid_pn_mapping::created_at.eq(entry.created_at),
-                    lid_pn_mapping::learning_source.eq(&entry.learning_source),
-                    lid_pn_mapping::updated_at.eq(entry.updated_at),
-                    lid_pn_mapping::device_id.eq(device_id),
-                ))
-                .on_conflict((lid_pn_mapping::lid, lid_pn_mapping::device_id))
-                .do_update()
-                .set((
-                    lid_pn_mapping::phone_number.eq(&entry.phone_number),
-                    lid_pn_mapping::learning_source.eq(&entry.learning_source),
-                    lid_pn_mapping::updated_at.eq(entry.updated_at),
-                ))
-                .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(())
+        // Share the batch across retry attempts via Arc so no retry re-clones
+        // the Vec. `with_retry` invokes `make_op` once per attempt; we only
+        // bump the Arc refcount.
+        let entries: std::sync::Arc<Vec<LidPnMappingEntry>> = std::sync::Arc::new(entries.to_vec());
+        self.with_retry("put_lid_mappings", move || {
+            let entries = std::sync::Arc::clone(&entries);
+            Box::new(move |conn: &mut SqliteConnection| {
+                conn.transaction::<_, DieselError, _>(|conn| {
+                    for entry in entries.iter() {
+                        diesel::insert_into(lid_pn_mapping::table)
+                            .values((
+                                lid_pn_mapping::lid.eq(&entry.lid),
+                                lid_pn_mapping::phone_number.eq(&entry.phone_number),
+                                lid_pn_mapping::created_at.eq(entry.created_at),
+                                lid_pn_mapping::learning_source.eq(&entry.learning_source),
+                                lid_pn_mapping::updated_at.eq(entry.updated_at),
+                                lid_pn_mapping::device_id.eq(device_id),
+                            ))
+                            .on_conflict((lid_pn_mapping::lid, lid_pn_mapping::device_id))
+                            .do_update()
+                            .set((
+                                lid_pn_mapping::phone_number.eq(&entry.phone_number),
+                                lid_pn_mapping::learning_source.eq(&entry.learning_source),
+                                lid_pn_mapping::updated_at.eq(entry.updated_at),
+                            ))
+                            .execute(conn)?;
+                    }
+                    Ok(())
+                })
+            })
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
-        Ok(())
     }
 
     async fn get_all_lid_mappings(&self) -> Result<Vec<LidPnMappingEntry>> {
@@ -1664,6 +2070,7 @@ impl ProtocolStore for SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let raw_id_i32 = record.raw_id.map(|r| r as i32);
             diesel::insert_into(device_registry::table)
                 .values((
                     device_registry::user_id.eq(&record.user),
@@ -1672,6 +2079,7 @@ impl ProtocolStore for SqliteStore {
                     device_registry::phash.eq(&record.phash),
                     device_registry::device_id.eq(device_id),
                     device_registry::updated_at.eq(now),
+                    device_registry::raw_id.eq(raw_id_i32),
                 ))
                 .on_conflict((device_registry::user_id, device_registry::device_id))
                 .do_update()
@@ -1680,6 +2088,7 @@ impl ProtocolStore for SqliteStore {
                     device_registry::timestamp.eq(record.timestamp as i32),
                     device_registry::phash.eq(&record.phash),
                     device_registry::updated_at.eq(now),
+                    device_registry::raw_id.eq(raw_id_i32),
                 ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
@@ -1698,20 +2107,22 @@ impl ProtocolStore for SqliteStore {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let row: Option<(String, String, i32, Option<String>)> = device_registry::table
-                .select((
-                    device_registry::user_id,
-                    device_registry::devices_json,
-                    device_registry::timestamp,
-                    device_registry::phash,
-                ))
-                .filter(device_registry::user_id.eq(&user))
-                .filter(device_registry::device_id.eq(device_id))
-                .first(&mut conn)
-                .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+            let row: Option<(String, String, i32, Option<String>, Option<i32>)> =
+                device_registry::table
+                    .select((
+                        device_registry::user_id,
+                        device_registry::devices_json,
+                        device_registry::timestamp,
+                        device_registry::phash,
+                        device_registry::raw_id,
+                    ))
+                    .filter(device_registry::user_id.eq(&user))
+                    .filter(device_registry::device_id.eq(device_id))
+                    .first(&mut conn)
+                    .optional()
+                    .map_err(|e| StoreError::Database(e.to_string()))?;
             match row {
-                Some((user, devices_json, timestamp, phash)) => {
+                Some((user, devices_json, timestamp, phash, raw_id)) => {
                     let devices: Vec<DeviceInfo> = serde_json::from_str(&devices_json)
                         .map_err(|e| StoreError::Serialization(e.to_string()))?;
                     Ok(Some(DeviceListRecord {
@@ -1719,6 +2130,7 @@ impl ProtocolStore for SqliteStore {
                         devices,
                         timestamp: timestamp as i64,
                         phash,
+                        raw_id: raw_id.map(|r| r as u32),
                     }))
                 }
                 None => Ok(None),
@@ -1728,33 +2140,89 @@ impl ProtocolStore for SqliteStore {
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 
-    async fn mark_forget_sender_key(&self, group_jid: &str, participant: &str) -> Result<()> {
+    async fn delete_devices(&self, user: &str) -> Result<()> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
-        let group_jid = group_jid.to_string();
-        let participant = participant.to_string();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i32;
+        let user = user.to_string();
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            diesel::insert_into(sender_key_status::table)
+            diesel::delete(
+                device_registry::table
+                    .filter(device_registry::user_id.eq(&user))
+                    .filter(device_registry::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn get_tc_token(&self, jid: &str) -> Result<Option<TcTokenEntry>> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let jid = jid.to_string();
+        tokio::task::spawn_blocking(move || -> Result<Option<TcTokenEntry>> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let row: Option<(Vec<u8>, i64, Option<i64>)> = tc_tokens::table
+                .select((
+                    tc_tokens::token,
+                    tc_tokens::token_timestamp,
+                    tc_tokens::sender_timestamp,
+                ))
+                .filter(tc_tokens::jid.eq(&jid))
+                .filter(tc_tokens::device_id.eq(device_id))
+                .first(&mut conn)
+                .optional()
+                .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(
+                row.map(|(token, token_timestamp, sender_timestamp)| TcTokenEntry {
+                    token,
+                    token_timestamp,
+                    sender_timestamp,
+                }),
+            )
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn put_tc_token(&self, jid: &str, entry: &TcTokenEntry) -> Result<()> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        let jid = jid.to_string();
+        let entry = entry.clone();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::insert_into(tc_tokens::table)
                 .values((
-                    sender_key_status::group_jid.eq(&group_jid),
-                    sender_key_status::participant.eq(&participant),
-                    sender_key_status::device_id.eq(device_id),
-                    sender_key_status::marked_at.eq(now),
+                    tc_tokens::jid.eq(&jid),
+                    tc_tokens::token.eq(&entry.token),
+                    tc_tokens::token_timestamp.eq(entry.token_timestamp),
+                    tc_tokens::sender_timestamp.eq(entry.sender_timestamp),
+                    tc_tokens::device_id.eq(device_id),
+                    tc_tokens::updated_at.eq(now),
                 ))
-                .on_conflict((
-                    sender_key_status::group_jid,
-                    sender_key_status::participant,
-                    sender_key_status::device_id,
-                ))
+                .on_conflict((tc_tokens::jid, tc_tokens::device_id))
                 .do_update()
-                .set(sender_key_status::marked_at.eq(now))
+                .set((
+                    tc_tokens::token.eq(&entry.token),
+                    tc_tokens::token_timestamp.eq(entry.token_timestamp),
+                    tc_tokens::sender_timestamp.eq(entry.sender_timestamp),
+                    tc_tokens::updated_at.eq(now),
+                ))
                 .execute(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
             Ok(())
@@ -1764,35 +2232,152 @@ impl ProtocolStore for SqliteStore {
         Ok(())
     }
 
-    async fn consume_forget_marks(&self, group_jid: &str) -> Result<Vec<String>> {
+    async fn delete_tc_token(&self, jid: &str) -> Result<()> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
-        let group_jid = group_jid.to_string();
+        let jid = jid.to_string();
+        tokio::task::spawn_blocking(move || -> Result<()> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            diesel::delete(
+                tc_tokens::table
+                    .filter(tc_tokens::jid.eq(&jid))
+                    .filter(tc_tokens::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))??;
+        Ok(())
+    }
+
+    async fn get_all_tc_token_jids(&self) -> Result<Vec<String>> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
         tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
             let mut conn = pool
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
-            let participants: Vec<String> = sender_key_status::table
-                .select(sender_key_status::participant)
-                .filter(sender_key_status::group_jid.eq(&group_jid))
-                .filter(sender_key_status::device_id.eq(device_id))
+            let jids: Vec<String> = tc_tokens::table
+                .select(tc_tokens::jid)
+                .filter(tc_tokens::device_id.eq(device_id))
                 .load(&mut conn)
                 .map_err(|e| StoreError::Database(e.to_string()))?;
-            diesel::delete(
-                sender_key_status::table
-                    .filter(sender_key_status::group_jid.eq(&group_jid))
-                    .filter(sender_key_status::device_id.eq(device_id)),
+            Ok(jids)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        tokio::task::spawn_blocking(move || -> Result<u32> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let deleted = diesel::delete(
+                tc_tokens::table
+                    .filter(tc_tokens::token_timestamp.lt(cutoff_timestamp))
+                    .filter(tc_tokens::device_id.eq(device_id)),
             )
             .execute(&mut conn)
             .map_err(|e| StoreError::Database(e.to_string()))?;
-            Ok(participants)
+            Ok(deleted as u32)
+        })
+        .await
+        .map_err(|e| StoreError::Database(e.to_string()))?
+    }
+
+    async fn store_sent_message(
+        &self,
+        chat_jid: &str,
+        message_id: &str,
+        payload: &[u8],
+    ) -> Result<()> {
+        let chat_jid = chat_jid.to_string();
+        let message_id = message_id.to_string();
+        // Arc avoids cloning the full payload bytes on each retry iteration
+        let payload: Arc<Vec<u8>> = Arc::new(payload.to_vec());
+        let device_id = self.device_id;
+        self.with_retry("store_sent_message", || {
+            let chat_jid = chat_jid.clone();
+            let message_id = message_id.clone();
+            let payload = Arc::clone(&payload);
+            Box::new(move |conn: &mut SqliteConnection| {
+                diesel::replace_into(sent_messages::table)
+                    .values((
+                        sent_messages::chat_jid.eq(&chat_jid),
+                        sent_messages::message_id.eq(&message_id),
+                        sent_messages::payload.eq(payload.as_slice()),
+                        sent_messages::device_id.eq(device_id),
+                    ))
+                    .execute(conn)?;
+                Ok(())
+            })
+        })
+        .await
+    }
+
+    async fn take_sent_message(&self, chat_jid: &str, message_id: &str) -> Result<Option<Vec<u8>>> {
+        let chat_jid = chat_jid.to_string();
+        let message_id = message_id.to_string();
+        let device_id = self.device_id;
+        // Atomic SELECT+DELETE with retry for SQLITE_BUSY resilience.
+        self.with_retry("take_sent_message", || {
+            let chat_jid = chat_jid.clone();
+            let message_id = message_id.clone();
+            Box::new(move |conn: &mut SqliteConnection| {
+                conn.immediate_transaction(|conn| {
+                    let row: Option<Vec<u8>> = sent_messages::table
+                        .select(sent_messages::payload)
+                        .filter(sent_messages::chat_jid.eq(&chat_jid))
+                        .filter(sent_messages::message_id.eq(&message_id))
+                        .filter(sent_messages::device_id.eq(device_id))
+                        .first(conn)
+                        .optional()?;
+                    if row.is_some() {
+                        diesel::delete(
+                            sent_messages::table
+                                .filter(sent_messages::chat_jid.eq(&chat_jid))
+                                .filter(sent_messages::message_id.eq(&message_id))
+                                .filter(sent_messages::device_id.eq(device_id)),
+                        )
+                        .execute(conn)?;
+                    }
+                    Ok(row)
+                })
+            })
+        })
+        .await
+    }
+
+    async fn delete_expired_sent_messages(&self, cutoff_timestamp: i64) -> Result<u32> {
+        let pool = self.pool.clone();
+        let device_id = self.device_id;
+        tokio::task::spawn_blocking(move || -> Result<u32> {
+            let mut conn = pool
+                .get()
+                .map_err(|e| StoreError::Connection(e.to_string()))?;
+            let deleted = diesel::delete(
+                sent_messages::table
+                    .filter(sent_messages::created_at.lt(cutoff_timestamp))
+                    .filter(sent_messages::device_id.eq(device_id)),
+            )
+            .execute(&mut conn)
+            .map_err(|e| StoreError::Database(e.to_string()))?;
+            Ok(deleted as u32)
         })
         .await
         .map_err(|e| StoreError::Database(e.to_string()))?
     }
 }
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl DeviceStore for SqliteStore {
     async fn save(&self, device: &CoreDevice) -> Result<()> {
         SqliteStore::save_device_data_for_device(self, self.device_id, device).await
@@ -1898,12 +2483,15 @@ mod tests {
     use super::*;
 
     async fn create_test_store() -> SqliteStore {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let db_name = format!("file:memdb_test_{}?mode=memory&cache=shared", timestamp);
+        use portable_atomic::AtomicU64;
+        use std::sync::atomic::Ordering;
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let db_name = format!(
+            "file:memdb_test_{}_{}?mode=memory&cache=shared",
+            std::process::id(),
+            id
+        );
         SqliteStore::new(&db_name)
             .await
             .expect("Failed to create test store")
@@ -1976,6 +2564,7 @@ mod tests {
             ],
             timestamp: 1234567890,
             phash: Some("2:abcdef".to_string()),
+            raw_id: None,
         };
 
         store.update_device_list(record).await.expect("save failed");
@@ -2005,6 +2594,7 @@ mod tests {
             }],
             timestamp: 1000,
             phash: Some("2:old".to_string()),
+            raw_id: None,
         };
         store
             .update_device_list(record1)
@@ -2025,6 +2615,7 @@ mod tests {
             ],
             timestamp: 2000,
             phash: Some("2:new".to_string()),
+            raw_id: None,
         };
         store
             .update_device_list(record2)
@@ -2049,78 +2640,240 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sender_key_status_mark_and_consume() {
-        let store = create_test_store().await;
-
-        let group = "group123@g.us";
-        let participant = "user1@s.whatsapp.net";
-
-        store
-            .mark_forget_sender_key(group, participant)
-            .await
-            .expect("mark failed");
-
-        let consumed = store
-            .consume_forget_marks(group)
-            .await
-            .expect("consume failed");
-        assert_eq!(consumed.len(), 1);
-        assert!(consumed.contains(&participant.to_string()));
-
-        let consumed = store
-            .consume_forget_marks(group)
-            .await
-            .expect("consume failed");
-        assert!(consumed.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_sender_key_status_consume_multiple() {
+    async fn test_sender_key_devices_set_and_get() {
         let store = create_test_store().await;
 
         let group = "group123@g.us";
 
+        // Set two devices: one has key, one needs SKDM
         store
-            .mark_forget_sender_key(group, "user1@s.whatsapp.net")
+            .set_sender_key_status(group, &[("user1:5@lid", true), ("user2:3@lid", false)])
             .await
-            .expect("mark failed");
-        store
-            .mark_forget_sender_key(group, "user2@s.whatsapp.net")
-            .await
-            .expect("mark failed");
+            .expect("set failed");
 
-        let consumed = store
-            .consume_forget_marks(group)
+        let devices = store
+            .get_sender_key_devices(group)
             .await
-            .expect("consume failed");
-        assert_eq!(consumed.len(), 2);
-        assert!(consumed.contains(&"user1@s.whatsapp.net".to_string()));
-        assert!(consumed.contains(&"user2@s.whatsapp.net".to_string()));
-
-        let consumed = store
-            .consume_forget_marks(group)
-            .await
-            .expect("consume failed");
-        assert!(consumed.is_empty());
+            .expect("get failed");
+        assert_eq!(devices.len(), 2);
+        assert!(devices.contains(&("user1:5@lid".to_string(), true)));
+        assert!(devices.contains(&("user2:3@lid".to_string(), false)));
     }
 
     #[tokio::test]
-    async fn test_sender_key_status_different_groups() {
+    async fn test_sender_key_devices_upsert_overwrites() {
+        let store = create_test_store().await;
+
+        let group = "group123@g.us";
+
+        // Initially mark as needing SKDM
+        store
+            .set_sender_key_status(group, &[("user1:5@lid", false)])
+            .await
+            .expect("set failed");
+
+        // Then mark as having key (simulates successful SKDM delivery)
+        store
+            .set_sender_key_status(group, &[("user1:5@lid", true)])
+            .await
+            .expect("set failed");
+
+        let devices = store
+            .get_sender_key_devices(group)
+            .await
+            .expect("get failed");
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0], ("user1:5@lid".to_string(), true));
+    }
+
+    #[tokio::test]
+    async fn test_sender_key_devices_clear() {
+        let store = create_test_store().await;
+
+        let group = "group123@g.us";
+
+        store
+            .set_sender_key_status(group, &[("user1:5@lid", true), ("user2:3@lid", true)])
+            .await
+            .expect("set failed");
+
+        store
+            .clear_sender_key_devices(group)
+            .await
+            .expect("clear failed");
+
+        let devices = store
+            .get_sender_key_devices(group)
+            .await
+            .expect("get failed");
+        assert!(devices.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_put_and_get() {
+        let store = create_test_store().await;
+
+        let entry = TcTokenEntry {
+            token: vec![1, 2, 3, 4, 5],
+            token_timestamp: 1707000000,
+            sender_timestamp: Some(1707000100),
+        };
+
+        store
+            .put_tc_token("user@lid", &entry)
+            .await
+            .expect("put failed");
+
+        let loaded = store
+            .get_tc_token("user@lid")
+            .await
+            .expect("get failed")
+            .expect("should exist");
+
+        assert_eq!(loaded.token, vec![1, 2, 3, 4, 5]);
+        assert_eq!(loaded.token_timestamp, 1707000000);
+        assert_eq!(loaded.sender_timestamp, Some(1707000100));
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_upsert() {
+        let store = create_test_store().await;
+
+        let entry1 = TcTokenEntry {
+            token: vec![1, 2, 3],
+            token_timestamp: 1000,
+            sender_timestamp: None,
+        };
+        store.put_tc_token("user@lid", &entry1).await.unwrap();
+
+        let entry2 = TcTokenEntry {
+            token: vec![4, 5, 6],
+            token_timestamp: 2000,
+            sender_timestamp: Some(1500),
+        };
+        store.put_tc_token("user@lid", &entry2).await.unwrap();
+
+        let loaded = store.get_tc_token("user@lid").await.unwrap().unwrap();
+        assert_eq!(loaded.token, vec![4, 5, 6]);
+        assert_eq!(loaded.token_timestamp, 2000);
+        assert_eq!(loaded.sender_timestamp, Some(1500));
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_delete() {
+        let store = create_test_store().await;
+
+        let entry = TcTokenEntry {
+            token: vec![1, 2, 3],
+            token_timestamp: 1000,
+            sender_timestamp: None,
+        };
+        store.put_tc_token("user@lid", &entry).await.unwrap();
+        store.delete_tc_token("user@lid").await.unwrap();
+
+        let result = store.get_tc_token("user@lid").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_get_all_jids() {
+        let store = create_test_store().await;
+
+        let entry = TcTokenEntry {
+            token: vec![1],
+            token_timestamp: 1000,
+            sender_timestamp: None,
+        };
+        store.put_tc_token("user1@lid", &entry).await.unwrap();
+        store.put_tc_token("user2@lid", &entry).await.unwrap();
+        store.put_tc_token("user3@lid", &entry).await.unwrap();
+
+        let mut jids = store.get_all_tc_token_jids().await.unwrap();
+        jids.sort();
+        assert_eq!(jids, vec!["user1@lid", "user2@lid", "user3@lid"]);
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_delete_expired() {
+        let store = create_test_store().await;
+
+        let old = TcTokenEntry {
+            token: vec![1],
+            token_timestamp: 1000,
+            sender_timestamp: None,
+        };
+        let recent = TcTokenEntry {
+            token: vec![2],
+            token_timestamp: 5000,
+            sender_timestamp: None,
+        };
+        store.put_tc_token("old@lid", &old).await.unwrap();
+        store.put_tc_token("recent@lid", &recent).await.unwrap();
+
+        let deleted = store.delete_expired_tc_tokens(3000).await.unwrap();
+        assert_eq!(deleted, 1);
+
+        assert!(store.get_tc_token("old@lid").await.unwrap().is_none());
+        assert!(store.get_tc_token("recent@lid").await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_tc_token_get_nonexistent() {
+        let store = create_test_store().await;
+        let result = store.get_tc_token("nonexistent@lid").await.unwrap();
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_sender_key_devices_different_groups() {
         let store = create_test_store().await;
 
         let group1 = "group1@g.us";
         let group2 = "group2@g.us";
-        let participant = "user@s.whatsapp.net";
 
         store
-            .mark_forget_sender_key(group1, participant)
+            .set_sender_key_status(group1, &[("user:5@lid", true)])
             .await
-            .expect("mark failed");
+            .expect("set failed");
 
-        let consumed = store.consume_forget_marks(group1).await.unwrap();
-        assert_eq!(consumed.len(), 1);
+        let g1 = store.get_sender_key_devices(group1).await.unwrap();
+        assert_eq!(g1.len(), 1);
 
-        let consumed = store.consume_forget_marks(group2).await.unwrap();
-        assert!(consumed.is_empty());
+        let g2 = store.get_sender_key_devices(group2).await.unwrap();
+        assert!(g2.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_create_new_device_uses_configured_device_id() {
+        use portable_atomic::AtomicU64;
+        use std::sync::atomic::Ordering;
+        static COUNTER: AtomicU64 = AtomicU64::new(100);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let db_name = format!(
+            "file:memdb_devid_{}_{}?mode=memory&cache=shared",
+            std::process::id(),
+            id
+        );
+
+        let device_id = 42;
+        let store = SqliteStore::new_for_device(&db_name, device_id)
+            .await
+            .expect("Failed to create test store");
+
+        assert!(!store.device_exists(device_id).await.unwrap());
+        let returned_id = store.create_new_device().await.unwrap();
+        assert_eq!(returned_id, device_id);
+        assert!(store.device_exists(device_id).await.unwrap());
+
+        // Row 1 should NOT exist (would if auto-increment was used)
+        if device_id != 1 {
+            assert!(!store.device_exists(1).await.unwrap());
+        }
+
+        let loaded = store.load_device_data_for_device(device_id).await.unwrap();
+        assert!(
+            loaded.is_some(),
+            "device data should be loadable by configured id"
+        );
     }
 }

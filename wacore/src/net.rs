@@ -20,17 +20,19 @@ pub enum TransportEvent {
 
 /// Represents an active network connection.
 /// The transport is a dumb pipe for bytes with no knowledge of WhatsApp framing.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait Transport: Send + Sync {
     /// Sends raw data to the server.
-    async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error>;
+    async fn send(&self, data: Bytes) -> Result<(), anyhow::Error>;
 
     /// Closes the connection.
     async fn disconnect(&self);
 }
 
 /// A factory responsible for creating new transport instances.
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait TransportFactory: Send + Sync {
     /// Creates a new transport and returns it, along with a stream of events.
     async fn create_transport(
@@ -98,16 +100,19 @@ pub struct StreamingHttpResponse {
 }
 
 /// Trait for executing HTTP requests in a runtime-agnostic way
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait HttpClient: Send + Sync {
     /// Executes a given HTTP request and returns the response.
     async fn execute(&self, request: HttpRequest) -> Result<HttpResponse>;
 
-    /// Synchronous streaming variant. Returns a reader over the response body
-    /// instead of buffering it all in memory.
-    ///
-    /// Must be called from a blocking context (e.g. inside `spawn_blocking`).
-    /// Override to enable streaming downloads.
+    /// Whether this client supports synchronous streaming downloads.
+    fn supports_streaming(&self) -> bool {
+        false
+    }
+
+    /// Synchronous streaming variant — returns a reader over the response body.
+    /// Must be called from a blocking context.
     fn execute_streaming(&self, _request: HttpRequest) -> Result<StreamingHttpResponse> {
         Err(anyhow::anyhow!(
             "Streaming not supported by this HTTP client"

@@ -6,8 +6,6 @@ pub enum AppStateError {
     MissingPreviousSetValueOperation,
     #[error("mismatching LTHash")]
     MismatchingLTHash,
-    #[error("mismatching patch MAC")]
-    MismatchingPatchMAC,
     #[error("mismatching content MAC")]
     MismatchingContentMAC,
     #[error("mismatching index MAC")]
@@ -32,6 +30,8 @@ pub enum AppStateError {
     PatchSnapshotMACMismatch,
     #[error("patch MAC mismatch")]
     PatchMACMismatch,
+    #[error("patch version mismatch: expected {expected}, got {got}")]
+    PatchVersionMismatch { expected: u64, got: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, AppStateError>;

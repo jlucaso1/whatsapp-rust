@@ -22,8 +22,19 @@ const ALTERNATE_IDENTITY_SIGNATURE_PREFIX_2: &[u8] = b"Signal_PNI_Signature";
 ///
 /// Wrapper for [`PublicKey`].
 #[derive(
-    Debug, PartialOrd, Ord, PartialEq, Eq, Clone, Copy, derive_more::From, derive_more::Into,
+    Debug,
+    PartialOrd,
+    Ord,
+    PartialEq,
+    Eq,
+    Clone,
+    Copy,
+    derive_more::From,
+    derive_more::Into,
+    serde::Serialize,
+    serde::Deserialize,
 )]
+#[serde(transparent)]
 pub struct IdentityKey {
     public_key: PublicKey,
 }
@@ -79,7 +90,7 @@ impl TryFrom<&[u8]> for IdentityKey {
 /// The private identity of a user.
 ///
 /// Can be converted to and from [`KeyPair`].
-#[derive(Clone)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct IdentityKeyPair {
     identity_key: IdentityKey,
     private_key: PrivateKey,

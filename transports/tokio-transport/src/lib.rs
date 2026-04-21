@@ -1,25 +1,32 @@
-/// Tokio-based WebSocket transport implementation for whatsapp-rust
-///
-/// This crate provides a concrete implementation of the Transport trait
-/// using tokio-websockets. It handles raw byte transmission without any
-/// knowledge of WhatsApp framing.
+//! Tokio WebSocket transport for whatsapp-rust.
+//!
+//! For custom connections, use [`from_websocket`].
+
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use log::{debug, error, trace, warn};
 use std::sync::{Arc, Once};
-use tokio::net::TcpStream;
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::Mutex;
-use tokio_websockets::{ClientBuilder, Connector, MaybeTlsStream, Message, WebSocketStream};
+use tokio_websockets::{ClientBuilder, Message, WebSocketStream};
 use wacore::net::{Transport, TransportEvent, TransportFactory, WHATSAPP_WEB_WS_URL};
 
-/// Ensures the rustls crypto provider is only installed once
+pub use tokio_websockets::Connector;
+
+const EVENT_CHANNEL_CAPACITY: usize = 1_024;
+
 static CRYPTO_PROVIDER_INIT: Once = Once::new();
 
-/// Creates a TLS connector based on feature flags
-fn create_tls_connector() -> Connector {
-    // Install rustls crypto provider (only once)
+/// Returns the default TLS connector used by [`TokioWebSocketTransportFactory`].
+///
+/// Useful as a starting point when users need to inspect or replicate the
+/// default TLS configuration before customizing it via [`TokioWebSocketTransportFactory::with_connector`].
+///
+/// On first call, installs `ring` as the global rustls crypto provider
+/// (no-op if one is already installed).
+pub fn default_tls_connector() -> Connector {
     CRYPTO_PROVIDER_INIT.call_once(|| {
         let _ = rustls::crypto::ring::default_provider().install_default();
     });
@@ -29,9 +36,8 @@ fn create_tls_connector() -> Connector {
         use std::sync::Arc as StdArc;
         use tokio_rustls::TlsConnector;
 
-        warn!("TLS certificate verification is DISABLED - this is insecure!");
+        warn!("TLS certificate verification is DISABLED");
 
-        // Create a custom verifier that accepts any certificate
         #[derive(Debug)]
         struct NoVerifier;
 
@@ -88,8 +94,7 @@ fn create_tls_connector() -> Connector {
             .with_custom_certificate_verifier(StdArc::new(NoVerifier))
             .with_no_client_auth();
 
-        let tls_connector = TlsConnector::from(StdArc::new(config));
-        Connector::Rustls(tls_connector)
+        Connector::Rustls(TlsConnector::from(StdArc::new(config)))
     }
 
     #[cfg(not(feature = "danger-skip-tls-verify"))]
@@ -104,83 +109,148 @@ fn create_tls_connector() -> Connector {
             .with_root_certificates(root_store)
             .with_no_client_auth();
 
-        let tls_connector = TlsConnector::from(StdArc::new(config));
-        Connector::Rustls(tls_connector)
+        Connector::Rustls(TlsConnector::from(StdArc::new(config)))
     }
 }
 
-type RawWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
-type WsSink = SplitSink<RawWs, Message>;
-type WsStream = SplitStream<RawWs>;
+type Sink<S> = SplitSink<WebSocketStream<S>, Message>;
 
-/// Tokio-based WebSocket transport
-/// This is a simple byte pipe - it has no knowledge of WhatsApp framing.
-pub struct TokioWebSocketTransport {
-    ws_sink: Arc<Mutex<Option<WsSink>>>,
-    is_connected: Arc<Mutex<bool>>,
+struct WsTransport<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> {
+    sink: Arc<Mutex<Option<Sink<S>>>>,
+    shutdown_tx: tokio::sync::watch::Sender<bool>,
 }
 
-impl TokioWebSocketTransport {
-    /// Create a new transport instance
-    fn new(sink: WsSink) -> Self {
+impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> WsTransport<S> {
+    fn new(sink: Sink<S>, shutdown_tx: tokio::sync::watch::Sender<bool>) -> Self {
         Self {
-            ws_sink: Arc::new(Mutex::new(Some(sink))),
-            is_connected: Arc::new(Mutex::new(true)),
+            sink: Arc::new(Mutex::new(Some(sink))),
+            shutdown_tx,
         }
     }
 }
 
 #[async_trait]
-impl Transport for TokioWebSocketTransport {
-    /// Sends raw data through the WebSocket.
-    /// The caller is responsible for any framing.
-    async fn send(&self, data: Vec<u8>) -> Result<(), anyhow::Error> {
-        let mut sink_guard = self.ws_sink.lock().await;
-        let sink = sink_guard
+impl<S: AsyncRead + AsyncWrite + Unpin + Send + 'static> Transport for WsTransport<S> {
+    async fn send(&self, data: bytes::Bytes) -> Result<(), anyhow::Error> {
+        let mut guard = self.sink.lock().await;
+        let sink = guard
             .as_mut()
             .ok_or_else(|| anyhow::anyhow!("Socket is closed"))?;
-
         debug!("--> Sending {} bytes", data.len());
         sink.send(Message::binary(data))
             .await
-            .map_err(|e| anyhow::anyhow!("WebSocket send error: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("WebSocket send error: {e}"))?;
         Ok(())
     }
 
     async fn disconnect(&self) {
-        let mut sink_guard = self.ws_sink.lock().await;
-        if let Some(mut sink) = sink_guard.take() {
-            if let Err(e) = sink.close().await {
-                error!("Error closing WebSocket: {}", e);
-            }
-            // After awaiting the close, set is_connected to false
-            let mut is_connected_guard = self.is_connected.lock().await;
-            *is_connected_guard = false;
-        } else {
-            // If no sink, still ensure is_connected is false
-            let mut is_connected_guard = self.is_connected.lock().await;
-            if *is_connected_guard {
-                *is_connected_guard = false;
-            }
+        let _ = self.shutdown_tx.send(true);
+        if let Some(mut sink) = self.sink.lock().await.take() {
+            let _ = sink
+                .send(Message::close(
+                    Some(tokio_websockets::CloseCode::NORMAL_CLOSURE),
+                    "",
+                ))
+                .await;
         }
     }
 }
 
-/// Factory for creating Tokio WebSocket transports
+async fn read_pump<S: AsyncRead + AsyncWrite + Unpin + Send + 'static>(
+    mut stream: SplitStream<WebSocketStream<S>>,
+    tx: async_channel::Sender<TransportEvent>,
+    mut shutdown: tokio::sync::watch::Receiver<bool>,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.changed() => break,
+            next = stream.next() => match next {
+                Some(Ok(msg)) if msg.is_binary() => {
+                    let payload = msg.into_payload();
+                    debug!("<-- Received WebSocket data: {} bytes", payload.len());
+                    tokio::select! {
+                        biased;
+                        _ = shutdown.changed() => break,
+                        r = tx.send(TransportEvent::DataReceived(Bytes::from(payload))) => {
+                            if r.is_err() {
+                                warn!("Event receiver dropped");
+                                break;
+                            }
+                        }
+                    }
+                }
+                Some(Ok(msg)) if msg.is_close() => {
+                    trace!("Received close frame");
+                    break;
+                }
+                Some(Ok(_)) => {} // ping/pong/text handled by tokio-websockets
+                Some(Err(e)) => {
+                    error!("WebSocket read error: {e}");
+                    break;
+                }
+                None => {
+                    trace!("WebSocket stream ended");
+                    break;
+                }
+            },
+        }
+    }
+
+    let _ = tx.send(TransportEvent::Disconnected).await;
+}
+
+/// Wraps an already-upgraded [`WebSocketStream`] into a [`Transport`] + event channel.
+///
+/// Useful for custom connection strategies (e.g. IPv4 preference, TCP keepalive).
+pub fn from_websocket<S>(
+    ws: WebSocketStream<S>,
+) -> (Arc<dyn Transport>, async_channel::Receiver<TransportEvent>)
+where
+    S: AsyncRead + AsyncWrite + Send + Unpin + 'static,
+{
+    let (sink, stream) = ws.split();
+    let (event_tx, event_rx) = async_channel::bounded(EVENT_CHANNEL_CAPACITY);
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+
+    let transport = Arc::new(WsTransport::new(sink, shutdown_tx));
+
+    // Enqueue Connected before spawning so it precedes any DataReceived.
+    let _ = event_tx.try_send(TransportEvent::Connected);
+
+    tokio::task::spawn(read_pump(stream, event_tx, shutdown_rx));
+
+    (transport, event_rx)
+}
+
+/// Default [`TransportFactory`] using system DNS, TCP, and TLS.
+///
+/// For custom connection logic, use [`from_websocket`] directly.
 pub struct TokioWebSocketTransportFactory {
     url: String,
+    connector: Option<Connector>,
 }
 
 impl TokioWebSocketTransportFactory {
-    /// Create a new factory instance
     pub fn new() -> Self {
         Self {
             url: WHATSAPP_WEB_WS_URL.to_string(),
+            connector: None,
         }
     }
 
     pub fn with_url(mut self, url: impl Into<String>) -> Self {
         self.url = url.into();
+        self
+    }
+
+    /// Use a custom TLS [`Connector`] instead of the built-in default.
+    ///
+    /// This is the primary extension point for custom TLS configuration
+    /// (e.g. custom CA certificates, client certs). For full proxy support,
+    /// implement [`TransportFactory`] directly and use [`from_websocket`].
+    pub fn with_connector(mut self, connector: Connector) -> Self {
+        self.connector = Some(connector);
         self
     }
 }
@@ -196,72 +266,27 @@ impl TransportFactory for TokioWebSocketTransportFactory {
     async fn create_transport(
         &self,
     ) -> Result<(Arc<dyn Transport>, async_channel::Receiver<TransportEvent>), anyhow::Error> {
-        let connector = create_tls_connector();
-
-        let url = self.url.as_str();
-        debug!("Dialing {url}");
-        let uri: http::Uri = url
+        let uri: http::Uri = self
+            .url
             .parse()
-            .map_err(|e| anyhow::anyhow!("Failed to parse URL: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("Failed to parse URL: {e}"))?;
 
-        let (client, _response) = ClientBuilder::from_uri(uri)
-            .connector(&connector)
+        let default_connector;
+        let connector = match &self.connector {
+            Some(c) => c,
+            None => {
+                default_connector = default_tls_connector();
+                &default_connector
+            }
+        };
+
+        debug!("Dialing {}", self.url);
+        let (ws, _) = ClientBuilder::from_uri(uri)
+            .connector(connector)
             .connect()
             .await
-            .map_err(|e| anyhow::anyhow!("WebSocket connect failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("WebSocket connect failed: {e}"))?;
 
-        let (sink, stream) = client.split();
-
-        // Create event channel
-        let (event_tx, event_rx) = async_channel::bounded(10000);
-
-        // Create transport - just a simple byte pipe
-        let transport = Arc::new(TokioWebSocketTransport::new(sink));
-
-        // Spawn read pump task
-        let event_tx_clone = event_tx.clone();
-        tokio::task::spawn(read_pump(stream, event_tx_clone));
-
-        // Send connected event
-        let _ = event_tx.send(TransportEvent::Connected).await;
-
-        Ok((transport, event_rx))
+        Ok(from_websocket(ws))
     }
-}
-
-/// Reads from the WebSocket and forwards raw data to the event channel.
-/// No framing logic here - just passes bytes through.
-async fn read_pump(mut stream: WsStream, event_tx: async_channel::Sender<TransportEvent>) {
-    loop {
-        match stream.next().await {
-            Some(Ok(msg)) => {
-                if msg.is_binary() {
-                    let payload = msg.into_payload();
-                    debug!("<-- Received WebSocket data: {} bytes", payload.len());
-                    if event_tx
-                        .send(TransportEvent::DataReceived(Bytes::from(payload)))
-                        .await
-                        .is_err()
-                    {
-                        warn!("Event receiver dropped, closing read pump");
-                        break;
-                    }
-                } else if msg.is_close() {
-                    trace!("Received close frame");
-                    break;
-                }
-            }
-            Some(Err(e)) => {
-                error!("Error reading from websocket: {e}");
-                break;
-            }
-            None => {
-                trace!("Websocket stream ended");
-                break;
-            }
-        }
-    }
-
-    // Send disconnected event
-    let _ = event_tx.send(TransportEvent::Disconnected).await;
 }

@@ -1,14 +1,14 @@
 use crate::client::Client;
 use crate::lid_pn_cache::LearningSource;
 use crate::types::events::{Event, PairError, PairSuccess};
-use log::{error, info, warn};
+use log::{debug, error, info, warn};
 use prost::Message;
-use rand::TryRngCore;
+
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use wacore::libsignal::protocol::KeyPair;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::NodeRef;
+use wacore_binary::{Jid, SERVER_JID};
 use waproto::whatsapp as wa;
 
 pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
@@ -22,22 +22,20 @@ pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
     PairUtils::make_qr_data(&device_state, ref_str)
 }
 
-pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
+pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
     // Server JID is "s.whatsapp.net" (no @ prefix for server-only JIDs)
-    if !node
-        .attrs
-        .get("from")
-        .map(|from| from == SERVER_JID)
-        .unwrap_or(false)
+    if node
+        .get_attr("from")
+        .is_none_or(|v| v.as_str() != SERVER_JID)
     {
         return false;
     }
 
     if let Some(children) = node.children() {
         for child in children {
-            let handled = match child.tag.as_str() {
+            let handled = match child.tag.as_ref() {
                 "pair-device" => {
-                    if let Some(ack_node) = PairUtils::build_ack_node(node)
+                    if let Some(ack_node) = PairUtils::build_ack_node_ref(node)
                         && let Err(e) = client.send_node(ack_node).await
                     {
                         warn!("Failed to send acknowledgement: {e:?}");
@@ -53,53 +51,70 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
                     };
 
                     for grandchild in child.get_children_by_tag("ref") {
-                        if let Some(NodeContent::Bytes(bytes)) = &grandchild.content
-                            && let Ok(r) = String::from_utf8(bytes.clone())
+                        if let Some(bytes) = grandchild.content_bytes()
+                            && let Ok(r) = std::str::from_utf8(bytes)
                         {
-                            codes.push(PairUtils::make_qr_data(&device_state, r));
+                            codes.push(PairUtils::make_qr_data(&device_state, r.to_string()));
                         }
                     }
 
-                    let (stop_tx, stop_rx) = tokio::sync::watch::channel(());
+                    let (stop_tx, stop_rx) = async_channel::bounded::<()>(1);
                     let codes_clone = codes.clone();
                     let client_clone = client.clone();
 
-                    tokio::spawn(async move {
-                        // The rotation logic is now inside the library
-                        let mut is_first = true;
-                        let mut stop_rx_clone = stop_rx.clone();
+                    client
+                        .runtime
+                        .spawn(Box::pin(async move {
+                            let mut is_first = true;
 
-                        for code in codes_clone {
-                            let timeout = if is_first {
-                                is_first = false;
-                                std::time::Duration::from_secs(60)
-                            } else {
-                                std::time::Duration::from_secs(20)
-                            };
-
-                            // Dispatch the new, simple event for each code
-                            client_clone
-                                .core
-                                .event_bus
-                                .dispatch(&Event::PairingQrCode { code, timeout });
-
-                            // Wait for the timeout OR a stop signal
-                            tokio::select! {
-                                _ = tokio::time::sleep(timeout) => {}
-                                _ = stop_rx_clone.changed() => {
-                                    info!("Pairing complete. Stopping QR code rotation.");
+                            for code in codes_clone {
+                                // Guard: pairing may complete before this task gets polled
+                                // (single-threaded runtimes, fast auto-pair, mock servers)
+                                if client_clone.is_logged_in() {
+                                    info!("Already logged in, stopping QR rotation.");
                                     return;
                                 }
+
+                                let timeout = if is_first {
+                                    is_first = false;
+                                    std::time::Duration::from_secs(60)
+                                } else {
+                                    std::time::Duration::from_secs(20)
+                                };
+
+                                client_clone
+                                    .core
+                                    .event_bus
+                                    .dispatch(Event::PairingQrCode { code, timeout });
+
+                                let sleep = client_clone.runtime.sleep(timeout);
+                                let stop = stop_rx.recv();
+                                futures::pin_mut!(sleep);
+                                futures::pin_mut!(stop);
+                                match futures::future::select(sleep, stop).await {
+                                    futures::future::Either::Left(_) => {
+                                        if client_clone.is_logged_in() {
+                                            info!(
+                                                "Logged in during QR timeout, stopping rotation."
+                                            );
+                                            return;
+                                        }
+                                    }
+                                    futures::future::Either::Right(_) => {
+                                        info!("Pairing complete. Stopping QR code rotation.");
+                                        return;
+                                    }
+                                }
                             }
-                        }
-                        info!("All QR codes for this session have expired.");
-                        client_clone.disconnect().await;
-                    });
+
+                            if !client_clone.is_logged_in() {
+                                info!("All QR codes for this session have expired.");
+                                client_clone.disconnect().await;
+                            }
+                        }))
+                        .detach();
 
                     *client.pairing_cancellation_tx.lock().await = Some(stop_tx);
-
-                    // We no longer dispatch the raw Event::Qr
-                    // client.core.event_bus.dispatch(&Event::Qr(Qr { codes }));
                     true
                 }
                 "pair-success" => {
@@ -117,10 +132,16 @@ pub async fn handle_iq(client: &Arc<Client>, node: &Node) -> bool {
     false
 }
 
-async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_node: &Node) {
-    // Cancel QR code rotation if active
+async fn handle_pair_success<'a>(
+    client: &Arc<Client>,
+    request_node: &NodeRef<'a>,
+    success_node: &NodeRef<'a>,
+) {
     if let Some(tx) = client.pairing_cancellation_tx.lock().await.take() {
-        let _ = tx.send(());
+        let _ = tx.try_send(());
+        debug!("Sent QR rotation stop signal");
+    } else {
+        debug!("QR rotation channel not yet stored — is_logged_in guard will stop the task");
     }
 
     // Clear pair code state if active
@@ -128,20 +149,18 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
     client.update_server_time_offset(request_node);
 
-    let req_id = match request_node.attrs.get("id") {
-        Some(id) => id.to_string(),
+    let req_id = match request_node.get_attr("id").map(|v| v.as_str()) {
+        Some(id) => id.into_owned(),
         None => {
             error!("Received pair-success without request ID");
             return;
         }
     };
 
-    let device_identity_bytes = match success_node
-        .get_optional_child_by_tag(&["device-identity"])
-        .and_then(|n| n.content.as_ref())
-    {
-        Some(NodeContent::Bytes(b)) => b.clone(),
-        _ => {
+    let device_identity_node = success_node.get_optional_child_by_tag(&["device-identity"]);
+    let device_identity_bytes = match device_identity_node.and_then(|n| n.content_bytes()) {
+        Some(b) => b,
+        None => {
             let error_node = PairUtils::build_pair_error_node(&req_id, 500, "internal-error");
             if let Err(e) = client.send_node(error_node).await {
                 error!("Failed to send pair error node: {e}");
@@ -153,12 +172,20 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
 
     let business_name = success_node
         .get_optional_child_by_tag(&["biz"])
-        .map(|n| n.attrs().optional_string("name").unwrap_or("").to_string())
+        .map(|n| {
+            n.get_attr("name")
+                .map(|v| v.as_str().into_owned())
+                .unwrap_or_default()
+        })
         .unwrap_or_default();
 
     let platform = success_node
         .get_optional_child_by_tag(&["platform"])
-        .map(|n| n.attrs().optional_string("name").unwrap_or("").to_string())
+        .map(|n| {
+            n.get_attr("name")
+                .map(|v| v.as_str().into_owned())
+                .unwrap_or_default()
+        })
         .unwrap_or_default();
 
     // For jid and lid, parse them together to handle errors correctly
@@ -167,13 +194,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
         let mut parser = device_node.attrs();
         let parsed_jid = parser.optional_jid("jid").unwrap_or_default();
         let parsed_lid = parser.optional_jid("lid").unwrap_or_default();
-
-        if let Err(e) = parser.finish() {
-            warn!(target: "Client/Pair", "Error parsing device node attributes: {e:?}");
-            (Jid::default(), Jid::default())
-        } else {
-            (parsed_jid, parsed_lid)
-        }
+        (parsed_jid, parsed_lid)
     } else {
         (Jid::default(), Jid::default())
     };
@@ -185,7 +206,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
         adv_secret_key: device_snapshot.adv_secret_key,
     };
 
-    let result = PairUtils::do_pair_crypto(&device_state, &device_identity_bytes);
+    let result = PairUtils::do_pair_crypto(&device_state, device_identity_bytes);
 
     match result {
         Ok((self_signed_identity_bytes, key_index)) => {
@@ -197,7 +218,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
                     error!(
                         "FATAL: Failed to re-decode self-signed identity for event, pairing cannot complete: {e}"
                     );
-                    client.core.event_bus.dispatch(&Event::PairError(PairError {
+                    client.core.event_bus.dispatch(Event::PairError(PairError {
                         id: jid.clone(),
                         lid: lid.clone(),
                         business_name: business_name.clone(),
@@ -273,9 +294,12 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             }
 
             let client_for_unified = client.clone();
-            tokio::spawn(async move {
-                client_for_unified.send_unified_session().await;
-            });
+            client
+                .runtime
+                .spawn(Box::pin(async move {
+                    client_for_unified.send_unified_session().await;
+                }))
+                .detach();
 
             // --- START: FIX ---
             // Set the flag to trigger a full sync on the next successful connection.
@@ -297,7 +321,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             client
                 .core
                 .event_bus
-                .dispatch(&Event::PairSuccess(success_event));
+                .dispatch(Event::PairSuccess(success_event));
         }
         Err(e) => {
             error!("Pairing crypto failed: {e}");
@@ -316,7 +340,7 @@ async fn handle_pair_success(client: &Arc<Client>, request_node: &Node, success_
             client
                 .core
                 .event_bus
-                .dispatch(&Event::PairError(pair_error_event));
+                .dispatch(Event::PairError(pair_error_event));
         }
     }
 }
@@ -326,7 +350,7 @@ pub async fn pair_with_qr_code(client: &Arc<Client>, qr_code: &str) -> Result<()
 
     let (pairing_ref, dut_noise_pub, dut_identity_pub) = PairUtils::parse_qr_code(qr_code)?;
 
-    let master_ephemeral = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+    let master_ephemeral = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
 
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
     let device_state = DeviceState {

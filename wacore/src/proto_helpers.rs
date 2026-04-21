@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use wacore_binary::jid::{Jid, JidExt};
+use wacore_binary::{Jid, JidExt};
 use waproto::whatsapp as wa;
 
 /// Invokes a callback macro with the list of all message types that have `context_info`.
@@ -91,6 +91,9 @@ macro_rules! set_context_info_impl {
 pub trait MessageExt {
     /// Recursively unwraps ephemeral/view-once/document_with_caption/edited wrappers to get the core message.
     fn get_base_message(&self) -> &wa::Message;
+    /// Consuming version of [`get_base_message`]. Moves the innermost message out of
+    /// wrapper types (device_sent, ephemeral, view_once, etc.) without cloning.
+    fn into_base_message(self) -> wa::Message;
     fn is_ephemeral(&self) -> bool;
     fn is_view_once(&self) -> bool;
     /// Gets the caption for media messages (Image, Video, Document).
@@ -143,6 +146,14 @@ pub trait MessageExt {
     /// reply.set_context_info(context);
     /// ```
     fn set_context_info(&mut self, context: wa::ContextInfo) -> bool;
+
+    /// Reads `context_info.expiration` from the first message type that has it.
+    fn get_ephemeral_expiration(&self) -> Option<u32>;
+
+    /// Sets `context_info.expiration` on the first message type found.
+    /// Creates a default `context_info` if needed. Returns `false` for
+    /// bare `conversation` messages (use `ExtendedTextMessage` instead).
+    fn set_ephemeral_expiration(&mut self, expiration: u32) -> bool;
 }
 
 impl MessageExt for wa::Message {
@@ -193,6 +204,28 @@ impl MessageExt for wa::Message {
         current
     }
 
+    fn into_base_message(mut self) -> wa::Message {
+        macro_rules! peel_wrapper {
+            ($field:ident) => {
+                if let Some(mut wrapper) = self.$field.take() {
+                    if let Some(msg) = wrapper.message.take() {
+                        self = *msg;
+                    } else {
+                        self.$field = Some(wrapper);
+                    }
+                }
+            };
+        }
+
+        peel_wrapper!(device_sent_message);
+        peel_wrapper!(ephemeral_message);
+        peel_wrapper!(view_once_message);
+        peel_wrapper!(view_once_message_v2);
+        peel_wrapper!(document_with_caption_message);
+        peel_wrapper!(edited_message);
+        self
+    }
+
     fn is_ephemeral(&self) -> bool {
         self.ephemeral_message.is_some()
     }
@@ -238,6 +271,45 @@ impl MessageExt for wa::Message {
 
     fn set_context_info(&mut self, context: wa::ContextInfo) -> bool {
         set_context_info_on_message!(self, Box::new(context))
+    }
+
+    fn get_ephemeral_expiration(&self) -> Option<u32> {
+        macro_rules! check {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    if let Some(ref m) = self.$field {
+                        if let Some(ref ctx) = m.context_info {
+                            if let Some(exp) = ctx.expiration {
+                                if exp > 0 {
+                                    return Some(exp);
+                                }
+                            }
+                        }
+                    }
+                )+
+            };
+        }
+        with_context_info_fields!(check!());
+        None
+    }
+
+    fn set_ephemeral_expiration(&mut self, expiration: u32) -> bool {
+        if expiration == 0 {
+            return false;
+        }
+        macro_rules! try_set {
+            ($($field:ident),+ $(,)?) => {
+                $(
+                    if let Some(ref mut m) = self.$field {
+                        let ctx = m.context_info.get_or_insert_with(|| Box::new(wa::ContextInfo::default()));
+                        ctx.expiration = Some(expiration);
+                        return true;
+                    }
+                )+
+            };
+        }
+        with_context_info_fields!(try_set!());
+        false
     }
 }
 
@@ -300,6 +372,56 @@ pub(crate) fn strip_nested_context_info(msg: &mut wa::Message) {
     }
 }
 
+/// Merges `MessageContextInfo` from the outer and inner messages of a
+/// `DeviceSentMessage` wrapper, matching WhatsApp Web's
+/// `WAWebDeviceSentMessageProtoUtils.unwrapDeviceSentMessage` logic.
+///
+/// Merge strategy:
+/// - **Base**: all fields from `inner`
+/// - **`message_secret`**: inner, falling back to outer
+/// - **`message_association`**: inner, falling back to outer
+/// - **`limit_sharing_v2`**: always from outer (unconditional override)
+/// - **`thread_id`**: inner if non-empty, otherwise outer
+/// - **`bot_metadata`**: inner, falling back to outer
+pub fn merge_dsm_context(
+    inner: Option<wa::MessageContextInfo>,
+    outer: Option<&wa::MessageContextInfo>,
+) -> Option<wa::MessageContextInfo> {
+    match (inner, outer) {
+        (None, None) => None,
+        (Some(mut inner), None) => {
+            // limit_sharing_v2 always comes from outer; clear it when outer is absent
+            inner.limit_sharing_v2 = None;
+            Some(inner)
+        }
+        (None, Some(outer)) => Some(wa::MessageContextInfo {
+            message_secret: outer.message_secret.clone(),
+            message_association: outer.message_association.clone(),
+            limit_sharing_v2: outer.limit_sharing_v2,
+            thread_id: outer.thread_id.clone(),
+            bot_metadata: outer.bot_metadata.clone(),
+            ..Default::default()
+        }),
+        (Some(mut inner), Some(outer)) => {
+            if inner.message_secret.is_none() {
+                inner.message_secret = outer.message_secret.clone();
+            }
+            if inner.message_association.is_none() {
+                inner.message_association = outer.message_association.clone();
+            }
+            // limit_sharing_v2: always from outer (WA Web unconditionally overrides)
+            inner.limit_sharing_v2 = outer.limit_sharing_v2;
+            if inner.thread_id.is_empty() {
+                inner.thread_id = outer.thread_id.clone();
+            }
+            if inner.bot_metadata.is_none() {
+                inner.bot_metadata = outer.bot_metadata.clone();
+            }
+            Some(inner)
+        }
+    }
+}
+
 /// Builds a quote context for replying to a message.
 ///
 /// This is a standalone function that can be used without `MessageContext`,
@@ -343,44 +465,22 @@ pub fn build_quote_context(
     }
 }
 
-/// Builds a quote context with proper participant resolution for special message types.
+/// Builds a quote ContextInfo matching WA Web's EProtoGenerator + getQuotedParticipantForContextInfo.
 ///
-/// This matches WhatsApp Web's `getQuotedParticipantForContextInfo` (3JJWKHeu5-P.js:144304-144311)
-/// which resolves the participant based on message type:
-/// - Newsletter messages: uses the chat JID (the newsletter itself)
-/// - Group status messages: uses the sender (author field not available here)
-/// - Normal messages: uses the sender JID
-///
-/// # Arguments
-/// * `message_id` - The ID of the message being quoted
-/// * `sender_jid` - The JID of the sender of the message being quoted
-/// * `chat_jid` - The JID of the chat where the message was sent
-/// * `quoted_message` - The message being quoted
-///
-/// # Example
-///
-/// ```ignore
-/// use wacore::proto_helpers::{build_quote_context_with_info, MessageExt};
-///
-/// let context = build_quote_context_with_info(
-///     "3EB0123456789",
-///     &sender_jid,
-///     &chat_jid,
-///     &original_message,
-/// );
-/// ```
+/// Sets `remote_jid` (required by iOS to scope the quote) and resolves `participant`
+/// based on chat type (newsletter → channel JID, otherwise → sender JID).
 pub fn build_quote_context_with_info(
     message_id: impl Into<String>,
     sender_jid: &Jid,
     chat_jid: &Jid,
     quoted_message: &wa::Message,
 ) -> wa::ContextInfo {
-    // Match WhatsApp Web's participant resolution.
+    // WA Web always sets remoteJid to the chat JID (EProtoGenerator.js:108).
+    let remote_jid = chat_jid.to_string();
+
+    // Newsletter quotes use the channel JID as participant; others use the sender.
     let participant = if chat_jid.is_newsletter() {
-        chat_jid.to_string()
-    } else if chat_jid.is_status_broadcast() {
-        // Author isn't available here; fall back to sender.
-        sender_jid.to_string()
+        remote_jid.clone()
     } else {
         sender_jid.to_string()
     };
@@ -388,7 +488,36 @@ pub fn build_quote_context_with_info(
     wa::ContextInfo {
         stanza_id: Some(message_id.into()),
         participant: Some(participant),
+        remote_jid: Some(remote_jid),
         quoted_message: Some(quoted_message.prepare_for_quote()),
+        ..Default::default()
+    }
+}
+
+/// Wraps a media message as an album child (WA Web `EProtoGenerator` parity).
+/// Lifts `message_context_info` to the outer message and adds the album association.
+pub fn wrap_as_album_child(
+    mut inner_message: wa::Message,
+    parent_key: wa::MessageKey,
+) -> wa::Message {
+    let existing_context = inner_message.message_context_info.take();
+
+    // WA Web's outgoing association (ProtoUtils.js function m) only sets
+    // associationType + parentMessageKey, not messageIndex.
+    let association = wa::MessageAssociation {
+        association_type: Some(wa::message_association::AssociationType::MediaAlbum as i32),
+        parent_message_key: Some(parent_key),
+        message_index: None,
+    };
+
+    let mut outer_context = existing_context.unwrap_or_default();
+    outer_context.message_association = Some(association);
+
+    wa::Message {
+        associated_child_message: Some(Box::new(wa::message::FutureProofMessage {
+            message: Some(Box::new(inner_message)),
+        })),
+        message_context_info: Some(outer_context),
         ..Default::default()
     }
 }
@@ -1148,5 +1277,371 @@ mod tests {
             Some("123456@s.whatsapp.net"),
             "Status broadcast participant should fall back to sender"
         );
+    }
+
+    // ── into_base_message tests ──────────────────────────────────────────
+
+    /// Test: into_base_message unwraps DeviceSentMessage containing a reaction.
+    #[test]
+    fn test_into_base_message_unwraps_device_sent_reaction() {
+        let msg = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: Some(Box::new(wa::Message {
+                    reaction_message: Some(wa::message::ReactionMessage {
+                        text: Some("\u{2764}".to_string()),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                })),
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let unwrapped = msg.into_base_message();
+        assert!(
+            unwrapped.device_sent_message.is_none(),
+            "device_sent_message wrapper should be removed"
+        );
+        assert!(
+            unwrapped.reaction_message.is_some(),
+            "reaction_message should be accessible after unwrapping"
+        );
+        assert_eq!(
+            unwrapped.reaction_message.as_ref().unwrap().text.as_deref(),
+            Some("\u{2764}")
+        );
+    }
+
+    /// Test: into_base_message unwraps nested DSM + ephemeral wrappers.
+    #[test]
+    fn test_into_base_message_unwraps_nested_dsm_ephemeral() {
+        let msg = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: Some(Box::new(wa::Message {
+                    ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
+                        message: Some(Box::new(wa::Message {
+                            conversation: Some("secret".to_string()),
+                            ..Default::default()
+                        })),
+                    })),
+                    ..Default::default()
+                })),
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let unwrapped = msg.into_base_message();
+        assert_eq!(
+            unwrapped.conversation.as_deref(),
+            Some("secret"),
+            "should unwrap through DSM then ephemeral to reach conversation"
+        );
+    }
+
+    /// Test: into_base_message passes through a plain message unchanged.
+    #[test]
+    fn test_into_base_message_passthrough_plain() {
+        let msg = wa::Message {
+            conversation: Some("hello".to_string()),
+            ..Default::default()
+        };
+
+        let unwrapped = msg.into_base_message();
+        assert_eq!(unwrapped.conversation.as_deref(), Some("hello"));
+    }
+
+    /// Test: into_base_message handles DSM with no inner message.
+    #[test]
+    fn test_into_base_message_empty_dsm() {
+        let msg = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+                message: None,
+                phash: None,
+            })),
+            ..Default::default()
+        };
+
+        let unwrapped = msg.into_base_message();
+        // With no inner message the wrapper is preserved
+        assert!(
+            unwrapped.device_sent_message.is_some(),
+            "empty DSM wrapper should be preserved"
+        );
+        assert!(unwrapped.conversation.is_none());
+    }
+
+    // ── merge_dsm_context tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_merge_dsm_context_both_none() {
+        assert!(merge_dsm_context(None, None).is_none());
+    }
+
+    #[test]
+    fn test_merge_dsm_context_inner_only() {
+        let inner = wa::MessageContextInfo {
+            message_secret: Some(vec![1, 2, 3]),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner.clone()), None).unwrap();
+        assert_eq!(result.message_secret, Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn test_merge_dsm_context_outer_only() {
+        let outer = wa::MessageContextInfo {
+            message_secret: Some(vec![4, 5, 6]),
+            limit_sharing_v2: Some(wa::LimitSharing::default()),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(None, Some(&outer)).unwrap();
+        assert_eq!(
+            result.message_secret,
+            Some(vec![4, 5, 6]),
+            "message_secret should come from outer when inner is None"
+        );
+        assert!(
+            result.limit_sharing_v2.is_some(),
+            "limit_sharing_v2 should come from outer"
+        );
+    }
+
+    #[test]
+    fn test_merge_dsm_context_inner_preferred_for_secret() {
+        let inner = wa::MessageContextInfo {
+            message_secret: Some(vec![1, 2, 3]),
+            ..Default::default()
+        };
+        let outer = wa::MessageContextInfo {
+            message_secret: Some(vec![4, 5, 6]),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner), Some(&outer)).unwrap();
+        assert_eq!(
+            result.message_secret,
+            Some(vec![1, 2, 3]),
+            "inner message_secret should be preferred over outer"
+        );
+    }
+
+    #[test]
+    fn test_merge_dsm_context_secret_fallback_to_outer() {
+        let inner = wa::MessageContextInfo {
+            message_secret: None,
+            ..Default::default()
+        };
+        let outer = wa::MessageContextInfo {
+            message_secret: Some(vec![4, 5, 6]),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner), Some(&outer)).unwrap();
+        assert_eq!(
+            result.message_secret,
+            Some(vec![4, 5, 6]),
+            "should fall back to outer message_secret when inner is None"
+        );
+    }
+
+    #[test]
+    fn test_merge_dsm_context_limit_sharing_v2_always_outer() {
+        let inner_ls = wa::LimitSharing {
+            ..Default::default()
+        };
+        let outer_ls = wa::LimitSharing {
+            ..Default::default()
+        };
+        let inner = wa::MessageContextInfo {
+            limit_sharing_v2: Some(inner_ls),
+            ..Default::default()
+        };
+        let outer = wa::MessageContextInfo {
+            limit_sharing_v2: Some(outer_ls),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner), Some(&outer)).unwrap();
+        assert_eq!(
+            result.limit_sharing_v2,
+            Some(outer_ls),
+            "limit_sharing_v2 should always come from outer"
+        );
+
+        // When outer is None, inner's limit_sharing_v2 should be cleared
+        let inner_with_ls = wa::MessageContextInfo {
+            limit_sharing_v2: Some(wa::LimitSharing::default()),
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner_with_ls), None).unwrap();
+        assert_eq!(
+            result.limit_sharing_v2, None,
+            "limit_sharing_v2 should be cleared when outer is None"
+        );
+    }
+
+    #[test]
+    fn test_merge_dsm_context_thread_id_fallback() {
+        let outer = wa::MessageContextInfo {
+            thread_id: vec![wa::ThreadId::default()],
+            ..Default::default()
+        };
+        // Inner has empty thread_id → should fall back to outer
+        let inner_empty = wa::MessageContextInfo::default();
+        let result = merge_dsm_context(Some(inner_empty), Some(&outer)).unwrap();
+        assert_eq!(
+            result.thread_id.len(),
+            1,
+            "should fall back to outer thread_id when inner is empty"
+        );
+
+        // Inner has non-empty thread_id → should keep inner
+        let inner_filled = wa::MessageContextInfo {
+            thread_id: vec![wa::ThreadId::default(), wa::ThreadId::default()],
+            ..Default::default()
+        };
+        let result = merge_dsm_context(Some(inner_filled), Some(&outer)).unwrap();
+        assert_eq!(
+            result.thread_id.len(),
+            2,
+            "should keep inner thread_id when non-empty"
+        );
+    }
+
+    #[test]
+    fn quote_context_sets_remote_jid_for_group() {
+        let sender: Jid = "551199887766@s.whatsapp.net".parse().unwrap();
+        let group: Jid = "120363098765432100@g.us".parse().unwrap();
+        let msg = wa::Message {
+            conversation: Some("hello".into()),
+            ..Default::default()
+        };
+
+        let ctx = build_quote_context_with_info("msg-id-123", &sender, &group, &msg);
+
+        assert_eq!(ctx.stanza_id.as_deref(), Some("msg-id-123"));
+        assert_eq!(
+            ctx.participant.as_deref(),
+            Some("551199887766@s.whatsapp.net")
+        );
+        assert_eq!(ctx.remote_jid.as_deref(), Some("120363098765432100@g.us"));
+        assert!(ctx.quoted_message.is_some());
+        assert!(ctx.mentioned_jid.is_empty());
+    }
+
+    #[test]
+    fn quote_context_sets_remote_jid_for_dm() {
+        let sender: Jid = "551199887766@s.whatsapp.net".parse().unwrap();
+        let chat: Jid = "551199887766@s.whatsapp.net".parse().unwrap();
+        let msg = wa::Message {
+            conversation: Some("ping".into()),
+            ..Default::default()
+        };
+
+        let ctx = build_quote_context_with_info("msg-id-456", &sender, &chat, &msg);
+
+        assert_eq!(
+            ctx.remote_jid.as_deref(),
+            Some("551199887766@s.whatsapp.net")
+        );
+        assert_eq!(
+            ctx.participant.as_deref(),
+            Some("551199887766@s.whatsapp.net")
+        );
+    }
+
+    #[test]
+    fn quote_context_newsletter_uses_channel_as_participant() {
+        let sender: Jid = "551199887766@s.whatsapp.net".parse().unwrap();
+        let newsletter: Jid = "120363099999999999@newsletter".parse().unwrap();
+        let msg = wa::Message::default();
+
+        let ctx = build_quote_context_with_info("msg-id-789", &sender, &newsletter, &msg);
+
+        assert_eq!(
+            ctx.participant.as_deref(),
+            Some("120363099999999999@newsletter")
+        );
+        assert_eq!(
+            ctx.remote_jid.as_deref(),
+            Some("120363099999999999@newsletter")
+        );
+    }
+
+    #[test]
+    fn quote_context_strips_mentions_from_quoted_message() {
+        let sender: Jid = "551199887766@s.whatsapp.net".parse().unwrap();
+        let group: Jid = "120363098765432100@g.us".parse().unwrap();
+        let msg = create_message_with_mentions();
+
+        let ctx = build_quote_context_with_info("msg-id", &sender, &group, &msg);
+
+        // The quoted message's nested context_info should have mentions stripped
+        let quoted = ctx.quoted_message.unwrap();
+        let inner_ctx = quoted.extended_text_message.unwrap().context_info.unwrap();
+        assert!(inner_ctx.mentioned_jid.is_empty());
+        assert!(inner_ctx.group_mentions.is_empty());
+        // The outer context should have no mentions
+        assert!(ctx.mentioned_jid.is_empty());
+    }
+
+    fn sample_parent_key() -> wa::MessageKey {
+        wa::MessageKey {
+            remote_jid: Some("5511999999999@s.whatsapp.net".to_string()),
+            from_me: Some(true),
+            id: Some("PARENT_MSG_ID".to_string()),
+            participant: None,
+        }
+    }
+
+    #[test]
+    fn test_wrap_as_album_child_basic() {
+        let inner = wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage {
+                url: Some("https://mmg.whatsapp.net/test".to_string()),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+
+        let wrapped = wrap_as_album_child(inner, sample_parent_key());
+
+        let future_proof = wrapped.associated_child_message.as_ref().unwrap();
+        let inner_msg = future_proof.message.as_ref().unwrap();
+        assert!(inner_msg.image_message.is_some());
+        assert!(inner_msg.message_context_info.is_none());
+
+        let ctx = wrapped.message_context_info.as_ref().unwrap();
+        let assoc = ctx.message_association.as_ref().unwrap();
+        assert_eq!(
+            assoc.association_type,
+            Some(wa::message_association::AssociationType::MediaAlbum as i32)
+        );
+        assert_eq!(assoc.parent_message_key, Some(sample_parent_key()));
+        assert_eq!(assoc.message_index, None);
+    }
+
+    #[test]
+    fn test_wrap_as_album_child_lifts_existing_context() {
+        let secret = vec![1u8; 32];
+        let inner = wa::Message {
+            video_message: Some(Box::new(wa::message::VideoMessage {
+                url: Some("https://mmg.whatsapp.net/vid".to_string()),
+                ..Default::default()
+            })),
+            message_context_info: Some(wa::MessageContextInfo {
+                message_secret: Some(secret.clone()),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        let wrapped = wrap_as_album_child(inner, sample_parent_key());
+
+        let ctx = wrapped.message_context_info.as_ref().unwrap();
+        assert_eq!(ctx.message_secret.as_deref(), Some(secret.as_slice()));
+        assert!(ctx.message_association.is_some());
     }
 }

@@ -177,7 +177,22 @@ where
     let original_hash_is_empty = state.hash == [0u8; 128];
     let had_no_prior_state = original_version == 0 && original_hash_is_empty;
 
-    state.version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+    let patch_version = patch.version.as_ref().and_then(|v| v.version).unwrap_or(0);
+
+    // WA Web: validatePatchVersion — strict monotonic version check.
+    // Patch version must be exactly local_version + 1.  If not, WA Web throws
+    // "syncd-version-check-error-local-version-{greater|less}-than-expected".
+    // Skip this check when we have no prior state (version=0, empty hash),
+    // since we don't have a baseline to validate against.
+    let expected_version = original_version.saturating_add(1);
+    if !had_no_prior_state && patch_version != expected_version {
+        return Err(AppStateError::PatchVersionMismatch {
+            expected: expected_version,
+            got: patch_version,
+        });
+    }
+
+    state.version = patch_version;
 
     // Update hash state - the closure handles finding previous values
     let (hash_update_result, result) = state.update_hash(&patch.mutations, |index_mac, idx| {
@@ -224,8 +239,8 @@ where
 
     // Decode all mutations and collect MACs in a single pass
     let mut mutations = Vec::with_capacity(patch.mutations.len());
-    let mut added_macs = Vec::new();
-    let mut removed_index_macs = Vec::new();
+    let mut added_macs = Vec::with_capacity(patch.mutations.len());
+    let mut removed_index_macs = Vec::with_capacity(patch.mutations.len());
 
     for m in &patch.mutations {
         if let Some(rec) = &m.record {
@@ -611,5 +626,199 @@ mod tests {
         );
 
         assert_eq!(result.state.hash.as_slice(), expected_hash.as_slice());
+    }
+
+    /// WA Web: validatePatchVersion checks `localVersion !== patchVersion - 1`.
+    /// If the patch version is not exactly local_version + 1, it rejects with
+    /// "syncd-version-check-error-local-version-{greater|less}-than-expected".
+    #[test]
+    fn test_patch_version_rollback_rejected() {
+        let master_key = [7u8; 32];
+        let keys = expand_app_state_keys(&master_key);
+        let key_id = b"test_key_id".to_vec();
+        let index_mac = vec![99; 32];
+
+        let record = create_encrypted_record(
+            wa::syncd_mutation::SyncdOperation::Set,
+            &index_mac,
+            &keys,
+            &key_id,
+            5000,
+        );
+
+        // Current state is at version 5
+        let mut state = HashState {
+            version: 5,
+            ..Default::default()
+        };
+
+        // Patch claims version 3 (rollback: 3 < 5 + 1)
+        let patch = wa::SyncdPatch {
+            version: Some(wa::SyncdVersion { version: Some(3) }),
+            mutations: vec![wa::SyncdMutation {
+                operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                record: Some(record),
+            }],
+            key_id: Some(wa::KeyId {
+                id: Some(key_id.clone()),
+            }),
+            ..Default::default()
+        };
+
+        let get_keys = |_: &[u8]| Ok(keys.clone());
+        let get_prev = |_: &[u8]| -> Result<Option<Vec<u8>>, AppStateError> { Ok(None) };
+
+        let err = process_patch(&patch, &mut state, get_keys, get_prev, false, "regular")
+            .expect_err("rollback patch should be rejected");
+
+        assert!(
+            matches!(
+                err,
+                AppStateError::PatchVersionMismatch {
+                    expected: 6,
+                    got: 3
+                }
+            ),
+            "expected PatchVersionMismatch {{ expected: 6, got: 3 }}, got: {err:?}"
+        );
+    }
+
+    /// WA Web: version gap (e.g., local=5, patch=8) also triggers
+    /// "syncd-version-check-error-local-version-less-than-expected".
+    #[test]
+    fn test_patch_version_gap_rejected() {
+        let master_key = [7u8; 32];
+        let keys = expand_app_state_keys(&master_key);
+        let key_id = b"test_key_id".to_vec();
+        let index_mac = vec![99; 32];
+
+        let record = create_encrypted_record(
+            wa::syncd_mutation::SyncdOperation::Set,
+            &index_mac,
+            &keys,
+            &key_id,
+            6000,
+        );
+
+        // Current state is at version 5
+        let mut state = HashState {
+            version: 5,
+            ..Default::default()
+        };
+
+        // Patch claims version 8 (gap: 8 != 5 + 1)
+        let patch = wa::SyncdPatch {
+            version: Some(wa::SyncdVersion { version: Some(8) }),
+            mutations: vec![wa::SyncdMutation {
+                operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                record: Some(record),
+            }],
+            key_id: Some(wa::KeyId {
+                id: Some(key_id.clone()),
+            }),
+            ..Default::default()
+        };
+
+        let get_keys = |_: &[u8]| Ok(keys.clone());
+        let get_prev = |_: &[u8]| -> Result<Option<Vec<u8>>, AppStateError> { Ok(None) };
+
+        let err = process_patch(&patch, &mut state, get_keys, get_prev, false, "regular")
+            .expect_err("version gap should be rejected");
+
+        assert!(
+            matches!(
+                err,
+                AppStateError::PatchVersionMismatch {
+                    expected: 6,
+                    got: 8
+                }
+            ),
+            "expected PatchVersionMismatch {{ expected: 6, got: 8 }}, got: {err:?}"
+        );
+    }
+
+    /// Consecutive patch (local=5, patch=6) should succeed.
+    #[test]
+    fn test_patch_version_consecutive_accepted() {
+        let master_key = [7u8; 32];
+        let keys = expand_app_state_keys(&master_key);
+        let key_id = b"test_key_id".to_vec();
+        let index_mac = vec![99; 32];
+
+        let record = create_encrypted_record(
+            wa::syncd_mutation::SyncdOperation::Set,
+            &index_mac,
+            &keys,
+            &key_id,
+            7000,
+        );
+
+        // Current state at version 5
+        let mut state = HashState {
+            version: 5,
+            ..Default::default()
+        };
+
+        // Patch version 6 (exactly local + 1)
+        let patch = wa::SyncdPatch {
+            version: Some(wa::SyncdVersion { version: Some(6) }),
+            mutations: vec![wa::SyncdMutation {
+                operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                record: Some(record),
+            }],
+            key_id: Some(wa::KeyId {
+                id: Some(key_id.clone()),
+            }),
+            ..Default::default()
+        };
+
+        let get_keys = |_: &[u8]| Ok(keys.clone());
+        let get_prev = |_: &[u8]| -> Result<Option<Vec<u8>>, AppStateError> { Ok(None) };
+
+        let result = process_patch(&patch, &mut state, get_keys, get_prev, false, "regular")
+            .expect("consecutive version should be accepted");
+        assert_eq!(result.state.version, 6);
+    }
+
+    /// When local version is 0 (no prior state), any patch version should be
+    /// accepted — we can't validate version continuity without a baseline.
+    /// WA Web: "empty lthash" is retryable, but the patch still applies.
+    #[test]
+    fn test_patch_version_check_skipped_when_no_prior_state() {
+        let master_key = [7u8; 32];
+        let keys = expand_app_state_keys(&master_key);
+        let key_id = b"test_key_id".to_vec();
+        let index_mac = vec![99; 32];
+
+        let record = create_encrypted_record(
+            wa::syncd_mutation::SyncdOperation::Set,
+            &index_mac,
+            &keys,
+            &key_id,
+            8000,
+        );
+
+        // Fresh state — version 0, empty hash
+        let mut state = HashState::default();
+
+        // Patch version 42 — should be accepted since no prior state
+        let patch = wa::SyncdPatch {
+            version: Some(wa::SyncdVersion { version: Some(42) }),
+            mutations: vec![wa::SyncdMutation {
+                operation: Some(wa::syncd_mutation::SyncdOperation::Set as i32),
+                record: Some(record),
+            }],
+            key_id: Some(wa::KeyId {
+                id: Some(key_id.clone()),
+            }),
+            ..Default::default()
+        };
+
+        let get_keys = |_: &[u8]| Ok(keys.clone());
+        let get_prev = |_: &[u8]| -> Result<Option<Vec<u8>>, AppStateError> { Ok(None) };
+
+        let result = process_patch(&patch, &mut state, get_keys, get_prev, false, "regular")
+            .expect("no-prior-state should skip version check");
+        assert_eq!(result.state.version, 42);
     }
 }

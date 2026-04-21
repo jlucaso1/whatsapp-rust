@@ -1,0 +1,39 @@
+name: Release Docs
+on:
+  workflow_run:
+    workflows: ["Release Crate"]
+    types:
+      - completed
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' || github.event_name == 'workflow_dispatch' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: oven-sh/setup-bun@v1
+      - name: Install
+        working-directory: docs
+        run: bun install
+      - name: Build
+        working-directory: docs
+        run: |
+          bun run build
+          cp .vitepress/dist/index.html .vitepress/dist/404.html
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: "docs/.vitepress/dist"
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

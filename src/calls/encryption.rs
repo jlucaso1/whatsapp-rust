@@ -88,9 +88,9 @@ impl std::fmt::Debug for CallEncryptionKey {
 impl CallEncryptionKey {
     /// Generate a new random call encryption key.
     pub fn generate() -> Self {
-        use rand::RngCore;
+        use rand::RngExt;
         let mut master_key = [0u8; 32];
-        rand::rng().fill_bytes(&mut master_key);
+        rand::rng().fill(&mut master_key);
         Self {
             master_key,
             generation: 1,

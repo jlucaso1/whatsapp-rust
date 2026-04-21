@@ -2,7 +2,7 @@ use crate::client::Client;
 use crate::types::message::MessageInfo;
 use anyhow::Result;
 use std::sync::Arc;
-use wacore_binary::node::Node;
+use wacore_binary::Node;
 
 /// Trait for handling custom encrypted message types
 #[async_trait::async_trait]
@@ -23,11 +23,12 @@ pub trait EncHandler: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::TokioRuntime;
     use crate::types::message::MessageInfo;
     use anyhow::Result;
+    use async_lock::Mutex;
     use std::sync::Arc;
-    use tokio::sync::Mutex;
-    use wacore_binary::node::Node;
+    use wacore_binary::Node;
 
     /// Mock handler for testing custom enc types
     #[derive(Debug)]
@@ -54,6 +55,7 @@ mod tests {
             let enc_type = enc_node
                 .attrs()
                 .optional_string("type")
+                .as_deref()
                 .unwrap_or("unknown")
                 .to_string();
             self.calls.lock().await.push(enc_type);
@@ -78,12 +80,19 @@ mod tests {
             .with_transport_factory(transport)
             .with_http_client(http_client)
             .with_enc_handler("frskmsg", mock_handler)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");
 
         // Verify handler was registered
-        assert!(bot.client().custom_enc_handlers.contains_key("frskmsg"));
+        assert!(
+            bot.client()
+                .custom_enc_handlers
+                .read()
+                .await
+                .contains_key("frskmsg")
+        );
     }
 
     #[tokio::test]
@@ -104,14 +113,27 @@ mod tests {
             .with_http_client(http_client)
             .with_enc_handler("frskmsg", handler1)
             .with_enc_handler("customtype", handler2)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");
 
         // Verify both handlers were registered
-        assert!(bot.client().custom_enc_handlers.contains_key("frskmsg"));
-        assert!(bot.client().custom_enc_handlers.contains_key("customtype"));
-        assert_eq!(bot.client().custom_enc_handlers.len(), 2);
+        assert!(
+            bot.client()
+                .custom_enc_handlers
+                .read()
+                .await
+                .contains_key("frskmsg")
+        );
+        assert!(
+            bot.client()
+                .custom_enc_handlers
+                .read()
+                .await
+                .contains_key("customtype")
+        );
+        assert_eq!(bot.client().custom_enc_handlers.read().await.len(), 2);
     }
 
     #[tokio::test]
@@ -127,11 +149,12 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(http_client)
+            .with_runtime(TokioRuntime)
             .build()
             .await
             .expect("Failed to build bot");
 
         // Verify no custom handlers are registered
-        assert_eq!(bot.client().custom_enc_handlers.len(), 0);
+        assert_eq!(bot.client().custom_enc_handlers.read().await.len(), 0);
     }
 }

@@ -1294,20 +1294,22 @@ mod stun_auth_tests {
 // ============================================================================
 
 mod stanza_parsing_tests {
+    use std::borrow::Cow;
     use wacore_binary::node::{Attrs, Node, NodeContent, NodeValue};
     use whatsapp_rust::calls::ParsedCallStanza;
 
     fn attrs(pairs: &[(&str, &str)]) -> Attrs {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), NodeValue::from(*v)))
-            .collect()
+        let mut out = Attrs(Vec::new());
+        for (k, v) in pairs {
+            out.insert(Cow::Owned(k.to_string()), NodeValue::from(*v));
+        }
+        out
     }
 
     /// Create a minimal valid call stanza for testing.
     fn create_call_stanza(signaling_type: &str, call_id: &str) -> Node {
         let signaling_node = Node {
-            tag: signaling_type.to_string(),
+            tag: Cow::Owned(signaling_type.to_string()),
             attrs: attrs(&[
                 ("call-id", call_id),
                 ("call-creator", "1234567890@s.whatsapp.net"),
@@ -1316,7 +1318,7 @@ mod stanza_parsing_tests {
         };
 
         Node {
-            tag: "call".to_string(),
+            tag: Cow::Borrowed("call"),
             attrs: attrs(&[("id", "stanza-123"), ("from", "9876543210@s.whatsapp.net")]),
             content: Some(NodeContent::Nodes(vec![signaling_node])),
         }
@@ -1358,7 +1360,7 @@ mod stanza_parsing_tests {
     #[test]
     fn test_parse_relay_election_stanza() {
         let signaling_node = Node {
-            tag: "relay_election".to_string(),
+            tag: Cow::Borrowed("relay_election"),
             attrs: attrs(&[
                 ("call-id", "test-call-election"),
                 ("call-creator", "1234567890@s.whatsapp.net"),
@@ -1368,7 +1370,7 @@ mod stanza_parsing_tests {
         };
 
         let node = Node {
-            tag: "call".to_string(),
+            tag: Cow::Borrowed("call"),
             attrs: attrs(&[("id", "stanza-456"), ("from", "9876543210@s.whatsapp.net")]),
             content: Some(NodeContent::Nodes(vec![signaling_node])),
         };
@@ -1384,7 +1386,7 @@ mod stanza_parsing_tests {
     fn test_parse_relay_election_from_binary_payload() {
         // Test parsing elected_relay_idx from binary payload (single byte)
         let signaling_node = Node {
-            tag: "relay_election".to_string(),
+            tag: Cow::Borrowed("relay_election"),
             attrs: attrs(&[
                 ("call-id", "test-call-binary"),
                 ("call-creator", "1234567890@s.whatsapp.net"),
@@ -1393,7 +1395,7 @@ mod stanza_parsing_tests {
         };
 
         let node = Node {
-            tag: "call".to_string(),
+            tag: Cow::Borrowed("call"),
             attrs: attrs(&[("id", "stanza-789"), ("from", "9876543210@s.whatsapp.net")]),
             content: Some(NodeContent::Nodes(vec![signaling_node])),
         };
@@ -1408,7 +1410,7 @@ mod stanza_parsing_tests {
     fn test_parse_relaylatency_stanza() {
         // Create a relaylatency stanza with te children
         let te_node = Node {
-            tag: "te".to_string(),
+            tag: Cow::Borrowed("te"),
             attrs: attrs(&[
                 ("relay_name", "test-relay"),
                 ("latency", "33554474"), // 42ms + flags
@@ -1417,7 +1419,7 @@ mod stanza_parsing_tests {
         };
 
         let signaling_node = Node {
-            tag: "relaylatency".to_string(),
+            tag: Cow::Borrowed("relaylatency"),
             attrs: attrs(&[
                 ("call-id", "test-call-latency"),
                 ("call-creator", "1234567890@s.whatsapp.net"),
@@ -1426,7 +1428,7 @@ mod stanza_parsing_tests {
         };
 
         let node = Node {
-            tag: "call".to_string(),
+            tag: Cow::Borrowed("call"),
             attrs: attrs(&[("id", "stanza-lat"), ("from", "9876543210@s.whatsapp.net")]),
             content: Some(NodeContent::Nodes(vec![signaling_node])),
         };
@@ -1445,7 +1447,7 @@ mod stanza_parsing_tests {
     #[test]
     fn test_parse_invalid_tag() {
         let node = Node {
-            tag: "not-a-call".to_string(),
+            tag: Cow::Borrowed("not-a-call"),
             attrs: attrs(&[]),
             content: None,
         };
@@ -1457,7 +1459,7 @@ mod stanza_parsing_tests {
     #[test]
     fn test_parse_missing_signaling_child() {
         let node = Node {
-            tag: "call".to_string(),
+            tag: Cow::Borrowed("call"),
             attrs: attrs(&[("id", "stanza-123"), ("from", "9876543210@s.whatsapp.net")]),
             content: None, // No children
         };
@@ -1477,15 +1479,17 @@ mod stanza_parsing_tests {
 // ============================================================================
 
 mod enc_rekey_tests {
+    use std::borrow::Cow;
     use wacore_binary::node::{Attrs, Node, NodeContent, NodeValue};
-    use whatsapp_rust::calls::{CallEncryptionKey, EncType, ParsedCallStanza, derive_call_keys};
 
     fn attrs(pairs: &[(&str, &str)]) -> Attrs {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), NodeValue::from(*v)))
-            .collect()
+        let mut out = Attrs(Vec::new());
+        for (k, v) in pairs {
+            out.insert(Cow::Owned(k.to_string()), NodeValue::from(*v));
+        }
+        out
     }
+    use whatsapp_rust::calls::{CallEncryptionKey, EncType, ParsedCallStanza, derive_call_keys};
 
     /// Create a test call encryption key with known values.
     fn create_test_call_key() -> CallEncryptionKey {
@@ -1577,13 +1581,13 @@ mod enc_rekey_tests {
     fn test_enc_rekey_stanza_parsing() {
         // Create an enc_rekey stanza with enc child
         let enc_node = Node {
-            tag: "enc".to_string(),
+            tag: Cow::Borrowed("enc"),
             attrs: attrs(&[("type", "msg"), ("count", "2")]),
             content: Some(NodeContent::Bytes(vec![0x01, 0x02, 0x03, 0x04])),
         };
 
         let signaling_node = Node {
-            tag: "enc_rekey".to_string(),
+            tag: Cow::Borrowed("enc_rekey"),
             attrs: attrs(&[
                 ("call-id", "test-call-rekey"),
                 ("call-creator", "1234567890@s.whatsapp.net"),
@@ -1592,7 +1596,7 @@ mod enc_rekey_tests {
         };
 
         let node = Node {
-            tag: "call".to_string(),
+            tag: Cow::Borrowed("call"),
             attrs: attrs(&[
                 ("id", "stanza-rekey"),
                 ("from", "9876543210@s.whatsapp.net"),
@@ -1615,13 +1619,13 @@ mod enc_rekey_tests {
     fn test_enc_rekey_pkmsg_type() {
         // Test pkmsg encryption type (prekey message)
         let enc_node = Node {
-            tag: "enc".to_string(),
+            tag: Cow::Borrowed("enc"),
             attrs: attrs(&[("type", "pkmsg"), ("count", "1")]),
             content: Some(NodeContent::Bytes(vec![0xAA, 0xBB, 0xCC])),
         };
 
         let signaling_node = Node {
-            tag: "enc_rekey".to_string(),
+            tag: Cow::Borrowed("enc_rekey"),
             attrs: attrs(&[
                 ("call-id", "test-call-pkmsg"),
                 ("call-creator", "1234567890@s.whatsapp.net"),
@@ -1630,7 +1634,7 @@ mod enc_rekey_tests {
         };
 
         let node = Node {
-            tag: "call".to_string(),
+            tag: Cow::Borrowed("call"),
             attrs: attrs(&[
                 ("id", "stanza-pkmsg"),
                 ("from", "9876543210@s.whatsapp.net"),

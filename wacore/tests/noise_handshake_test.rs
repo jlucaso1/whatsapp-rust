@@ -78,7 +78,7 @@ fn test_server_static_key_decryption_with_go_values() {
         aad: &aad_for_decrypt,
     };
 
-    let rust_plaintext = cipher.decrypt(iv.as_ref().into(), payload)
+    let rust_plaintext = cipher.decrypt((&iv).into(), payload)
         .expect("AEAD DECRYPTION FAILED! The test inputs are correct, so the GCM primitive or its inputs are flawed.");
 
     assert_eq!(
@@ -117,7 +117,7 @@ fn test_live_decryption_with_go_values() {
     };
 
     let rust_plaintext = cipher
-        .decrypt(iv.as_ref().into(), payload)
+        .decrypt((&iv).into(), payload)
         .expect("AEAD DECRYPTION FAILED! The GCM primitive or its inputs are flawed.");
 
     assert_eq!(

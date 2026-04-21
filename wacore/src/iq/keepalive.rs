@@ -12,8 +12,8 @@
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use std::time::Duration;
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::Node;
+use wacore_binary::NodeRef;
+use wacore_binary::{Jid, Server};
 
 /// Keepalive ping to keep the connection alive.
 #[derive(Debug, Clone, Default)]
@@ -39,14 +39,14 @@ impl IqSpec for KeepaliveSpec {
     type Response = ();
 
     fn build_iq(&self) -> InfoQuery<'static> {
-        let mut iq = InfoQuery::get("w:p", Jid::new("", SERVER_JID), None);
+        let mut iq = InfoQuery::get("w:p", Jid::new("", Server::Pn), None);
         if let Some(timeout) = self.timeout {
             iq = iq.with_timeout(timeout);
         }
         iq
     }
 
-    fn parse_response(&self, _response: &Node) -> Result<Self::Response, anyhow::Error> {
+    fn parse_response(&self, _response: &NodeRef<'_>) -> Result<Self::Response, anyhow::Error> {
         // Keepalive just needs a successful response, no parsing needed
         Ok(())
     }
@@ -82,7 +82,7 @@ mod tests {
         let spec = KeepaliveSpec::new();
         let response = NodeBuilder::new("iq").build();
 
-        let result = spec.parse_response(&response);
+        let result = spec.parse_response(&response.as_node_ref());
         assert!(result.is_ok());
     }
 }

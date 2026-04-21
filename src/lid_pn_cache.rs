@@ -10,11 +10,19 @@
 //!
 //! When multiple LIDs exist for the same phone number (rare), the most recent one
 //! (by `created_at` timestamp) is considered "current".
+//!
+//! Both maps are bounded (max 10 000 entries, 1 h idle TTL) to prevent unbounded
+//! memory growth in long-running sessions.
 
-use std::collections::HashMap;
-use tokio::sync::RwLock;
+use std::sync::Arc;
 
+use crate::cache_config::{CacheConfig, CacheEntryConfig};
+use crate::cache_store::TypedCache;
 pub use wacore::types::{LearningSource, LidPnEntry};
+
+/// Namespaces used in the custom store.
+const NS_LID: &str = "lid_pn_by_lid";
+const NS_PN: &str = "lid_pn_by_pn";
 
 /// Cache for LID to Phone Number mappings.
 ///
@@ -23,12 +31,11 @@ pub use wacore::types::{LearningSource, LidPnEntry};
 /// Signal address resolution.
 ///
 /// The cache is thread-safe and can be shared across async tasks.
-#[derive(Debug)]
 pub struct LidPnCache {
     /// LID -> Entry mapping
-    lid_to_entry: RwLock<HashMap<String, LidPnEntry>>,
+    lid_to_entry: TypedCache<String, LidPnEntry>,
     /// Phone number -> Entry mapping (stores the most recent LID for that PN)
-    pn_to_entry: RwLock<HashMap<String, LidPnEntry>>,
+    pn_to_entry: TypedCache<String, LidPnEntry>,
 }
 
 impl Default for LidPnCache {
@@ -38,40 +45,65 @@ impl Default for LidPnCache {
 }
 
 impl LidPnCache {
-    /// Create a new empty cache
+    /// Create a new empty cache with default settings (1h idle TTL, 10000 entries).
     pub fn new() -> Self {
-        Self {
-            lid_to_entry: RwLock::new(HashMap::new()),
-            pn_to_entry: RwLock::new(HashMap::new()),
+        Self::with_config(&CacheConfig::default().lid_pn_cache, None)
+    }
+
+    /// Create a new cache with custom configuration (uses time_to_idle semantics).
+    ///
+    /// When `store` is `Some`, both internal maps use the custom backend.
+    /// When `store` is `None`, both maps use in-process moka caches.
+    pub fn with_config(
+        config: &CacheEntryConfig,
+        store: Option<Arc<dyn wacore::store::CacheStore>>,
+    ) -> Self {
+        match store {
+            Some(s) => Self {
+                lid_to_entry: TypedCache::from_store(s.clone(), NS_LID, config.timeout),
+                pn_to_entry: TypedCache::from_store(s, NS_PN, config.timeout),
+            },
+            None => Self {
+                lid_to_entry: TypedCache::from_moka(config.build_with_tti()),
+                pn_to_entry: TypedCache::from_moka(config.build_with_tti()),
+            },
         }
+    }
+
+    /// Returns approximate entry counts for the LID and PN maps.
+    #[cfg(feature = "debug-diagnostics")]
+    pub fn entry_counts(&self) -> (u64, u64) {
+        (
+            self.lid_to_entry.entry_count(),
+            self.pn_to_entry.entry_count(),
+        )
     }
 
     /// Get the current LID for a phone number.
     ///
     /// Returns the LID user part if a mapping exists, None otherwise.
     pub async fn get_current_lid(&self, phone: &str) -> Option<String> {
-        let pn_map = self.pn_to_entry.read().await;
-        pn_map.get(phone).map(|e| e.lid.clone())
+        self.pn_to_entry.get(phone).await.map(|e| e.lid.clone())
     }
 
     /// Get the phone number for a LID.
     ///
     /// Returns the phone number user part if a mapping exists, None otherwise.
     pub async fn get_phone_number(&self, lid: &str) -> Option<String> {
-        let lid_map = self.lid_to_entry.read().await;
-        lid_map.get(lid).map(|e| e.phone_number.clone())
+        self.lid_to_entry
+            .get(lid)
+            .await
+            .map(|e| e.phone_number.clone())
     }
 
     /// Get the full entry for a LID.
     pub async fn get_entry_by_lid(&self, lid: &str) -> Option<LidPnEntry> {
-        let lid_map = self.lid_to_entry.read().await;
-        lid_map.get(lid).cloned()
+        self.lid_to_entry.get(lid).await
     }
 
     /// Get the full entry for a phone number.
     pub async fn get_entry_by_phone(&self, phone: &str) -> Option<LidPnEntry> {
-        let pn_map = self.pn_to_entry.read().await;
-        pn_map.get(phone).cloned()
+        self.pn_to_entry.get(phone).await
     }
 
     /// Add or update a mapping in the cache.
@@ -79,31 +111,28 @@ impl LidPnCache {
     /// For the LID -> Entry map, this always updates.
     /// For the PN -> Entry map, this only updates if the new entry has a
     /// newer or equal `created_at` timestamp (matching WhatsApp Web behavior).
-    pub async fn add(&self, entry: LidPnEntry) {
-        // Check if PN map needs update first (before we move/clone the entry)
-        let should_update_pn = {
-            let pn_map = self.pn_to_entry.read().await;
-            match pn_map.get(&entry.phone_number) {
-                Some(existing) => existing.created_at <= entry.created_at,
-                None => true,
-            }
+    ///
+    /// Note: the get-then-insert on the PN map is not atomic. With external
+    /// backends (e.g., Redis), concurrent `add()` calls for the same phone
+    /// number can race. This is acceptable because the cache is best-effort
+    /// and backed by persistent storage for correctness.
+    pub async fn add(&self, entry: &LidPnEntry) {
+        // Check if PN map needs update first
+        let should_update_pn = match self.pn_to_entry.get(entry.phone_number.as_str()).await {
+            Some(existing) => existing.created_at <= entry.created_at,
+            None => true,
         };
 
-        // Clone for LID map (we need the original for PN map if updating)
-        let entry_for_lid = entry.clone();
-
         // Update LID -> Entry map
-        {
-            let mut lid_map = self.lid_to_entry.write().await;
-            lid_map.insert(entry_for_lid.lid.clone(), entry_for_lid);
-        }
+        self.lid_to_entry
+            .insert(entry.lid.clone(), entry.clone())
+            .await;
 
         // Update PN -> Entry map (only if newer or equal timestamp)
         if should_update_pn {
-            let mut pn_map = self.pn_to_entry.write().await;
-            // Use the original entry - avoids an extra clone
-            let phone_key = entry.phone_number.clone();
-            pn_map.insert(phone_key, entry);
+            self.pn_to_entry
+                .insert(entry.phone_number.clone(), entry.clone())
+                .await;
         }
     }
 
@@ -112,11 +141,11 @@ impl LidPnCache {
     /// This should be called during client initialization to populate
     /// the cache from the database.
     pub async fn warm_up(&self, entries: impl IntoIterator<Item = LidPnEntry>) {
-        let start = std::time::Instant::now();
+        let start = wacore::time::Instant::now();
         let mut count = 0;
 
         for entry in entries {
-            self.add(entry).await;
+            self.add(&entry).await;
             count += 1;
         }
 
@@ -128,27 +157,24 @@ impl LidPnCache {
     }
 
     /// Clear all entries from the cache.
+    ///
+    /// Awaits the actual clear operation on custom backends (unlike
+    /// `invalidate_all` which is fire-and-forget).
     pub async fn clear(&self) {
-        {
-            let mut lid_map = self.lid_to_entry.write().await;
-            lid_map.clear();
-        }
-        {
-            let mut pn_map = self.pn_to_entry.write().await;
-            pn_map.clear();
-        }
+        self.lid_to_entry.clear().await;
+        self.pn_to_entry.clear().await;
     }
 
     /// Get the number of LID entries in the cache.
-    pub async fn lid_count(&self) -> usize {
-        let lid_map = self.lid_to_entry.read().await;
-        lid_map.len()
+    pub async fn lid_count(&self) -> u64 {
+        self.lid_to_entry.run_pending_tasks().await;
+        self.lid_to_entry.entry_count()
     }
 
     /// Get the number of phone number entries in the cache.
-    pub async fn pn_count(&self) -> usize {
-        let pn_map = self.pn_to_entry.read().await;
-        pn_map.len()
+    pub async fn pn_count(&self) -> u64 {
+        self.pn_to_entry.run_pending_tasks().await;
+        self.pn_to_entry.entry_count()
     }
 }
 
@@ -170,7 +196,7 @@ mod tests {
             "559980000001".to_string(),
             LearningSource::Usync,
         );
-        cache.add(entry).await;
+        cache.add(&entry).await;
 
         // Should be retrievable both ways
         assert_eq!(
@@ -194,7 +220,7 @@ mod tests {
             1000,
             LearningSource::Other,
         );
-        cache.add(old_entry).await;
+        cache.add(&old_entry).await;
 
         assert_eq!(
             cache.get_current_lid("559980000001").await,
@@ -208,7 +234,7 @@ mod tests {
             2000,
             LearningSource::Usync,
         );
-        cache.add(new_entry).await;
+        cache.add(&new_entry).await;
 
         // Should return the newer LID for PN lookup
         assert_eq!(
@@ -238,7 +264,7 @@ mod tests {
             2000,
             LearningSource::Usync,
         );
-        cache.add(new_entry).await;
+        cache.add(&new_entry).await;
 
         // Try to add older mapping
         let old_entry = LidPnEntry::with_timestamp(
@@ -247,7 +273,7 @@ mod tests {
             1000,
             LearningSource::Other,
         );
-        cache.add(old_entry).await;
+        cache.add(&old_entry).await;
 
         // PN -> LID should still return the newer one
         assert_eq!(
@@ -300,13 +326,12 @@ mod tests {
             "559980000001".to_string(),
             LearningSource::Usync,
         );
-        cache.add(entry).await;
+        cache.add(&entry).await;
 
         assert_eq!(cache.lid_count().await, 1);
         assert_eq!(cache.pn_count().await, 1);
 
         cache.clear().await;
-
         assert_eq!(cache.lid_count().await, 0);
         assert_eq!(cache.pn_count().await, 0);
         assert!(cache.get_current_lid("559980000001").await.is_none());

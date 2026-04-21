@@ -78,6 +78,8 @@ pub enum SignalProtocolError {
     DuplicatedMessage(u32, u32),
     /// invalid {0:?} message: {1}
     InvalidMessage(CiphertextMessageType, &'static str),
+    /// MAC verification failed for {0:?} message
+    BadMac(CiphertextMessageType),
 
     /// error while invoking an ffi callback: {0}
     FfiBindingError(String),

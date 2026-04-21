@@ -2,18 +2,19 @@
 
 use crate::client::Client;
 use log::debug;
-use wacore::StringEnum;
+use wacore::WireEnum;
+use wacore_binary::Jid;
 use wacore_binary::builder::NodeBuilder;
-use wacore_binary::jid::Jid;
 
 /// Chat state type for typing indicators.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
+#[non_exhaustive]
 pub enum ChatStateType {
-    #[str = "composing"]
+    #[wire = "composing"]
     Composing,
-    #[str = "recording"]
+    #[wire = "recording"]
     Recording,
-    #[str = "paused"]
+    #[wire = "paused"]
     Paused,
 }
 
@@ -51,7 +52,7 @@ impl<'a> Chatstate<'a> {
         self.send(to, ChatStateType::Paused).await
     }
 
-    fn build_chatstate_node(&self, to: &Jid, state: ChatStateType) -> wacore_binary::node::Node {
+    fn build_chatstate_node(&self, to: &Jid, state: ChatStateType) -> wacore_binary::Node {
         let child = match state {
             ChatStateType::Composing => NodeBuilder::new("composing").build(),
             ChatStateType::Recording => {
@@ -61,7 +62,7 @@ impl<'a> Chatstate<'a> {
         };
 
         NodeBuilder::new("chatstate")
-            .attr("to", to.to_string())
+            .attr("to", to)
             .children([child])
             .build()
     }

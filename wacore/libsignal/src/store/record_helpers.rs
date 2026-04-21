@@ -100,7 +100,7 @@ pub fn signed_prekey_structure_to_record(
 mod tests {
     use super::*;
     use crate::protocol::{GenericSignedPreKey, KeyPair, PreKeyRecord};
-    use rand::RngCore;
+    use rand::Rng;
 
     #[test]
     fn test_prekey_serialization_length() -> Result<(), Box<dyn std::error::Error>> {

@@ -7,7 +7,7 @@ use std::fmt;
 
 use arrayref::array_ref;
 
-use hmac::{Hmac, Mac};
+use hmac::{HmacReset, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::protocol::{PrivateKey, PublicKey, Result, crypto, stores::session_structure};
@@ -189,11 +189,16 @@ impl ChainKey {
         self.index
     }
 
-    pub fn next_chain_key(&self) -> Self {
-        Self {
+    pub fn next_chain_key(&self) -> crate::protocol::Result<Self> {
+        Ok(Self {
             key: self.calculate_base_material(Self::CHAIN_KEY_SEED),
-            index: self.index + 1,
-        }
+            index: self.index.checked_add(1).ok_or_else(|| {
+                crate::protocol::SignalProtocolError::InvalidState(
+                    "next_chain_key",
+                    "chain key index overflow (u32::MAX)".to_string(),
+                )
+            })?,
+        })
     }
 
     pub fn message_keys(&self) -> MessageKeyGenerator {
@@ -205,8 +210,8 @@ impl ChainKey {
 
     /// Compute both message keys and next chain key in one call, reusing HMAC key setup.
     #[inline]
-    pub fn step_with_message_keys(&self) -> (MessageKeyGenerator, Self) {
-        let mut hmac = Hmac::<Sha256>::new_from_slice(&self.key)
+    pub fn step_with_message_keys(&self) -> crate::protocol::Result<(MessageKeyGenerator, Self)> {
+        let mut hmac = HmacReset::<Sha256>::new_from_slice(&self.key)
             .expect("HMAC-SHA256 should accept any size key");
 
         hmac.update(&Self::MESSAGE_KEY_SEED);
@@ -218,10 +223,15 @@ impl ChainKey {
         let message_keys = MessageKeyGenerator::new_from_seed(&message_key_seed, self.index);
         let next_chain = Self {
             key: next_key,
-            index: self.index + 1,
+            index: self.index.checked_add(1).ok_or_else(|| {
+                crate::protocol::SignalProtocolError::InvalidState(
+                    "step_with_message_keys",
+                    "chain key index overflow (u32::MAX)".to_string(),
+                )
+            })?,
         };
 
-        (message_keys, next_chain)
+        Ok((message_keys, next_chain))
     }
 
     fn calculate_base_material(&self, seed: [u8; 1]) -> [u8; 32] {
@@ -284,9 +294,9 @@ mod tests {
         let chain_key = ChainKey::new(initial_key, 0);
 
         // Step the chain multiple times
-        let chain1 = chain_key.next_chain_key();
-        let chain2 = chain1.next_chain_key();
-        let chain3 = chain2.next_chain_key();
+        let chain1 = chain_key.next_chain_key().expect("chain key step");
+        let chain2 = chain1.next_chain_key().expect("chain key step");
+        let chain3 = chain2.next_chain_key().expect("chain key step");
 
         // Verify index increments correctly
         assert_eq!(chain_key.index(), 0);
@@ -301,7 +311,7 @@ mod tests {
 
         // Verify determinism: same initial key produces same chain
         let chain_key_copy = ChainKey::new(initial_key, 0);
-        let chain1_copy = chain_key_copy.next_chain_key();
+        let chain1_copy = chain_key_copy.next_chain_key().expect("chain key step");
         assert_eq!(chain1.key(), chain1_copy.key());
         assert_eq!(chain1.index(), chain1_copy.index());
     }
@@ -346,7 +356,7 @@ mod tests {
 
         // The keys themselves depend on the chain key (not counter), but counter differs
         // If we advance the chain, we should get different underlying keys
-        let chain_advanced = chain_key_0.next_chain_key();
+        let chain_advanced = chain_key_0.next_chain_key().expect("chain key step");
         let mk_advanced = chain_advanced.message_keys().generate_keys();
 
         assert_ne!(mk0.cipher_key(), mk_advanced.cipher_key());
@@ -372,7 +382,7 @@ mod tests {
 
         for i in 0..100 {
             assert_eq!(chain.index(), i);
-            chain = chain.next_chain_key();
+            chain = chain.next_chain_key().expect("chain key step");
         }
 
         assert_eq!(chain.index(), 100);
@@ -427,10 +437,12 @@ mod tests {
 
         // Get results using separate calls
         let message_keys_separate = chain_key.message_keys().generate_keys();
-        let next_chain_separate = chain_key.next_chain_key();
+        let next_chain_separate = chain_key.next_chain_key().expect("chain key step");
 
         // Get results using optimized combined call
-        let (message_keys_gen_combined, next_chain_combined) = chain_key.step_with_message_keys();
+        let (message_keys_gen_combined, next_chain_combined) = chain_key
+            .step_with_message_keys()
+            .expect("step with message keys");
         let message_keys_combined = message_keys_gen_combined.generate_keys();
 
         // Verify message keys are identical
@@ -463,9 +475,11 @@ mod tests {
         // Step both chains 10 times and verify they stay in sync
         for i in 0..10 {
             let msg_keys_sep = chain_separate.message_keys().generate_keys();
-            chain_separate = chain_separate.next_chain_key();
+            chain_separate = chain_separate.next_chain_key().expect("chain key step");
 
-            let (msg_keys_gen_comb, next_chain) = chain_combined.step_with_message_keys();
+            let (msg_keys_gen_comb, next_chain) = chain_combined
+                .step_with_message_keys()
+                .expect("step with message keys");
             let msg_keys_comb = msg_keys_gen_comb.generate_keys();
             chain_combined = next_chain;
 
@@ -484,5 +498,46 @@ mod tests {
             );
             assert_eq!(chain_separate.index(), chain_combined.index());
         }
+    }
+
+    /// Verify next_chain_key fails at u32::MAX instead of wrapping.
+    #[test]
+    fn test_chain_key_overflow_regression() {
+        let chain = ChainKey::new([0xFFu8; 32], u32::MAX);
+        assert!(matches!(
+            chain.next_chain_key(),
+            Err(crate::protocol::SignalProtocolError::InvalidState(..))
+        ));
+    }
+
+    /// Verify step_with_message_keys also fails at u32::MAX.
+    #[test]
+    fn test_chain_key_overflow_step_with_message_keys() {
+        let chain = ChainKey::new([0xEEu8; 32], u32::MAX);
+        assert!(matches!(
+            chain.step_with_message_keys(),
+            Err(crate::protocol::SignalProtocolError::InvalidState(..))
+        ));
+    }
+
+    /// u32::MAX-1 advances once (to MAX), then fails on the next step.
+    #[test]
+    fn test_chain_key_overflow_boundary() {
+        let chain_at_max = ChainKey::new([0xDDu8; 32], u32::MAX - 1)
+            .next_chain_key()
+            .expect("advance to u32::MAX");
+        assert_eq!(chain_at_max.index(), u32::MAX);
+        assert!(chain_at_max.next_chain_key().is_err());
+    }
+
+    /// Chained advances from MAX-3 succeed until MAX, then error.
+    #[test]
+    fn test_chain_key_overflow_chained_advances() {
+        let c1 = ChainKey::new([0xCCu8; 32], u32::MAX - 3);
+        let c2 = c1.next_chain_key().expect("to MAX-2");
+        let c3 = c2.next_chain_key().expect("to MAX-1");
+        let c4 = c3.next_chain_key().expect("to MAX");
+        assert_eq!(c4.index(), u32::MAX);
+        assert!(c4.next_chain_key().is_err());
     }
 }

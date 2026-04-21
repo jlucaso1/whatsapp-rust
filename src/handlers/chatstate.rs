@@ -8,8 +8,7 @@ use std::sync::Arc;
 use wacore::iq::chatstate::{
     ChatstateParseError, ChatstateSource, ChatstateStanza, ReceivedChatState,
 };
-use wacore_binary::jid::Jid;
-use wacore_binary::node::Node;
+use wacore_binary::Jid;
 
 /// Event for incoming chatstate (`<chatstate/>`) stanzas.
 ///
@@ -47,14 +46,20 @@ impl ChatStateEvent {
 #[derive(Default)]
 pub struct ChatstateHandler;
 
-#[async_trait]
+#[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
+#[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl StanzaHandler for ChatstateHandler {
     fn tag(&self) -> &'static str {
         "chatstate"
     }
 
-    async fn handle(&self, client: Arc<Client>, node: Arc<Node>, _cancelled: &mut bool) -> bool {
-        match ChatstateStanza::parse(&node) {
+    async fn handle(
+        &self,
+        client: Arc<Client>,
+        node: Arc<wacore_binary::OwnedNodeRef>,
+        _cancelled: &mut bool,
+    ) -> bool {
+        match ChatstateStanza::parse(node.get()) {
             Ok(stanza) => {
                 debug!(
                     target: "ChatstateHandler",

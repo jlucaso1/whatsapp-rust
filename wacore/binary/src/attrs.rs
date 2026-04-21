@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use crate::error::{BinaryError, Result};
 use crate::jid::Jid;
-use crate::node::{Attrs, Node, NodeRef, NodeValue, ValueRef};
+use crate::node::{Attrs, Node, NodeRef, NodeStr, NodeValue, ValueRef};
 
 pub struct AttrParser<'a> {
     pub attrs: &'a Attrs,
@@ -11,7 +11,7 @@ pub struct AttrParser<'a> {
 }
 
 pub struct AttrParserRef<'a> {
-    pub attrs: &'a [(Cow<'a, str>, ValueRef<'a>)],
+    pub(crate) attrs: &'a [(NodeStr<'a>, ValueRef<'a>)],
     pub errors: Vec<BinaryError>,
 }
 
@@ -36,11 +36,7 @@ impl<'a> AttrParserRef<'a> {
     }
 
     fn get_raw(&mut self, key: &str, require: bool) -> Option<&'a ValueRef<'a>> {
-        let val = self
-            .attrs
-            .iter()
-            .find(|(k, _)| k.as_ref() == key)
-            .map(|(_, v)| v);
+        let val = self.attrs.iter().find(|(k, _)| **k == *key).map(|(_, v)| v);
 
         if require && val.is_none() {
             self.errors.push(BinaryError::AttrParse(format!(
@@ -51,36 +47,20 @@ impl<'a> AttrParserRef<'a> {
         val
     }
 
-    /// Get string from the value.
-    /// For JID values, this returns None - use optional_jid instead.
-    pub fn optional_string(&mut self, key: &str) -> Option<&'a str> {
-        self.get_raw(key, false).and_then(|v| v.as_str())
+    /// Get string from the value. Works for both String and JID variants.
+    /// - String variant: Cow::Borrowed — zero copy
+    /// - JID variant: Cow::Owned — allocates only when needed
+    pub fn optional_string(&mut self, key: &str) -> Option<Cow<'a, str>> {
+        self.get_raw(key, false).map(|v| v.as_str())
     }
 
     /// Get a required string attribute, returning an error if missing.
     ///
     /// Prefer this over `string()` for required attributes as it makes
     /// the error explicit rather than silently defaulting to empty string.
-    pub fn required_string(&mut self, key: &str) -> Result<&'a str> {
+    pub fn required_string(&mut self, key: &str) -> Result<Cow<'a, str>> {
         self.optional_string(key)
             .ok_or_else(|| BinaryError::MissingAttr(key.to_string()))
-    }
-
-    /// Get string, defaulting to empty string if missing.
-    ///
-    /// # Deprecation
-    ///
-    /// This method silently defaults to an empty string when the attribute is missing.
-    /// Use `optional_string()` with explicit error handling or `required_string()`
-    /// to avoid silent failures.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use optional_string() with explicit handling or required_string() instead"
-    )]
-    pub fn string(&mut self, key: &str) -> String {
-        self.get_raw(key, true)
-            .map(|v| v.to_string_cow().into_owned())
-            .unwrap_or_default()
     }
 
     /// Get JID from the value.
@@ -110,7 +90,7 @@ impl<'a> AttrParserRef<'a> {
     }
 
     fn get_string_value(&mut self, key: &str, require: bool) -> Option<Cow<'a, str>> {
-        self.get_raw(key, require).map(|v| v.to_string_cow())
+        self.get_raw(key, require).map(|v| v.as_str())
     }
 
     fn get_bool(&mut self, key: &str, require: bool) -> Option<bool> {
@@ -218,34 +198,20 @@ impl<'a> AttrParser<'a> {
     }
 
     // --- String ---
-    pub fn optional_string(&mut self, key: &str) -> Option<&'a str> {
-        self.get_raw(key, false).and_then(|v| v.as_str())
+    /// Get string from the value. Works for both String and JID variants.
+    /// - String variant: Cow::Borrowed — zero copy
+    /// - JID variant: Cow::Owned — allocates only when needed
+    pub fn optional_string(&mut self, key: &str) -> Option<Cow<'a, str>> {
+        self.get_raw(key, false).map(|v| v.as_str())
     }
 
     /// Get a required string attribute, returning an error if missing.
     ///
     /// Prefer this over `string()` for required attributes as it makes
     /// the error explicit rather than silently defaulting to empty string.
-    pub fn required_string(&mut self, key: &str) -> Result<&'a str> {
+    pub fn required_string(&mut self, key: &str) -> Result<Cow<'a, str>> {
         self.optional_string(key)
             .ok_or_else(|| BinaryError::MissingAttr(key.to_string()))
-    }
-
-    /// Get string, defaulting to empty string if missing.
-    ///
-    /// # Deprecation
-    ///
-    /// This method silently defaults to an empty string when the attribute is missing.
-    /// Use `optional_string()` with explicit error handling or `required_string()`
-    /// to avoid silent failures.
-    #[deprecated(
-        since = "0.2.0",
-        note = "Use optional_string() with explicit handling or required_string() instead"
-    )]
-    pub fn string(&mut self, key: &str) -> String {
-        self.get_raw(key, true)
-            .map(|v| v.to_string_value())
-            .unwrap_or_default()
     }
 
     // --- JID ---

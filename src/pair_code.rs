@@ -49,12 +49,12 @@ use crate::client::Client;
 use crate::request::{InfoQuery, InfoQueryType, IqError};
 use crate::types::events::Event;
 use log::{error, info, warn};
-use rand::TryRngCore;
+
 use std::sync::Arc;
 use wacore::libsignal::protocol::KeyPair;
 use wacore::pair_code::{PairCodeError, PairCodeState, PairCodeUtils};
-use wacore_binary::jid::{Jid, SERVER_JID};
-use wacore_binary::node::{Node, NodeContent};
+use wacore_binary::Jid;
+use wacore_binary::{NodeContent, NodeContentRef, NodeRef};
 
 // Re-export types for user convenience
 pub use wacore::pair_code::{PairCodeOptions, PlatformId};
@@ -135,7 +135,7 @@ impl Client {
         );
 
         // Generate ephemeral keypair for this pairing session
-        let ephemeral_keypair = KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err());
+        let ephemeral_keypair = KeyPair::generate(&mut rand::make_rng::<rand::rngs::StdRng>());
 
         // Get device state for noise key
         let device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -155,11 +155,10 @@ impl Client {
             .try_into()
             .expect("ephemeral key is 32 bytes");
 
-        let wrapped_ephemeral = tokio::task::spawn_blocking(move || {
+        let wrapped_ephemeral = wacore::runtime::blocking(&*self.runtime, move || {
             PairCodeUtils::encrypt_ephemeral_pub(&ephemeral_pub, &code_clone)
         })
-        .await
-        .map_err(|e| PairCodeError::CryptoError(format!("spawn_blocking failed: {e}")))?;
+        .await;
 
         // Build the stage 1 IQ node
         let req_id = self.generate_request_id();
@@ -177,7 +176,7 @@ impl Client {
         let query = InfoQuery {
             query_type: InfoQueryType::Set,
             namespace: "md",
-            to: Jid::new("", SERVER_JID),
+            to: Jid::new("", wacore_binary::Server::Pn),
             target: None,
             content: Some(NodeContent::Nodes(
                 iq_content
@@ -195,7 +194,7 @@ impl Client {
             .map_err(|e: IqError| PairCodeError::RequestFailed(e.to_string()))?;
 
         // Extract pairing ref from response
-        let pairing_ref = PairCodeUtils::parse_companion_hello_response(&response)
+        let pairing_ref = PairCodeUtils::parse_companion_hello_response(response.get())
             .ok_or(PairCodeError::MissingPairingRef)?;
 
         info!(
@@ -213,7 +212,7 @@ impl Client {
         };
 
         // Dispatch event for user to display the code
-        self.core.event_bus.dispatch(&Event::PairingCode {
+        self.core.event_bus.dispatch(Event::PairingCode {
             code: code.clone(),
             timeout: PairCodeUtils::code_validity(),
         });
@@ -226,7 +225,10 @@ impl Client {
 ///
 /// This is called when the user enters the code on their phone. The notification
 /// contains the primary device's encrypted ephemeral public key and identity public key.
-pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &Node) -> bool {
+pub(crate) async fn handle_pair_code_notification(
+    client: &Arc<Client>,
+    node: &NodeRef<'_>,
+) -> bool {
     // Check if this is a link_code_companion_reg notification
     let Some(reg_node) = node.get_optional_child_by_tag(&["link_code_companion_reg"]) else {
         return false;
@@ -235,10 +237,12 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Extract primary's wrapped ephemeral public key (80 bytes: salt + iv + encrypted key)
     let primary_wrapped_ephemeral = match reg_node
         .get_optional_child_by_tag(&["link_code_pairing_wrapped_primary_ephemeral_pub"])
-        .and_then(|n| n.content.as_ref())
-    {
-        Some(NodeContent::Bytes(b)) if b.len() == 80 => b.clone(),
-        _ => {
+        .and_then(|n| match n.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) if b.len() == 80 => Some(b.to_vec()),
+            _ => None,
+        }) {
+        Some(b) => b,
+        None => {
             warn!(
                 target: "Client/PairCode",
                 "Missing or invalid primary wrapped ephemeral pub in notification"
@@ -250,19 +254,12 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Extract primary's identity public key (32 bytes, unencrypted)
     let primary_identity_pub: [u8; 32] = match reg_node
         .get_optional_child_by_tag(&["primary_identity_pub"])
-        .and_then(|n| n.content.as_ref())
-    {
-        Some(NodeContent::Bytes(b)) if b.len() == 32 => match b.as_slice().try_into() {
-            Ok(arr) => arr,
-            Err(_) => {
-                warn!(
-                    target: "Client/PairCode",
-                    "Failed to convert primary identity pub to array"
-                );
-                return false;
-            }
-        },
-        _ => {
+        .and_then(|n| match n.content.as_deref() {
+            Some(NodeContentRef::Bytes(b)) if b.len() == 32 => b.as_ref().try_into().ok(),
+            _ => None,
+        }) {
+        Some(arr) => arr,
+        None => {
             warn!(
                 target: "Client/PairCode",
                 "Missing or invalid primary identity pub in notification"
@@ -300,23 +297,16 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Decrypt primary's ephemeral public key (expensive PBKDF2 operation)
     // Run in spawn_blocking to avoid stalling the async runtime
     let pair_code_clone = pair_code.clone();
-    let primary_ephemeral_pub = match tokio::task::spawn_blocking(move || {
+    let primary_ephemeral_pub = match wacore::runtime::blocking(&*client.runtime, move || {
         PairCodeUtils::decrypt_primary_ephemeral_pub(&primary_wrapped_ephemeral, &pair_code_clone)
     })
     .await
     {
-        Ok(Ok(pub_key)) => pub_key,
-        Ok(Err(e)) => {
-            error!(
-                target: "Client/PairCode",
-                "Failed to decrypt primary ephemeral pub: {e}"
-            );
-            return false;
-        }
+        Ok(pub_key) => pub_key,
         Err(e) => {
             error!(
                 target: "Client/PairCode",
-                "spawn_blocking failed: {e}"
+                "Failed to decrypt primary ephemeral pub: {e}"
             );
             return false;
         }
@@ -325,11 +315,8 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
     // Get device keys
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
 
-    // Prepare encrypted key bundle
-    // TODO: Store `new_adv_secret` via DeviceCommand::SetAdvSecretKey to enable HMAC
-    // verification in pair-success. Currently the HMAC check in do_pair_crypto is
-    // commented out, so pairing works without it. See wacore/src/pair.rs:147-153.
-    let (wrapped_bundle, _new_adv_secret) = match PairCodeUtils::prepare_key_bundle(
+    // Prepare encrypted key bundle (includes rotated adv_secret_key)
+    let (wrapped_bundle, new_adv_secret) = match PairCodeUtils::prepare_key_bundle(
         &ephemeral_keypair,
         &primary_ephemeral_pub,
         &primary_identity_pub,
@@ -341,6 +328,14 @@ pub(crate) async fn handle_pair_code_notification(client: &Arc<Client>, node: &N
             return false;
         }
     };
+
+    // Persist rotated adv_secret_key so HMAC verification works in pair-success.
+    client
+        .persistence_manager
+        .process_command(crate::store::commands::DeviceCommand::SetAdvSecretKey(
+            new_adv_secret,
+        ))
+        .await;
 
     // Build and send stage 2 IQ
     let req_id = client.generate_request_id();
