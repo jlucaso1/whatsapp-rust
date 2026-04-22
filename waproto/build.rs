@@ -24,6 +24,7 @@ fn main() -> std::io::Result<()> {
     #[cfg(feature = "generate")]
     {
         println!("cargo:rerun-if-changed=src/whatsapp.proto");
+        println!("cargo:rerun-if-changed=src/voip.proto");
         println!("cargo:warning=Regenerating proto definitions...");
 
         let mut config = prost_build::Config::new();
@@ -92,7 +93,7 @@ fn main() -> std::io::Result<()> {
         // Output to src/ so generated code is version-controlled.
         config.out_dir("src/");
 
-        config.compile_protos(&["src/whatsapp.proto"], &["src/"])?;
+        config.compile_protos(&["src/whatsapp.proto", "src/voip.proto"], &["src/"])?;
         Ok(())
     }
 }

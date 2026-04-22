@@ -85,6 +85,12 @@ pub enum UsyncContext {
     /// Message context - for message-related operations.
     #[wire = "message"]
     Message,
+    /// VoIP context - used by `WAWebAdvSyncDeviceListApi.syncDeviceList`
+    /// in WA Web's `StartCall.js` before placing a call. Forces the server
+    /// to refresh the peer's device list so we don't miss a newly-linked
+    /// device when fanning out the call offer.
+    #[wire = "voip"]
+    Voip,
 }
 
 #[derive(Debug, Clone)]
@@ -488,6 +494,10 @@ pub struct DeviceListResponse {
 pub struct DeviceListSpec {
     pub jids: Vec<Jid>,
     pub sid: String,
+    /// Usync context to pass on the wire. Defaults to
+    /// [`UsyncContext::Message`]; use [`UsyncContext::Voip`] before
+    /// placing a call (matches `WAWebAdvSyncDeviceListApi.syncDeviceList`).
+    pub context: UsyncContext,
 }
 
 impl DeviceListSpec {
@@ -495,7 +505,14 @@ impl DeviceListSpec {
         Self {
             jids,
             sid: sid.into(),
+            context: UsyncContext::Message,
         }
+    }
+
+    /// Override the usync context. Chainable.
+    pub fn with_context(mut self, context: UsyncContext) -> Self {
+        self.context = context;
+        self
     }
 }
 
@@ -526,7 +543,7 @@ impl IqSpec for DeviceListSpec {
             .attr("mode", UsyncMode::Query.as_str())
             .attr("last", "true")
             .attr("index", "0")
-            .attr("context", UsyncContext::Message.as_str())
+            .attr("context", self.context.as_str())
             .children(vec![query_node, list_node])
             .build();
 
@@ -1040,6 +1057,26 @@ mod tests {
         } else {
             panic!("Expected NodeContent::Nodes");
         }
+    }
+
+    /// `with_context(Voip)` must emit `context="voip"` on the usync element.
+    /// WA Web's `StartCall.js` runs this exact shape before a call offer
+    /// so the server refreshes the peer's device list.
+    #[test]
+    fn test_device_list_spec_voip_context() {
+        let jid: Jid = "1234567890@s.whatsapp.net".parse().unwrap();
+        let spec = DeviceListSpec::new(vec![jid], "voip-sid").with_context(UsyncContext::Voip);
+        let iq = spec.build_iq();
+
+        let Some(NodeContent::Nodes(nodes)) = &iq.content else {
+            panic!("expected usync node content");
+        };
+        let usync = &nodes[0];
+        assert_eq!(
+            usync.attrs.get("context").map(|v| v.to_string()).as_deref(),
+            Some("voip"),
+            "voip context must serialize to the literal string \"voip\""
+        );
     }
 
     #[test]

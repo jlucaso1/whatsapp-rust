@@ -1,7 +1,8 @@
 use chrono::{Local, Utc};
-use log::{error, info};
+use log::{error, info, warn};
 use std::sync::Arc;
 use wacore::proto_helpers::MessageExt;
+use wacore::types::call::CallId;
 use wacore::types::events::Event;
 use waproto::whatsapp as wa;
 use whatsapp_rust::TokioRuntime;
@@ -116,6 +117,18 @@ fn main() {
                     }
                     Event::Connected(_) => info!("✅ Bot connected successfully!"),
                     Event::LoggedOut(_) => error!("❌ Bot was logged out!"),
+                    Event::CallOffer(offer) => {
+                        handle_call_offer(offer, client).await;
+                    }
+                    Event::CallAccepted(accepted) => {
+                        info!("📞 Call {} accepted by remote", accepted.meta.call_id);
+                    }
+                    Event::CallRejected(rejected) => {
+                        info!("📞 Call {} rejected by remote", rejected.meta.call_id);
+                    }
+                    Event::CallEnded(ended) => {
+                        info!("📞 Call {} ended", ended.meta.call_id);
+                    }
                     _ => {}
                 }
             })
@@ -243,6 +256,164 @@ fn build_media_pong(message: &wa::Message) -> Option<wa::Message> {
         });
     }
     None
+}
+
+async fn handle_call_offer(
+    offer: &wacore::types::events::CallOffer,
+    client: std::sync::Arc<whatsapp_rust::Client>,
+) {
+    info!(
+        "📞 Incoming {} call from {} (call_id: {})",
+        if offer.media_type == wacore::types::call::CallMediaType::Video {
+            "video"
+        } else {
+            "audio"
+        },
+        offer.meta.from,
+        offer.meta.call_id
+    );
+    info!(
+        "   Remote: {} v{}",
+        offer.remote_meta.remote_platform, offer.remote_meta.remote_version
+    );
+
+    let call_id = CallId::new(&offer.meta.call_id);
+    let call_manager = client.get_call_manager().await;
+    if let Some(call_info) = call_manager.get_call(&call_id).await {
+        if let Some(ref relay) = call_info.offer_relay_data {
+            info!(
+                "   Relay: uuid={:?}, self_pid={:?}, peer_pid={:?}",
+                relay.uuid, relay.self_pid, relay.peer_pid
+            );
+            info!(
+                "   Relay keys: hbh_key={} bytes, relay_key={} bytes",
+                relay.hbh_key.as_ref().map(|k| k.len()).unwrap_or(0),
+                relay.relay_key.as_ref().map(|k| k.len()).unwrap_or(0)
+            );
+            info!(
+                "   Relay endpoints: {} endpoints, {} tokens, {} auth_tokens",
+                relay.endpoints.len(),
+                relay.relay_tokens.len(),
+                relay.auth_tokens.len()
+            );
+            for ep in &relay.endpoints {
+                info!(
+                    "     - {} (id={}): {} addresses",
+                    ep.relay_name,
+                    ep.relay_id,
+                    ep.addresses.len()
+                );
+            }
+        }
+        if let Some(ref media) = call_info.offer_media_params {
+            for audio in &media.audio {
+                info!("   Audio: {} @ {}Hz", audio.codec, audio.rate);
+            }
+            if let Some(ref video) = media.video {
+                info!("   Video: {:?}", video.codec);
+            }
+        }
+        if let Some(ref enc) = call_info.offer_enc_data {
+            info!(
+                "   Encrypted key: type={:?}, {} bytes (v{})",
+                enc.enc_type,
+                enc.ciphertext.len(),
+                enc.version
+            );
+        }
+    }
+
+    if offer.is_offline {
+        info!("   (Offline call - not accepting)");
+        return;
+    }
+
+    // Acceptance flow: PREACCEPT → RELAYLATENCY → MUTE_V2 → ACCEPT → connect relay.
+    info!("   Caller LID: {}", offer.meta.call_creator);
+
+    info!("   Step 1: Sending PREACCEPT...");
+    match call_manager.send_preaccept(&call_id).await {
+        Ok(stanza) => {
+            if let Err(e) = client.send_node(stanza).await {
+                error!("Failed to send PREACCEPT: {}", e);
+            } else {
+                info!("   ✓ Sent PREACCEPT");
+            }
+        }
+        Err(e) => warn!("Failed to build PREACCEPT: {}", e),
+    }
+
+    info!("   Step 2: Sending RELAYLATENCY...");
+    if let Some(info_rec) = call_manager.get_call(&call_id).await
+        && let Some(ref relay_data) = info_rec.offer_relay_data
+    {
+        let measurements =
+            whatsapp_rust::calls::RelayLatencyMeasurement::from_relay_data(relay_data, 30);
+        info!("   Generated {} relay measurements", measurements.len());
+        match call_manager
+            .send_relay_latency(&call_id, measurements)
+            .await
+        {
+            Ok(stanza) => {
+                if let Err(e) = client.send_node(stanza).await {
+                    error!("Failed to send RELAYLATENCY: {}", e);
+                } else {
+                    info!("   ✓ Sent RELAYLATENCY");
+                }
+            }
+            Err(e) => warn!("Failed to build RELAYLATENCY: {}", e),
+        }
+    }
+
+    info!("   Step 3: Sending MUTE_V2 (unmuted)...");
+    match call_manager.send_mute_state(&call_id, false).await {
+        Ok(stanza) => {
+            if let Err(e) = client.send_node(stanza).await {
+                error!("Failed to send MUTE_V2: {}", e);
+            } else {
+                info!("   ✓ Sent MUTE_V2");
+            }
+        }
+        Err(e) => warn!("Failed to build MUTE_V2: {}", e),
+    }
+
+    info!("   Step 4: Sending ACCEPT...");
+    match call_manager.accept_call(&call_id).await {
+        Ok(stanza) => {
+            if let Err(e) = client.send_node(stanza).await {
+                error!("Failed to send ACCEPT: {}", e);
+            } else {
+                info!(
+                    "✅ Call accepted! All signaling complete for {}",
+                    offer.meta.call_id
+                );
+            }
+        }
+        Err(e) => error!("Failed to build ACCEPT stanza: {}", e),
+    }
+
+    info!("   Step 5: Connecting to relay via WebRTC...");
+    if let Some(relay_data) = call_manager.get_relay_data(&call_id).await {
+        let call_manager_clone = call_manager.clone();
+        let call_id_clone = call_id.clone();
+        tokio::spawn(async move {
+            match call_manager_clone
+                .connect_relay(&call_id_clone, &relay_data)
+                .await
+            {
+                Ok(relay_name) => info!(
+                    "WebRTC connected for call {}: relay={}",
+                    call_id_clone, relay_name
+                ),
+                Err(e) => warn!("WebRTC connection failed for call {}: {}", call_id_clone, e),
+            }
+        });
+    } else {
+        warn!(
+            "No relay data available for call {} - cannot connect WebRTC",
+            call_id
+        );
+    }
 }
 
 fn parse_arg(args: &[String], long: &str, short: &str) -> Option<String> {

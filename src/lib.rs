@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 pub use wacore::{
     iq::privacy as privacy_settings, proto_helpers, sticker_pack, store::traits, webp,
 };
@@ -58,6 +60,7 @@ pub mod retry;
 pub mod unified_session;
 
 pub mod appstate_sync;
+pub mod calls;
 pub mod history_sync;
 pub mod usync;
 

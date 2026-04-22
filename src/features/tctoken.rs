@@ -12,11 +12,15 @@
 //! let count = client.tc_token().prune_expired().await?;
 //! ```
 //!
-//! ## TODO: VoIP call integration
+//! ## VoIP call integration
 //! WA Web calls `sendTcToken` for each participant when initiating calls
-//! (WAWeb/Voip/StartCall.js). When a calls/VoIP module is added, it should
-//! call `issue_tc_token_after_send` (or equivalent) for every call participant
-//! — both 1:1 and group calls. This prevents 463 nacks on call offers.
+//! (`WAWeb/Voip/StartCall.js:140` →
+//! `WAWeb/Send/TcTokenChatAction.js::sendTcToken`). That amounts to
+//! `issuePrivacyToken(peer_lid, [TrustedContact], now)` gated by a
+//! per-chat timestamp (`shouldSendNewToken`). Without it the server
+//! returns **463 nack** on the call offer and the call is aborted.
+//!
+//! Use [`TcToken::pre_call_send`] before [`crate::calls::CallManager::start_call`].
 
 use crate::client::Client;
 use crate::request::IqError;
@@ -77,6 +81,32 @@ impl<'a> TcToken<'a> {
     pub async fn get_all_jids(&self) -> Result<Vec<String>, anyhow::Error> {
         let backend = self.client.persistence_manager.backend();
         Ok(backend.get_all_tc_token_jids().await?)
+    }
+
+    /// Issue a TrustedContact privacy token for `peer` before placing a
+    /// call, matching WA Web's `sendTcToken(jid)` step in `StartCall.js`.
+    /// Without this, the server returns **463 nack** on the call offer.
+    ///
+    /// This is a best-effort path: any IQ error is swallowed and logged at
+    /// WARN, because (a) the server only enforces the token for privacy
+    /// protection features, and (b) we want the call to still go through
+    /// so the user gets a UI-level error from the call handler, not a
+    /// silent abort from this pre-step.
+    ///
+    /// Returns `true` if a token was issued, `false` if we skipped
+    /// (issue failed). Callers shouldn't gate the call on the return.
+    pub async fn pre_call_send(&self, peer: &Jid) -> bool {
+        match self.issue_tokens(std::slice::from_ref(peer)).await {
+            Ok(tokens) => !tokens.is_empty(),
+            Err(e) => {
+                log::warn!(
+                    target: "Client/TcToken",
+                    "pre_call_send: issue_tokens({}) failed: {:?}",
+                    peer, e
+                );
+                false
+            }
+        }
     }
 }
 

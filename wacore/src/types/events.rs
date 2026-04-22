@@ -1,5 +1,5 @@
 use crate::stanza::BusinessSubscription;
-use crate::types::call::IncomingCall;
+use crate::types::call::{BasicCallMeta, CallMediaType, CallRemoteMeta, IncomingCall};
 use crate::types::message::MessageInfo;
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use bytes::Bytes;
@@ -430,6 +430,11 @@ pub enum Event {
 
     /// Business account status changed (verified name, profile, conversion to personal)
     BusinessStatusUpdate(BusinessStatusUpdate),
+
+    CallOffer(CallOffer),
+    CallAccepted(CallAccepted),
+    CallRejected(CallRejected),
+    CallEnded(CallEnded),
 
     StreamReplaced(StreamReplaced),
     TemporaryBan(TemporaryBan),
@@ -864,6 +869,30 @@ pub struct MarkChatAsReadUpdate {
     pub timestamp: DateTime<Utc>,
     pub action: Box<wa::sync_action_value::MarkChatAsReadAction>,
     pub from_full_sync: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CallOffer {
+    pub meta: BasicCallMeta,
+    pub media_type: CallMediaType,
+    pub is_offline: bool,
+    pub remote_meta: CallRemoteMeta,
+    pub group_jid: Option<Jid>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CallAccepted {
+    pub meta: BasicCallMeta,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CallRejected {
+    pub meta: BasicCallMeta,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CallEnded {
+    pub meta: BasicCallMeta,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -24,6 +24,7 @@ members = [
     "wacore/libsignal",
     "wacore/noise",
     "waproto",
+    "whatsapp-ui",
 ]
 default-members = [
     ".",
@@ -37,6 +38,7 @@ default-members = [
     "wacore/libsignal",
     "wacore/noise",
     "waproto",
+    "whatsapp-ui",
 ]
 
 [workspace.dependencies]
@@ -68,6 +70,7 @@ portable-atomic = { version = "1", default-features = false, features = ["fallba
 prost = { version = "0.14.3", default-features = false, features = ["std"] }
 prost-build = { version = "0.14.3", default-features = false }
 rand = "0.10"
+rand_core = "0.10"
 serde = { version = "1.0", features = ["derive", "rc"] }
 serde-big-array = "0.5"
 serde_json = { version = "1.0", default-features = false }
@@ -111,34 +114,47 @@ sqlite-storage = ["whatsapp-rust-sqlite-storage"]
 tokio-native = ["tokio-runtime", "tokio/rt-multi-thread"]
 
 [dependencies]
+aes = "0.8.4"
 anyhow = { workspace = true }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true, features = ["clock"] }
+chrono = { workspace = true, features = ["clock", "serde"] }
+crc = "3.4.0"
+ctr = "0.9.2"
+dashmap = "6.1.0"
 env_logger = { workspace = true }
 event-listener = { workspace = true }
 futures = { workspace = true, features = ["std"] }
 hex = { workspace = true }
+hkdf = { workspace = true }
+hmac = { workspace = true }
 itoa = { workspace = true }
 log = { workspace = true }
 moka = { version = "0.12.12", features = ["future"], optional = true }
 portable-atomic = { workspace = true }
 prost = { workspace = true }
 rand = { workspace = true }
+rand_core = { workspace = true }
+regex = "1.11"
 scopeguard = "1.2"
 serde = { workspace = true }
 serde_json = { workspace = true, features = ["std"] }
+sha1 = { workspace = true }
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"], optional = true }
 wacore = { workspace = true }
 wacore-binary = { workspace = true }
 waproto = { workspace = true }
+
+webrtc = "0.14.0"
 whatsapp-rust-sqlite-storage = { path = "./storages/sqlite-storage", version = "0.5.0", optional = true }
 whatsapp-rust-tokio-transport = { path = "./transports/tokio-transport", version = "0.5.0", optional = true }
 whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version = "0.5.0", optional = true }
+zeroize = { version = "1.8.2", features = ["derive"] }
 
 [dev-dependencies]
 uuid = { workspace = true, features = ["v4"] }
@@ -163,8 +179,29 @@ lto = "thin"
 debug = 1
 strip = false
 
-# Profiling: optimized with debug symbols for DHAT / heaptrack / perf
+# Profiling: optimized with debug symbols for DHAT / heaptrack / perf / valgrind
 [profile.profiling]
 inherits = "release"
-debug = 1
+debug = 2
 strip = false
+lto = false
+opt-level = 2
+
+# gpui-component tracks a specific zed commit in its Cargo.lock but declares
+# `gpui = { git = ".../zed" }` without a rev, so by default cargo would pull
+# whatever is on zed main (and zed main has since removed APIs gpui-component
+# still uses). Pin to the commit gpui-component CI builds against.
+[patch."https://github.com/zed-industries/zed"]
+gpui = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "gpui" }
+gpui_platform = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "gpui_platform" }
+gpui_macros = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "gpui_macros" }
+collections = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "collections" }
+util = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "util" }
+util_macros = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "util_macros" }
+sum_tree = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "sum_tree" }
+refineable = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "refineable" }
+derive_refineable = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "derive_refineable" }
+http_client = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "http_client" }
+perf = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "perf" }
+zlog = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "zlog" }
+ztracing = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "ztracing" }

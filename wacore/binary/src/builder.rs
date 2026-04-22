@@ -30,6 +30,13 @@ impl NodeBuilder {
         self
     }
 
+    /// Insert an attribute with an owned (dynamic) key. Prefer `attr` with a
+    /// `&'static str` when the key is known at compile time.
+    pub fn attr_dynamic(mut self, key: String, value: impl Into<NodeValue>) -> Self {
+        self.attrs.insert(Cow::Owned(key), value.into());
+        self
+    }
+
     pub fn attrs<I, V>(mut self, attrs: I) -> Self
     where
         I: IntoIterator<Item = (&'static str, V)>,
