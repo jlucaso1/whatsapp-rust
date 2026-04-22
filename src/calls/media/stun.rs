@@ -116,6 +116,18 @@ pub enum StunAttributeType {
     ReceiverSubscription = 0x4001,
     /// WhatsApp SubscriptionAck (0x4002) - Custom subscription acknowledgment
     SubscriptionAck = 0x4002,
+    /// WhatsApp ReceiverSubscriptionV2 (0x4021) - emitted by
+    /// `add_stun_attr_receiver_subscription` in `wa_transport_subscription.cc`.
+    /// Parsed as opaque bytes (schema not reverse-engineered yet).
+    ReceiverSubscriptionV2 = 0x4021,
+    /// WhatsApp StreamDescriptor (0x4024) - emitted by
+    /// `add_stun_attr_stream_descriptor` in `wa_transport_subscription.cc`.
+    /// Carries SSRC-level metadata (app_data, hbh_fec, imu_data, live_transcription).
+    StreamDescriptor = 0x4024,
+    /// WhatsApp SenderSubscriptionsV2 (0x4025) - the newer emit path for
+    /// `add_stun_attr_sender_subscriptions`. Parse tolerant; keep both
+    /// 0x4000 and 0x4025 to stay compatible across server rollouts.
+    SenderSubscriptionsV2 = 0x4025,
     /// SOFTWARE (0x8022) - Software description
     Software = 0x8022,
     /// FINGERPRINT (0x8028) - CRC32 checksum
@@ -146,6 +158,9 @@ impl TryFrom<u16> for StunAttributeType {
             0x4000 => Ok(Self::SenderSubscriptions),
             0x4001 => Ok(Self::ReceiverSubscription),
             0x4002 => Ok(Self::SubscriptionAck),
+            0x4021 => Ok(Self::ReceiverSubscriptionV2),
+            0x4024 => Ok(Self::StreamDescriptor),
+            0x4025 => Ok(Self::SenderSubscriptionsV2),
             0x8022 => Ok(Self::Software),
             0x8028 => Ok(Self::Fingerprint),
             0x8029 => Ok(Self::IceControlled),
@@ -202,6 +217,15 @@ pub enum StunAttribute {
     ReceiverSubscription(Vec<u8>),
     /// WhatsApp SubscriptionAck (0x4002) - raw bytes
     SubscriptionAck(Vec<u8>),
+    /// WhatsApp ReceiverSubscriptionV2 (0x4021) - raw bytes.
+    /// Emitted by `add_stun_attr_receiver_subscription` in WA Web WASM.
+    ReceiverSubscriptionV2(Vec<u8>),
+    /// WhatsApp StreamDescriptor (0x4024) - raw bytes.
+    /// Per-SSRC stream metadata from `add_stun_attr_stream_descriptor`.
+    StreamDescriptor(Vec<u8>),
+    /// WhatsApp SenderSubscriptionsV2 (0x4025) - raw bytes.
+    /// Newer emit path for `add_stun_attr_sender_subscriptions`.
+    SenderSubscriptionsV2(Vec<u8>),
     /// Unknown attribute
     Unknown { attr_type: u16, data: Vec<u8> },
 }
@@ -783,6 +807,24 @@ impl StunMessage {
                             data: attr_data.to_vec(),
                         }
                     }
+                }
+                Ok(StunAttributeType::SenderSubscriptions) => {
+                    StunAttribute::SenderSubscriptions(attr_data.to_vec())
+                }
+                Ok(StunAttributeType::ReceiverSubscription) => {
+                    StunAttribute::ReceiverSubscription(attr_data.to_vec())
+                }
+                Ok(StunAttributeType::SubscriptionAck) => {
+                    StunAttribute::SubscriptionAck(attr_data.to_vec())
+                }
+                Ok(StunAttributeType::ReceiverSubscriptionV2) => {
+                    StunAttribute::ReceiverSubscriptionV2(attr_data.to_vec())
+                }
+                Ok(StunAttributeType::StreamDescriptor) => {
+                    StunAttribute::StreamDescriptor(attr_data.to_vec())
+                }
+                Ok(StunAttributeType::SenderSubscriptionsV2) => {
+                    StunAttribute::SenderSubscriptionsV2(attr_data.to_vec())
                 }
                 _ => StunAttribute::Unknown {
                     attr_type,
@@ -1474,6 +1516,111 @@ mod tests {
         let mapped = msg.mapped_address().unwrap();
         assert_eq!(mapped.ip(), IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1)));
         assert_eq!(mapped.port(), 12345);
+    }
+
+    /// Unknown comprehension-optional attrs (>= 0x8000) must be preserved,
+    /// not errored out. Server can roll out new attrs at any time and the
+    /// parser must stay forward-compatible.
+    #[test]
+    fn test_stun_decode_tolerates_unknown_comprehension_optional() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x01, 0x01]); // Binding Response
+        data.extend_from_slice(&[0x00, 0x08]); // length: 8 bytes of attrs
+        data.extend_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes());
+        data.extend_from_slice(&[0u8; 12]); // transaction id
+
+        // Unknown comprehension-optional attr 0xFFFE with 4-byte payload.
+        data.extend_from_slice(&[0xFF, 0xFE]);
+        data.extend_from_slice(&[0x00, 0x04]);
+        data.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+
+        let msg = StunMessage::decode(&data).expect("decode should tolerate unknown attrs");
+        let unknown = msg
+            .attributes
+            .iter()
+            .find(|a| {
+                matches!(
+                    a,
+                    StunAttribute::Unknown {
+                        attr_type: 0xFFFE,
+                        ..
+                    }
+                )
+            })
+            .expect("unknown attr 0xFFFE must be preserved");
+        match unknown {
+            StunAttribute::Unknown { data, .. } => {
+                assert_eq!(data, &[0xDE, 0xAD, 0xBE, 0xEF]);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    /// WhatsApp custom attrs added later in wa_transport_subscription.cc:
+    /// 0x4021 (receiver subscription v2), 0x4024 (stream descriptor),
+    /// 0x4025 (sender subscriptions v2). Parser must preserve the raw
+    /// bytes for each so downstream consumers can decode their protobufs.
+    #[test]
+    fn test_stun_decode_wa_custom_attrs_v2() {
+        for (ty, tag) in [(0x4021u16, "rx"), (0x4024u16, "desc"), (0x4025u16, "tx")] {
+            let mut data = Vec::new();
+            data.extend_from_slice(&[0x01, 0x01]);
+            data.extend_from_slice(&[0x00, 0x08]);
+            data.extend_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes());
+            data.extend_from_slice(&[0u8; 12]);
+
+            data.extend_from_slice(&ty.to_be_bytes());
+            data.extend_from_slice(&[0x00, 0x04]);
+            data.extend_from_slice(&[0xA5, 0xA5, 0xA5, 0xA5]);
+
+            let msg = StunMessage::decode(&data)
+                .unwrap_or_else(|e| panic!("decode {:?} failed for {}: {:?}", ty, tag, e));
+            let found = msg.attributes.iter().find(|a| {
+                matches!(
+                    (ty, *a),
+                    (0x4021, StunAttribute::ReceiverSubscriptionV2(_))
+                        | (0x4024, StunAttribute::StreamDescriptor(_))
+                        | (0x4025, StunAttribute::SenderSubscriptionsV2(_))
+                )
+            });
+            assert!(
+                found.is_some(),
+                "attr 0x{:04X} ({}) must be parsed into its typed variant, got {:?}",
+                ty,
+                tag,
+                msg.attributes
+            );
+        }
+    }
+
+    /// Same tolerance for comprehension-required (< 0x8000) codes we don't
+    /// know. WhatsApp custom attrs (0x4003..) were added after our enum list;
+    /// rejecting them would break us on any server-side rollout.
+    #[test]
+    fn test_stun_decode_tolerates_unknown_comprehension_required() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x01, 0x01]);
+        data.extend_from_slice(&[0x00, 0x08]);
+        data.extend_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes());
+        data.extend_from_slice(&[0u8; 12]);
+
+        // 0x4F00 is a free slot in the comprehension-required range — not
+        // defined by either RFC 5389 or the WA custom subscription set.
+        data.extend_from_slice(&[0x4F, 0x00]);
+        data.extend_from_slice(&[0x00, 0x04]);
+        data.extend_from_slice(&[0xCA, 0xFE, 0xBA, 0xBE]);
+
+        let msg = StunMessage::decode(&data).expect("decode must not fail on unknown < 0x8000");
+        assert!(
+            msg.attributes.iter().any(|a| matches!(
+                a,
+                StunAttribute::Unknown {
+                    attr_type: 0x4F00,
+                    ..
+                }
+            )),
+            "unknown comprehension-required attr must survive as Unknown variant"
+        );
     }
 
     #[test]

@@ -96,6 +96,15 @@ pub struct RelayConnection {
     config: RelayConnectionConfig,
     /// Stored credentials for keepalives (auth_token + relay_key).
     credentials: Mutex<Option<StunCredentials>>,
+    /// Stable-routing 64-bit connection id. When populated, every outgoing
+    /// packet on this relay is prefixed with `conn_id.to_be_bytes()` so the
+    /// relay can fast-route to the correct session.
+    ///
+    /// WA Web: `wa_tp_connection.cc::wa_transport_maybe_prepend_relay_conn_id`.
+    /// Server signals per-relay conn_id in the allocate response (exact attr
+    /// code pending reverse engineering); until we parse it, callers can set
+    /// this directly via `set_conn_id`.
+    conn_id: Mutex<Option<u64>>,
 }
 
 impl RelayConnection {
@@ -110,7 +119,26 @@ impl RelayConnection {
             connected: Mutex::new(None),
             config,
             credentials: Mutex::new(None),
+            conn_id: Mutex::new(None),
         })
+    }
+
+    /// Install the stable-routing connection id. Once set, [`send`] prefixes
+    /// every packet with the 8-byte big-endian encoded id.
+    ///
+    /// [`send`]: Self::send
+    pub async fn set_conn_id(&self, conn_id: u64) {
+        *self.conn_id.lock().await = Some(conn_id);
+    }
+
+    /// Clear the stable-routing connection id (revert to raw-packet mode).
+    pub async fn clear_conn_id(&self) {
+        *self.conn_id.lock().await = None;
+    }
+
+    /// Currently-installed stable-routing connection id, if any.
+    pub async fn conn_id(&self) -> Option<u64> {
+        *self.conn_id.lock().await
     }
 
     /// Get the local address.
@@ -331,7 +359,28 @@ impl RelayConnection {
         Err(RelayError::NoValidAddress(endpoint.relay_name.clone()))
     }
 
-    /// Send data to the connected relay.
+    /// Frame an outbound packet for stable routing. When `conn_id` is `None`
+    /// the packet is returned borrowed untouched; when `Some`, the 8-byte BE
+    /// encoded id is prepended. Pure: zero I/O, zero global state. Unit test
+    /// entry point for the wire layout.
+    pub fn frame_packet(conn_id: Option<u64>, data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+        match conn_id {
+            Some(id) => {
+                let mut buf = Vec::with_capacity(8 + data.len());
+                buf.extend_from_slice(&id.to_be_bytes());
+                buf.extend_from_slice(data);
+                std::borrow::Cow::Owned(buf)
+            }
+            None => std::borrow::Cow::Borrowed(data),
+        }
+    }
+
+    /// Send data to the connected relay. When a stable-routing connection
+    /// id is installed (see [`set_conn_id`]) the 8-byte BE encoding is
+    /// prepended to the packet before it hits the wire, matching WA Web's
+    /// `wa_transport_maybe_prepend_relay_conn_id`.
+    ///
+    /// [`set_conn_id`]: Self::set_conn_id
     pub async fn send(&self, data: &[u8]) -> Result<usize, RelayError> {
         let state = *self.state.lock().await;
         if state != RelayState::Bound {
@@ -341,7 +390,9 @@ impl RelayConnection {
             )));
         }
 
-        Ok(self.socket.send(data).await?)
+        let conn_id = *self.conn_id.lock().await;
+        let framed = Self::frame_packet(conn_id, data);
+        Ok(self.socket.send(framed.as_ref()).await?)
     }
 
     /// Receive data from the relay.
@@ -416,5 +467,42 @@ mod tests {
         let local = conn.local_addr().unwrap();
         // Should be bound to 0.0.0.0 with some port
         assert!(local.port() > 0);
+    }
+
+    /// `frame_packet(None, payload)` must pass-through (borrow) without
+    /// allocating a new buffer.
+    #[test]
+    fn test_frame_packet_noop_when_conn_id_missing() {
+        let payload = [0xABu8; 32];
+        let framed = RelayConnection::frame_packet(None, &payload);
+        assert!(
+            matches!(framed, std::borrow::Cow::Borrowed(_)),
+            "frame_packet with None must borrow, not allocate"
+        );
+        assert_eq!(framed.as_ref(), &payload);
+    }
+
+    /// `frame_packet(Some(id), payload)` prepends exactly 8 bytes BE-encoded
+    /// `id`, preserving the payload verbatim.
+    #[test]
+    fn test_frame_packet_prepends_be_id() {
+        let id: u64 = 0x0102030405060708;
+        let payload = [0xDEu8, 0xAD, 0xBE, 0xEF];
+        let framed = RelayConnection::frame_packet(Some(id), &payload);
+        assert_eq!(framed.len(), 12);
+        assert_eq!(&framed[..8], &id.to_be_bytes());
+        assert_eq!(&framed[8..], &payload);
+    }
+
+    /// Setter/getter round-trip for the stable-routing connection id.
+    #[tokio::test]
+    async fn test_set_conn_id_roundtrip() {
+        let config = RelayConnectionConfig::default();
+        let conn = RelayConnection::new(config).await.unwrap();
+        assert_eq!(conn.conn_id().await, None);
+        conn.set_conn_id(0xCAFEBABEDEADBEEF).await;
+        assert_eq!(conn.conn_id().await, Some(0xCAFEBABEDEADBEEF));
+        conn.clear_conn_id().await;
+        assert_eq!(conn.conn_id().await, None);
     }
 }

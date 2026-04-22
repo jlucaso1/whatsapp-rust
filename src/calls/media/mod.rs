@@ -49,6 +49,7 @@ mod session;
 mod srtp;
 mod stun;
 mod transport;
+mod warp_mi;
 mod webrtc;
 
 pub use ice_interceptor::RelayUdpConn;
@@ -75,6 +76,7 @@ pub use transport::{
     ActiveRelay, CallMediaTransport, MediaTransportConfig, RelayLatency, TransportError,
     TransportState,
 };
+pub use warp_mi::{DEFAULT_WARP_MI_TAG_LEN, WarpMi, WarpMiError};
 pub use webrtc::{
     DATA_CHANNEL_NAME, RelayConnectionInfo, WHATSAPP_DTLS_FINGERPRINT, WebRtcConnectionResult,
     WebRtcError, WebRtcState, WebRtcTransport, WebRtcTransportConfig, manipulate_sdp,
