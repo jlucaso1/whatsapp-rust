@@ -22,10 +22,13 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 cpal = "0.15"
 env_logger = "0.11"
 
-# UI framework - GPUI with YUV surface support (forked Zed)
-gpui = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "gpui" }
-gpui-component = "0.5.0"
-gpui-component-assets = "0.5.0"
+# UI framework - GPUI upstream + gpui-component.
+# gpui-component leaves its gpui dep unpinned; we pin the rev via a root-level
+# [patch] so our workspace uses a single gpui version.
+gpui = { git = "https://github.com/zed-industries/zed", package = "gpui" }
+gpui_platform = { git = "https://github.com/zed-industries/zed", package = "gpui_platform", features = ["font-kit", "x11", "wayland", "runtime_shaders"] }
+gpui-component = { git = "https://github.com/longbridge/gpui-component.git" }
+gpui-component-assets = { git = "https://github.com/longbridge/gpui-component.git" }
 
 # Image handling
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }

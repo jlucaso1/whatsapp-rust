@@ -18,9 +18,7 @@ mod utils;
 mod video;
 mod views;
 
-use gpui::{
-    App, AppContext, Application, Bounds, SharedString, WindowBounds, WindowOptions, px, size,
-};
+use gpui::{App, AppContext, Bounds, SharedString, WindowBounds, WindowOptions, px, size};
 use gpui_component::Root;
 use gpui_component::theme::{Theme, ThemeMode};
 
@@ -35,7 +33,7 @@ fn main() {
         .filter_module("gpui", log::LevelFilter::Warn)
         .init();
 
-    Application::new()
+    gpui_platform::application()
         .with_assets(assets::Assets)
         .run(|cx: &mut App| {
             gpui_component::init(cx);

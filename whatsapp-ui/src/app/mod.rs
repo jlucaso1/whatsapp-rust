@@ -1099,13 +1099,13 @@ impl WhatsAppApp {
         self.video_players.get(message_id).map(|p| p.state())
     }
 
-    /// Get current video frame for a message (if playing)
-    /// Returns YuvFrameData for GPU-accelerated YUV→RGB conversion (~62% less memory than BGRA)
-    pub fn video_current_frame(&self, message_id: &str) -> Option<gpui::YuvFrameData> {
+    /// Get current video frame for a message (if playing).
+    /// Returns an `Arc<RenderImage>` — YUV→RGBA was already converted when
+    /// the frame was decoded (same pattern Zed uses on Linux).
+    pub fn video_current_frame(&self, message_id: &str) -> Option<Arc<gpui::RenderImage>> {
         self.video_players
             .get(message_id)
             .and_then(|p| p.current_frame())
-            .cloned()
     }
 
     /// Get or create a cached sticker image for animation state preservation.

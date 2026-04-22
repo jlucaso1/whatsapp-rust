@@ -26,7 +26,6 @@ members = [
     "waproto",
     "whatsapp-ui",
 ]
-exclude = ["vendor"]
 default-members = [
     ".",
     "http_clients/ureq-client",
@@ -188,21 +187,21 @@ strip = false
 lto = false
 opt-level = 2
 
-[patch.crates-io]
-gpui = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "gpui" }
-gpui-component = { path = "vendor/gpui-component/crates/ui" }
-gpui-component-assets = { path = "vendor/gpui-component/crates/assets" }
-
+# gpui-component tracks a specific zed commit in its Cargo.lock but declares
+# `gpui = { git = ".../zed" }` without a rev, so by default cargo would pull
+# whatever is on zed main (and zed main has since removed APIs gpui-component
+# still uses). Pin to the commit gpui-component CI builds against.
 [patch."https://github.com/zed-industries/zed"]
-gpui = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "gpui" }
-collections = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "collections" }
-util = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "util" }
-util_macros = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "util_macros" }
-sum_tree = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "sum_tree" }
-refineable = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "refineable" }
-derive_refineable = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "derive_refineable" }
-gpui_macros = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "gpui_macros" }
-http_client = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "http_client" }
-perf = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "perf" }
-zlog = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "zlog" }
-ztracing = { git = "https://github.com/jlucaso1/zed.git", branch = "gpui-yuv-surface-linux-windows", package = "ztracing" }
+gpui = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "gpui" }
+gpui_platform = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "gpui_platform" }
+gpui_macros = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "gpui_macros" }
+collections = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "collections" }
+util = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "util" }
+util_macros = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "util_macros" }
+sum_tree = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "sum_tree" }
+refineable = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "refineable" }
+derive_refineable = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "derive_refineable" }
+http_client = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "http_client" }
+perf = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "perf" }
+zlog = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "zlog" }
+ztracing = { git = "https://github.com/jlucaso1/zed.git", rev = "15d8660748b508b3525d3403e5d172f1a557bfa5", package = "ztracing" }

@@ -1,13 +1,23 @@
-//! Streaming video decoder with on-demand frame decoding and YUV GPU rendering.
+//! Streaming video decoder with on-demand frame decoding.
+//!
+//! Same pipeline Zed's livekit_client uses on Linux: decode H.264 with
+//! openh264, let `YUVSource::write_rgba8` do the YUV→RGBA conversion
+//! (SIMD-accelerated when available), then wrap the RGBA buffer in a
+//! [`gpui::RenderImage`]. Upstream GPUI has no YUV surface on Linux — the
+//! macOS `CVPixelBuffer` path is the only hardware-accelerated route, so
+//! doing the convert in CPU here matches what Zed itself does.
 
 use std::io::Cursor;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
-use gpui::{SharedBytes, YuvFormat, YuvFrameData};
+use gpui::RenderImage;
+use image::{Frame, RgbaImage};
 use mp4::{Mp4Reader, TrackType};
 use openh264::decoder::Decoder;
 use openh264::formats::YUVSource;
+use smallvec::SmallVec;
 
 use super::audio::VideoAudio;
 
@@ -17,11 +27,11 @@ const NAL_START_CODE: &[u8] = &[0x00, 0x00, 0x00, 0x01];
 /// NAL length size in AVCC format (typically 4 bytes for WhatsApp videos)
 const NAL_LENGTH_SIZE: usize = 4;
 
-/// A decoded video frame in YUV format (I420).
+/// A decoded video frame, BGRA8-encoded and ready to hand to `gpui::img`.
 #[derive(Clone)]
 pub struct StreamingFrame {
-    /// YUV frame data for GPU rendering
-    pub yuv_data: YuvFrameData,
+    /// Decoded RGBA frame, converted from YUV to BGRA in CPU.
+    pub image: Arc<RenderImage>,
     /// Presentation timestamp
     pub timestamp: Duration,
     /// Frame index
@@ -57,12 +67,12 @@ pub struct StreamingVideoDecoder {
     current_frame: Option<StreamingFrame>,
     /// Decoded audio from the video
     audio: Option<VideoAudio>,
-    /// Single contiguous buffer for all YUV planes (Y + U + V)
-    /// This reduces allocations from 3 to 1 per frame and improves cache locality
-    combined_buffer: Vec<u8>,
-    /// Precomputed plane sizes for slicing
-    y_size: usize,
-    u_size: usize,
+    /// Reusable RGBA scratch buffer so we don't allocate `w*h*4` per frame.
+    /// `std::mem::take`'d each time a frame is kept, to move ownership into
+    /// `RenderImage`; refilled from capacity on the next keep.
+    rgba_buffer: Vec<u8>,
+    /// Precomputed `width * height * 4`; re-allocation size for the buffer.
+    rgba_byte_len: usize,
 }
 
 impl StreamingVideoDecoder {
@@ -221,13 +231,7 @@ impl StreamingVideoDecoder {
         // Extract audio
         let audio = Self::extract_audio(mp4_data);
 
-        // Pre-compute plane sizes for YUV I420 format
-        let y_size = (width as usize) * (height as usize);
-        let uv_width = (width as usize).div_ceil(2);
-        let uv_height = (height as usize).div_ceil(2);
-        let u_size = uv_width * uv_height;
-        let v_size = u_size;
-        let total_size = y_size + u_size + v_size;
+        let rgba_byte_len = (width as usize) * (height as usize) * 4;
 
         Ok(Self {
             samples,
@@ -240,9 +244,8 @@ impl StreamingVideoDecoder {
             last_decoded_index: -1,
             current_frame: None,
             audio,
-            combined_buffer: Vec::with_capacity(total_size),
-            y_size,
-            u_size,
+            rgba_buffer: vec![0u8; rgba_byte_len],
+            rgba_byte_len,
         })
     }
 
@@ -448,90 +451,50 @@ impl StreamingVideoDecoder {
             Ok(Some(yuv)) => {
                 self.last_decoded_index = index as i32;
 
-                let (y_stride, u_stride, v_stride) = yuv.strides();
-                let y_len = yuv.y().len();
-                let u_len = yuv.u().len();
-                let v_len = yuv.v().len();
-
-                // Log first successful decode
                 if index == 0 {
+                    let (y_stride, u_stride, v_stride) = yuv.strides();
                     log::info!(
                         "First frame decoded: strides=({}, {}, {}), plane sizes=({}, {}, {})",
                         y_stride,
                         u_stride,
                         v_stride,
-                        y_len,
-                        u_len,
-                        v_len
+                        yuv.y().len(),
+                        yuv.u().len(),
+                        yuv.v().len()
                     );
                 }
 
-                // Only create YUV frame if we need to keep this frame
+                // Only materialize a frame if the caller wants to keep it
                 if keep_output {
-                    let width = self.width as usize;
-                    let height = self.height as usize;
-                    let uv_width = width.div_ceil(2);
-                    let uv_height = height.div_ceil(2);
+                    // openh264 writes RGBA directly (SIMD path `write_rgba8_f32x8`
+                    // when the host supports it, scalar fallback otherwise).
+                    yuv.write_rgba8(&mut self.rgba_buffer);
 
-                    // Clear and reuse the combined buffer (no allocation if capacity sufficient)
-                    self.combined_buffer.clear();
-
-                    // Extract all planes contiguously into the single buffer
-                    extract_plane_append(
-                        &mut self.combined_buffer,
-                        yuv.y(),
-                        width,
-                        height,
-                        y_stride,
-                    );
-                    extract_plane_append(
-                        &mut self.combined_buffer,
-                        yuv.u(),
-                        uv_width,
-                        uv_height,
-                        u_stride,
-                    );
-                    extract_plane_append(
-                        &mut self.combined_buffer,
-                        yuv.v(),
-                        uv_width,
-                        uv_height,
-                        v_stride,
-                    );
-
-                    // Convert to SharedBytes (takes ownership, O(1) move) and slice into planes
-                    // This is 1 allocation vs 3, with zero-copy slicing for Y/U/V views
-                    let shared = SharedBytes::from(std::mem::take(&mut self.combined_buffer));
-                    let y_plane = shared.slice(0..self.y_size);
-                    let u_plane = shared.slice(self.y_size..self.y_size + self.u_size);
-                    let v_plane = shared.slice(self.y_size + self.u_size..);
-
-                    let yuv_data = YuvFrameData {
-                        format: YuvFormat::I420,
-                        width: self.width,
-                        height: self.height,
-                        y_plane,
-                        u_plane,
-                        v_plane: Some(v_plane),
-                        y_stride: self.width,
-                        u_stride: uv_width as u32,
-                        v_stride: Some(uv_width as u32),
+                    let owned =
+                        std::mem::replace(&mut self.rgba_buffer, vec![0u8; self.rgba_byte_len]);
+                    let Some(image) = RgbaImage::from_raw(self.width, self.height, owned) else {
+                        log::warn!(
+                            "Frame {}: RgbaImage::from_raw failed (size mismatch)",
+                            index
+                        );
+                        return;
                     };
+                    let render_image =
+                        Arc::new(RenderImage::new(SmallVec::from_elem(Frame::new(image), 1)));
 
                     let timestamp = self.frame_duration * index as u32;
                     self.current_frame = Some(StreamingFrame {
-                        yuv_data,
+                        image: render_image,
                         timestamp,
                         index,
                     });
 
                     if index == 0 {
                         log::info!(
-                            "First frame YUV created: combined buffer {} bytes (Y={}, U={}, V={})",
-                            self.y_size + self.u_size * 2,
-                            self.y_size,
-                            self.u_size,
-                            self.u_size
+                            "First frame RGBA created: {} bytes ({}x{})",
+                            self.rgba_byte_len,
+                            self.width,
+                            self.height
                         );
                     }
                 }
@@ -665,25 +628,5 @@ impl StreamingVideoDecoder {
     /// Extract audio from MP4
     fn extract_audio(mp4_data: &[u8]) -> Option<VideoAudio> {
         super::audio::extract_audio_from_mp4(mp4_data)
-    }
-}
-
-/// Append a plane from strided buffer to the destination buffer (for contiguous storage)
-fn extract_plane_append(dst: &mut Vec<u8>, src: &[u8], width: usize, height: usize, stride: usize) {
-    let plane_size = width * height;
-
-    if stride == width {
-        // No padding, direct append
-        let end = plane_size.min(src.len());
-        dst.extend_from_slice(&src[..end]);
-    } else {
-        // Has padding, copy row by row
-        for row in 0..height {
-            let row_start = row * stride;
-            let row_end = row_start + width;
-            if row_end <= src.len() {
-                dst.extend_from_slice(&src[row_start..row_end]);
-            }
-        }
     }
 }

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use gpui::YuvFrameData;
+use gpui::RenderImage;
 use tokio::sync::oneshot;
 
 use super::audio::VideoAudio;
@@ -44,7 +44,7 @@ pub struct VideoPlayer {
     playback_start: Option<Instant>,
     paused_at: Option<Duration>,
     error: Option<String>,
-    current_frame: Option<YuvFrameData>,
+    current_frame: Option<Arc<RenderImage>>,
     current_timestamp: Duration,
     audio: Option<Arc<VideoAudio>>,
     needs_audio_start: bool,
@@ -206,20 +206,18 @@ impl VideoPlayer {
         let changed = self.current_timestamp != frame.timestamp;
         if changed {
             log::debug!(
-                "VideoPlayer: frame {} -> {}, YUV sizes: Y={} U={} V={}",
+                "VideoPlayer: frame {} -> {} ({})",
                 self.current_timestamp.as_millis(),
                 frame.timestamp.as_millis(),
-                frame.yuv_data.y_plane.len(),
-                frame.yuv_data.u_plane.len(),
-                frame.yuv_data.v_plane.as_ref().map_or(0, |v| v.len())
+                frame.index
             );
         }
-        self.current_frame = Some(frame.yuv_data.clone());
+        self.current_frame = Some(Arc::clone(&frame.image));
         self.current_timestamp = frame.timestamp;
         changed
     }
 
-    pub fn current_frame(&self) -> Option<&YuvFrameData> {
-        self.current_frame.as_ref()
+    pub fn current_frame(&self) -> Option<Arc<RenderImage>> {
+        self.current_frame.clone()
     }
 }

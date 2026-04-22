@@ -4,8 +4,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use gpui::{
-    Entity, Image, ImageSource, ObjectFit, SharedString, YuvFrameData, div, img, prelude::*, px,
-    rgb, surface,
+    Entity, Image, ImageSource, ObjectFit, RenderImage, SharedString, div, img, prelude::*, px, rgb,
 };
 use gpui_component::button::{Button, ButtonVariants};
 use gpui_component::clipboard::Clipboard;
@@ -27,7 +26,7 @@ pub fn render_message_bubble(
     is_group: bool,
     show_sender: bool,
     video_player_state: Option<VideoPlayerState>,
-    video_frame: Option<YuvFrameData>,
+    video_frame: Option<Arc<RenderImage>>,
     sticker_image: Option<Arc<Image>>,
     responsive_layout: ResponsiveLayout,
 ) -> impl IntoElement {
@@ -188,7 +187,7 @@ fn render_media_content(
     is_playing: bool,
     entity: Entity<WhatsAppApp>,
     video_player_state: Option<VideoPlayerState>,
-    video_frame: Option<YuvFrameData>,
+    video_frame: Option<Arc<RenderImage>>,
     sticker_image: Option<Arc<Image>>,
     max_media_size: f32,
 ) -> gpui::Div {
@@ -413,7 +412,7 @@ fn render_video_player(
     message_id: String,
     entity: Entity<WhatsAppApp>,
     video_player_state: Option<VideoPlayerState>,
-    video_frame: Option<YuvFrameData>,
+    video_frame: Option<Arc<RenderImage>>,
     max_media_size: f32,
 ) -> impl IntoElement {
     let (display_w, display_h) = calculate_media_size(
@@ -439,11 +438,14 @@ fn render_video_player(
         .overflow_hidden()
         .child(
             if let Some(frame) = video_frame.filter(|_| is_playing || is_paused) {
+                // Frame is a pre-decoded RGBA `RenderImage`; render with the
+                // standard `img()` element. GPU-side YUV surfaces (the old
+                // `surface()` path) are macOS-only upstream.
                 div()
                     .w_full()
                     .h_full()
                     .child(
-                        surface(frame)
+                        img(frame)
                             .w(px(display_w))
                             .h(px(display_h))
                             .object_fit(ObjectFit::Contain),
