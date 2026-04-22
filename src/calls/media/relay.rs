@@ -277,14 +277,18 @@ impl RelayConnection {
         // WhatsApp Web: ice-ufrag = authToken ?? token (prefer auth_token)
         let username = auth_token.unwrap_or(relay_token);
 
-        // Get relay_key for MESSAGE-INTEGRITY (ice-pwd)
-        let relay_key = relay_data.relay_key.as_ref();
+        // MESSAGE-INTEGRITY HMAC key: see [`integrity_key_for_relay`].
+        let integrity_key_bytes: Option<Vec<u8>> = relay_data
+            .relay_key
+            .as_ref()
+            .map(|bytes| Self::integrity_key_for_relay(bytes));
 
-        if let Some(key) = relay_key {
+        if let Some(ref key_bytes) = integrity_key_bytes {
             debug!(
-                "Relay key for {}: {} bytes (using for MESSAGE-INTEGRITY)",
+                "Relay key for {}: {} raw bytes → {} base64-string bytes (HMAC key)",
                 endpoint.relay_name,
-                key.len()
+                relay_data.relay_key.as_ref().map_or(0, |k| k.len()),
+                key_bytes.len()
             );
         } else {
             debug!(
@@ -294,8 +298,8 @@ impl RelayConnection {
         }
 
         // Build STUN credentials like WhatsApp Web
-        let credentials = if let Some(key) = relay_key {
-            StunCredentials::with_integrity(username, key)
+        let credentials = if let Some(ref key_bytes) = integrity_key_bytes {
+            StunCredentials::with_integrity(username, key_bytes)
         } else {
             StunCredentials::username_only(username)
         };
@@ -405,6 +409,22 @@ impl RelayConnection {
 
         warn!("No valid address found for relay {}", endpoint.relay_name);
         Err(RelayError::NoValidAddress(endpoint.relay_name.clone()))
+    }
+
+    /// Derive the MESSAGE-INTEGRITY HMAC key for a WhatsApp relay: the
+    /// ASCII bytes of the base64-encoded `relay_key`.
+    ///
+    /// Chrome / Firefox compute STUN `MESSAGE-INTEGRITY` over the packet
+    /// using the `ice-pwd` SDP value as the key. The SDP puts the
+    /// base64-string form of the raw relay key there, so when we bind
+    /// from Rust we must hash using the same string-bytes. Using the raw
+    /// 16 bytes directly would produce a different MAC and the relay
+    /// would drop the binding request.
+    pub fn integrity_key_for_relay(relay_key: &[u8]) -> Vec<u8> {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD
+            .encode(relay_key)
+            .into_bytes()
     }
 
     /// Frame an outbound packet for stable routing. When `conn_id` is `None`
@@ -601,6 +621,33 @@ mod tests {
         assert_eq!(conn.conn_id().await, Some(0xCAFEBABEDEADBEEF));
         conn.clear_conn_id().await;
         assert_eq!(conn.conn_id().await, None);
+    }
+
+    /// `integrity_key_for_relay(raw_bytes)` must return the ASCII bytes
+    /// of the base64 representation — the same string WebRTC puts into
+    /// `a=ice-pwd` and then uses as HMAC key. Raw length 16 → 24 bytes.
+    #[test]
+    fn test_integrity_key_uses_base64_string_bytes() {
+        let raw: [u8; 16] = [
+            0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE,
+            0xFF, 0x00,
+        ];
+        let out = RelayConnection::integrity_key_for_relay(&raw);
+        assert_eq!(out.len(), 24, "base64 of 16 raw bytes = 24 ASCII chars");
+        // Verify every byte is printable base64 alphabet.
+        for b in &out {
+            assert!(
+                b.is_ascii_alphanumeric() || *b == b'+' || *b == b'/' || *b == b'=',
+                "byte {:#x} is outside the base64 alphabet — double-check encoder",
+                b
+            );
+        }
+        // Sanity: must NOT equal the raw bytes (that was the bug).
+        assert_ne!(
+            out.as_slice(),
+            &raw[..],
+            "integrity key must differ from raw relay_key"
+        );
     }
 
     /// `frame_packet_with_warp` with both conn_id and WARP MI armed emits

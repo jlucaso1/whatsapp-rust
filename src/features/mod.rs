@@ -1,4 +1,5 @@
 mod blocking;
+mod calls;
 pub(crate) mod chat_actions;
 mod chatstate;
 mod community;
@@ -15,6 +16,7 @@ pub(crate) mod status;
 mod tctoken;
 
 pub use blocking::{Blocking, BlocklistEntry};
+pub use calls::{PlaceCallRequest, PlaceCallResult};
 
 pub use chat_actions::{ChatActions, SyncActionMessageRange, message_key, message_range};
 

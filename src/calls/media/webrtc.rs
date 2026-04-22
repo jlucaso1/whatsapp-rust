@@ -50,7 +50,16 @@ use super::ice_interceptor::RelayUdpConn;
 use crate::calls::{RelayData, WHATSAPP_RELAY_PORT};
 
 /// Hardcoded DTLS fingerprint used by WhatsApp Web.
-/// This is validated via HMAC by the relay server.
+///
+/// Shape: `"{hash_alg} {colon_separated_hex}"`. WA Web injects this
+/// literally into the SDP answer before the browser's WebRTC stack
+/// does its fingerprint check (which is then disabled on the Rust side
+/// via `disable_certificate_fingerprint_verification`), and the relay
+/// validates the actual security via its own HMAC layer — not DTLS.
+///
+/// Captured from WA Web. Rotation by the relay is rare but possible;
+/// update both the string and the test in `test_dtls_fingerprint_shape`
+/// if the relay ever rejects the current value.
 pub const WHATSAPP_DTLS_FINGERPRINT: &str = "sha-256 F9:CA:0C:98:A3:CC:71:D6:42:CE:5A:E2:53:D2:15:20:D3:1B:BA:D8:57:A4:F0:AF:BE:0B:FB:F3:6B:0C:A0:68";
 
 /// DataChannel name used by WhatsApp Web.
@@ -1017,6 +1026,38 @@ pub enum WebRtcError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `WHATSAPP_DTLS_FINGERPRINT` must keep the
+    /// `"{algorithm} {HEX(:HEX)*}"` shape SDP consumers expect. Breaking
+    /// this shape silently produces `a=fingerprint:garbage` and DTLS
+    /// handshake goes nowhere.
+    #[test]
+    fn test_dtls_fingerprint_shape() {
+        let fp = WHATSAPP_DTLS_FINGERPRINT;
+        let (algorithm, hex) = fp.split_once(' ').expect("algorithm + space + hex");
+        assert!(
+            algorithm.starts_with("sha-"),
+            "algorithm must be a hash name like sha-256, got {:?}",
+            algorithm
+        );
+        let parts: Vec<&str> = hex.split(':').collect();
+        // SHA-256 = 32 bytes = 32 hex pairs
+        assert_eq!(
+            parts.len(),
+            32,
+            "sha-256 fingerprint must have 32 colon-separated bytes, got {}",
+            parts.len()
+        );
+        for (i, part) in parts.iter().enumerate() {
+            assert_eq!(part.len(), 2, "byte {} must be 2 hex chars", i);
+            assert!(
+                part.chars().all(|c| c.is_ascii_hexdigit()),
+                "byte {} ({:?}) must be hex",
+                i,
+                part
+            );
+        }
+    }
 
     #[test]
     fn test_manipulate_sdp_ice_ufrag() {

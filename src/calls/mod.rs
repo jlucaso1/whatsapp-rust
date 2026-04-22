@@ -49,9 +49,11 @@ pub use manager::{CallManager, CallManagerConfig, CallMediaCallback, CallOptions
 pub use signaling::{ResponseType, SignalingType};
 pub use stanza::{
     AcceptAudioParams, AcceptVideoParams, AudioParams, CallStanzaBuilder, EncRekeyData,
-    MediaParams, OfferEncData, ParsedCallStanza, PreacceptParams, RelayAddress, RelayData,
-    RelayElectionData, RelayEndpoint, RelayLatencyData, RelayLatencyMeasurement, TransportParams,
-    VideoParams, build_call_ack, build_call_receipt, parse_relay_data_from_ack,
+    GroupDestinationRecipient, MediaParams, OfferEncData, ParsedCallStanza, PreacceptParams,
+    RelayAddress, RelayData, RelayElectionData, RelayEndpoint, RelayLatencyData,
+    RelayLatencyMeasurement, TransportParams, VideoParams, WHATSAPP_VOIP_CAPABILITY_V1,
+    build_call_ack, build_call_receipt, build_relay_node, default_voip_capability,
+    inject_relay_block, parse_relay_data_from_ack,
 };
 pub use state::{CallEncryption, CallInfo, CallState, CallTransition, InvalidTransition};
 pub use transport::{

@@ -768,10 +768,28 @@ impl Default for PreacceptParams {
             audio_codec: "opus".to_string(),
             audio_rate: 16000,
             keygen: 2,
-            // Default capability bytes from real WhatsApp Web logs
-            capability: vec![0x01, 0x05, 0xF7, 0x09, 0xE4, 0xBB, 0x07],
+            capability: default_voip_capability().to_vec(),
         }
     }
+}
+
+/// Default `<capability>` bytes for outgoing call offers / preaccepts.
+///
+/// Layout (`wa_voip_capabilities.cc::wa_serialize_voip_capabilities`):
+/// * byte 0: version (currently 1)
+/// * byte 1: bit-mask length in bytes (5)
+/// * bytes 2..: bit-mask (each bit = one optional feature)
+///
+/// Captured from real WA Web traffic. The WASM stack recomputes these
+/// bytes at runtime based on which VoIP features are negotiated — if
+/// the peer requires a newer bit, it will ignore this offer. Bump here
+/// when the server starts rejecting with capability-related nacks.
+pub const WHATSAPP_VOIP_CAPABILITY_V1: [u8; 7] = [0x01, 0x05, 0xF7, 0x09, 0xE4, 0xBB, 0x07];
+
+/// Accessor for [`WHATSAPP_VOIP_CAPABILITY_V1`] as a slice, for callers
+/// that want to pin a specific snapshot into a log or test assertion.
+pub fn default_voip_capability() -> &'static [u8; 7] {
+    &WHATSAPP_VOIP_CAPABILITY_V1
 }
 
 /// Relay latency measurement for outgoing RELAYLATENCY stanza.
@@ -927,6 +945,19 @@ impl TransportParams {
     }
 }
 
+/// One participant inside a group-call `<destination>` block.
+/// Emits `<to jid="...">` with one `<enc>` per fan-out key — typically
+/// one key (primary device), optionally two (primary + companion).
+#[derive(Debug, Clone)]
+pub struct GroupDestinationRecipient {
+    /// Participant device JID the inner `<enc>` is encrypted for.
+    pub jid: Jid,
+    /// Encrypted call key(s) for that participant. Empty vec emits the
+    /// `<to>` wrapper with no `<enc>`, matching the WA Web fallback when
+    /// Signal encryption fails (all enc nodes stripped).
+    pub encrypted_keys: Vec<EncryptedCallKey>,
+}
+
 /// Audio codec parameters for building accept stanzas.
 #[derive(Debug, Clone)]
 pub struct AcceptAudioParams {
@@ -973,7 +1004,17 @@ pub struct CallStanzaBuilder {
     /// Stanza ID for the outer `<call>` element (for routing and acks).
     stanza_id: Option<String>,
     /// Encrypted call key for offer/accept stanzas.
-    encrypted_key: Option<EncryptedCallKey>,
+    encrypted_keys: Vec<EncryptedCallKey>,
+    /// Relay endpoints + session keys to embed in the outgoing offer.
+    /// Caller obtains this from the server (relay allocate IQ) and passes
+    /// it here so the peer can reach the same relay. Without it the peer
+    /// has no path for media.
+    relay_data: Option<RelayData>,
+    /// Per-participant encrypted keys for a group call offer. When set,
+    /// the builder emits a `<destination>` child with one `<to jid="...">`
+    /// sub-node per participant, each wrapping that participant's
+    /// `<enc>`. Matches WA Web's `SendSignalingXmpp.js::E` fan-out.
+    destination_recipients: Vec<GroupDestinationRecipient>,
     /// Audio parameters for accept/offer stanzas.
     /// Offers include two entries (8kHz + 16kHz), accepts include one.
     audio_params: Vec<AcceptAudioParams>,
@@ -1017,7 +1058,9 @@ impl CallStanzaBuilder {
             payload: None,
             extra_attrs: HashMap::new(),
             stanza_id: None,
-            encrypted_key: None,
+            encrypted_keys: Vec::new(),
+            relay_data: None,
+            destination_recipients: Vec::new(),
             audio_params: Vec::new(),
             video_params: None,
             preaccept_params: None,
@@ -1061,11 +1104,50 @@ impl CallStanzaBuilder {
         self
     }
 
-    /// Set the encrypted call key for offer/accept stanzas.
+    /// Append an encrypted call key for offer stanzas.
     ///
-    /// This adds an `<enc type="msg|pkmsg" v="2">ciphertext</enc>` element.
+    /// Emits an `<enc type="msg|pkmsg" v="2">ciphertext</enc>` element.
+    /// Call multiple times to fan-out the call key across a peer's
+    /// devices — WA Web emits one `<enc>` per device
+    /// (`SendSignalingXmpp.js::S` for 1:1 companion + primary, `::E` for
+    /// group call `<destination>` sub-nodes).
     pub fn encrypted_key(mut self, key: EncryptedCallKey) -> Self {
-        self.encrypted_key = Some(key);
+        self.encrypted_keys.push(key);
+        self
+    }
+
+    /// Replace the full encrypted-key list in one call. Useful when the
+    /// caller already has the full `Vec` from the fan-out encryption step.
+    pub fn encrypted_keys(mut self, keys: Vec<EncryptedCallKey>) -> Self {
+        self.encrypted_keys = keys;
+        self
+    }
+
+    /// Attach a `<relay>` block to the outgoing offer. The peer will
+    /// connect to the embedded endpoints / tokens / keys to send media.
+    ///
+    /// WA Web obtains this from the native VoIP stack after an allocate
+    /// request; in Rust the caller is expected to fetch it via the relay
+    /// allocate IQ (not yet exposed here as a standalone API) and pass
+    /// the parsed [`RelayData`] through.
+    pub fn relay_data(mut self, data: RelayData) -> Self {
+        self.relay_data = Some(data);
+        self
+    }
+
+    /// Replace the group `<destination>` recipient list. Each recipient
+    /// becomes a `<to jid="...">` child with its own `<enc>` nodes,
+    /// matching WA Web's group-call offer shape from
+    /// `SendSignalingXmpp.js::E`.
+    pub fn destination_recipients(mut self, recipients: Vec<GroupDestinationRecipient>) -> Self {
+        self.destination_recipients = recipients;
+        self
+    }
+
+    /// Append a single participant to the group `<destination>` list.
+    /// Chainable to build the full fan-out incrementally.
+    pub fn destination_recipient(mut self, recipient: GroupDestinationRecipient) -> Self {
+        self.destination_recipients.push(recipient);
         self
     }
 
@@ -1266,6 +1348,15 @@ impl CallStanzaBuilder {
                 children.push(privacy_node);
             }
 
+            // Add <relay> for offers that include relay endpoints. Peer uses
+            // this to connect to the same relay the caller's VoIP stack
+            // already allocated; without it the peer can't route media.
+            if self.signaling_type == SignalingType::Offer
+                && let Some(ref data) = self.relay_data
+            {
+                children.push(build_relay_node(data));
+            }
+
             // Add <audio> elements
             for audio in &self.audio_params {
                 let audio_node = NodeBuilder::new("audio")
@@ -1295,16 +1386,50 @@ impl CallStanzaBuilder {
                 children.push(cap_node);
             }
 
-            // Add <enc> for offers only (Accept has no enc per protocol)
+            // Group-call fan-out: `<destination><to jid="..."><enc/></to>*</destination>`
+            // Per `SendSignalingXmpp.js::E` this is emitted only for group calls
+            // (mutually exclusive with the flat `<enc>` list, which is 1:1).
             if self.signaling_type == SignalingType::Offer
-                && let Some(ref enc_key) = self.encrypted_key
+                && !self.destination_recipients.is_empty()
             {
-                let enc_node = NodeBuilder::new("enc")
-                    .attr("type", enc_key.enc_type.to_string())
-                    .attr("v", "2")
-                    .bytes(enc_key.ciphertext.clone())
-                    .build();
-                children.push(enc_node);
+                let mut to_nodes: Vec<Node> = Vec::with_capacity(self.destination_recipients.len());
+                for recipient in &self.destination_recipients {
+                    let mut recipient_children: Vec<Node> =
+                        Vec::with_capacity(recipient.encrypted_keys.len());
+                    for enc_key in &recipient.encrypted_keys {
+                        recipient_children.push(
+                            NodeBuilder::new("enc")
+                                .attr("type", enc_key.enc_type.to_string())
+                                .attr("v", "2")
+                                .bytes(enc_key.ciphertext.clone())
+                                .build(),
+                        );
+                    }
+                    to_nodes.push(
+                        NodeBuilder::new("to")
+                            .attr("jid", recipient.jid.to_string())
+                            .children(recipient_children)
+                            .build(),
+                    );
+                }
+                children.push(NodeBuilder::new("destination").children(to_nodes).build());
+            }
+
+            // Add `<enc>` children for offers only. Accept has no enc per
+            // protocol (`SendSignalingXmpp.js::C = ["offer", "enc_rekey"]`
+            // is the explicit whitelist). One element per fan-out device.
+            // Skipped when the group `<destination>` path is active — they
+            // carry the per-participant encs instead.
+            if self.signaling_type == SignalingType::Offer && self.destination_recipients.is_empty()
+            {
+                for enc_key in &self.encrypted_keys {
+                    let enc_node = NodeBuilder::new("enc")
+                        .attr("type", enc_key.enc_type.to_string())
+                        .attr("v", "2")
+                        .bytes(enc_key.ciphertext.clone())
+                        .build();
+                    children.push(enc_node);
+                }
             }
 
             // Add <encopt keygen="2"/>
@@ -1443,6 +1568,163 @@ pub fn build_call_ack(
 pub fn parse_relay_data_from_ack(ack_node: &Node) -> Option<RelayData> {
     // ACK node has relay as a direct child
     ParsedCallStanza::parse_relay_data_from_node(ack_node)
+}
+
+/// Inject a `<relay>` block as the first child of the inner `<offer>` node
+/// inside a `<call>` stanza. Used by the high-level `Client::place_call`
+/// pipeline to splice server-provided relay info into a pre-built offer
+/// without reaching into the builder mid-flight.
+///
+/// No-op (returns the node untouched) if the stanza isn't `<call><offer/>`.
+/// The relay block is inserted at position 0 of the offer children so it
+/// precedes any `<privacy>` / `<audio>` already emitted by the builder —
+/// this is the same ordering WA Web produces.
+pub fn inject_relay_block(mut call_stanza: Node, relay: RelayData) -> Node {
+    let relay_node = build_relay_node(&relay);
+
+    // Take ownership of `<call>` children so we can splice in place
+    // without cloning the whole tree.
+    let mut call_children: Vec<Node> = match call_stanza.content.take() {
+        Some(NodeContent::Nodes(c)) => c,
+        other => {
+            // Not a node-container, put it back and bail.
+            call_stanza.content = other;
+            return call_stanza;
+        }
+    };
+
+    let Some(offer_idx) = call_children.iter().position(|c| c.tag == "offer") else {
+        // No `<offer>` child — put children back and bail.
+        call_stanza.content = Some(NodeContent::Nodes(call_children));
+        return call_stanza;
+    };
+
+    let offer = &mut call_children[offer_idx];
+    let mut offer_children: Vec<Node> = match offer.content.take() {
+        Some(NodeContent::Nodes(c)) => c,
+        _ => Vec::new(),
+    };
+    offer_children.insert(0, relay_node);
+    offer.content = Some(NodeContent::Nodes(offer_children));
+
+    call_stanza.content = Some(NodeContent::Nodes(call_children));
+    call_stanza
+}
+
+/// Serialize a [`RelayData`] back into a `<relay>` node suitable for embedding
+/// into an outgoing `<offer>` stanza. Mirror of [`ParsedCallStanza::parse_relay_data`].
+///
+/// Wire shape (matches WA Web's `WAVoipNodeToXmlNodeConverter` output):
+/// ```xml
+/// <relay uuid="..." self_pid="..." peer_pid="...">
+///   <key>base64(relay_key)</key>
+///   <hbh_key>base64(hbh_key)</hbh_key>
+///   <token id="N">raw_bytes</token>*
+///   <auth_token id="N">raw_bytes</auth_token>*
+///   <te2 relay_id="..." relay_name="..." token_id="..." auth_token_id="..."
+///        protocol="..." c2r_rtt="...">addr_bytes</te2>*
+/// </relay>
+/// ```
+pub fn build_relay_node(data: &RelayData) -> Node {
+    use base64::Engine;
+
+    let mut children: Vec<Node> = Vec::new();
+
+    // <key> (base64-encoded 16-byte relay key)
+    if let Some(ref relay_key) = data.relay_key {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(relay_key);
+        children.push(NodeBuilder::new("key").string_content(b64).build());
+    }
+
+    // <hbh_key> (base64-encoded 30-byte HBH SRTP key+salt)
+    if let Some(ref hbh) = data.hbh_key {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(hbh);
+        children.push(NodeBuilder::new("hbh_key").string_content(b64).build());
+    }
+
+    // <token id="N">raw_bytes</token>* — preserves the index assigned by the
+    // server so `te2.token_id` indexing stays coherent.
+    for (idx, token) in data.relay_tokens.iter().enumerate() {
+        children.push(
+            NodeBuilder::new("token")
+                .attr_dynamic("id".to_string(), idx.to_string())
+                .bytes(token.clone())
+                .build(),
+        );
+    }
+
+    // <auth_token id="N">raw_bytes</auth_token>*
+    for (idx, token) in data.auth_tokens.iter().enumerate() {
+        children.push(
+            NodeBuilder::new("auth_token")
+                .attr_dynamic("id".to_string(), idx.to_string())
+                .bytes(token.clone())
+                .build(),
+        );
+    }
+
+    // <te2 ...>binary_addr</te2>* — one per endpoint address combination.
+    for endpoint in &data.endpoints {
+        for addr in &endpoint.addresses {
+            // Encode the address bytes (IPv4: 6 bytes, IPv6: 18 bytes).
+            let addr_bytes = encode_te2_address(addr);
+            let mut te2 = NodeBuilder::new("te2")
+                .attr_dynamic("relay_id".to_string(), endpoint.relay_id.to_string())
+                .attr_dynamic("relay_name".to_string(), endpoint.relay_name.clone())
+                .attr_dynamic("token_id".to_string(), endpoint.token_id.to_string())
+                .attr_dynamic(
+                    "auth_token_id".to_string(),
+                    endpoint.auth_token_id.to_string(),
+                )
+                .attr_dynamic("protocol".to_string(), addr.protocol.to_string());
+            if let Some(rtt) = endpoint.c2r_rtt_ms {
+                te2 = te2.attr_dynamic("c2r_rtt".to_string(), rtt.to_string());
+            }
+            te2 = te2.bytes(addr_bytes);
+            children.push(te2.build());
+        }
+    }
+
+    let mut builder = NodeBuilder::new("relay");
+    if let Some(ref uuid) = data.uuid {
+        builder = builder.attr_dynamic("uuid".to_string(), uuid.clone());
+    }
+    if let Some(self_pid) = data.self_pid {
+        builder = builder.attr_dynamic("self_pid".to_string(), self_pid.to_string());
+    }
+    if let Some(peer_pid) = data.peer_pid {
+        builder = builder.attr_dynamic("peer_pid".to_string(), peer_pid.to_string());
+    }
+    builder.children(children).build()
+}
+
+/// Encode a [`RelayAddress`] back to the `te2` binary payload.
+/// IPv6 is preferred when present; IPv4 is the fallback. Unknown /
+/// malformed addresses encode as all-zeros so downstream parsers don't
+/// misinterpret the length.
+fn encode_te2_address(addr: &RelayAddress) -> Vec<u8> {
+    if let Some(ref ip6) = addr.ipv6 {
+        let mut out = Vec::with_capacity(18);
+        let octets: [u8; 16] = ip6
+            .parse::<std::net::Ipv6Addr>()
+            .map(|a| a.octets())
+            .unwrap_or([0u8; 16]);
+        out.extend_from_slice(&octets);
+        let port = addr.port_v6.unwrap_or(addr.port);
+        out.extend_from_slice(&port.to_be_bytes());
+        out
+    } else {
+        let mut out = Vec::with_capacity(6);
+        let octets: [u8; 4] = addr
+            .ipv4
+            .as_deref()
+            .and_then(|s| s.parse::<std::net::Ipv4Addr>().ok())
+            .map(|a| a.octets())
+            .unwrap_or([0, 0, 0, 0]);
+        out.extend_from_slice(&octets);
+        out.extend_from_slice(&addr.port.to_be_bytes());
+        out
+    }
 }
 
 #[cfg(test)]
@@ -2795,6 +3077,244 @@ mod tests {
         assert!(first_audio_idx < net_idx, "audio should be before net");
         assert!(net_idx < cap_idx, "net should be before capability");
         assert!(cap_idx < encopt_idx, "capability should be before encopt");
+    }
+
+    /// `WHATSAPP_VOIP_CAPABILITY_V1` must (a) decode as version 1 with a
+    /// 5-byte bit-mask, and (b) match the default used by `PreacceptParams`.
+    /// If WA Web bumps the version, update the constant and this test.
+    #[test]
+    fn test_voip_capability_v1_layout() {
+        let cap = default_voip_capability();
+        assert_eq!(cap[0], 0x01, "version byte must be 1");
+        assert_eq!(cap[1], 0x05, "bit_mask_length must be 5");
+        assert_eq!(cap.len(), 2 + 5, "total length = version + len + mask");
+        assert_eq!(
+            PreacceptParams::default().capability,
+            cap.to_vec(),
+            "PreacceptParams default must match the pinned constant"
+        );
+    }
+
+    /// Group call offer emits `<destination>` with one `<to jid>` per
+    /// participant, each wrapping its own `<enc>`. Flat `<enc>` list is
+    /// suppressed in this mode (mutually exclusive wire shape).
+    #[test]
+    fn test_group_offer_emits_destination_with_per_recipient_enc() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "1@lid".parse().unwrap();
+        let to: Jid = "group@g.us".parse().unwrap();
+
+        let alice: Jid = "100@lid".parse().unwrap();
+        let bob_main: Jid = "200:0@lid".parse().unwrap();
+        let bob_companion: Jid = "200:1@lid".parse().unwrap();
+
+        let node =
+            CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::Offer)
+                .group(to.clone())
+                .destination_recipients(vec![
+                    GroupDestinationRecipient {
+                        jid: alice.clone(),
+                        encrypted_keys: vec![EncryptedCallKey {
+                            enc_type: EncType::Msg,
+                            ciphertext: vec![0xAA],
+                        }],
+                    },
+                    GroupDestinationRecipient {
+                        jid: bob_main.clone(),
+                        encrypted_keys: vec![
+                            EncryptedCallKey {
+                                enc_type: EncType::PkMsg,
+                                ciphertext: vec![0xBB],
+                            },
+                            EncryptedCallKey {
+                                enc_type: EncType::Msg,
+                                ciphertext: vec![0xCC],
+                            },
+                        ],
+                    },
+                    GroupDestinationRecipient {
+                        jid: bob_companion.clone(),
+                        encrypted_keys: vec![EncryptedCallKey {
+                            enc_type: EncType::Msg,
+                            ciphertext: vec![0xDD],
+                        }],
+                    },
+                ])
+                .build();
+
+        let offer_node = &node.children().unwrap()[0];
+        assert_eq!(offer_node.tag, "offer");
+        let offer_children = offer_node.children().unwrap();
+
+        // Exactly one <destination> child.
+        let destination = offer_children
+            .iter()
+            .find(|c| c.tag == "destination")
+            .expect("group offer must have <destination>");
+
+        let tos: Vec<&Node> = destination
+            .children()
+            .unwrap()
+            .iter()
+            .filter(|c| c.tag == "to")
+            .collect();
+        assert_eq!(tos.len(), 3, "one <to> per participant/device");
+
+        // Per-recipient enc count histogram. Expected: one <to> with 2
+        // encs (bob_main primary+companion share same <to> in the test)
+        // and two <to>s with 1 enc each.
+        let mut enc_counts: Vec<usize> = tos
+            .iter()
+            .map(|t| {
+                t.children()
+                    .unwrap()
+                    .iter()
+                    .filter(|c| c.tag == "enc")
+                    .count()
+            })
+            .collect();
+        enc_counts.sort_unstable();
+        assert_eq!(
+            enc_counts,
+            vec![1, 1, 2],
+            "expected two 1-enc recipients and one 2-enc recipient"
+        );
+
+        // Flat <enc> children must NOT be present when <destination> is.
+        let flat_enc_count = offer_children.iter().filter(|c| c.tag == "enc").count();
+        assert_eq!(
+            flat_enc_count, 0,
+            "flat <enc> must be suppressed when <destination> is used"
+        );
+    }
+
+    /// Outgoing offer must embed the `<relay>` block so the peer can
+    /// reach the same relay. Wire round-trip: encode → parse → fields
+    /// match the original. Without this block WA Web's parser rejects
+    /// the offer ("no relay data"), or the peer falls back to P2P and
+    /// fails behind NAT.
+    #[test]
+    fn test_offer_embeds_and_roundtrips_relay_block() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        let relay = RelayData {
+            uuid: Some("relay-uuid-42".to_string()),
+            self_pid: Some(3),
+            peer_pid: Some(1),
+            hbh_key: Some(vec![0x11; 30]),
+            relay_key: Some(vec![0x22; 16]),
+            relay_tokens: vec![vec![0xAA; 8], vec![0xBB; 8]],
+            auth_tokens: vec![vec![0xCC; 12]],
+            endpoints: vec![RelayEndpoint {
+                relay_id: 7,
+                relay_name: "fra1-a".to_string(),
+                token_id: 0,
+                auth_token_id: 0,
+                addresses: vec![RelayAddress {
+                    ipv4: Some("203.0.113.7".to_string()),
+                    ipv6: None,
+                    port: 3478,
+                    port_v6: None,
+                    protocol: 0,
+                }],
+                c2r_rtt_ms: Some(42),
+            }],
+        };
+
+        let node =
+            CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::Offer)
+                .relay_data(relay.clone())
+                .build();
+
+        let parsed = ParsedCallStanza::parse(&node).expect("offer with relay must parse");
+        let got = parsed
+            .relay_data
+            .expect("relay_data must survive the round-trip");
+
+        assert_eq!(got.uuid, relay.uuid);
+        assert_eq!(got.self_pid, relay.self_pid);
+        assert_eq!(got.peer_pid, relay.peer_pid);
+        assert_eq!(got.hbh_key, relay.hbh_key);
+        assert_eq!(got.relay_key, relay.relay_key);
+        assert_eq!(got.relay_tokens, relay.relay_tokens);
+        assert_eq!(got.auth_tokens, relay.auth_tokens);
+        assert_eq!(got.endpoints.len(), 1);
+        let ep = &got.endpoints[0];
+        assert_eq!(ep.relay_id, 7);
+        assert_eq!(ep.relay_name, "fra1-a");
+        assert_eq!(ep.c2r_rtt_ms, Some(42));
+        assert_eq!(ep.addresses.len(), 1);
+        assert_eq!(ep.addresses[0].ipv4.as_deref(), Some("203.0.113.7"));
+        assert_eq!(ep.addresses[0].port, 3478);
+    }
+
+    /// Fan-out: two encrypted keys must emit two `<enc>` children on the
+    /// offer. Matches WA Web's `SendSignalingXmpp.js::S` for 1:1 with
+    /// companion, and the destination loop for group calls.
+    #[test]
+    fn test_offer_emits_one_enc_per_fanout_key() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        let key_primary = EncryptedCallKey {
+            enc_type: EncType::PkMsg,
+            ciphertext: vec![0xAA, 0xBB],
+        };
+        let key_companion = EncryptedCallKey {
+            enc_type: EncType::Msg,
+            ciphertext: vec![0xCC, 0xDD, 0xEE],
+        };
+
+        let node =
+            CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::Offer)
+                .encrypted_keys(vec![key_primary.clone(), key_companion.clone()])
+                .build();
+
+        let offer_node = &node.children().unwrap()[0];
+        let offer_children = offer_node.children().unwrap();
+        let encs: Vec<_> = offer_children.iter().filter(|c| c.tag == "enc").collect();
+        assert_eq!(encs.len(), 2, "one <enc> per fan-out device expected");
+
+        // First matches primary (pkmsg), second matches companion (msg).
+        let mut a0 = encs[0].attrs();
+        assert_eq!(a0.required_string("type").unwrap(), "pkmsg");
+        assert_eq!(a0.required_string("v").unwrap(), "2");
+        let mut a1 = encs[1].attrs();
+        assert_eq!(a1.required_string("type").unwrap(), "msg");
+    }
+
+    /// `encrypted_key()` must be chainable multiple times — each call
+    /// appends a new `<enc>`, matching the fan-out API callers may want
+    /// when they don't have the keys in a single `Vec`.
+    #[test]
+    fn test_encrypted_key_chains_instead_of_replaces() {
+        let call_id = "TEST1234TEST1234TEST1234TEST1234";
+        let creator: Jid = "123@lid".parse().unwrap();
+        let to: Jid = "456@lid".parse().unwrap();
+
+        let node =
+            CallStanzaBuilder::new(call_id, creator.clone(), to.clone(), SignalingType::Offer)
+                .encrypted_key(EncryptedCallKey {
+                    enc_type: EncType::Msg,
+                    ciphertext: vec![0x01],
+                })
+                .encrypted_key(EncryptedCallKey {
+                    enc_type: EncType::Msg,
+                    ciphertext: vec![0x02],
+                })
+                .build();
+
+        let offer_node = &node.children().unwrap()[0];
+        let enc_count = offer_node
+            .children()
+            .unwrap()
+            .iter()
+            .filter(|c| c.tag == "enc")
+            .count();
+        assert_eq!(enc_count, 2, "`encrypted_key` must append, not replace");
     }
 
     /// Test that Accept stanza does NOT include privacy or capability.

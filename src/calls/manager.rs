@@ -226,6 +226,25 @@ impl CallManager {
         encrypted_key: Option<EncryptedCallKey>,
         device_identity: Option<Vec<u8>>,
     ) -> Result<Node, CallError> {
+        let keys: Vec<EncryptedCallKey> = encrypted_key.into_iter().collect();
+        self.build_offer_stanza_fanout(call_id, keys, device_identity)
+            .await
+    }
+
+    /// Build an offer stanza with N encrypted keys fanned out across the
+    /// peer's devices. One `<enc>` child per key, matching WA Web's
+    /// `SendSignalingXmpp.js::S` behavior for 1:1 companion+primary
+    /// fan-out.
+    ///
+    /// For the single-key case prefer [`build_offer_stanza_with_key`].
+    ///
+    /// [`build_offer_stanza_with_key`]: Self::build_offer_stanza_with_key
+    pub async fn build_offer_stanza_fanout(
+        &self,
+        call_id: &CallId,
+        encrypted_keys: Vec<EncryptedCallKey>,
+        device_identity: Option<Vec<u8>>,
+    ) -> Result<Node, CallError> {
         let calls = self.calls.read().await;
         let info = calls
             .get(call_id.as_str())
@@ -245,9 +264,10 @@ impl CallManager {
             builder = builder.group(group_jid.clone());
         }
 
-        // Add encrypted key if provided
-        if let Some(key) = encrypted_key {
-            builder = builder.encrypted_key(key);
+        // Fan-out the encrypted keys. Empty list == no `<enc>` child at all,
+        // matching WA Web's fallback path ("Sending offer without enc").
+        if !encrypted_keys.is_empty() {
+            builder = builder.encrypted_keys(encrypted_keys);
         }
 
         // Add audio params - offers include both 8kHz and 16kHz (per WhatsApp Web)
@@ -267,8 +287,9 @@ impl CallManager {
         // Offers use net_medium=3 (WiFi+cellular), accepts use net_medium=2 (WiFi)
         builder = builder.net_medium(3).encopt_keygen(2);
 
-        // Add capability bytes (from real WhatsApp Web logs)
-        builder = builder.capability(vec![0x01, 0x05, 0xF7, 0x09, 0xE4, 0xBB, 0x07]);
+        // Add capability bytes — pinned to the captured WA Web snapshot.
+        // See [`crate::calls::stanza::WHATSAPP_VOIP_CAPABILITY_V1`].
+        builder = builder.capability(crate::calls::stanza::WHATSAPP_VOIP_CAPABILITY_V1.to_vec());
 
         // Add device identity for pkmsg offers (required for PreKey messages)
         if let Some(identity) = device_identity {

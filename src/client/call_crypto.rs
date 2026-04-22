@@ -21,24 +21,14 @@ impl Client {
             .unwrap_or(false)
     }
 
-    /// Ensure a Signal session exists with the given JID, returning the device JID used.
+    /// Ensure a Signal session exists with the given JID, returning the
+    /// **primary** device JID (device=0). Convenience wrapper for callers
+    /// that only need to address the primary device; for multi-device
+    /// fan-out use [`ensure_call_sessions_all`] instead.
+    ///
+    /// [`ensure_call_sessions_all`]: Self::ensure_call_sessions_all
     pub async fn ensure_call_session(&self, jid: &Jid) -> Result<Jid, CallError> {
-        let devices = self
-            .get_user_devices(std::slice::from_ref(jid))
-            .await
-            .map_err(|e| CallError::Encryption(format!("Failed to get devices: {}", e)))?;
-
-        if devices.is_empty() {
-            return Err(CallError::Encryption(format!(
-                "No devices found for {}",
-                jid
-            )));
-        }
-
-        self.ensure_e2e_sessions(&devices)
-            .await
-            .map_err(|e| CallError::Encryption(format!("Failed to establish session: {}", e)))?;
-
+        let devices = self.ensure_call_sessions_all(jid).await?;
         let target = devices
             .into_iter()
             .find(|d| d.device == 0)
@@ -46,6 +36,37 @@ impl Client {
 
         log::debug!("Established call session with {}", target);
         Ok(target)
+    }
+
+    /// Ensure a Signal session exists with **every** device belonging to
+    /// `peer`, and return the full device JID list (including companion
+    /// devices with `device != 0`). Matches WA Web's
+    /// `SendSignalingXmpp.js::ensureE2ESessions([deviceWid, defaultDeviceWid])`
+    /// — every device must be able to decrypt the call key or it will
+    /// miss the incoming call entirely.
+    pub async fn ensure_call_sessions_all(&self, peer: &Jid) -> Result<Vec<Jid>, CallError> {
+        let devices = self
+            .get_user_devices(std::slice::from_ref(peer))
+            .await
+            .map_err(|e| CallError::Encryption(format!("Failed to get devices: {}", e)))?;
+
+        if devices.is_empty() {
+            return Err(CallError::Encryption(format!(
+                "No devices found for {}",
+                peer
+            )));
+        }
+
+        self.ensure_e2e_sessions(&devices)
+            .await
+            .map_err(|e| CallError::Encryption(format!("Failed to establish session: {}", e)))?;
+
+        log::debug!(
+            "Established call sessions with {} device(s) for {}",
+            devices.len(),
+            peer
+        );
+        Ok(devices)
     }
 
     /// Encrypt a call key for a recipient, returning the key and encrypted payload.

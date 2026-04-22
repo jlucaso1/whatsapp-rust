@@ -176,6 +176,15 @@ pub struct EncryptedCallKey {
     pub enc_type: EncType,
 }
 
+impl EncryptedCallKey {
+    /// `true` iff the ciphertext is a Signal PreKey message (`pkmsg`).
+    /// Offers with at least one pkmsg must also carry `<device-identity>`
+    /// (see `WAWebSendSignalingXmpp.js::D`).
+    pub fn is_prekey(&self) -> bool {
+        matches!(self.enc_type, EncType::PkMsg)
+    }
+}
+
 /// Encrypt a call key for a recipient using Signal Protocol.
 ///
 /// This encrypts the call key wrapped in a protobuf Message, ready for
