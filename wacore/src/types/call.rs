@@ -318,6 +318,53 @@ mod tests {
         assert_eq!(EndCallReason::CameraPermissionDenied as u8, 6);
     }
 
+    /// Values 0–6 must track `WAWebVoipSignalingEnums.EndCallReason` exactly:
+    /// `{Unknown=0, Timeout=1, Self=2, RejectDoNotDisturb=3, RejectBlocked=4,
+    ///   MicPermissionDenied=5, CameraPermissionDenied=6}`.
+    /// (`UserEnded` is the Rust name for `Self`, which is a reserved keyword.)
+    #[test]
+    fn test_end_call_reason_matches_js_canonical() {
+        let canonical: &[(&str, u8)] = &[
+            ("Unknown", 0),
+            ("Timeout", 1),
+            ("Self / UserEnded", 2),
+            ("RejectDoNotDisturb", 3),
+            ("RejectBlocked", 4),
+            ("MicPermissionDenied", 5),
+            ("CameraPermissionDenied", 6),
+        ];
+        let rust_values = [
+            EndCallReason::Unknown as u8,
+            EndCallReason::Timeout as u8,
+            EndCallReason::UserEnded as u8,
+            EndCallReason::RejectDoNotDisturb as u8,
+            EndCallReason::RejectBlocked as u8,
+            EndCallReason::MicPermissionDenied as u8,
+            EndCallReason::CameraPermissionDenied as u8,
+        ];
+        for ((name, expected), got) in canonical.iter().zip(rust_values.iter()) {
+            assert_eq!(
+                *got, *expected,
+                "EndCallReason::{} must be {} (from JS); got {}",
+                name, expected, got
+            );
+        }
+        // Extensions beyond 6 are Rust-only convenience variants; they must
+        // not collide with any canonical slot.
+        for &v in &[
+            EndCallReason::Declined as u8,
+            EndCallReason::Busy as u8,
+            EndCallReason::NetworkError as u8,
+            EndCallReason::Cancelled as u8,
+            EndCallReason::AcceptedElsewhere as u8,
+        ] {
+            assert!(
+                v > 6,
+                "extension variants must be > 6 to not collide with JS canonical range"
+            );
+        }
+    }
+
     #[test]
     fn test_end_call_reason_to_outcome() {
         assert_eq!(

@@ -775,7 +775,7 @@ impl Default for PreacceptParams {
 }
 
 /// Relay latency measurement for outgoing RELAYLATENCY stanza.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RelayLatencyMeasurement {
     /// Relay server name (e.g., "for2c02")
     pub relay_name: String,
@@ -783,10 +783,18 @@ pub struct RelayLatencyMeasurement {
     pub latency_ms: u32,
     /// Relay token bytes (from offer's relay tokens)
     pub token: Vec<u8>,
-    /// IPv4 address if available
+    /// IPv4 address (mutually exclusive with `ipv6`).
     pub ipv4: Option<String>,
-    /// Port (default 3480)
+    /// Port for `ipv4`. Also used as port when this measurement has an IPv6
+    /// address but the offer only provided a single port.
     pub port: u16,
+    /// IPv6 address (mutually exclusive with `ipv4`).
+    /// Matches WA Web `RelayConnectionUtils.js` which emits separate entries
+    /// for each IP family.
+    pub ipv6: Option<String>,
+    /// Port override for `ipv6` (offer's `port_v6`). Falls back to `port`
+    /// when the offer didn't provide a separate IPv6 port.
+    pub port_v6: Option<u16>,
 }
 
 impl RelayLatencyMeasurement {
@@ -796,60 +804,99 @@ impl RelayLatencyMeasurement {
         0x2000000 + self.latency_ms
     }
 
-    /// Encode the address bytes for the te element content.
-    /// Format: 4 bytes IPv4 + 2 bytes port (big-endian)
+    /// IPv6 address if present. Mirrors the public `ipv4` accessor pattern.
+    pub fn ipv6_address(&self) -> Option<&str> {
+        self.ipv6.as_deref()
+    }
+
+    /// Replace this measurement's address with an IPv6 one (chainable).
+    /// `ipv4` is cleared so IPv4 and IPv6 stay mutually exclusive.
+    pub fn with_ipv6(mut self, ip: String, port: u16) -> Self {
+        self.ipv4 = None;
+        self.ipv6 = Some(ip);
+        self.port_v6 = Some(port);
+        self
+    }
+
+    /// Encode the address bytes for the `<te>` element content.
+    /// IPv4 → 4 bytes IP + 2 bytes port big-endian (= 6 bytes).
+    /// IPv6 → 16 bytes IP + 2 bytes port big-endian (= 18 bytes).
     pub fn encode_address(&self) -> Vec<u8> {
-        let mut bytes = Vec::with_capacity(6);
-        if let Some(ref ipv4) = self.ipv4 {
-            let parts: Vec<u8> = ipv4.split('.').filter_map(|s| s.parse().ok()).collect();
-            if parts.len() == 4 {
-                bytes.extend_from_slice(&parts);
-            } else {
-                bytes.extend_from_slice(&[0, 0, 0, 0]);
+        if let Some(ip6) = self.ipv6.as_deref() {
+            // 16 bytes IPv6 + 2 bytes port — allocate exact.
+            let mut bytes = Vec::with_capacity(18);
+            let parsed: Option<std::net::Ipv6Addr> = ip6.parse().ok();
+            match parsed {
+                Some(addr) => bytes.extend_from_slice(&addr.octets()),
+                None => bytes.extend_from_slice(&[0u8; 16]),
             }
-        } else {
-            bytes.extend_from_slice(&[0, 0, 0, 0]);
+            let port = self.port_v6.unwrap_or(self.port);
+            bytes.extend_from_slice(&port.to_be_bytes());
+            return bytes;
         }
+
+        // IPv4 path: 4 bytes IP + 2 bytes port — allocate exact.
+        let mut bytes = Vec::with_capacity(6);
+        let octets: [u8; 4] = self
+            .ipv4
+            .as_deref()
+            .and_then(|s| s.parse::<std::net::Ipv4Addr>().ok())
+            .map(|a| a.octets())
+            .unwrap_or([0, 0, 0, 0]);
+        bytes.extend_from_slice(&octets);
         bytes.extend_from_slice(&self.port.to_be_bytes());
         bytes
     }
 
     /// Create relay latency measurements from offer's relay data.
     ///
-    /// This creates measurements for each relay endpoint in the offer.
-    /// The latency values are estimated (for actual measurement, implement UDP ping).
+    /// Matches WA Web's `RelayConnectionUtils.js`: for every endpoint address,
+    /// emit an IPv4 measurement when `ipv4` is set and an IPv6 measurement
+    /// when `ipv6`+`port_v6` are set — so a dual-stack endpoint yields two
+    /// measurements.
     ///
     /// # Arguments
     /// * `relay_data` - The relay data from the offer stanza
     /// * `base_latency_ms` - Base latency to use (default ~30ms is reasonable for most connections)
     pub fn from_relay_data(relay_data: &RelayData, base_latency_ms: u32) -> Vec<Self> {
-        let mut measurements = Vec::new();
+        // Pre-size for the common dual-stack case (2 per endpoint).
+        let mut measurements = Vec::with_capacity(relay_data.endpoints.len() * 2);
 
         for endpoint in &relay_data.endpoints {
-            // Get the first IPv4 address from the endpoint
-            let (ipv4, port) = endpoint
-                .addresses
-                .iter()
-                .find_map(|addr| addr.ipv4.as_ref().map(|ip| (ip.clone(), addr.port)))
-                .unwrap_or_else(|| ("0.0.0.0".to_string(), 3480));
-
-            // Get token for this endpoint
             let token = relay_data
                 .relay_tokens
                 .get(endpoint.token_id as usize)
                 .cloned()
                 .unwrap_or_default();
 
-            // Add small variation to latency based on endpoint index to simulate real conditions
-            let latency_ms = base_latency_ms + (measurements.len() as u32 * 5);
-
-            measurements.push(Self {
-                relay_name: endpoint.relay_name.clone(),
-                latency_ms,
-                token,
-                ipv4: Some(ipv4),
-                port,
-            });
+            for addr in &endpoint.addresses {
+                if let Some(v4) = addr.ipv4.as_deref() {
+                    let idx = measurements.len() as u32;
+                    measurements.push(Self {
+                        relay_name: endpoint.relay_name.clone(),
+                        latency_ms: base_latency_ms + idx * 5,
+                        token: token.clone(),
+                        ipv4: Some(v4.to_string()),
+                        port: addr.port,
+                        ipv6: None,
+                        port_v6: None,
+                    });
+                }
+                if let Some(v6) = addr.ipv6.as_deref()
+                    && let Some(port_v6) = addr.port_v6
+                {
+                    let idx = measurements.len() as u32;
+                    measurements.push(Self {
+                        relay_name: endpoint.relay_name.clone(),
+                        latency_ms: base_latency_ms + idx * 5,
+                        token: token.clone(),
+                        ipv4: None,
+                        port: addr.port,
+                        ipv6: Some(v6.to_string()),
+                        port_v6: Some(port_v6),
+                    });
+                }
+            }
         }
 
         measurements
@@ -2431,6 +2478,7 @@ mod tests {
             token: vec![],
             ipv4: Some("57.144.165.54".to_string()),
             port: 3480,
+            ..Default::default()
         }];
 
         let node = CallStanzaBuilder::new(
@@ -2470,6 +2518,7 @@ mod tests {
             token: vec![],
             ipv4: Some("192.168.1.1".to_string()),
             port: 3480,
+            ..Default::default()
         };
 
         // Base is 0x2000000 = 33554432
@@ -2480,6 +2529,60 @@ mod tests {
         assert_eq!(addr.len(), 6);
         assert_eq!(addr[0..4], [192, 168, 1, 1]);
         assert_eq!(addr[4..6], [0x0D, 0x98]); // 3480 in big-endian
+    }
+
+    /// IPv6 measurements must encode 16 bytes address + 2 bytes port = 18 bytes.
+    /// WA Web (`RelayConnectionUtils.js`) treats IPv4 and IPv6 endpoints as
+    /// separate entries — we must do the same.
+    #[test]
+    fn test_relay_latency_encoding_ipv6() {
+        let measurement = RelayLatencyMeasurement {
+            relay_name: "test".to_string(),
+            latency_ms: 12,
+            token: vec![],
+            ipv4: None,
+            port: 3480,
+            ..Default::default()
+        }
+        .with_ipv6("2001:db8::1".to_string(), 3480);
+
+        let addr = measurement.encode_address();
+        assert_eq!(addr.len(), 18, "IPv6 + port should encode to 18 bytes");
+        // Last 2 bytes: port 3480 big-endian.
+        assert_eq!(&addr[16..18], &[0x0D, 0x98]);
+    }
+
+    /// `from_relay_data` must emit one measurement per IP family available on
+    /// each endpoint (matches `RelayConnectionUtils.js:90-126`).
+    #[test]
+    fn test_from_relay_data_emits_both_ip_families() {
+        let relay_data = RelayData {
+            relay_tokens: vec![vec![0xAA; 16]],
+            endpoints: vec![RelayEndpoint {
+                relay_id: 1,
+                relay_name: "for2c02".to_string(),
+                token_id: 0,
+                auth_token_id: 0,
+                addresses: vec![RelayAddress {
+                    ipv4: Some("192.168.0.1".to_string()),
+                    ipv6: Some("2001:db8::1".to_string()),
+                    port: 3480,
+                    port_v6: Some(3481),
+                    protocol: 0,
+                }],
+                c2r_rtt_ms: Some(30),
+            }],
+            ..Default::default()
+        };
+
+        let measurements = RelayLatencyMeasurement::from_relay_data(&relay_data, 30);
+        assert_eq!(
+            measurements.len(),
+            2,
+            "expected one IPv4 + one IPv6 measurement per endpoint"
+        );
+        assert!(measurements.iter().any(|m| m.ipv4.is_some()));
+        assert!(measurements.iter().any(|m| m.ipv6_address().is_some()));
     }
 
     /// Test TRANSPORT stanza building.

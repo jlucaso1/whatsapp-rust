@@ -104,7 +104,11 @@ pub enum SignalingType {
 
     /// Mute state v2 (newer mute signaling format).
     /// Contains mute-state attribute (0=unmuted, 1=muted).
-    MuteV2 = 26,
+    ///
+    /// Not present in `WAWebVoipSignalingEnums.TYPE` (which caps at MAX=26),
+    /// but the `mute_v2` wire tag IS in the binary protocol dictionary. We use
+    /// discriminant 27 to keep JS MAX=26 as a sentinel slot.
+    MuteV2 = 27,
 }
 
 impl SignalingType {
@@ -206,9 +210,10 @@ impl SignalingType {
         }
     }
 
-    /// Parse from numeric value.
+    /// Parse from numeric value. Matches against the real discriminant, so
+    /// values outside `WAWebVoipSignalingEnums.TYPE` (like MAX=26) return `None`.
     pub fn from_u8(value: u8) -> Option<Self> {
-        Self::ALL.get(value as usize).copied()
+        Self::ALL.iter().copied().find(|st| *st as u8 == value)
     }
 
     /// Whether this signaling type requires a `<receipt>` response.
@@ -284,11 +289,23 @@ mod tests {
 
     #[test]
     fn test_signaling_type_from_u8() {
-        for (i, st) in SignalingType::ALL.iter().enumerate() {
-            let parsed = SignalingType::from_u8(i as u8).unwrap();
-            assert_eq!(*st, parsed);
+        // `from_u8` must round-trip the *discriminant*, not the array index.
+        for st in SignalingType::ALL {
+            let wire_value = st as u8;
+            let parsed = SignalingType::from_u8(wire_value)
+                .unwrap_or_else(|| panic!("from_u8({}) returned None for {:?}", wire_value, st));
+            assert_eq!(
+                parsed, st,
+                "from_u8({}) returned {:?}, expected {:?}",
+                wire_value, parsed, st
+            );
         }
-        assert!(SignalingType::from_u8(27).is_none());
+        // MAX=26 is the JS sentinel, not a type — must be rejected.
+        assert!(
+            SignalingType::from_u8(26).is_none(),
+            "value 26 is JS MAX sentinel and must not map to any type"
+        );
+        assert!(SignalingType::from_u8(28).is_none());
     }
 
     #[test]
@@ -387,11 +404,29 @@ mod tests {
         assert_eq!(SignalingType::GroupUpdate as u8, 24);
         assert_eq!(SignalingType::OfferNotice as u8, 25);
 
-        // MuteV2 is a Rust-only addition beyond MAX in JS
-        assert_eq!(SignalingType::MuteV2 as u8, 26);
+        // MuteV2 is a Rust-only addition beyond MAX in JS. It MUST come after
+        // MAX=26 so the canonical JS enum range (0..=25 valid types + 26 sentinel)
+        // stays intact if we ever compare against wire values from the peer.
+        assert!(
+            SignalingType::MuteV2 as u8 > 26,
+            "MuteV2 value {} must be > JS MAX sentinel (26); placing it at 26 overwrites MAX",
+            SignalingType::MuteV2 as u8
+        );
 
         // Verify we have 27 types (26 from JS + MuteV2)
         assert_eq!(SignalingType::ALL.len(), 27);
+    }
+
+    /// `MuteV2`'s wire representation must stay `"mute_v2"` (present in the
+    /// WhatsApp Web binary protocol dictionary — see `docs/captured-js/WA/Wap/Dict.js`).
+    /// Moving the numeric discriminant around must not change the serialized tag.
+    #[test]
+    fn test_mute_v2_tag_is_stable() {
+        assert_eq!(SignalingType::MuteV2.tag_name(), "mute_v2");
+        assert_eq!(
+            SignalingType::from_tag("mute_v2"),
+            Some(SignalingType::MuteV2)
+        );
     }
 
     /// Test tag names match binary protocol dictionary tokens.

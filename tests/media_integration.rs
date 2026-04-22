@@ -675,6 +675,7 @@ mod voip_call_flow_tests {
             ipv4: Some("192.168.1.1".to_string()),
             port: 3478,
             token: vec![0x01; 32],
+            ..Default::default()
         };
 
         assert_eq!(measurement.relay_name, "test-relay");
@@ -950,6 +951,7 @@ mod voip_call_flow_tests {
             ipv4: Some("192.168.1.1".to_string()),
             port: 3478,
             token: vec![0x01; 32],
+            ..Default::default()
         }];
 
         let stanza = call_manager

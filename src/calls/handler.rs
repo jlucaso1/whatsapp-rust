@@ -222,6 +222,7 @@ impl CallHandler {
                         ipv4,
                         port,
                         token,
+                        ..Default::default()
                     };
 
                     match call_manager
