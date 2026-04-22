@@ -128,6 +128,13 @@ pub enum StunAttributeType {
     /// `add_stun_attr_sender_subscriptions`. Parse tolerant; keep both
     /// 0x4000 and 0x4025 to stay compatible across server rollouts.
     SenderSubscriptionsV2 = 0x4025,
+    /// WhatsApp StableRoutingConnectionId (0x4033) — carries the 64-bit
+    /// conn_id the relay wants prepended to subsequent outbound packets.
+    ///
+    /// Attribute slot identified via the parsing spec table at local+108 in
+    /// the allocate-response handler (`func[2636]` in `wa_tp.cc`). Value is
+    /// parsed as 8 bytes big-endian.
+    StableRoutingConnectionId = 0x4033,
     /// SOFTWARE (0x8022) - Software description
     Software = 0x8022,
     /// FINGERPRINT (0x8028) - CRC32 checksum
@@ -161,6 +168,7 @@ impl TryFrom<u16> for StunAttributeType {
             0x4021 => Ok(Self::ReceiverSubscriptionV2),
             0x4024 => Ok(Self::StreamDescriptor),
             0x4025 => Ok(Self::SenderSubscriptionsV2),
+            0x4033 => Ok(Self::StableRoutingConnectionId),
             0x8022 => Ok(Self::Software),
             0x8028 => Ok(Self::Fingerprint),
             0x8029 => Ok(Self::IceControlled),
@@ -226,6 +234,10 @@ pub enum StunAttribute {
     /// WhatsApp SenderSubscriptionsV2 (0x4025) - raw bytes.
     /// Newer emit path for `add_stun_attr_sender_subscriptions`.
     SenderSubscriptionsV2(Vec<u8>),
+    /// WhatsApp StableRoutingConnectionId (0x4033) — 64-bit big-endian id.
+    /// Wire value decoded; when the attr is present but malformed the
+    /// decoder falls back to `Unknown`.
+    StableRoutingConnectionId(u64),
     /// Unknown attribute
     Unknown { attr_type: u16, data: Vec<u8> },
 }
@@ -826,6 +838,26 @@ impl StunMessage {
                 Ok(StunAttributeType::SenderSubscriptionsV2) => {
                     StunAttribute::SenderSubscriptionsV2(attr_data.to_vec())
                 }
+                Ok(StunAttributeType::StableRoutingConnectionId) => {
+                    if attr_data.len() == 8 {
+                        let id = u64::from_be_bytes([
+                            attr_data[0],
+                            attr_data[1],
+                            attr_data[2],
+                            attr_data[3],
+                            attr_data[4],
+                            attr_data[5],
+                            attr_data[6],
+                            attr_data[7],
+                        ]);
+                        StunAttribute::StableRoutingConnectionId(id)
+                    } else {
+                        StunAttribute::Unknown {
+                            attr_type,
+                            data: attr_data.to_vec(),
+                        }
+                    }
+                }
                 _ => StunAttribute::Unknown {
                     attr_type,
                     data: attr_data.to_vec(),
@@ -952,6 +984,44 @@ impl StunMessage {
     pub fn realm(&self) -> Option<&str> {
         self.attributes.iter().find_map(|attr| match attr {
             StunAttribute::Realm(realm) => Some(realm.as_str()),
+            _ => None,
+        })
+    }
+
+    /// Stable-routing connection id if present (attr 0x4033). Callers that
+    /// see `Some(_)` should push it to their `RelayConnection` via
+    /// `set_conn_id` so outbound packets get the 8-byte prefix.
+    pub fn stable_routing_conn_id(&self) -> Option<u64> {
+        self.attributes.iter().find_map(|attr| match attr {
+            StunAttribute::StableRoutingConnectionId(id) => Some(*id),
+            _ => None,
+        })
+    }
+
+    /// Raw payload bytes of the `SenderSubscriptionsV2` attribute (0x4025)
+    /// if present. Bytes are the serialized `voip.SenderSubscriptions`
+    /// protobuf; caller decodes with the schema from `waproto::voip`.
+    pub fn sender_subscriptions_v2(&self) -> Option<&[u8]> {
+        self.attributes.iter().find_map(|attr| match attr {
+            StunAttribute::SenderSubscriptionsV2(b) => Some(b.as_slice()),
+            _ => None,
+        })
+    }
+
+    /// Raw payload of the `ReceiverSubscriptionV2` attribute (0x4021).
+    pub fn receiver_subscription_v2(&self) -> Option<&[u8]> {
+        self.attributes.iter().find_map(|attr| match attr {
+            StunAttribute::ReceiverSubscriptionV2(b) => Some(b.as_slice()),
+            _ => None,
+        })
+    }
+
+    /// Raw payload of the `StreamDescriptor` attribute (0x4024).
+    /// Per WA Web `append_stream_descriptor`, the payload carries
+    /// per-stream SSRC metadata (media + FEC + NACK ids).
+    pub fn stream_descriptor(&self) -> Option<&[u8]> {
+        self.attributes.iter().find_map(|attr| match attr {
+            StunAttribute::StreamDescriptor(b) => Some(b.as_slice()),
             _ => None,
         })
     }
@@ -1554,6 +1624,93 @@ mod tests {
             }
             _ => unreachable!(),
         }
+    }
+
+    /// Allocate response carrying attr 0x4033 (64-bit stable-routing
+    /// connection id, big-endian) must be decoded and exposed through the
+    /// `stable_routing_conn_id()` helper.
+    #[test]
+    fn test_stun_decode_stable_routing_conn_id() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x01, 0x01]);
+        data.extend_from_slice(&[0x00, 0x0C]); // 12 bytes of attrs = header(4) + value(8)
+        data.extend_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes());
+        data.extend_from_slice(&[0u8; 12]);
+
+        data.extend_from_slice(&[0x40, 0x33]); // attr 0x4033
+        data.extend_from_slice(&[0x00, 0x08]); // length 8
+        let id: u64 = 0xDEADBEEFCAFEBABE;
+        data.extend_from_slice(&id.to_be_bytes());
+
+        let msg = StunMessage::decode(&data).expect("decode must succeed");
+        assert_eq!(msg.stable_routing_conn_id(), Some(id));
+    }
+
+    /// Malformed (non-8-byte) conn id attribute falls back to `Unknown` and
+    /// the helper returns `None` — we must not panic or expose a bogus u64.
+    #[test]
+    fn test_stun_decode_stable_routing_conn_id_wrong_size_ignored() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x01, 0x01]);
+        data.extend_from_slice(&[0x00, 0x08]);
+        data.extend_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes());
+        data.extend_from_slice(&[0u8; 12]);
+
+        data.extend_from_slice(&[0x40, 0x33]);
+        data.extend_from_slice(&[0x00, 0x04]);
+        data.extend_from_slice(&[0, 0, 0, 42]);
+
+        let msg = StunMessage::decode(&data).expect("decode must succeed");
+        assert_eq!(msg.stable_routing_conn_id(), None);
+        assert!(
+            msg.attributes.iter().any(|a| matches!(
+                a,
+                StunAttribute::Unknown {
+                    attr_type: 0x4033,
+                    ..
+                }
+            )),
+            "malformed conn_id must survive as Unknown"
+        );
+    }
+
+    /// Typed accessors on `StunMessage` must expose the raw protobuf bytes
+    /// for each v2 attr — downstream decoders need zero-copy access (no
+    /// re-walk through the attribute list) to keep the hot-path cheap.
+    #[test]
+    fn test_stun_v2_attr_accessors() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0x01, 0x01]);
+        // 3 attrs × (4 header + 4 payload) + padding (0 since 4-aligned) = 24
+        data.extend_from_slice(&[0x00, 0x18]);
+        data.extend_from_slice(&STUN_MAGIC_COOKIE.to_be_bytes());
+        data.extend_from_slice(&[0u8; 12]);
+
+        data.extend_from_slice(&[0x40, 0x21]);
+        data.extend_from_slice(&[0x00, 0x04]);
+        data.extend_from_slice(&[0x01, 0x02, 0x03, 0x04]);
+
+        data.extend_from_slice(&[0x40, 0x24]);
+        data.extend_from_slice(&[0x00, 0x04]);
+        data.extend_from_slice(&[0x11, 0x22, 0x33, 0x44]);
+
+        data.extend_from_slice(&[0x40, 0x25]);
+        data.extend_from_slice(&[0x00, 0x04]);
+        data.extend_from_slice(&[0xAA, 0xBB, 0xCC, 0xDD]);
+
+        let msg = StunMessage::decode(&data).expect("decode");
+        assert_eq!(
+            msg.receiver_subscription_v2(),
+            Some(&[0x01u8, 0x02, 0x03, 0x04][..])
+        );
+        assert_eq!(
+            msg.stream_descriptor(),
+            Some(&[0x11u8, 0x22, 0x33, 0x44][..])
+        );
+        assert_eq!(
+            msg.sender_subscriptions_v2(),
+            Some(&[0xAAu8, 0xBB, 0xCC, 0xDD][..])
+        );
     }
 
     /// WhatsApp custom attrs added later in wa_transport_subscription.cc:

@@ -105,6 +105,19 @@ pub struct RelayConnection {
     /// code pending reverse engineering); until we parse it, callers can set
     /// this directly via `set_conn_id`.
     conn_id: Mutex<Option<u64>>,
+    /// WARP MI (hop-by-hop MAC) configuration. When set, `send_with_warp_mi`
+    /// appends a truncated HMAC-SHA256 over the packet (conn_id prefix
+    /// included). WA Web enables this per packet type via
+    /// `tp->enable_hbh_warp_mi_req_bitmap`; here we expose it as an
+    /// opt-in per send until we reverse the bitmap wire format.
+    warp_mi: Mutex<Option<WarpMiState>>,
+}
+
+/// Installed WARP MI configuration for a [`RelayConnection`].
+#[derive(Debug, Clone, Copy)]
+struct WarpMiState {
+    key: [u8; 32],
+    tagger: super::warp_mi::WarpMi,
 }
 
 impl RelayConnection {
@@ -120,6 +133,7 @@ impl RelayConnection {
             config,
             credentials: Mutex::new(None),
             conn_id: Mutex::new(None),
+            warp_mi: Mutex::new(None),
         })
     }
 
@@ -139,6 +153,30 @@ impl RelayConnection {
     /// Currently-installed stable-routing connection id, if any.
     pub async fn conn_id(&self) -> Option<u64> {
         *self.conn_id.lock().await
+    }
+
+    /// Install a WARP MI key + tag length. Until [`clear_warp_mi`] is
+    /// called, [`send_with_warp_mi`] appends the truncated HMAC-SHA256 tag
+    /// to every packet it frames.
+    ///
+    /// [`clear_warp_mi`]: Self::clear_warp_mi
+    /// [`send_with_warp_mi`]: Self::send_with_warp_mi
+    pub async fn set_warp_mi(&self, key: [u8; 32], tag_len: usize) {
+        *self.warp_mi.lock().await = Some(WarpMiState {
+            key,
+            tagger: super::warp_mi::WarpMi::new().with_tag_len(tag_len),
+        });
+    }
+
+    /// Remove the WARP MI configuration; subsequent `send_with_warp_mi`
+    /// calls behave like plain `send`.
+    pub async fn clear_warp_mi(&self) {
+        *self.warp_mi.lock().await = None;
+    }
+
+    /// True iff WARP MI is currently armed.
+    pub async fn has_warp_mi(&self) -> bool {
+        self.warp_mi.lock().await.is_some()
     }
 
     /// Get the local address.
@@ -299,6 +337,16 @@ impl RelayConnection {
             endpoint.relay_name, local_addr, stun_result.mapped_address
         );
 
+        // If the bind response carried a stable-routing connection id, latch
+        // it immediately so all subsequent `send` calls prefix the 8 bytes.
+        if let Some(conn_id) = stun_result.response.stable_routing_conn_id() {
+            debug!(
+                "stable routing: latched conn_id 0x{:016x} for relay {}",
+                conn_id, endpoint.relay_name
+            );
+            *self.conn_id.lock().await = Some(conn_id);
+        }
+
         // Store credentials for keepalives
         *self.credentials.lock().await = Some(credentials);
 
@@ -375,6 +423,32 @@ impl RelayConnection {
         }
     }
 
+    /// Frame an outbound packet with both stable-routing prefix and WARP MI
+    /// tag in a single owned buffer. Wire layout (when both are enabled):
+    ///
+    /// `[ conn_id (8 BE) | payload | HMAC-SHA256(key, conn_id||payload) tag ]`
+    ///
+    /// The MAC covers the conn_id prefix so it cannot be swapped relay-side
+    /// without failing verification — same contract as `add_hbh_warp_mi_tag`.
+    /// When both are `None` / disabled, returns the original slice borrowed.
+    pub fn frame_packet_with_warp(
+        conn_id: Option<u64>,
+        warp_key_tag: Option<(&[u8; 32], &super::warp_mi::WarpMi)>,
+        data: &[u8],
+    ) -> Vec<u8> {
+        let tag_len = warp_key_tag.map(|(_, t)| t.tag_len()).unwrap_or(0);
+        let prefix_len = if conn_id.is_some() { 8 } else { 0 };
+        let mut buf = Vec::with_capacity(prefix_len + data.len() + tag_len);
+        if let Some(id) = conn_id {
+            buf.extend_from_slice(&id.to_be_bytes());
+        }
+        buf.extend_from_slice(data);
+        if let Some((key, tagger)) = warp_key_tag {
+            tagger.append_tag(key, &mut buf);
+        }
+        buf
+    }
+
     /// Send data to the connected relay. When a stable-routing connection
     /// id is installed (see [`set_conn_id`]) the 8-byte BE encoding is
     /// prepended to the packet before it hits the wire, matching WA Web's
@@ -393,6 +467,29 @@ impl RelayConnection {
         let conn_id = *self.conn_id.lock().await;
         let framed = Self::frame_packet(conn_id, data);
         Ok(self.socket.send(framed.as_ref()).await?)
+    }
+
+    /// Same as [`send`] but also appends the WARP MI tag if one is armed
+    /// via [`set_warp_mi`]. Use this for packet types that the relay
+    /// requires to be authenticated (audio RTP, FEC, etc.); `send` stays
+    /// the cheap path for types that don't require a tag.
+    ///
+    /// [`send`]: Self::send
+    /// [`set_warp_mi`]: Self::set_warp_mi
+    pub async fn send_with_warp_mi(&self, data: &[u8]) -> Result<usize, RelayError> {
+        let state = *self.state.lock().await;
+        if state != RelayState::Bound {
+            return Err(RelayError::Socket(std::io::Error::new(
+                std::io::ErrorKind::NotConnected,
+                "Relay not connected",
+            )));
+        }
+
+        let conn_id = *self.conn_id.lock().await;
+        let warp_state = *self.warp_mi.lock().await;
+        let warp_ref = warp_state.as_ref().map(|w| (&w.key, &w.tagger));
+        let framed = Self::frame_packet_with_warp(conn_id, warp_ref, data);
+        Ok(self.socket.send(&framed).await?)
     }
 
     /// Receive data from the relay.
@@ -504,5 +601,50 @@ mod tests {
         assert_eq!(conn.conn_id().await, Some(0xCAFEBABEDEADBEEF));
         conn.clear_conn_id().await;
         assert_eq!(conn.conn_id().await, None);
+    }
+
+    /// `frame_packet_with_warp` with both conn_id and WARP MI armed emits
+    /// the full wire layout: `[conn_id BE | payload | tag]`.
+    #[test]
+    fn test_frame_packet_with_warp_layout() {
+        use super::super::warp_mi::WarpMi;
+        let key = [0xAAu8; 32];
+        let tagger = WarpMi::new();
+        let payload = b"rtp-like-payload".to_vec();
+        let conn_id: u64 = 0x0102030405060708;
+
+        let framed =
+            RelayConnection::frame_packet_with_warp(Some(conn_id), Some((&key, &tagger)), &payload);
+        assert_eq!(framed.len(), 8 + payload.len() + tagger.tag_len());
+        assert_eq!(&framed[..8], &conn_id.to_be_bytes());
+        assert_eq!(&framed[8..8 + payload.len()], &payload[..]);
+
+        // Verify the tag is computed over conn_id || payload, not payload alone.
+        let expected_payload_view = &framed[..8 + payload.len()];
+        let tag_slice = &framed[8 + payload.len()..];
+        let mut recomputed = [0u8; 32];
+        let wrote = tagger.compute_into(&key, expected_payload_view, &mut recomputed);
+        assert_eq!(tag_slice, &recomputed[..wrote]);
+    }
+
+    /// WARP MI disabled → same bytes as `frame_packet`.
+    #[test]
+    fn test_frame_packet_with_warp_disabled_matches_plain() {
+        let payload = [0u8, 1, 2, 3];
+        let plain = RelayConnection::frame_packet(None, &payload);
+        let with_warp = RelayConnection::frame_packet_with_warp(None, None, &payload);
+        assert_eq!(plain.as_ref(), with_warp.as_slice());
+    }
+
+    /// Set/clear WARP MI state.
+    #[tokio::test]
+    async fn test_set_warp_mi_roundtrip() {
+        let config = RelayConnectionConfig::default();
+        let conn = RelayConnection::new(config).await.unwrap();
+        assert!(!conn.has_warp_mi().await);
+        conn.set_warp_mi([0x42u8; 32], 16).await;
+        assert!(conn.has_warp_mi().await);
+        conn.clear_warp_mi().await;
+        assert!(!conn.has_warp_mi().await);
     }
 }
