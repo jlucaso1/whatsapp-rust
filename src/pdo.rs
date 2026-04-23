@@ -400,12 +400,14 @@ impl Client {
         let is_group = remote_jid.is_group();
         let is_from_me = key.from_me.unwrap_or(false);
 
-        let sender = if is_group {
-            key.participant
-                .as_ref()
-                .map(|p: &String| p.parse())
-                .transpose()?
-                .unwrap_or_else(|| remote_jid.clone())
+        // `key.participant` is the real author for any chat where the sender
+        // differs from the remote_jid — groups AND broadcasts (including
+        // status). Falling back to remote_jid for broadcasts would surface
+        // `status@broadcast` as the sender and erase the author. Matches the
+        // response-handler construction in WAWebNonMessageDataRequestHandlerPlaceholderResend
+        // which maps participant to `author` for both broadcast branches.
+        let sender = if let Some(p) = key.participant.as_ref() {
+            p.parse()?
         } else if is_from_me {
             self.persistence_manager
                 .get_device_snapshot()
@@ -563,5 +565,92 @@ mod tests {
         assert_eq!(peer_target.user, "559999999999");
         assert_eq!(peer_target.device, 0);
         assert_eq!(peer_target.agent, 0);
+    }
+
+    /// The reconstruction path preserves the real author for status
+    /// broadcasts via `key.participant`. Using `remote_jid` as sender
+    /// would surface `status@broadcast` and erase the author.
+    #[tokio::test]
+    async fn test_reconstruct_prefers_participant_for_status_broadcast() {
+        use crate::test_utils::{MockHttpClient, create_test_backend};
+        use crate::{
+            client::Client, runtime_impl::TokioRuntime,
+            store::persistence_manager::PersistenceManager, transport::mock::MockTransportFactory,
+        };
+        use std::sync::Arc;
+        use waproto::whatsapp as wa;
+
+        let backend = create_test_backend().await;
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _rx) = Client::new(
+            Arc::new(TokioRuntime),
+            pm,
+            Arc::new(MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let author_jid = "203040904720543@lid";
+        let web_msg = wa::WebMessageInfo {
+            key: wa::MessageKey {
+                remote_jid: Some("status@broadcast".into()),
+                from_me: Some(false),
+                id: Some("STATUS_PDO_1".into()),
+                participant: Some(author_jid.into()),
+            },
+            ..Default::default()
+        };
+
+        let info = client
+            .message_info_from_web_message_info(&web_msg)
+            .await
+            .unwrap();
+
+        assert_eq!(info.source.chat.to_string(), "status@broadcast");
+        assert_eq!(info.source.sender.to_string(), author_jid);
+    }
+
+    /// DM without participant falls back to remote_jid as the sender,
+    /// preserving the pre-fix behaviour for the DM case.
+    #[tokio::test]
+    async fn test_reconstruct_dm_falls_back_to_remote_jid() {
+        use crate::test_utils::{MockHttpClient, create_test_backend};
+        use crate::{
+            client::Client, runtime_impl::TokioRuntime,
+            store::persistence_manager::PersistenceManager, transport::mock::MockTransportFactory,
+        };
+        use std::sync::Arc;
+        use waproto::whatsapp as wa;
+
+        let backend = create_test_backend().await;
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _rx) = Client::new(
+            Arc::new(TokioRuntime),
+            pm,
+            Arc::new(MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+
+        let peer = "5511999998888@s.whatsapp.net";
+        let web_msg = wa::WebMessageInfo {
+            key: wa::MessageKey {
+                remote_jid: Some(peer.into()),
+                from_me: Some(false),
+                id: Some("DM_PDO_1".into()),
+                participant: None,
+            },
+            ..Default::default()
+        };
+
+        let info = client
+            .message_info_from_web_message_info(&web_msg)
+            .await
+            .unwrap();
+
+        assert_eq!(info.source.chat.to_string(), peer);
+        assert_eq!(info.source.sender.to_string(), peer);
     }
 }
