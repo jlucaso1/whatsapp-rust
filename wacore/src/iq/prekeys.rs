@@ -37,7 +37,7 @@
 //! </iq>
 //! ```
 
-use crate::iq::node::required_child;
+use crate::iq::node::{extract_content_bytes, extract_content_uint, required_child};
 use crate::iq::spec::IqSpec;
 use crate::prekeys::PreKeyUtils;
 use crate::protocol::ProtocolNode;
@@ -50,29 +50,6 @@ use wacore_binary::{Node, NodeContent, NodeContentRef, NodeRef};
 
 // Re-export PreKeyBundle for convenience
 pub use crate::libsignal::protocol::{PreKeyBundle, PublicKey};
-
-/// Extract binary content from an optional `NodeRef` as `Vec<u8>`.
-fn extract_content_bytes(node: Option<&NodeRef<'_>>) -> Vec<u8> {
-    node.and_then(|n| match n.content.as_deref() {
-        Some(NodeContentRef::Bytes(b)) => Some(b.to_vec()),
-        _ => None,
-    })
-    .unwrap_or_default()
-}
-
-/// Extract binary content from an optional `NodeRef` as a big-endian unsigned integer.
-fn extract_content_uint(node: Option<&NodeRef<'_>>) -> u32 {
-    node.and_then(|n| match n.content.as_deref() {
-        Some(NodeContentRef::Bytes(b)) => {
-            let mut buf = [0u8; 4];
-            let len = b.len().min(4);
-            buf[4 - len..].copy_from_slice(&b[..len]);
-            Some(u32::from_be_bytes(buf))
-        }
-        _ => None,
-    })
-    .unwrap_or(0)
-}
 
 /// Pre-key count response.
 #[derive(Debug, Clone)]

@@ -26,8 +26,11 @@ impl Client {
         // Signal that offline sync is complete - post-login tasks are waiting for this.
         // This mimics WhatsApp Web's offlineDeliveryEnd event.
         // Use compare_exchange to ensure we only run this once (add_permits is NOT idempotent).
-        // Install the wider semaphore BEFORE flipping the flag so that any thread
-        // observing offline_sync_completed=true already sees the 64-permit semaphore.
+        // Readers that observe offline_sync_completed=true short-circuit without touching
+        // the semaphore (wait_for_offline_delivery_end returns early), so the ordering of
+        // flag flip vs. semaphore swap below is not observable: any in-flight worker keeps
+        // using its old 1-permit Arc and drains normally; newly-spawned workers pick up the
+        // 64-permit semaphore via read_message_semaphore().
         if self
             .offline_sync_completed
             .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)

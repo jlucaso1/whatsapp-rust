@@ -867,7 +867,7 @@ where
     let mut enc_builder = NodeBuilder::new("enc")
         .attr("v", stanza::ENC_VERSION)
         .attr("type", enc_type)
-        .attr("count", retry_count.to_string());
+        .attr("count", retry_count);
     if let Some(mt) = media_type_from_message(message) {
         enc_builder = enc_builder.attr("mediatype", mt);
     }
@@ -933,7 +933,7 @@ where
     let mut enc_builder = NodeBuilder::new("enc")
         .attr("v", stanza::ENC_VERSION)
         .attr("type", enc_type)
-        .attr("count", retry_count.to_string());
+        .attr("count", retry_count);
     if let Some(mt) = media_type_from_message(message) {
         enc_builder = enc_builder.attr("mediatype", mt);
     }

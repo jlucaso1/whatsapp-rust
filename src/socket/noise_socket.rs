@@ -20,8 +20,6 @@ struct SendJob {
 }
 
 pub struct NoiseSocket {
-    #[allow(dead_code)] // Kept for potential future spawns
-    runtime: Arc<dyn Runtime>,
     read_key: Arc<NoiseCipher>,
     read_counter: Arc<AtomicU32>,
     /// Channel to send jobs to the dedicated sender task.
@@ -60,7 +58,6 @@ impl NoiseSocket {
         )));
 
         Self {
-            runtime,
             read_key,
             read_counter: Arc::new(AtomicU32::new(0)),
             send_job_tx,

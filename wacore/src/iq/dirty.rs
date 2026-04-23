@@ -102,7 +102,7 @@ impl IqSpec for CleanDirtyBitsSpec {
             .map(|bit| {
                 let mut builder = NodeBuilder::new("clean").attr("type", bit.dirty_type.as_str());
                 if let Some(ts) = bit.timestamp {
-                    builder = builder.attr("timestamp", ts.to_string());
+                    builder = builder.attr("timestamp", ts);
                 }
                 builder.build()
             })

@@ -144,9 +144,7 @@ mod tests {
         let manager = UnifiedSessionManager::new();
 
         let server_time = wacore::time::now_secs() + 10;
-        let node = NodeBuilder::new("success")
-            .attr("t", server_time.to_string())
-            .build();
+        let node = NodeBuilder::new("success").attr("t", server_time).build();
 
         manager.update_server_time_offset(&node.as_node_ref());
 

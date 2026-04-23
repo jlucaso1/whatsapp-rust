@@ -390,9 +390,9 @@ impl<'a> Newsletter<'a> {
         count: u32,
         before: Option<u64>,
     ) -> Result<Vec<NewsletterMessage>, anyhow::Error> {
-        let mut messages_node = NodeBuilder::new("messages").attr("count", count.to_string());
+        let mut messages_node = NodeBuilder::new("messages").attr("count", count);
         if let Some(before_id) = before {
-            messages_node = messages_node.attr("before", before_id.to_string());
+            messages_node = messages_node.attr("before", before_id);
         }
 
         let iq = InfoQuery::get(

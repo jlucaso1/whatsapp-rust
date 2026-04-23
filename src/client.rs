@@ -1824,10 +1824,6 @@ impl Client {
         self.send_raw_bytes(buf).await
     }
 
-    pub(crate) async fn handle_unimplemented(&self, tag: &str) {
-        log::debug!("Unhandled stanza: <{tag}>");
-    }
-
     pub async fn set_passive(&self, passive: bool) -> Result<(), crate::request::IqError> {
         use wacore::iq::passive::PassiveModeSpec;
         self.execute(PassiveModeSpec::new(passive)).await
@@ -2556,7 +2552,7 @@ impl Client {
                         if want_snapshot { "true" } else { "false" },
                     );
                 if !want_snapshot {
-                    builder = builder.attr("version", state.version.to_string());
+                    builder = builder.attr("version", state.version);
                 }
                 collection_nodes.push(builder.build());
             }
@@ -2769,7 +2765,7 @@ impl Client {
                     if want_snapshot { "true" } else { "false" },
                 );
             if !want_snapshot {
-                collection_builder = collection_builder.attr("version", state.version.to_string());
+                collection_builder = collection_builder.attr("version", state.version);
             }
             let sync_node = NodeBuilder::new("sync")
                 .children([collection_builder.build()])
@@ -2977,7 +2973,7 @@ impl Client {
 
         let collection_node = NodeBuilder::new("collection")
             .attr("name", collection_name)
-            .attr("version", base_version.to_string())
+            .attr("version", base_version)
             .attr("return_snapshot", "false")
             .children([NodeBuilder::new("patch").bytes(patch_bytes).build()])
             .build();
@@ -3547,7 +3543,7 @@ impl Client {
             .attr("to", to)
             .attr("type", "reaction")
             .attr("id", &request_id)
-            .attr("server_id", server_id.to_string())
+            .attr("server_id", server_id)
             .children([NodeBuilder::new("reaction").attr("code", reaction).build()])
             .build();
 
@@ -4969,9 +4965,7 @@ mod tests {
 
         // Create a node with a 't' attribute
         let server_time = wacore::time::now_secs() + 10; // Server is 10 seconds ahead
-        let node = NodeBuilder::new("success")
-            .attr("t", server_time.to_string())
-            .build();
+        let node = NodeBuilder::new("success").attr("t", server_time).build();
 
         // Update the offset
         client.update_server_time_offset(&node.as_node_ref());

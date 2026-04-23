@@ -860,13 +860,13 @@ impl Client {
         let mut retry_builder = NodeBuilder::new("retry")
             .attr("v", "1")
             .attr("id", info.id.clone())
-            .attr("t", info.timestamp.timestamp().to_string())
-            .attr("count", retry_count.to_string());
+            .attr("t", info.timestamp.timestamp())
+            .attr("count", retry_count);
 
         // Include the error code if it's not UnknownError (matches WhatsApp Web's behavior
         // where error is only included when there's a specific reason)
         if reason != RetryReason::UnknownError {
-            retry_builder = retry_builder.attr("error", (reason as u8).to_string());
+            retry_builder = retry_builder.attr("error", reason as u8);
         }
 
         let retry_node = retry_builder.build();
@@ -1022,7 +1022,7 @@ impl Client {
         let enc_rekey_node = NodeBuilder::new("enc_rekey")
             .attr("call-creator", call_creator)
             .attr("call-id", call_id)
-            .attr("count", retry_count.to_string())
+            .attr("count", retry_count)
             .build();
 
         let registration_node = NodeBuilder::new("registration")
@@ -1326,7 +1326,7 @@ mod tests {
         let enc_rekey_node = NodeBuilder::new("enc_rekey")
             .attr("call-creator", call_creator)
             .attr("call-id", call_id)
-            .attr("count", retry_count.to_string())
+            .attr("count", retry_count)
             .build();
 
         let registration_node = NodeBuilder::new("registration")
