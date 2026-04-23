@@ -8,7 +8,7 @@ use wacore::WireEnum;
 
 use crate::client::Client;
 use crate::features::mex::{MexError, MexRequest};
-use prost::Message as ProtoMessage;
+use buffa::Message as ProtoMessage;
 use serde_json::json;
 use wacore::iq::mex_ids::newsletter as newsletter_docs;
 use wacore::iq::newsletter::NEWSLETTER_XMLNS;
@@ -572,7 +572,9 @@ fn parse_newsletter_messages_response(
             msg_node
                 .get_optional_child("plaintext")
                 .and_then(|pt| match pt.content.as_deref() {
-                    Some(NodeContentRef::Bytes(bytes)) => wa::Message::decode(bytes.as_ref()).ok(),
+                    Some(NodeContentRef::Bytes(bytes)) => {
+                        wa::Message::decode_from_slice(bytes.as_ref()).ok()
+                    }
                     _ => None,
                 });
 

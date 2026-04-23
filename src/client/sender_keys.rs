@@ -116,13 +116,13 @@ impl Client {
 
     /// Look up and consume a message by exact `ChatMessageId` (L1 cache then DB).
     async fn try_take_by_key(&self, key: &ChatMessageId) -> Option<wa::Message> {
-        use prost::Message;
+        use buffa::Message;
         let chat_str = key.chat.to_string();
         let has_l1_cache = self.cache_config.recent_messages.capacity > 0;
 
         // L1 cache check (if capacity > 0)
         if has_l1_cache && let Some(bytes) = self.recent_messages.remove(key).await {
-            if let Ok(msg) = wa::Message::decode(bytes.as_slice()) {
+            if let Ok(msg) = wa::Message::decode_from_slice(bytes.as_slice()) {
                 // Cache hit — consume the DB row in the background to avoid orphans.
                 let backend = self.persistence_manager.backend();
                 let mid = key.id.clone();
@@ -149,7 +149,7 @@ impl Client {
             .take_sent_message(&chat_str, &key.id)
             .await
         {
-            Ok(Some(bytes)) => match wa::Message::decode(bytes.as_slice()) {
+            Ok(Some(bytes)) => match wa::Message::decode_from_slice(bytes.as_slice()) {
                 Ok(msg) => Some(msg),
                 Err(e) => {
                     log::warn!(
@@ -179,7 +179,7 @@ impl Client {
     /// In DB-only mode (capacity = 0), the DB write is awaited to guarantee persistence.
     /// With L1 cache, the DB write is backgrounded since the cache serves reads immediately.
     pub(crate) async fn add_recent_message(&self, to: &Jid, id: &str, msg: &wa::Message) {
-        use prost::Message;
+        use buffa::Message;
         let key = self.make_chat_message_id(to, id).await;
         let bytes = msg.encode_to_vec();
         let has_l1_cache = self.cache_config.recent_messages.capacity > 0;

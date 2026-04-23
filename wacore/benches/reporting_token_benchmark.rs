@@ -1,8 +1,8 @@
+use buffa::Message;
 use iai_callgrind::{
     Callgrind, FlamegraphConfig, LibraryBenchmarkConfig, library_benchmark,
     library_benchmark_group, main,
 };
-use prost::Message;
 use std::hint::black_box;
 use wacore::reporting_token::{
     MESSAGE_SECRET_SIZE, REPORTING_TOKEN_KEY_SIZE, calculate_reporting_token,
@@ -20,15 +20,15 @@ fn create_simple_message() -> wa::Message {
 
 fn create_extended_message() -> wa::Message {
     wa::Message {
-        extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+        extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
             text: Some("Test message with context info".to_string()),
-            context_info: Some(Box::new(wa::ContextInfo {
+            context_info: buffa::MessageField::some(wa::ContextInfo {
                 is_forwarded: Some(true),
                 forwarding_score: Some(5),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
-        })),
+        }),
         ..Default::default()
     }
 }

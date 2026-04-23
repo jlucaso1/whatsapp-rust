@@ -7,7 +7,7 @@
 
 #![warn(missing_docs)]
 
-use prost::Message;
+use buffa::Message;
 use rand::{CryptoRng, Rng};
 
 use crate::protocol::{
@@ -138,6 +138,7 @@ impl IdentityKeyPair {
         let structure = IdentityKeyPairStructure {
             public_key: Some(self.identity_key.serialize().to_vec()),
             private_key: Some(self.private_key.serialize().to_vec()),
+            ..Default::default()
         };
 
         let result = structure.encode_to_vec();
@@ -165,7 +166,7 @@ impl TryFrom<&[u8]> for IdentityKeyPair {
     type Error = SignalProtocolError;
 
     fn try_from(value: &[u8]) -> Result<Self> {
-        let structure = IdentityKeyPairStructure::decode(value)
+        let structure = IdentityKeyPairStructure::decode_from_slice(value)
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
         Ok(Self {
             identity_key: IdentityKey::try_from(

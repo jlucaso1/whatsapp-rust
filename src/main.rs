@@ -165,10 +165,11 @@ async fn handle_text_ping(ctx: &MessageContext) {
             .source
             .is_group
             .then(|| ctx.info.source.sender.to_string()),
+        ..Default::default()
     };
     let reaction = wa::Message {
-        reaction_message: Some(wa::message::ReactionMessage {
-            key: Some(key),
+        reaction_message: buffa::MessageField::some(wa::message::ReactionMessage {
+            key: buffa::MessageField::some(key),
             text: Some(REACTION_EMOJI.to_string()),
             sender_timestamp_ms: Some(Utc::now().timestamp_millis()),
             ..Default::default()
@@ -182,11 +183,11 @@ async fn handle_text_ping(ctx: &MessageContext) {
     let start = std::time::Instant::now();
     let context_info = ctx.build_quote_context();
     let reply = wa::Message {
-        extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+        extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
             text: Some(PONG_TEXT.to_string()),
-            context_info: Some(Box::new(context_info)),
+            context_info: buffa::MessageField::some(context_info),
             ..Default::default()
-        })),
+        }),
         ..Default::default()
     };
 
@@ -205,10 +206,10 @@ async fn handle_text_ping(ctx: &MessageContext) {
     );
 
     let edit = wa::Message {
-        extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+        extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
             text: Some(format!("{PONG_TEXT}\n`{duration}`")),
             ..Default::default()
-        })),
+        }),
         ..Default::default()
     };
     if let Err(e) = ctx.edit_message(sent.message_id.clone(), edit).await {
@@ -220,25 +221,25 @@ async fn handle_text_ping(ctx: &MessageContext) {
 fn build_media_pong(message: &wa::Message) -> Option<wa::Message> {
     let base = message.get_base_message();
 
-    if let Some(img) = &base.image_message
+    if let Some(img) = base.image_message.as_option()
         && img.caption.as_deref() == Some(PING_TRIGGER)
     {
         return Some(wa::Message {
-            image_message: Some(Box::new(wa::message::ImageMessage {
+            image_message: buffa::MessageField::some(wa::message::ImageMessage {
                 caption: Some(PONG_TEXT.to_string()),
-                ..*img.clone()
-            })),
+                ..img.clone()
+            }),
             ..Default::default()
         });
     }
-    if let Some(vid) = &base.video_message
+    if let Some(vid) = base.video_message.as_option()
         && vid.caption.as_deref() == Some(PING_TRIGGER)
     {
         return Some(wa::Message {
-            video_message: Some(Box::new(wa::message::VideoMessage {
+            video_message: buffa::MessageField::some(wa::message::VideoMessage {
                 caption: Some(PONG_TEXT.to_string()),
-                ..*vid.clone()
-            })),
+                ..vid.clone()
+            }),
             ..Default::default()
         });
     }

@@ -241,10 +241,10 @@ fn make_text_msg(text: &str) -> wa::Message {
 fn make_large_msg(round: usize) -> wa::Message {
     let body = format!("large-msg-r{round}-{}", "X".repeat(2000));
     wa::Message {
-        extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+        extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
             text: Some(body),
             ..Default::default()
-        })),
+        }),
         ..Default::default()
     }
 }
@@ -264,7 +264,7 @@ async fn send_and_recv(
                 msg.conversation.as_deref() == Some(t.as_str())
                     || msg
                         .extended_text_message
-                        .as_ref()
+                        .as_option()
                         .and_then(|ext| ext.text.as_deref())
                         .is_some_and(|txt| txt.starts_with(&t))
             }
@@ -287,7 +287,7 @@ async fn wait_for_group_msg(
                 msg.conversation.as_deref() == Some(text.as_str())
                     || msg
                         .extended_text_message
-                        .as_ref()
+                        .as_option()
                         .and_then(|ext| ext.text.as_deref())
                         .is_some_and(|txt| txt.starts_with(&text))
             }

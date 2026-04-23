@@ -53,12 +53,12 @@ impl<'a> Status<'a> {
         options: StatusSendOptions,
     ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some(text.to_string()),
                 background_argb: Some(background_argb),
-                font: Some(font),
+                font: buffa::Enumeration::from_i32(font),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
@@ -80,7 +80,7 @@ impl<'a> Status<'a> {
         options: StatusSendOptions,
     ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
-            image_message: Some(Box::new(wa::message::ImageMessage {
+            image_message: buffa::MessageField::some(wa::message::ImageMessage {
                 url: Some(upload.url),
                 direct_path: Some(upload.direct_path),
                 media_key: Some(upload.media_key.to_vec()),
@@ -91,7 +91,7 @@ impl<'a> Status<'a> {
                 jpeg_thumbnail: Some(thumbnail),
                 caption: caption.map(|c| c.to_string()),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
@@ -114,7 +114,7 @@ impl<'a> Status<'a> {
         options: StatusSendOptions,
     ) -> Result<SendResult, anyhow::Error> {
         let message = wa::Message {
-            video_message: Some(Box::new(wa::message::VideoMessage {
+            video_message: buffa::MessageField::some(wa::message::VideoMessage {
                 url: Some(upload.url),
                 direct_path: Some(upload.direct_path),
                 media_key: Some(upload.media_key.to_vec()),
@@ -126,7 +126,7 @@ impl<'a> Status<'a> {
                 seconds: Some(duration_seconds),
                 caption: caption.map(|c| c.to_string()),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
@@ -163,16 +163,16 @@ impl<'a> Status<'a> {
         let to = Jid::status_broadcast();
 
         let revoke_message = wa::Message {
-            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
-                key: Some(wa::MessageKey {
+            protocol_message: buffa::MessageField::some(wa::message::ProtocolMessage {
+                key: buffa::MessageField::some(wa::MessageKey {
                     remote_jid: Some(to.to_string()),
                     from_me: Some(true),
                     id: Some(message_id),
-                    participant: None,
+                    ..Default::default()
                 }),
-                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                r#type: Some(wa::message::protocol_message::Type::REVOKE),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
@@ -228,23 +228,24 @@ mod tests {
     #[test]
     fn test_status_text_message_structure() {
         // Verify the message structure matches WhatsApp Web's extendedTextMessage format
+        use waproto::whatsapp::message::extended_text_message::FontType;
         let text = "Hello from Rust!";
         let bg = 0xFF1E6E4F_u32;
-        let font = 2_i32;
+        let font = FontType::FB_SCRIPT;
 
         let message = waproto::whatsapp::Message {
-            extended_text_message: Some(Box::new(
+            extended_text_message: buffa::MessageField::some(
                 waproto::whatsapp::message::ExtendedTextMessage {
                     text: Some(text.to_string()),
                     background_argb: Some(bg),
                     font: Some(font),
                     ..Default::default()
                 },
-            )),
+            ),
             ..Default::default()
         };
 
-        let ext = message.extended_text_message.as_ref().unwrap();
+        let ext = message.extended_text_message.as_option().unwrap();
         assert_eq!(ext.text.as_deref(), Some(text));
         assert_eq!(ext.background_argb, Some(bg));
         assert_eq!(ext.font, Some(font));
@@ -258,25 +259,23 @@ mod tests {
         let to = Jid::status_broadcast();
 
         let revoke_message = wa::Message {
-            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
-                key: Some(wa::MessageKey {
+            protocol_message: buffa::MessageField::some(wa::message::ProtocolMessage {
+                key: wa::MessageKey {
                     remote_jid: Some(to.to_string()),
                     from_me: Some(true),
                     id: Some(original_id.to_string()),
-                    participant: None,
-                }),
-                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+                    ..Default::default()
+                }
+                .into(),
+                r#type: Some(wa::message::protocol_message::Type::REVOKE),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
 
-        let pm = revoke_message.protocol_message.as_ref().unwrap();
-        assert_eq!(
-            pm.r#type,
-            Some(wa::message::protocol_message::Type::Revoke as i32)
-        );
-        let key = pm.key.as_ref().unwrap();
+        let pm = revoke_message.protocol_message.as_option().unwrap();
+        assert_eq!(pm.r#type, Some(wa::message::protocol_message::Type::REVOKE));
+        let key = pm.key.as_option().unwrap();
         assert_eq!(key.remote_jid.as_deref(), Some("status@broadcast"));
         assert_eq!(key.from_me, Some(true));
         assert_eq!(key.id.as_deref(), Some(original_id));
@@ -288,28 +287,30 @@ mod tests {
 
         // Non-revoke message
         let text_msg = wa::Message {
-            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+            extended_text_message: buffa::MessageField::some(wa::message::ExtendedTextMessage {
                 text: Some("hello".to_string()),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
-        let is_revoke = text_msg.protocol_message.as_ref().is_some_and(|pm| {
-            pm.r#type == Some(wa::message::protocol_message::Type::Revoke as i32)
-        });
+        let is_revoke = text_msg
+            .protocol_message
+            .as_option()
+            .is_some_and(|pm| pm.r#type == Some(wa::message::protocol_message::Type::REVOKE));
         assert!(!is_revoke, "text message should not be detected as revoke");
 
         // Revoke message
         let revoke_msg = wa::Message {
-            protocol_message: Some(Box::new(wa::message::ProtocolMessage {
-                r#type: Some(wa::message::protocol_message::Type::Revoke as i32),
+            protocol_message: buffa::MessageField::some(wa::message::ProtocolMessage {
+                r#type: Some(wa::message::protocol_message::Type::REVOKE),
                 ..Default::default()
-            })),
+            }),
             ..Default::default()
         };
-        let is_revoke = revoke_msg.protocol_message.as_ref().is_some_and(|pm| {
-            pm.r#type == Some(wa::message::protocol_message::Type::Revoke as i32)
-        });
+        let is_revoke = revoke_msg
+            .protocol_message
+            .as_option()
+            .is_some_and(|pm| pm.r#type == Some(wa::message::protocol_message::Type::REVOKE));
         assert!(is_revoke, "revoke message should be detected as revoke");
     }
 }

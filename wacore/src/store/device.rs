@@ -1,26 +1,26 @@
 use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
-use prost::Message;
+use buffa::Message;
 use serde::{Deserialize, Serialize};
 use serde_big_array::BigArray;
 use std::sync::LazyLock;
 use wacore_binary::Jid;
 use waproto::whatsapp as wa;
 
-/// Protobuf-bytes serde for `AdvSignedDeviceIdentity` (prost types lack `Deserialize`).
+/// Protobuf-bytes serde for `ADVSignedDeviceIdentity` (prost types lack `Deserialize`).
 pub mod account_serde {
-    use prost::Message;
+    use buffa::Message;
     use waproto::whatsapp as wa;
 
-    pub fn to_bytes(account: &wa::AdvSignedDeviceIdentity) -> Vec<u8> {
+    pub fn to_bytes(account: &wa::ADVSignedDeviceIdentity) -> Vec<u8> {
         account.encode_to_vec()
     }
 
-    pub fn from_bytes(bytes: &[u8]) -> Result<wa::AdvSignedDeviceIdentity, prost::DecodeError> {
-        wa::AdvSignedDeviceIdentity::decode(bytes)
+    pub fn from_bytes(bytes: &[u8]) -> Result<wa::ADVSignedDeviceIdentity, buffa::DecodeError> {
+        wa::ADVSignedDeviceIdentity::decode_from_slice(bytes)
     }
 
     pub fn serialize<S: serde::Serializer>(
-        val: &Option<wa::AdvSignedDeviceIdentity>,
+        val: &Option<wa::ADVSignedDeviceIdentity>,
         s: S,
     ) -> Result<S::Ok, S::Error> {
         match val {
@@ -31,7 +31,7 @@ pub mod account_serde {
 
     pub fn deserialize<'de, D: serde::Deserializer<'de>>(
         d: D,
-    ) -> Result<Option<wa::AdvSignedDeviceIdentity>, D::Error> {
+    ) -> Result<Option<wa::ADVSignedDeviceIdentity>, D::Error> {
         let bytes: Option<Vec<u8>> = serde::Deserialize::deserialize(d)?;
         match bytes {
             Some(b) => from_bytes(&b).map(Some).map_err(serde::de::Error::custom),
@@ -79,10 +79,10 @@ fn build_base_client_payload(
     app_version: wa::client_payload::user_agent::AppVersion,
 ) -> wa::ClientPayload {
     wa::ClientPayload {
-        user_agent: Some(wa::client_payload::UserAgent {
-            platform: Some(wa::client_payload::user_agent::Platform::Web as i32),
-            release_channel: Some(wa::client_payload::user_agent::ReleaseChannel::Release as i32),
-            app_version: Some(app_version),
+        user_agent: buffa::MessageField::some(wa::client_payload::UserAgent {
+            platform: Some(wa::client_payload::user_agent::Platform::WEB),
+            release_channel: Some(wa::client_payload::user_agent::ReleaseChannel::RELEASE),
+            app_version: buffa::MessageField::some(app_version),
             mcc: Some("000".to_string()),
             mnc: Some("000".to_string()),
             os_version: Some("0.1.0".to_string()),
@@ -93,33 +93,34 @@ fn build_base_client_payload(
             locale_country_iso31661_alpha2: Some("en".to_string()),
             ..Default::default()
         }),
-        web_info: Some(wa::client_payload::WebInfo {
-            web_sub_platform: Some(wa::client_payload::web_info::WebSubPlatform::WebBrowser as i32),
+        web_info: buffa::MessageField::some(wa::client_payload::WebInfo {
+            web_sub_platform: Some(wa::client_payload::web_info::WebSubPlatform::WEB_BROWSER),
             ..Default::default()
         }),
-        connect_type: Some(wa::client_payload::ConnectType::WifiUnknown as i32),
-        connect_reason: Some(wa::client_payload::ConnectReason::UserActivated as i32),
+        connect_type: Some(wa::client_payload::ConnectType::WIFI_UNKNOWN),
+        connect_reason: Some(wa::client_payload::ConnectReason::USER_ACTIVATED),
         ..Default::default()
     }
 }
 
 pub static DEVICE_PROPS: LazyLock<wa::DeviceProps> = LazyLock::new(|| wa::DeviceProps {
     os: Some("rust".to_string()),
-    version: Some(wa::device_props::AppVersion {
+    version: buffa::MessageField::some(wa::device_props::AppVersion {
         primary: Some(0),
         secondary: Some(1),
         tertiary: Some(0),
         ..Default::default()
     }),
-    platform_type: Some(wa::device_props::PlatformType::Unknown as i32),
+    platform_type: Some(wa::device_props::PlatformType::UNKNOWN),
     require_full_sync: Some(true),
-    history_sync_config: Some(wa::device_props::HistorySyncConfig {
+    history_sync_config: buffa::MessageField::some(wa::device_props::HistorySyncConfig {
         full_sync_days_limit: Some(30),
         inline_initial_payload_in_e2_ee_msg: Some(true),
         storage_quota_mb: Some(10240),
         support_message_association: Some(true),
         ..Default::default()
     }),
+    ..Default::default()
 });
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -138,7 +139,7 @@ pub struct Device {
     pub signed_pre_key_signature: [u8; 64],
     pub adv_secret_key: [u8; 32],
     #[serde(with = "account_serde", default)]
-    pub account: Option<wa::AdvSignedDeviceIdentity>,
+    pub account: Option<wa::ADVSignedDeviceIdentity>,
     pub push_name: String,
     pub app_version_primary: u32,
     pub app_version_secondary: u32,
@@ -255,10 +256,10 @@ impl Device {
             self.device_props.os = Some(os);
         }
         if let Some(version) = version {
-            self.device_props.version = Some(version);
+            self.device_props.version = buffa::MessageField::some(version);
         }
         if let Some(platform_type) = platform_type {
-            self.device_props.platform_type = Some(platform_type as i32);
+            self.device_props.platform_type = Some(platform_type);
         }
     }
 
@@ -294,18 +295,12 @@ impl Device {
 
         let device_props_bytes = self.device_props.encode_to_vec();
 
-        let version = payload
-            .user_agent
-            .as_ref()
-            .expect("payload should have user_agent")
-            .app_version
-            .as_ref()
-            .expect("user_agent should have app_version");
+        let version = &payload.user_agent.app_version;
         let version_str = format!(
             "{}.{}.{}",
-            version.primary(),
-            version.secondary(),
-            version.tertiary()
+            version.primary.unwrap_or(0),
+            version.secondary.unwrap_or(0),
+            version.tertiary.unwrap_or(0)
         );
         let build_hash: [u8; 16] = md5::compute(version_str.as_bytes()).into();
 
@@ -318,9 +313,10 @@ impl Device {
             e_skey_sig: Some(self.signed_pre_key_signature.to_vec()),
             build_hash: Some(build_hash.to_vec()),
             device_props: Some(device_props_bytes),
+            ..Default::default()
         };
 
-        payload.device_pairing_data = Some(reg_data);
+        payload.device_pairing_data = buffa::MessageField::some(reg_data);
         payload.passive = Some(false);
         payload.pull = Some(false);
 
@@ -370,11 +366,12 @@ mod tests {
     #[test]
     fn test_device_serde_preserves_account() {
         let mut device = Device::new();
-        device.account = Some(wa::AdvSignedDeviceIdentity {
+        device.account = Some(wa::ADVSignedDeviceIdentity {
             details: Some(b"test-details".to_vec()),
             account_signature_key: Some(vec![1; 32]),
             account_signature: Some(vec![2; 64]),
             device_signature: Some(vec![3; 64]),
+            ..Default::default()
         });
 
         let json = serde_json::to_string(&device).expect("serialize should succeed");

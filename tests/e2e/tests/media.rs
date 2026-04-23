@@ -31,7 +31,7 @@ impl From<&UploadResponse> for UploadedMediaParts {
 fn build_image_message(upload: &UploadResponse, caption: Option<&str>) -> wa::Message {
     let upload = UploadedMediaParts::from(upload);
     wa::Message {
-        image_message: Some(Box::new(wa::message::ImageMessage {
+        image_message: buffa::MessageField::some(wa::message::ImageMessage {
             url: Some(upload.url),
             direct_path: Some(upload.direct_path),
             media_key: Some(upload.media_key),
@@ -41,7 +41,7 @@ fn build_image_message(upload: &UploadResponse, caption: Option<&str>) -> wa::Me
             mimetype: Some("image/jpeg".to_string()),
             caption: caption.map(|c| c.to_string()),
             ..Default::default()
-        })),
+        }),
         ..Default::default()
     }
 }
@@ -54,7 +54,7 @@ fn build_video_message(
 ) -> wa::Message {
     let upload = UploadedMediaParts::from(upload);
     wa::Message {
-        video_message: Some(Box::new(wa::message::VideoMessage {
+        video_message: buffa::MessageField::some(wa::message::VideoMessage {
             url: Some(upload.url),
             direct_path: Some(upload.direct_path),
             media_key: Some(upload.media_key),
@@ -65,7 +65,7 @@ fn build_video_message(
             seconds: Some(seconds),
             caption: caption.map(|c| c.to_string()),
             ..Default::default()
-        })),
+        }),
         ..Default::default()
     }
 }
@@ -74,7 +74,7 @@ fn build_video_message(
 fn build_document_message(upload: &UploadResponse, filename: &str, mimetype: &str) -> wa::Message {
     let upload = UploadedMediaParts::from(upload);
     wa::Message {
-        document_message: Some(Box::new(wa::message::DocumentMessage {
+        document_message: buffa::MessageField::some(wa::message::DocumentMessage {
             url: Some(upload.url),
             direct_path: Some(upload.direct_path),
             media_key: Some(upload.media_key),
@@ -84,7 +84,7 @@ fn build_document_message(upload: &UploadResponse, filename: &str, mimetype: &st
             mimetype: Some(mimetype.to_string()),
             file_name: Some(filename.to_string()),
             ..Default::default()
-        })),
+        }),
         ..Default::default()
     }
 }
@@ -93,7 +93,7 @@ fn build_document_message(upload: &UploadResponse, filename: &str, mimetype: &st
 fn build_audio_message(upload: &UploadResponse, ptt: bool, seconds: u32) -> wa::Message {
     let upload = UploadedMediaParts::from(upload);
     wa::Message {
-        audio_message: Some(Box::new(wa::message::AudioMessage {
+        audio_message: buffa::MessageField::some(wa::message::AudioMessage {
             url: Some(upload.url),
             direct_path: Some(upload.direct_path),
             media_key: Some(upload.media_key),
@@ -108,7 +108,7 @@ fn build_audio_message(upload: &UploadResponse, ptt: bool, seconds: u32) -> wa::
             ptt: Some(ptt),
             seconds: Some(seconds),
             ..Default::default()
-        })),
+        }),
         ..Default::default()
     }
 }
@@ -414,12 +414,12 @@ async fn test_send_image_message() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.image_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.image_message.is_set()),
         )
         .await?;
 
     if let Event::Message(msg, info) = &*event {
-        let img = msg.image_message.as_ref().unwrap();
+        let img = msg.image_message.as_option().unwrap();
         assert_eq!(img.caption.as_deref(), Some(caption));
         assert_eq!(img.mimetype.as_deref(), Some("image/jpeg"));
         assert!(img.direct_path.is_some());
@@ -429,10 +429,7 @@ async fn test_send_image_message() -> anyhow::Result<()> {
         info!("B received image from {:?}", info.source);
 
         // B downloads the received image
-        let downloaded = client_b
-            .client
-            .download(img.as_ref() as &dyn Downloadable)
-            .await?;
+        let downloaded = client_b.client.download(img as &dyn Downloadable).await?;
         assert_eq!(
             downloaded, original,
             "Downloaded image should match original"
@@ -472,20 +469,17 @@ async fn test_send_video_message() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.video_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.video_message.is_set()),
         )
         .await?;
 
     if let Event::Message(msg, _) = &*event {
-        let vid = msg.video_message.as_ref().unwrap();
+        let vid = msg.video_message.as_option().unwrap();
         assert_eq!(vid.caption.as_deref(), Some("Cool video"));
         assert_eq!(vid.seconds, Some(15));
         assert_eq!(vid.mimetype.as_deref(), Some("video/mp4"));
 
-        let downloaded = client_b
-            .client
-            .download(vid.as_ref() as &dyn Downloadable)
-            .await?;
+        let downloaded = client_b.client.download(vid as &dyn Downloadable).await?;
         assert_eq!(downloaded, original);
     } else {
         panic!("Expected video Message event");
@@ -522,19 +516,16 @@ async fn test_send_document_message() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.document_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.document_message.is_set()),
         )
         .await?;
 
     if let Event::Message(msg, _) = &*event {
-        let doc = msg.document_message.as_ref().unwrap();
+        let doc = msg.document_message.as_option().unwrap();
         assert_eq!(doc.file_name.as_deref(), Some("report.pdf"));
         assert_eq!(doc.mimetype.as_deref(), Some("application/pdf"));
 
-        let downloaded = client_b
-            .client
-            .download(doc.as_ref() as &dyn Downloadable)
-            .await?;
+        let downloaded = client_b.client.download(doc as &dyn Downloadable).await?;
         assert_eq!(downloaded, original);
     } else {
         panic!("Expected document Message event");
@@ -571,19 +562,16 @@ async fn test_send_audio_message() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.audio_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.audio_message.is_set()),
         )
         .await?;
 
     if let Event::Message(msg, _) = &*event {
-        let audio = msg.audio_message.as_ref().unwrap();
+        let audio = msg.audio_message.as_option().unwrap();
         assert_eq!(audio.seconds, Some(30));
         assert_eq!(audio.ptt, Some(false));
 
-        let downloaded = client_b
-            .client
-            .download(audio.as_ref() as &dyn Downloadable)
-            .await?;
+        let downloaded = client_b.client.download(audio as &dyn Downloadable).await?;
         assert_eq!(downloaded, original);
     } else {
         panic!("Expected audio Message event");
@@ -620,20 +608,17 @@ async fn test_send_ptt_voice_message() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.audio_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.audio_message.is_set()),
         )
         .await?;
 
     if let Event::Message(msg, _) = &*event {
-        let audio = msg.audio_message.as_ref().unwrap();
+        let audio = msg.audio_message.as_option().unwrap();
         assert_eq!(audio.ptt, Some(true));
         assert_eq!(audio.seconds, Some(5));
         assert_eq!(audio.mimetype.as_deref(), Some("audio/ogg; codecs=opus"));
 
-        let downloaded = client_b
-            .client
-            .download(audio.as_ref() as &dyn Downloadable)
-            .await?;
+        let downloaded = client_b.client.download(audio as &dyn Downloadable).await?;
         assert_eq!(downloaded, original);
     } else {
         panic!("Expected PTT audio Message event");
@@ -679,16 +664,13 @@ async fn test_send_image_bidirectional() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.image_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.image_message.is_set()),
         )
         .await?;
     if let Event::Message(msg, _) = &*event {
-        let img = msg.image_message.as_ref().unwrap();
+        let img = msg.image_message.as_option().unwrap();
         assert_eq!(img.caption.as_deref(), Some("From A"));
-        let downloaded = client_b
-            .client
-            .download(img.as_ref() as &dyn Downloadable)
-            .await?;
+        let downloaded = client_b.client.download(img as &dyn Downloadable).await?;
         assert_eq!(downloaded, data_a);
     }
 
@@ -705,16 +687,13 @@ async fn test_send_image_bidirectional() -> anyhow::Result<()> {
     let event = client_a
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.image_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.image_message.is_set()),
         )
         .await?;
     if let Event::Message(msg, _) = &*event {
-        let img = msg.image_message.as_ref().unwrap();
+        let img = msg.image_message.as_option().unwrap();
         assert_eq!(img.caption.as_deref(), Some("From B"));
-        let downloaded = client_a
-            .client
-            .download(img.as_ref() as &dyn Downloadable)
-            .await?;
+        let downloaded = client_a.client.download(img as &dyn Downloadable).await?;
         assert_eq!(downloaded, data_b);
     }
 
@@ -751,15 +730,12 @@ async fn test_send_multiple_media_types() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.image_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.image_message.is_set()),
         )
         .await?;
     if let Event::Message(msg, _) = &*event {
-        let img = msg.image_message.as_ref().unwrap();
-        let dl = client_b
-            .client
-            .download(img.as_ref() as &dyn Downloadable)
-            .await?;
+        let img = msg.image_message.as_option().unwrap();
+        let dl = client_b.client.download(img as &dyn Downloadable).await?;
         assert_eq!(dl, img_data);
     }
 
@@ -775,15 +751,12 @@ async fn test_send_multiple_media_types() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.document_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.document_message.is_set()),
         )
         .await?;
     if let Event::Message(msg, _) = &*event {
-        let doc = msg.document_message.as_ref().unwrap();
-        let dl = client_b
-            .client
-            .download(doc.as_ref() as &dyn Downloadable)
-            .await?;
+        let doc = msg.document_message.as_option().unwrap();
+        let dl = client_b.client.download(doc as &dyn Downloadable).await?;
         assert_eq!(dl, doc_data);
     }
 
@@ -799,15 +772,12 @@ async fn test_send_multiple_media_types() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.audio_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.audio_message.is_set()),
         )
         .await?;
     if let Event::Message(msg, _) = &*event {
-        let audio = msg.audio_message.as_ref().unwrap();
-        let dl = client_b
-            .client
-            .download(audio.as_ref() as &dyn Downloadable)
-            .await?;
+        let audio = msg.audio_message.as_option().unwrap();
+        let dl = client_b.client.download(audio as &dyn Downloadable).await?;
         assert_eq!(dl, aud_data);
     }
 
@@ -915,20 +885,17 @@ async fn test_send_image_no_caption() -> anyhow::Result<()> {
     let event = client_b
         .wait_for_event(
             30,
-            |e| matches!(e, Event::Message(m, _) if m.image_message.is_some()),
+            |e| matches!(e, Event::Message(m, _) if m.image_message.is_set()),
         )
         .await?;
 
     if let Event::Message(msg, _) = &*event {
-        let img = msg.image_message.as_ref().unwrap();
+        let img = msg.image_message.as_option().unwrap();
         assert!(
             img.caption.is_none() || img.caption.as_deref() == Some(""),
             "Caption should be absent or empty"
         );
-        let downloaded = client_b
-            .client
-            .download(img.as_ref() as &dyn Downloadable)
-            .await?;
+        let downloaded = client_b.client.download(img as &dyn Downloadable).await?;
         assert_eq!(downloaded, original);
     }
 

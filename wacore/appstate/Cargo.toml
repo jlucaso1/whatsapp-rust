@@ -16,11 +16,11 @@ simd = ["wacore-binary/simd"]
 
 [dependencies]
 anyhow = { workspace = true }
+buffa = { workspace = true }
 bytemuck = { workspace = true }
 hex = { workspace = true }
 hkdf = { workspace = true }
 log = { workspace = true }
-prost = { workspace = true }
 serde = { workspace = true }
 serde-big-array = { workspace = true }
 serde_json = { workspace = true, features = ["alloc"] }

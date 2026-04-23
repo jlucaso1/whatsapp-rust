@@ -2,16 +2,16 @@ use crate::libsignal::crypto::aes_256_gcm_encrypt;
 use crate::libsignal::protocol::{KeyPair, PublicKey};
 use base64::Engine as _;
 use base64::prelude::*;
+use buffa::Message;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
-use prost::Message;
 
 use sha2::Sha256;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::{Jid, SERVER_JID};
 use wacore_binary::{Node, NodeRef};
 use waproto::whatsapp as wa;
-use waproto::whatsapp::AdvEncryptionType;
+use waproto::whatsapp::ADVEncryptionType;
 
 // Prefixes from whatsmeow/pair.go, crucial for signature verification
 const ADV_PREFIX_ACCOUNT_SIGNATURE: &[u8] = &[6, 0];
@@ -117,16 +117,17 @@ impl PairUtils {
         device_identity_bytes: &[u8],
     ) -> Result<(Vec<u8>, u32), PairCryptoError> {
         // 1. Unmarshal HMAC container and verify HMAC
-        let hmac_container = wa::AdvSignedDeviceIdentityHmac::decode(device_identity_bytes)
-            .map_err(|e| PairCryptoError {
-                code: 500,
-                text: "internal-error",
-                source: e.into(),
-            })?;
+        let hmac_container = wa::ADVSignedDeviceIdentityHMAC::decode_from_slice(
+            device_identity_bytes,
+        )
+        .map_err(|e| PairCryptoError {
+            code: 500,
+            text: "internal-error",
+            source: e.into(),
+        })?;
 
         // Determine if this is a hosted account
-        let is_hosted_account = hmac_container.account_type.is_some()
-            && hmac_container.account_type() == AdvEncryptionType::Hosted;
+        let is_hosted_account = hmac_container.account_type == Some(ADVEncryptionType::HOSTED);
 
         let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(&device_state.adv_secret_key)
             .map_err(|e| PairCryptoError {
@@ -163,16 +164,26 @@ impl PairUtils {
         // Re-enable once both pairing paths persist the correct key.
 
         // 2. Unmarshal inner container and verify account signature
-        let mut signed_identity =
-            wa::AdvSignedDeviceIdentity::decode(details_bytes).map_err(|e| PairCryptoError {
+        let mut signed_identity = wa::ADVSignedDeviceIdentity::decode_from_slice(details_bytes)
+            .map_err(|e| PairCryptoError {
                 code: 500,
                 text: "internal-error",
                 source: e.into(),
             })?;
 
-        let account_sig_key_bytes = signed_identity.account_signature_key();
-        let account_sig_bytes = signed_identity.account_signature();
-        let inner_details_bytes = signed_identity.details().to_vec();
+        let account_sig_key_bytes = signed_identity
+            .account_signature_key
+            .as_deref()
+            .unwrap_or_default();
+        let account_sig_bytes = signed_identity
+            .account_signature
+            .as_deref()
+            .unwrap_or_default();
+        let inner_details_bytes = signed_identity
+            .details
+            .as_deref()
+            .unwrap_or_default()
+            .to_vec();
 
         let account_sig_prefix = if is_hosted_account {
             ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE
@@ -226,13 +237,13 @@ impl PairUtils {
         signed_identity.device_signature = Some(device_signature.to_vec());
 
         // 4. Unmarshal final details to get key_index
-        let identity_details =
-            wa::AdvDeviceIdentity::decode(&*inner_details_bytes).map_err(|e| PairCryptoError {
+        let identity_details = wa::ADVDeviceIdentity::decode_from_slice(&inner_details_bytes)
+            .map_err(|e| PairCryptoError {
                 code: 500,
                 text: "internal-error",
                 source: e.into(),
             })?;
-        let key_index = identity_details.key_index();
+        let key_index = identity_details.key_index.unwrap_or(0);
 
         // 5. Marshal the modified signed_identity to send back
         let self_signed_identity_bytes = signed_identity.encode_to_vec();

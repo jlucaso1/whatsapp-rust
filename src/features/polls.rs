@@ -58,31 +58,26 @@ impl<'a> Polls<'a> {
             .iter()
             .map(|name| wa::message::poll_creation_message::Option {
                 option_name: Some(name.clone()),
-                option_hash: None,
+                ..Default::default()
             })
             .collect();
 
         let poll_msg = wa::message::PollCreationMessage {
-            enc_key: None,
             name: Some(name.to_string()),
             options: poll_options,
             selectable_options_count: Some(selectable_count),
-            context_info: None,
-            poll_content_type: None,
-            poll_type: None,
-            correct_answer: None,
             ..Default::default()
         };
 
         // WA Web: v3 for single-select, v1 for multi-select (GeneratePollCreationMessageProto.js:39-41)
         let mut message = if selectable_count == 1 {
             wa::Message {
-                poll_creation_message_v3: Some(Box::new(poll_msg)),
+                poll_creation_message_v3: buffa::MessageField::some(poll_msg),
                 ..Default::default()
             }
         } else {
             wa::Message {
-                poll_creation_message: Some(Box::new(poll_msg)),
+                poll_creation_message: buffa::MessageField::some(poll_msg),
                 ..Default::default()
             }
         };
@@ -96,7 +91,7 @@ impl<'a> Polls<'a> {
             secret
         };
 
-        message.message_context_info = Some(wa::MessageContextInfo {
+        message.message_context_info = buffa::MessageField::some(wa::MessageContextInfo {
             message_secret: Some(message_secret.clone()),
             ..Default::default()
         });
@@ -140,7 +135,7 @@ impl<'a> Polls<'a> {
         let from_me = my_base.is_same_user_as(poll_creator_jid);
 
         let poll_update = wa::message::PollUpdateMessage {
-            poll_creation_message_key: Some(wa::MessageKey {
+            poll_creation_message_key: buffa::MessageField::some(wa::MessageKey {
                 remote_jid: Some(chat_jid.to_string()),
                 from_me: Some(from_me),
                 id: Some(poll_msg_id.to_string()),
@@ -149,17 +144,22 @@ impl<'a> Polls<'a> {
                 } else {
                     None
                 },
+                ..Default::default()
             }),
-            vote: Some(wa::message::PollEncValue {
+            vote: buffa::MessageField::some(wa::message::PollEncValue {
                 enc_payload: Some(enc_payload),
                 enc_iv: Some(iv.to_vec()),
+                ..Default::default()
             }),
-            metadata: Some(wa::message::PollUpdateMessageMetadata {}),
+            metadata: buffa::MessageField::some(wa::message::PollUpdateMessageMetadata {
+                ..Default::default()
+            }),
             sender_timestamp_ms: Some(wacore::time::now_millis()),
+            ..Default::default()
         };
 
         let message = wa::Message {
-            poll_update_message: Some(poll_update),
+            poll_update_message: buffa::MessageField::some(poll_update),
             ..Default::default()
         };
 

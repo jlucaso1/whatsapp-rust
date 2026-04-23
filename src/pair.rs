@@ -1,8 +1,8 @@
 use crate::client::Client;
 use crate::lid_pn_cache::LearningSource;
 use crate::types::events::{Event, PairError, PairSuccess};
+use buffa::Message;
 use log::{debug, error, info, warn};
-use prost::Message;
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -210,7 +210,7 @@ async fn handle_pair_success<'a>(
 
     match result {
         Ok((self_signed_identity_bytes, key_index)) => {
-            let signed_identity_for_event = match wa::AdvSignedDeviceIdentity::decode(
+            let signed_identity_for_event = match wa::ADVSignedDeviceIdentity::decode_from_slice(
                 self_signed_identity_bytes.as_slice(),
             ) {
                 Ok(identity) => identity,

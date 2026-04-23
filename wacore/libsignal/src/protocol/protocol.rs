@@ -3,8 +3,9 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 //
 
+use buffa::Message;
+use buffa::view::MessageView;
 use hmac::{Hmac, KeyInit, Mac};
-use prost::Message;
 use rand::{CryptoRng, Rng};
 use sha2::Sha256;
 use std::sync::OnceLock;
@@ -118,12 +119,12 @@ impl SignalMessage {
             counter: Some(counter),
             previous_counter: Some(previous_counter),
             ciphertext: Some(Vec::<u8>::from(ciphertext)),
+            ..Default::default()
         };
-        let mut serialized = Vec::with_capacity(1 + message.encoded_len() + Self::MAC_LENGTH);
+        let mut serialized =
+            Vec::with_capacity(1 + message.compute_size() as usize + Self::MAC_LENGTH);
         serialized.push(((message_version & 0xF) << 4) | CIPHERTEXT_MESSAGE_CURRENT_VERSION);
-        message
-            .encode(&mut serialized)
-            .expect("can always append to a buffer");
+        message.write_to(&mut serialized);
         let mac = Self::compute_mac(
             sender_identity_key,
             receiver_identity_key,
@@ -173,12 +174,11 @@ impl SignalMessage {
 
     fn decode_ciphertext(&self) -> Result<Box<[u8]>> {
         let proto_bytes = &self.serialized[1..self.serialized.len() - Self::MAC_LENGTH];
-        let proto = waproto::whatsapp::SignalMessage::decode(proto_bytes)
+        let view = waproto::whatsapp::SignalMessageView::decode_view(proto_bytes)
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
-        proto
-            .ciphertext
+        view.ciphertext
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)
-            .map(|v| v.into_boxed_slice())
+            .map(Box::from)
     }
 
     pub fn verify_mac(
@@ -248,23 +248,23 @@ impl TryFrom<&[u8]> for SignalMessage {
             ));
         }
 
-        let proto_structure = waproto::whatsapp::SignalMessage::decode(
+        let view = waproto::whatsapp::SignalMessageView::decode_view(
             &value[1..value.len() - SignalMessage::MAC_LENGTH],
         )
         .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
 
-        let sender_ratchet_key = proto_structure
+        let sender_ratchet_key = view
             .ratchet_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let sender_ratchet_key = PublicKey::deserialize(&sender_ratchet_key)?;
-        let counter = proto_structure
+        let sender_ratchet_key = PublicKey::deserialize(sender_ratchet_key)?;
+        let counter = view
             .counter
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let previous_counter = proto_structure.previous_counter.unwrap_or(0);
-        let ciphertext = proto_structure
+        let previous_counter = view.previous_counter.unwrap_or(0);
+        let ciphertext = view
             .ciphertext
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
-            .into_boxed_slice();
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)
+            .map(Box::from)?;
 
         let ciphertext_cache = OnceLock::new();
         let _ = ciphertext_cache.set(ciphertext);
@@ -309,12 +309,11 @@ impl PreKeySignalMessage {
             base_key: Some(base_key.serialize().to_vec()),
             identity_key: Some(identity_key.serialize().to_vec()),
             message: Some(Vec::from(message.as_ref())),
+            ..Default::default()
         };
-        let mut serialized = Vec::with_capacity(1 + proto_message.encoded_len());
+        let mut serialized = Vec::with_capacity(1 + proto_message.compute_size() as usize);
         serialized.push(((message_version & 0xF) << 4) | CIPHERTEXT_MESSAGE_CURRENT_VERSION);
-        proto_message
-            .encode(&mut serialized)
-            .expect("can always append to a Vec");
+        proto_message.write_to(&mut serialized);
         Ok(Self {
             message_version,
             registration_id,
@@ -395,32 +394,32 @@ impl TryFrom<&[u8]> for PreKeySignalMessage {
             ));
         }
 
-        let proto_structure = waproto::whatsapp::PreKeySignalMessage::decode(&value[1..])
+        let view = waproto::whatsapp::PreKeySignalMessageView::decode_view(&value[1..])
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
 
-        let base_key = proto_structure
+        let base_key = view
             .base_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let identity_key = proto_structure
+        let identity_key = view
             .identity_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let message = proto_structure
+        let message = view
             .message
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let signed_pre_key_id = proto_structure
+        let signed_pre_key_id = view
             .signed_pre_key_id
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
 
-        let base_key = PublicKey::deserialize(base_key.as_ref())?;
+        let base_key = PublicKey::deserialize(base_key)?;
 
         Ok(PreKeySignalMessage {
             message_version,
-            registration_id: proto_structure.registration_id.unwrap_or(0),
-            pre_key_id: proto_structure.pre_key_id.map(|id| id.into()),
+            registration_id: view.registration_id.unwrap_or(0),
+            pre_key_id: view.pre_key_id.map(|id| id.into()),
             signed_pre_key_id: signed_pre_key_id.into(),
             base_key,
-            identity_key: IdentityKey::try_from(identity_key.as_ref())?,
-            message: SignalMessage::try_from(message.as_ref())?,
+            identity_key: IdentityKey::try_from(identity_key)?,
+            message: SignalMessage::try_from(message)?,
             serialized: Box::from(value),
         })
     }
@@ -468,17 +467,16 @@ impl SenderKeyMessage {
             id: Some(chain_id),
             iteration: Some(iteration),
             ciphertext: Some(ciphertext.into_vec()),
+            ..Default::default()
         };
 
         // Build serialized buffer directly: [version_byte || proto || signature]
         // Sign over [version_byte || proto], then append signature
         let shifted_version = (message_version << 4) | 3u8;
-        let proto_len = proto_message.encoded_len();
+        let proto_len = proto_message.compute_size() as usize;
         let mut serialized = Vec::with_capacity(1 + proto_len + Self::SIGNATURE_LEN);
         serialized.push(shifted_version);
-        proto_message
-            .encode(&mut serialized)
-            .expect("can always append to a buffer");
+        proto_message.write_to(&mut serialized);
 
         // Sign the data we've built so far (version + proto)
         let signature = signature_key
@@ -534,12 +532,11 @@ impl SenderKeyMessage {
     fn decode_ciphertext(&self) -> Result<Box<[u8]>> {
         // serialized layout: [version_byte || protobuf || signature]
         let proto_bytes = &self.serialized[1..self.serialized.len() - Self::SIGNATURE_LEN];
-        let proto = waproto::whatsapp::SenderKeyMessage::decode(proto_bytes)
+        let view = waproto::whatsapp::SenderKeyMessageView::decode_view(proto_bytes)
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
-        let ciphertext = proto
-            .ciphertext
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        Ok(ciphertext.into_boxed_slice())
+        view.ciphertext
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)
+            .map(Box::from)
     }
 
     #[inline]
@@ -577,21 +574,21 @@ impl TryFrom<&[u8]> for SenderKeyMessage {
                 message_version,
             ));
         }
-        let proto_structure = waproto::whatsapp::SenderKeyMessage::decode(
+        let view = waproto::whatsapp::SenderKeyMessageView::decode_view(
             &value[1..value.len() - Self::SIGNATURE_LEN],
         )
         .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
 
-        let chain_id = proto_structure
+        let chain_id = view
             .id
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let iteration = proto_structure
+        let iteration = view
             .iteration
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let ciphertext = proto_structure
+        let ciphertext = view
             .ciphertext
-            .ok_or(SignalProtocolError::InvalidProtobufEncoding)?
-            .into_boxed_slice();
+            .ok_or(SignalProtocolError::InvalidProtobufEncoding)
+            .map(Box::from)?;
 
         let ciphertext_cache = OnceLock::new();
         let _ = ciphertext_cache.set(ciphertext);
@@ -629,12 +626,11 @@ impl SenderKeyDistributionMessage {
             iteration: Some(iteration),
             chain_key: Some(chain_key.to_vec()),
             signing_key: Some(signing_key.serialize().to_vec()),
+            ..Default::default()
         };
-        let mut serialized = Vec::with_capacity(1 + proto_message.encoded_len());
+        let mut serialized = Vec::with_capacity(1 + proto_message.compute_size() as usize);
         serialized.push(((message_version & 0xF) << 4) | SENDERKEY_MESSAGE_CURRENT_VERSION);
-        proto_message
-            .encode(&mut serialized)
-            .expect("can always append to a buffer");
+        proto_message.write_to(&mut serialized);
 
         Ok(Self {
             message_version,
@@ -710,30 +706,30 @@ impl TryFrom<&[u8]> for SenderKeyDistributionMessage {
             ));
         }
 
-        let proto_structure = waproto::whatsapp::SenderKeyDistributionMessage::decode(&value[1..])
+        let view = waproto::whatsapp::SenderKeyDistributionMessageView::decode_view(&value[1..])
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
 
-        let chain_id = proto_structure
+        let chain_id = view
             .id
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let iteration = proto_structure
+        let iteration = view
             .iteration
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let chain_key_vec = proto_structure
+        let chain_key_bytes = view
             .chain_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
-        let signing_key = proto_structure
+        let signing_key = view
             .signing_key
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)?;
 
-        if chain_key_vec.len() != 32 || signing_key.len() != 33 {
+        if chain_key_bytes.len() != 32 || signing_key.len() != 33 {
             return Err(SignalProtocolError::InvalidProtobufEncoding);
         }
 
-        let chain_key: [u8; 32] = chain_key_vec
+        let chain_key: [u8; 32] = chain_key_bytes
             .try_into()
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
-        let signing_key = PublicKey::deserialize(&signing_key)?;
+        let signing_key = PublicKey::deserialize(signing_key)?;
 
         Ok(SenderKeyDistributionMessage {
             message_version,
@@ -769,15 +765,87 @@ impl PlaintextContent {
     }
 }
 
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(Clone, PartialEq, Default)]
 pub struct DecryptionErrorMessageProto {
-    /// set to the public ratchet key from the SignalMessage if a 1-1 payload fails to decrypt
-    #[prost(bytes = "vec", optional, tag = "1")]
-    pub ratchet_key: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(uint64, optional, tag = "2")]
-    pub timestamp: ::core::option::Option<u64>,
-    #[prost(uint32, optional, tag = "3")]
-    pub device_id: ::core::option::Option<u32>,
+    pub ratchet_key: Option<Vec<u8>>,
+    pub timestamp: Option<u64>,
+    pub device_id: Option<u32>,
+    __buffa_cached_size: buffa::__private::CachedSize,
+}
+
+#[allow(unsafe_code)]
+unsafe impl buffa::DefaultInstance for DecryptionErrorMessageProto {
+    fn default_instance() -> &'static Self {
+        static VALUE: buffa::__private::OnceBox<DecryptionErrorMessageProto> =
+            buffa::__private::OnceBox::new();
+        VALUE.get_or_init(|| Box::new(DecryptionErrorMessageProto::default()))
+    }
+}
+
+impl buffa::Message for DecryptionErrorMessageProto {
+    fn compute_size(&self) -> u32 {
+        let mut size = 0u32;
+        if let Some(ref v) = self.ratchet_key {
+            size += 1 + buffa::types::bytes_encoded_len(v) as u32;
+        }
+        if let Some(v) = self.timestamp {
+            size += 1 + buffa::types::uint64_encoded_len(v) as u32;
+        }
+        if let Some(v) = self.device_id {
+            size += 1 + buffa::types::uint32_encoded_len(v) as u32;
+        }
+        self.__buffa_cached_size.set(size);
+        size
+    }
+
+    fn write_to(&self, buf: &mut impl buffa::bytes::BufMut) {
+        if let Some(ref v) = self.ratchet_key {
+            buffa::encoding::Tag::new(1, buffa::encoding::WireType::LengthDelimited).encode(buf);
+            buffa::types::encode_bytes(v, buf);
+        }
+        if let Some(v) = self.timestamp {
+            buffa::encoding::Tag::new(2, buffa::encoding::WireType::Varint).encode(buf);
+            buffa::types::encode_uint64(v, buf);
+        }
+        if let Some(v) = self.device_id {
+            buffa::encoding::Tag::new(3, buffa::encoding::WireType::Varint).encode(buf);
+            buffa::types::encode_uint32(v, buf);
+        }
+    }
+
+    fn merge_field(
+        &mut self,
+        tag: buffa::encoding::Tag,
+        buf: &mut impl buffa::bytes::Buf,
+        _depth: u32,
+    ) -> core::result::Result<(), buffa::DecodeError> {
+        match tag.field_number() {
+            1 => {
+                buffa::types::merge_bytes(self.ratchet_key.get_or_insert_with(Vec::new), buf)?;
+            }
+            2 => {
+                self.timestamp = Some(buffa::types::decode_uint64(buf)?);
+            }
+            3 => {
+                self.device_id = Some(buffa::types::decode_uint32(buf)?);
+            }
+            _ => {
+                buffa::encoding::skip_field(tag, buf)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn cached_size(&self) -> u32 {
+        self.__buffa_cached_size.get()
+    }
+
+    fn clear(&mut self) {
+        self.ratchet_key = None;
+        self.timestamp = None;
+        self.device_id = None;
+        self.__buffa_cached_size.set(0);
+    }
 }
 
 impl TryFrom<&[u8]> for PlaintextContent {
@@ -834,6 +902,7 @@ impl DecryptionErrorMessage {
             timestamp: Some(original_timestamp.epoch_millis()),
             ratchet_key: ratchet_key.map(|k| k.serialize().into()),
             device_id: Some(original_sender_device_id),
+            ..Default::default()
         };
         let serialized = proto_message.encode_to_vec();
 
@@ -870,7 +939,7 @@ impl TryFrom<&[u8]> for DecryptionErrorMessage {
     type Error = SignalProtocolError;
 
     fn try_from(value: &[u8]) -> Result<Self> {
-        let proto_structure = DecryptionErrorMessageProto::decode(value)
+        let proto_structure = DecryptionErrorMessageProto::decode_from_slice(value)
             .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?;
         let timestamp = proto_structure
             .timestamp

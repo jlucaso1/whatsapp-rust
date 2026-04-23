@@ -5,7 +5,7 @@
 
 use std::fmt;
 
-use prost::Message;
+use buffa::Message;
 
 use crate::protocol::{
     KeyPair, PrivateKey, PublicKey, Result, SignalProtocolError, stores::PreKeyRecordStructure,
@@ -37,13 +37,14 @@ impl PreKeyRecord {
                 id: Some(id.into()),
                 public_key: Some(public_key),
                 private_key: Some(private_key),
+                ..Default::default()
             },
         }
     }
 
     pub fn deserialize(data: &[u8]) -> Result<Self> {
         Ok(Self {
-            pre_key: PreKeyRecordStructure::decode(data)
+            pre_key: PreKeyRecordStructure::decode_from_slice(data)
                 .map_err(|_| SignalProtocolError::InvalidProtobufEncoding)?,
         })
     }

@@ -1,8 +1,8 @@
 use crate::client::Client;
 use crate::types::events::Event;
 use crate::types::message::MessageInfo;
+use buffa::Message as ProtoMessage;
 use log::{debug, warn};
-use prost::Message as ProtoMessage;
 
 use std::sync::Arc;
 use wacore::libsignal::crypto::DecryptionError;
@@ -116,7 +116,7 @@ impl Client {
         };
 
         if let Some(bytes) = plaintext_node.content_bytes() {
-            match wa::Message::decode(bytes) {
+            match wa::Message::decode_from_slice(bytes) {
                 Ok(msg) => {
                     log::info!(
                         "[msg:{}] Received newsletter plaintext message from {}",
@@ -1296,7 +1296,7 @@ impl Client {
 
         // Validate DSM presence against sender identity
         // (WAWebHandleMsgError.DeviceSentMessageError)
-        if original_msg.device_sent_message.is_some() && !info.source.is_from_me {
+        if original_msg.device_sent_message.is_set() && !info.source.is_from_me {
             warn!(
                 "[msg:{}] DeviceSentMessage present but sender {} is not self",
                 info.id, info.source.sender,
@@ -1310,7 +1310,7 @@ impl Client {
         let mut msg = wacore::messages::unwrap_device_sent(original_msg);
 
         // Post-decryption logic (SKDM, sync keys, etc.)
-        if let Some(skdm) = &msg.sender_key_distribution_message
+        if let Some(skdm) = msg.sender_key_distribution_message.as_option()
             && let Some(axolotl_bytes) = &skdm.axolotl_sender_key_distribution_message
         {
             self.handle_sender_key_distribution_message(
@@ -1321,24 +1321,31 @@ impl Client {
             .await;
         }
 
-        if let Some(protocol_msg) = &msg.protocol_message
-            && let Some(keys) = &protocol_msg.app_state_sync_key_share
+        if let Some(protocol_msg) = msg.protocol_message.as_option()
+            && protocol_msg.app_state_sync_key_share.is_set()
         {
-            self.handle_app_state_sync_key_share(keys).await;
+            self.handle_app_state_sync_key_share(&protocol_msg.app_state_sync_key_share)
+                .await;
         }
 
         // PDO responses come from our own account (is_from_me) via device 0 (primary phone)
         if info.source.is_from_me
-            && let Some(protocol_msg) = &msg.protocol_message
-            && let Some(pdo_response) = &protocol_msg.peer_data_operation_request_response_message
+            && let Some(protocol_msg) = msg.protocol_message.as_option()
+            && protocol_msg
+                .peer_data_operation_request_response_message
+                .is_set()
         {
-            self.handle_pdo_response(pdo_response, info).await;
+            self.handle_pdo_response(
+                &protocol_msg.peer_data_operation_request_response_message,
+                info,
+            )
+            .await;
         }
 
         // Note: msg might be modified by take() below
         let history_sync_taken = msg
             .protocol_message
-            .as_mut()
+            .as_option_mut()
             .and_then(|pm| pm.history_sync_notification.take());
 
         if let Some(history_sync) = history_sync_taken {
@@ -1502,15 +1509,16 @@ impl Client {
 
         /// Extract components from an AppStateSyncKey for storage.
         fn extract_key_components(key: &wa::message::AppStateSyncKey) -> Option<KeyComponents<'_>> {
-            let key_id = key.key_id.as_ref()?.key_id.as_ref()?;
-            let key_data = key.key_data.as_ref()?;
-            let fingerprint = key_data.fingerprint.as_ref()?;
+            let key_id_msg = key.key_id.as_option()?;
+            let key_id = key_id_msg.key_id.as_ref()?;
+            let key_data = key.key_data.as_option()?;
+            let fingerprint = key_data.fingerprint.as_option()?;
             let data = key_data.key_data.as_ref()?;
             Some(KeyComponents {
                 key_id,
                 data,
                 fingerprint_bytes: fingerprint.encode_to_vec(),
-                timestamp: key_data.timestamp(),
+                timestamp: key_data.timestamp.unwrap_or(0),
             })
         }
 
@@ -1569,7 +1577,7 @@ impl Client {
     ) {
         let skdm = match SenderKeyDistributionMessage::try_from(axolotl_bytes) {
             Ok(msg) => msg,
-            Err(e1) => match wa::SenderKeyDistributionMessage::decode(axolotl_bytes) {
+            Err(e1) => match wa::SenderKeyDistributionMessage::decode_from_slice(axolotl_bytes) {
                 Ok(go_msg) => {
                     let (Some(signing_key), Some(id), Some(iteration), Some(chain_key)) = (
                         go_msg.signing_key.as_ref(),
@@ -4608,6 +4616,7 @@ mod tests {
         let skdm = wa::message::SenderKeyDistributionMessage {
             group_id: Some("group".into()),
             axolotl_sender_key_distribution_message: Some(vec![1, 2, 3]),
+            ..Default::default()
         };
 
         // Empty message → false (no SKDM)
@@ -4615,34 +4624,34 @@ mod tests {
 
         // SKDM only → true
         assert!(is_sender_key_distribution_only(&wa::Message {
-            sender_key_distribution_message: Some(skdm.clone()),
+            sender_key_distribution_message: Some(skdm.clone()).into(),
             ..Default::default()
         }));
 
         // SKDM + message_context_info → still true (context_info is metadata)
         assert!(is_sender_key_distribution_only(&wa::Message {
-            sender_key_distribution_message: Some(skdm.clone()),
-            message_context_info: Some(wa::MessageContextInfo::default()),
+            sender_key_distribution_message: Some(skdm.clone()).into(),
+            message_context_info: buffa::MessageField::some(wa::MessageContextInfo::default()),
             ..Default::default()
         }));
 
         // SKDM + sticker → false (has user content)
         assert!(!is_sender_key_distribution_only(&wa::Message {
-            sender_key_distribution_message: Some(skdm.clone()),
-            sticker_message: Some(Box::new(wa::message::StickerMessage::default())),
+            sender_key_distribution_message: Some(skdm.clone()).into(),
+            sticker_message: buffa::MessageField::some(wa::message::StickerMessage::default()),
             ..Default::default()
         }));
 
         // SKDM + text → false (has user content)
         assert!(!is_sender_key_distribution_only(&wa::Message {
-            sender_key_distribution_message: Some(skdm.clone()),
+            sender_key_distribution_message: Some(skdm.clone()).into(),
             conversation: Some("hello".into()),
             ..Default::default()
         }));
 
         // protocol_message only (no SKDM) → false
         assert!(!is_sender_key_distribution_only(&wa::Message {
-            protocol_message: Some(Box::new(wa::message::ProtocolMessage::default())),
+            protocol_message: buffa::MessageField::some(wa::message::ProtocolMessage::default()),
             ..Default::default()
         }));
     }
@@ -4651,29 +4660,29 @@ mod tests {
     #[test]
     fn test_unwrap_device_sent_extracts_reaction() {
         let wrapped = wa::Message {
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
                 destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
-                message: Some(Box::new(wa::Message {
-                    reaction_message: Some(wa::message::ReactionMessage {
+                message: buffa::MessageField::some(wa::Message {
+                    reaction_message: buffa::MessageField::some(wa::message::ReactionMessage {
                         text: Some("\u{2764}".to_string()),
                         ..Default::default()
                     }),
                     ..Default::default()
-                })),
-                phash: None,
-            })),
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
         let unwrapped = unwrap_device_sent(wrapped);
         assert!(
-            unwrapped.device_sent_message.is_none(),
+            unwrapped.device_sent_message.is_unset(),
             "DSM wrapper should be removed"
         );
         assert_eq!(
             unwrapped
                 .reaction_message
-                .as_ref()
+                .as_option()
                 .and_then(|r| r.text.as_deref()),
             Some("\u{2764}"),
             "reaction should be accessible after unwrapping"
@@ -4688,17 +4697,16 @@ mod tests {
     #[test]
     fn test_unwrap_device_sent_preserves_empty_wrapper() {
         let wrapped = wa::Message {
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
                 destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
-                message: None,
-                phash: None,
-            })),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
         let result = unwrap_device_sent(wrapped);
         assert!(
-            result.device_sent_message.is_some(),
+            result.device_sent_message.is_set(),
             "empty DSM wrapper should be preserved"
         );
     }
@@ -4721,29 +4729,29 @@ mod tests {
     fn test_unwrap_device_sent_merges_context_info() {
         let wrapped = wa::Message {
             // Outer message_context_info (from the DSM envelope)
-            message_context_info: Some(wa::MessageContextInfo {
+            message_context_info: buffa::MessageField::some(wa::MessageContextInfo {
                 message_secret: Some(vec![10, 20, 30]),
-                limit_sharing_v2: Some(wa::LimitSharing::default()),
+                limit_sharing_v2: buffa::MessageField::some(wa::LimitSharing::default()),
                 ..Default::default()
             }),
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
                 destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
-                message: Some(Box::new(wa::Message {
+                message: buffa::MessageField::some(wa::Message {
                     conversation: Some("hello".to_string()),
                     // Inner has its own message_secret but no limit_sharing_v2
-                    message_context_info: Some(wa::MessageContextInfo {
+                    message_context_info: buffa::MessageField::some(wa::MessageContextInfo {
                         message_secret: Some(vec![1, 2, 3]),
                         ..Default::default()
                     }),
                     ..Default::default()
-                })),
-                phash: None,
-            })),
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
         let result = unwrap_device_sent(wrapped);
-        let ctx = result.message_context_info.as_ref().unwrap();
+        let ctx = result.message_context_info.as_option().unwrap();
 
         assert_eq!(
             ctx.message_secret,
@@ -4751,7 +4759,7 @@ mod tests {
             "inner message_secret should be preferred"
         );
         assert!(
-            ctx.limit_sharing_v2.is_some(),
+            ctx.limit_sharing_v2.is_set(),
             "limit_sharing_v2 should come from outer (always)"
         );
     }
@@ -4760,24 +4768,24 @@ mod tests {
     #[test]
     fn test_unwrap_device_sent_secret_fallback() {
         let wrapped = wa::Message {
-            message_context_info: Some(wa::MessageContextInfo {
+            message_context_info: buffa::MessageField::some(wa::MessageContextInfo {
                 message_secret: Some(vec![10, 20, 30]),
                 ..Default::default()
             }),
-            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+            device_sent_message: buffa::MessageField::some(wa::message::DeviceSentMessage {
                 destination_jid: Some("5511999999999@s.whatsapp.net".to_string()),
-                message: Some(Box::new(wa::Message {
+                message: buffa::MessageField::some(wa::Message {
                     conversation: Some("hello".to_string()),
                     // Inner has no message_context_info at all
                     ..Default::default()
-                })),
-                phash: None,
-            })),
+                }),
+                ..Default::default()
+            }),
             ..Default::default()
         };
 
         let result = unwrap_device_sent(wrapped);
-        let ctx = result.message_context_info.as_ref().unwrap();
+        let ctx = result.message_context_info.as_option().unwrap();
         assert_eq!(
             ctx.message_secret,
             Some(vec![10, 20, 30]),

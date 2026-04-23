@@ -34,10 +34,12 @@ pub fn message_range(
         messages: messages
             .into_iter()
             .map(|(key, ts)| wa::sync_action_value::SyncActionMessage {
-                key: Some(key),
+                key: buffa::MessageField::some(key),
                 timestamp: Some(ts),
+                ..Default::default()
             })
             .collect(),
+        ..Default::default()
     }
 }
 
@@ -52,6 +54,7 @@ pub fn message_key(
         remote_jid: Some(remote_jid.to_string()),
         from_me: Some(from_me),
         participant: participant.map(|j| j.to_string()),
+        ..Default::default()
     }
 }
 
@@ -61,7 +64,7 @@ pub(crate) fn dispatch_chat_mutation(
     m: &Mutation,
     full_sync: bool,
 ) -> bool {
-    if m.operation != wa::syncd_mutation::SyncdOperation::Set || m.index.is_empty() {
+    if m.operation != wa::syncd_mutation::SyncdOperation::SET || m.index.is_empty() {
         return false;
     }
 
@@ -109,12 +112,12 @@ pub(crate) fn dispatch_chat_mutation(
     match kind.as_str() {
         "mute" => {
             if let Some(val) = &m.action_value
-                && let Some(act) = &val.mute_action
+                && let Some(act) = val.mute_action.as_option()
             {
                 event_bus.dispatch(Event::MuteUpdate(MuteUpdate {
                     jid,
                     timestamp: time,
-                    action: Box::new(*act),
+                    action: Box::new(act.clone()),
                     from_full_sync: full_sync,
                 }));
             }
@@ -122,12 +125,12 @@ pub(crate) fn dispatch_chat_mutation(
         }
         "pin" | "pin_v1" => {
             if let Some(val) = &m.action_value
-                && let Some(act) = &val.pin_action
+                && let Some(act) = val.pin_action.as_option()
             {
                 event_bus.dispatch(Event::PinUpdate(PinUpdate {
                     jid,
                     timestamp: time,
-                    action: Box::new(*act),
+                    action: Box::new(act.clone()),
                     from_full_sync: full_sync,
                 }));
             }
@@ -135,7 +138,7 @@ pub(crate) fn dispatch_chat_mutation(
         }
         "archive" => {
             if let Some(val) = &m.action_value
-                && let Some(act) = &val.archive_chat_action
+                && let Some(act) = val.archive_chat_action.as_option()
             {
                 event_bus.dispatch(Event::ArchiveUpdate(ArchiveUpdate {
                     jid,
@@ -148,7 +151,7 @@ pub(crate) fn dispatch_chat_mutation(
         }
         "star" => {
             if let Some(val) = &m.action_value
-                && let Some(act) = &val.star_action
+                && let Some(act) = val.star_action.as_option()
                 && let Some((message_id, from_me, participant_jid)) =
                     parse_message_key_fields(kind, &m.index)
             {
@@ -158,7 +161,7 @@ pub(crate) fn dispatch_chat_mutation(
                     message_id,
                     from_me,
                     timestamp: time,
-                    action: Box::new(*act),
+                    action: Box::new(act.clone()),
                     from_full_sync: full_sync,
                 }));
             }
@@ -166,7 +169,7 @@ pub(crate) fn dispatch_chat_mutation(
         }
         "contact" => {
             if let Some(val) = &m.action_value
-                && let Some(act) = &val.contact_action
+                && let Some(act) = val.contact_action.as_option()
             {
                 event_bus.dispatch(Event::ContactUpdate(ContactUpdate {
                     jid,
@@ -179,7 +182,7 @@ pub(crate) fn dispatch_chat_mutation(
         }
         "mark_chat_as_read" | "markChatAsRead" => {
             if let Some(val) = &m.action_value
-                && let Some(act) = &val.mark_chat_as_read_action
+                && let Some(act) = val.mark_chat_as_read_action.as_option()
             {
                 event_bus.dispatch(Event::MarkChatAsReadUpdate(MarkChatAsReadUpdate {
                     jid,
@@ -192,7 +195,7 @@ pub(crate) fn dispatch_chat_mutation(
         }
         "deleteChat" => {
             if let Some(val) = &m.action_value
-                && let Some(act) = &val.delete_chat_action
+                && let Some(act) = val.delete_chat_action.as_option()
             {
                 // delete_media is in index[2], not in the proto (which only has messageRange)
                 let delete_media = m.index.get(2).is_none_or(|v| v != "0");
@@ -208,7 +211,7 @@ pub(crate) fn dispatch_chat_mutation(
         }
         "deleteMessageForMe" => {
             if let Some(val) = &m.action_value
-                && let Some(act) = &val.delete_message_for_me_action
+                && let Some(act) = val.delete_message_for_me_action.as_option()
                 && let Some((message_id, from_me, participant_jid)) =
                     parse_message_key_fields(kind, &m.index)
             {
@@ -218,7 +221,7 @@ pub(crate) fn dispatch_chat_mutation(
                     message_id,
                     from_me,
                     timestamp: time,
-                    action: Box::new(*act),
+                    action: Box::new(act.clone()),
                     from_full_sync: full_sync,
                 }));
             }
@@ -388,10 +391,13 @@ impl<'a> ChatActions<'a> {
         );
         let index = serde_json::to_vec(&["markChatAsRead", &jid.to_string()])?;
         let value = wa::SyncActionValue {
-            mark_chat_as_read_action: Some(wa::sync_action_value::MarkChatAsReadAction {
-                read: Some(read),
-                message_range,
-            }),
+            mark_chat_as_read_action: buffa::MessageField::some(
+                wa::sync_action_value::MarkChatAsReadAction {
+                    read: Some(read),
+                    message_range: message_range.into(),
+                    ..Default::default()
+                },
+            ),
             timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
         };
@@ -409,7 +415,12 @@ impl<'a> ChatActions<'a> {
         let delete_media_str = if delete_media { "1" } else { "0" };
         let index = serde_json::to_vec(&["deleteChat", &jid.to_string(), delete_media_str])?;
         let value = wa::SyncActionValue {
-            delete_chat_action: Some(wa::sync_action_value::DeleteChatAction { message_range }),
+            delete_chat_action: buffa::MessageField::some(
+                wa::sync_action_value::DeleteChatAction {
+                    message_range: message_range.into(),
+                    ..Default::default()
+                },
+            ),
             timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
         };
@@ -437,10 +448,13 @@ impl<'a> ChatActions<'a> {
             from_me,
         )?;
         let value = wa::SyncActionValue {
-            delete_message_for_me_action: Some(wa::sync_action_value::DeleteMessageForMeAction {
-                delete_media: Some(delete_media),
-                message_timestamp,
-            }),
+            delete_message_for_me_action: buffa::MessageField::some(
+                wa::sync_action_value::DeleteMessageForMeAction {
+                    delete_media: Some(delete_media),
+                    message_timestamp,
+                    ..Default::default()
+                },
+            ),
             timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
         };
@@ -456,10 +470,13 @@ impl<'a> ChatActions<'a> {
     ) -> Result<()> {
         let index = serde_json::to_vec(&["archive", &jid.to_string()])?;
         let value = wa::SyncActionValue {
-            archive_chat_action: Some(wa::sync_action_value::ArchiveChatAction {
-                archived: Some(archived),
-                message_range,
-            }),
+            archive_chat_action: buffa::MessageField::some(
+                wa::sync_action_value::ArchiveChatAction {
+                    archived: Some(archived),
+                    message_range: message_range.into(),
+                    ..Default::default()
+                },
+            ),
             timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
         };
@@ -470,8 +487,9 @@ impl<'a> ChatActions<'a> {
     async fn send_pin_mutation(&self, jid: &Jid, pinned: bool) -> Result<()> {
         let index = serde_json::to_vec(&["pin_v1", &jid.to_string()])?;
         let value = wa::SyncActionValue {
-            pin_action: Some(wa::sync_action_value::PinAction {
+            pin_action: buffa::MessageField::some(wa::sync_action_value::PinAction {
                 pinned: Some(pinned),
+                ..Default::default()
             }),
             timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
@@ -494,7 +512,7 @@ impl<'a> ChatActions<'a> {
             Some(0)
         };
         let value = wa::SyncActionValue {
-            mute_action: Some(wa::sync_action_value::MuteAction {
+            mute_action: buffa::MessageField::some(wa::sync_action_value::MuteAction {
                 muted: Some(muted),
                 mute_end_timestamp: mute_end,
                 ..Default::default()
@@ -517,8 +535,9 @@ impl<'a> ChatActions<'a> {
         let index =
             build_message_key_index("star", chat_jid, participant_jid, message_id, from_me)?;
         let value = wa::SyncActionValue {
-            star_action: Some(wa::sync_action_value::StarAction {
+            star_action: buffa::MessageField::some(wa::sync_action_value::StarAction {
                 starred: Some(starred),
+                ..Default::default()
             }),
             timestamp: Some(wacore::time::now_millis()),
             ..Default::default()
@@ -549,7 +568,7 @@ impl<'a> ChatActions<'a> {
         rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut iv);
 
         let (mutation, _) = encode_record(
-            wa::syncd_mutation::SyncdOperation::Set,
+            wa::syncd_mutation::SyncdOperation::SET,
             index,
             value,
             &keys,

@@ -16,7 +16,7 @@ impl Client {
             log::debug!(
                 "Dropping history sync {} during shutdown (Type: {:?})",
                 message_id,
-                notification.sync_type()
+                notification.sync_type
             );
             return;
         }
@@ -25,7 +25,7 @@ impl Client {
             log::debug!(
                 "Skipping history sync for message {} (Type: {:?})",
                 message_id,
-                notification.sync_type()
+                notification.sync_type
             );
             // Send receipt so the phone considers this chunk delivered and stops
             // retrying. This intentionally diverges from WhatsApp Web's AB prop
@@ -72,8 +72,8 @@ impl Client {
         log::info!(
             "Processing history sync for message {} (Size: {}, Type: {:?})",
             message_id,
-            notification.file_length(),
-            notification.sync_type()
+            notification.file_length.unwrap_or(0),
+            notification.sync_type
         );
 
         self.send_protocol_receipt(
@@ -219,7 +219,7 @@ impl Client {
                 if let Some(decompressed) = sync_result.decompressed_bytes {
                     let lazy_hs = LazyHistorySync::new(
                         decompressed,
-                        notification.sync_type().into(),
+                        notification.sync_type.map(|t| t as i32).unwrap_or(0),
                         notification.chunk_order,
                         notification.progress,
                     );

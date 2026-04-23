@@ -10,6 +10,7 @@ pub fn new_pre_key_record(id: u32, key_pair: &KeyPair) -> wa::PreKeyRecordStruct
         id: Some(id),
         public_key: Some(key_pair.public_key.public_key_bytes().to_vec()),
         private_key: Some(key_pair.private_key.serialize().to_vec()),
+        ..Default::default()
     }
 }
 
@@ -30,6 +31,7 @@ pub fn new_signed_pre_key_record(
                 .try_into()
                 .expect("Timestamp conversion failed"),
         ),
+        ..Default::default()
     }
 }
 
@@ -63,6 +65,7 @@ pub fn prekey_record_to_structure(
         id: Some(record.id()?.into()),
         public_key: Some(record.key_pair()?.public_key.public_key_bytes().to_vec()),
         private_key: Some(record.key_pair()?.private_key.serialize().to_vec()),
+        ..Default::default()
     })
 }
 

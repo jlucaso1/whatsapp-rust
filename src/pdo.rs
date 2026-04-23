@@ -17,8 +17,8 @@
 use crate::cache::Cache;
 use crate::client::Client;
 use crate::types::message::MessageInfo;
+use buffa::Message;
 use log::{debug, info, warn};
-use prost::Message;
 use std::sync::Arc;
 use std::time::Duration;
 use wacore::types::message::{
@@ -122,16 +122,18 @@ impl Client {
             from_me: Some(info.source.is_from_me),
             id: Some(info.id.clone()),
             participant: participant.map(|p| p.to_string()),
+            ..Default::default()
         };
 
         // Build the PDO request message
         let pdo_request = wa::message::PeerDataOperationRequestMessage {
             peer_data_operation_request_type: Some(
-                wa::message::PeerDataOperationRequestType::PlaceholderMessageResend as i32,
+                wa::message::PeerDataOperationRequestType::PLACEHOLDER_MESSAGE_RESEND,
             ),
             placeholder_message_resend_request: vec![
                 wa::message::peer_data_operation_request_message::PlaceholderMessageResendRequest {
-                    message_key: Some(message_key),
+                    message_key: buffa::MessageField::some(message_key),
+                    ..Default::default()
                 },
             ],
             ..Default::default()
@@ -139,15 +141,13 @@ impl Client {
 
         // Wrap it in a protocol message
         let protocol_message = wa::message::ProtocolMessage {
-            r#type: Some(
-                wa::message::protocol_message::Type::PeerDataOperationRequestMessage as i32,
-            ),
-            peer_data_operation_request_message: Some(pdo_request),
+            r#type: Some(wa::message::protocol_message::Type::PEER_DATA_OPERATION_REQUEST_MESSAGE),
+            peer_data_operation_request_message: buffa::MessageField::some(pdo_request),
             ..Default::default()
         };
 
         let msg = wa::Message {
-            protocol_message: Some(Box::new(protocol_message)),
+            protocol_message: buffa::MessageField::some(protocol_message),
             ..Default::default()
         };
 
@@ -195,9 +195,9 @@ impl Client {
 
         let pdo_request = wa::message::PeerDataOperationRequestMessage {
             peer_data_operation_request_type: Some(
-                wa::message::PeerDataOperationRequestType::HistorySyncOnDemand as i32,
+                wa::message::PeerDataOperationRequestType::HISTORY_SYNC_ON_DEMAND,
             ),
-            history_sync_on_demand_request: Some(
+            history_sync_on_demand_request: buffa::MessageField::some(
                 wa::message::peer_data_operation_request_message::HistorySyncOnDemandRequest {
                     chat_jid: Some(chat_jid.to_string()),
                     oldest_msg_id: Some(oldest_msg_id.to_string()),
@@ -211,15 +211,13 @@ impl Client {
         };
 
         let protocol_message = wa::message::ProtocolMessage {
-            r#type: Some(
-                wa::message::protocol_message::Type::PeerDataOperationRequestMessage as i32,
-            ),
-            peer_data_operation_request_message: Some(pdo_request),
+            r#type: Some(wa::message::protocol_message::Type::PEER_DATA_OPERATION_REQUEST_MESSAGE),
+            peer_data_operation_request_message: buffa::MessageField::some(pdo_request),
             ..Default::default()
         };
 
         let msg = wa::Message {
-            protocol_message: Some(Box::new(protocol_message)),
+            protocol_message: buffa::MessageField::some(protocol_message),
             ..Default::default()
         };
 
@@ -285,7 +283,9 @@ impl Client {
         );
 
         for result in &response.peer_data_operation_result {
-            if let Some(placeholder_response) = &result.placeholder_message_resend_response {
+            if let Some(placeholder_response) =
+                result.placeholder_message_resend_response.as_option()
+            {
                 self.handle_placeholder_resend_response(placeholder_response, request_id)
                     .await;
             }
@@ -302,13 +302,14 @@ impl Client {
             return;
         };
 
-        let web_msg_info = match wa::WebMessageInfo::decode(web_message_info_bytes.as_slice()) {
-            Ok(info) => info,
-            Err(e) => {
-                warn!("Failed to decode WebMessageInfo from PDO response: {:?}", e);
-                return;
-            }
-        };
+        let web_msg_info =
+            match wa::WebMessageInfo::decode_from_slice(web_message_info_bytes.as_slice()) {
+                Ok(info) => info,
+                Err(e) => {
+                    warn!("Failed to decode WebMessageInfo from PDO response: {:?}", e);
+                    return;
+                }
+            };
 
         let key = &web_msg_info.key;
         let remote_jid_str = key.remote_jid.as_deref().unwrap_or("");
@@ -352,10 +353,11 @@ impl Client {
             }
         };
 
-        let Some(message) = web_msg_info.message else {
+        if web_msg_info.message.is_unset() {
             warn!("PDO response WebMessageInfo missing message content");
             return;
-        };
+        }
+        let message = web_msg_info.message.into_option().unwrap();
 
         {
             use wacore::proto_helpers::MessageExt;
@@ -600,12 +602,13 @@ mod tests {
     ) -> waproto::whatsapp::WebMessageInfo {
         use waproto::whatsapp as wa;
         wa::WebMessageInfo {
-            key: wa::MessageKey {
+            key: buffa::MessageField::some(wa::MessageKey {
                 remote_jid: Some(remote_jid.into()),
                 from_me: Some(from_me),
                 id: Some(id.into()),
                 participant: participant.map(|p| p.into()),
-            },
+                ..Default::default()
+            }),
             ..Default::default()
         }
     }

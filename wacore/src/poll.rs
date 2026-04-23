@@ -63,15 +63,16 @@ pub fn encrypt_poll_vote(
     stanza_id: &str,
     voter_jid: &str,
 ) -> Result<(Vec<u8>, [u8; GCM_IV_SIZE])> {
-    use prost::Message;
+    use buffa::Message;
     use rand::Rng;
 
     let vote_msg = waproto::whatsapp::message::PollVoteMessage {
         selected_options: selected_option_hashes.to_vec(),
+        ..Default::default()
     };
 
     let mut plaintext = Vec::new();
-    vote_msg.encode(&mut plaintext)?;
+    vote_msg.encode(&mut plaintext);
 
     let mut iv = [0u8; GCM_IV_SIZE];
     rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut iv);
@@ -93,7 +94,7 @@ pub fn decrypt_poll_vote(
     stanza_id: &str,
     voter_jid: &str,
 ) -> Result<Vec<Vec<u8>>> {
-    use prost::Message as _;
+    use buffa::Message as _;
 
     let nonce: &[u8; GCM_IV_SIZE] = iv
         .try_into()
@@ -112,7 +113,7 @@ pub fn decrypt_poll_vote(
     aes_256_gcm_decrypt(encryption_key, nonce, &aad, enc_payload, &mut plaintext)
         .map_err(|_| anyhow!("Poll vote GCM tag verification failed"))?;
 
-    let vote_msg = waproto::whatsapp::message::PollVoteMessage::decode(&plaintext[..])?;
+    let vote_msg = waproto::whatsapp::message::PollVoteMessage::decode_from_slice(&plaintext[..])?;
     Ok(vote_msg.selected_options)
 }
 

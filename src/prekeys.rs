@@ -147,15 +147,16 @@ impl Client {
         // into Bytes sub-views. This replaces 812 individual encode_to_vec() allocs
         // with one large allocation + zero-copy slicing.
         let encoded_batch: Vec<(u32, bytes::Bytes)> = {
-            use prost::Message;
-            let total_len: usize = keys_to_upload.iter().map(|(_, r)| r.encoded_len()).sum();
+            use buffa::Message;
+            let total_len: usize = keys_to_upload
+                .iter()
+                .map(|(_, r)| r.compute_size() as usize)
+                .sum();
             let mut buf = Vec::with_capacity(total_len);
             let mut offsets = Vec::with_capacity(keys_to_upload.len());
             for (id, record) in &keys_to_upload {
                 let start = buf.len();
-                record
-                    .encode(&mut buf)
-                    .expect("prost encode into pre-sized Vec");
+                record.encode(&mut buf);
                 offsets.push((*id, start..buf.len()));
             }
             let shared = bytes::Bytes::from(buf);

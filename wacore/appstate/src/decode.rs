@@ -1,7 +1,7 @@
 use crate::AppStateError;
 use crate::hash::{generate_content_mac, validate_index_mac};
 use crate::keys::ExpandedAppStateKeys;
-use prost::Message;
+use buffa::Message;
 use wacore_libsignal::crypto::aes_256_cbc_decrypt_into;
 use waproto::whatsapp as wa;
 
@@ -43,8 +43,8 @@ pub fn decode_record(
 ) -> Result<Mutation, AppStateError> {
     let value_blob = record
         .value
+        .blob
         .as_ref()
-        .and_then(|v| v.blob.as_ref())
         .ok_or(AppStateError::MissingValueBlob)?;
 
     if value_blob.len() < 16 + 32 {
@@ -70,7 +70,7 @@ pub fn decode_record(
     aes_256_cbc_decrypt_into(ciphertext, &keys.value_encryption, iv, &mut plaintext)
         .map_err(|_| AppStateError::DecryptionFailed)?;
 
-    let action = wa::SyncActionData::decode(plaintext.as_slice())
+    let action = wa::SyncActionData::decode_from_slice(plaintext.as_slice())
         .map_err(|_| AppStateError::DecodeFailed)?;
 
     let mut index_list: Vec<String> = Vec::new();
@@ -78,8 +78,8 @@ pub fn decode_record(
         if validate_macs {
             let stored = record
                 .index
+                .blob
                 .as_ref()
-                .and_then(|i| i.blob.as_ref())
                 .ok_or(AppStateError::MissingIndexMAC)?;
             validate_index_mac(idx_bytes, stored, &keys.index)?;
         }
@@ -89,12 +89,8 @@ pub fn decode_record(
     }
 
     Ok(Mutation {
-        action_value: action.value,
-        index_mac: record
-            .index
-            .as_ref()
-            .and_then(|i| i.blob.clone())
-            .unwrap_or_default(),
+        action_value: action.value.into_option(),
+        index_mac: record.index.blob.clone().unwrap_or_default(),
         value_mac: value_mac.to_vec(),
         index: index_list,
         operation,
@@ -129,17 +125,17 @@ pub fn collect_key_ids_from_patch_list(
     };
 
     if let Some(snapshot) = snapshot {
-        check(snapshot.key_id.as_ref().and_then(|k| k.id.as_ref()));
+        check(snapshot.key_id.id.as_ref());
         for rec in &snapshot.records {
-            check(rec.key_id.as_ref().and_then(|k| k.id.as_ref()));
+            check(rec.key_id.id.as_ref());
         }
     }
 
     for patch in patches {
-        check(patch.key_id.as_ref().and_then(|k| k.id.as_ref()));
+        check(patch.key_id.id.as_ref());
         for mutation in &patch.mutations {
-            if let Some(record) = &mutation.record {
-                check(record.key_id.as_ref().and_then(|k| k.id.as_ref()));
+            if mutation.record.is_set() {
+                check(mutation.record.key_id.id.as_ref());
             }
         }
     }
@@ -152,7 +148,7 @@ mod tests {
     use super::*;
     use crate::hash::generate_content_mac;
     use crate::keys::expand_app_state_keys;
-    use prost::Message;
+    use buffa::Message;
     use wacore_libsignal::crypto::aes_256_cbc_encrypt_into;
 
     fn create_test_record(
@@ -174,15 +170,19 @@ mod tests {
         value_blob.extend_from_slice(&value_mac);
 
         wa::SyncdRecord {
-            index: Some(wa::SyncdIndex {
+            index: buffa::MessageField::some(wa::SyncdIndex {
                 blob: Some(vec![1; 32]),
+                ..Default::default()
             }),
-            value: Some(wa::SyncdValue {
+            value: buffa::MessageField::some(wa::SyncdValue {
                 blob: Some(value_blob),
+                ..Default::default()
             }),
-            key_id: Some(wa::KeyId {
+            key_id: buffa::MessageField::some(wa::KeyId {
                 id: Some(key_id.to_vec()),
+                ..Default::default()
             }),
+            ..Default::default()
         }
     }
 
@@ -193,7 +193,7 @@ mod tests {
         let key_id = b"test_key_id".to_vec();
 
         let action_data = wa::SyncActionData {
-            value: Some(wa::SyncActionValue {
+            value: buffa::MessageField::some(wa::SyncActionValue {
                 timestamp: Some(1234567890),
                 ..Default::default()
             }),
@@ -201,14 +201,14 @@ mod tests {
         };
 
         let record = create_test_record(
-            wa::syncd_mutation::SyncdOperation::Set,
+            wa::syncd_mutation::SyncdOperation::SET,
             &keys,
             &key_id,
             &action_data,
         );
 
         let mutation = decode_record(
-            wa::syncd_mutation::SyncdOperation::Set,
+            wa::syncd_mutation::SyncdOperation::SET,
             &record,
             &keys,
             &key_id,
@@ -220,7 +220,7 @@ mod tests {
             mutation.action_value.as_ref().and_then(|v| v.timestamp),
             Some(1234567890)
         );
-        assert_eq!(mutation.operation, wa::syncd_mutation::SyncdOperation::Set);
+        assert_eq!(mutation.operation, wa::syncd_mutation::SyncdOperation::SET);
     }
 
     #[test]
@@ -230,7 +230,7 @@ mod tests {
         let key_id = b"test_key_id".to_vec();
 
         let action_data = wa::SyncActionData {
-            value: Some(wa::SyncActionValue {
+            value: buffa::MessageField::some(wa::SyncActionValue {
                 timestamp: Some(1234567890),
                 ..Default::default()
             }),
@@ -238,7 +238,7 @@ mod tests {
         };
 
         let record = create_test_record(
-            wa::syncd_mutation::SyncdOperation::Set,
+            wa::syncd_mutation::SyncdOperation::SET,
             &keys,
             &key_id,
             &action_data,
@@ -246,7 +246,7 @@ mod tests {
 
         // With MAC validation enabled but no index in action_data, should succeed
         let result = decode_record(
-            wa::syncd_mutation::SyncdOperation::Set,
+            wa::syncd_mutation::SyncdOperation::SET,
             &record,
             &keys,
             &key_id,
@@ -263,12 +263,14 @@ mod tests {
         let key_id_4 = vec![10, 11, 12];
 
         let snapshot = wa::SyncdSnapshot {
-            key_id: Some(wa::KeyId {
+            key_id: buffa::MessageField::some(wa::KeyId {
                 id: Some(key_id_1.clone()),
+                ..Default::default()
             }),
             records: vec![wa::SyncdRecord {
-                key_id: Some(wa::KeyId {
+                key_id: buffa::MessageField::some(wa::KeyId {
                     id: Some(key_id_2.clone()),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }],
@@ -276,13 +278,15 @@ mod tests {
         };
 
         let patches = vec![wa::SyncdPatch {
-            key_id: Some(wa::KeyId {
+            key_id: buffa::MessageField::some(wa::KeyId {
                 id: Some(key_id_3.clone()),
+                ..Default::default()
             }),
             mutations: vec![wa::SyncdMutation {
-                record: Some(wa::SyncdRecord {
-                    key_id: Some(wa::KeyId {
+                record: buffa::MessageField::some(wa::SyncdRecord {
+                    key_id: buffa::MessageField::some(wa::KeyId {
                         id: Some(key_id_4.clone()),
+                        ..Default::default()
                     }),
                     ..Default::default()
                 }),
@@ -305,12 +309,14 @@ mod tests {
         let key_id = vec![1, 2, 3];
 
         let snapshot = wa::SyncdSnapshot {
-            key_id: Some(wa::KeyId {
+            key_id: buffa::MessageField::some(wa::KeyId {
                 id: Some(key_id.clone()),
+                ..Default::default()
             }),
             records: vec![wa::SyncdRecord {
-                key_id: Some(wa::KeyId {
+                key_id: buffa::MessageField::some(wa::KeyId {
                     id: Some(key_id.clone()),
+                    ..Default::default()
                 }),
                 ..Default::default()
             }],
@@ -318,8 +324,9 @@ mod tests {
         };
 
         let patches = vec![wa::SyncdPatch {
-            key_id: Some(wa::KeyId {
+            key_id: buffa::MessageField::some(wa::KeyId {
                 id: Some(key_id.clone()),
+                ..Default::default()
             }),
             ..Default::default()
         }];

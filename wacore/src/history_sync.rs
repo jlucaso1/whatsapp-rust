@@ -7,7 +7,7 @@ pub enum HistorySyncError {
     #[error("Failed to decompress history sync data: {0}")]
     DecompressionError(#[from] std::io::Error),
     #[error("Failed to decode HistorySync protobuf: {0}")]
-    ProtobufDecodeError(#[from] prost::DecodeError),
+    ProtobufDecodeError(#[from] buffa::DecodeError),
     #[error("Malformed protobuf: {0}")]
     MalformedProtobuf(String),
 }
@@ -243,42 +243,76 @@ fn extract_own_pushname(data: &[u8], own_user: &str) -> Option<String> {
     if id_match { pushname } else { None }
 }
 
-/// Prost partial decode — only tctoken fields, skips heavy `messages`.
-#[derive(Clone, PartialEq, prost::Message)]
-pub(crate) struct ConversationTcTokenFields {
-    #[prost(string, required, tag = "1")]
-    pub id: String,
-    #[prost(bytes = "vec", optional, tag = "21")]
-    pub tc_token: Option<Vec<u8>>,
-    #[prost(uint64, optional, tag = "22")]
-    pub tc_token_timestamp: Option<u64>,
-    #[prost(uint64, optional, tag = "28")]
-    pub tc_token_sender_timestamp: Option<u64>,
-}
-
 /// Extract tctoken candidate from a raw Conversation proto.
-/// Uses prost partial decode (only fields 1/21/22/28, skips messages).
+/// Manual partial decode (only fields 1/21/22/28, skips heavy messages).
 /// Returns `None` for groups, newsletters, bots, or conversations without tctokens.
 pub(crate) fn extract_tc_token_fields(data: &[u8]) -> Option<TcTokenCandidate> {
-    use prost::Message;
+    let mut pos = 0;
+    let mut id: Option<String> = None;
+    let mut tc_token: Option<Vec<u8>> = None;
+    let mut tc_token_timestamp: Option<u64> = None;
+    let mut tc_token_sender_timestamp: Option<u64> = None;
 
-    let conv = ConversationTcTokenFields::decode(data).ok()?;
+    while pos < data.len() {
+        let (tag, bytes_read) = read_varint(data.get(pos..)?).ok()?;
+        pos += bytes_read;
+        let field_number = (tag >> 3) as u32;
+        let wt = (tag & 0x7) as u32;
+
+        match field_number {
+            // id (tag 1, string)
+            1 if wt == wire_type::LENGTH_DELIMITED => {
+                let (len, vlen) = read_varint(data.get(pos..)?).ok()?;
+                pos += vlen;
+                let len = usize::try_from(len).ok()?;
+                let end = pos.checked_add(len).filter(|&e| e <= data.len())?;
+                id = Some(std::str::from_utf8(data.get(pos..end)?).ok()?.to_string());
+                pos = end;
+            }
+            // tc_token (tag 21, bytes)
+            21 if wt == wire_type::LENGTH_DELIMITED => {
+                let (len, vlen) = read_varint(data.get(pos..)?).ok()?;
+                pos += vlen;
+                let len = usize::try_from(len).ok()?;
+                let end = pos.checked_add(len).filter(|&e| e <= data.len())?;
+                tc_token = Some(data[pos..end].to_vec());
+                pos = end;
+            }
+            // tc_token_timestamp (tag 22, uint64)
+            22 if wt == wire_type::VARINT => {
+                let (val, vlen) = read_varint(data.get(pos..)?).ok()?;
+                pos += vlen;
+                tc_token_timestamp = Some(val);
+            }
+            // tc_token_sender_timestamp (tag 28, uint64)
+            28 if wt == wire_type::VARINT => {
+                let (val, vlen) = read_varint(data.get(pos..)?).ok()?;
+                pos += vlen;
+                tc_token_sender_timestamp = Some(val);
+            }
+            _ => {
+                pos = skip_field(wt, data, pos).ok()?;
+            }
+        }
+    }
+
+    let id = id?;
 
     // Early-out for non-1:1 conversations
-    if let Some(parts) = wacore_binary::jid::parse_jid_fast(&conv.id)
+    if let Some(parts) = wacore_binary::jid::parse_jid_fast(&id)
         && (parts.server == "g.us" || parts.server == "newsletter" || parts.server == "bot")
     {
         return None;
     }
 
-    let tc_token = conv.tc_token.filter(|t| !t.is_empty())?;
-    let tc_token_timestamp = conv.tc_token_timestamp?;
+    let tc_token = tc_token.filter(|t| !t.is_empty())?;
+    let tc_token_timestamp = tc_token_timestamp?;
 
     Some(TcTokenCandidate {
-        id: conv.id,
+        id,
         tc_token,
         tc_token_timestamp,
-        tc_token_sender_timestamp: conv.tc_token_sender_timestamp,
+        tc_token_sender_timestamp,
     })
 }
 
@@ -294,9 +328,9 @@ pub struct TcTokenCandidate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use buffa::Message;
     use flate2::Compression;
     use flate2::write::ZlibEncoder;
-    use prost::Message;
     use std::io::Write;
     use waproto::whatsapp as wa;
 
@@ -312,7 +346,7 @@ mod tests {
     fn test_nct_salt_extracted_from_history_sync() {
         let salt = vec![0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF];
         let hs = wa::HistorySync {
-            sync_type: wa::history_sync::HistorySyncType::InitialBootstrap as i32,
+            sync_type: wa::history_sync::HistorySyncType::INITIAL_BOOTSTRAP,
             nct_salt: Some(salt.clone()),
             ..Default::default()
         };
@@ -326,7 +360,7 @@ mod tests {
     #[test]
     fn test_nct_salt_none_when_absent() {
         let hs = wa::HistorySync {
-            sync_type: wa::history_sync::HistorySyncType::InitialBootstrap as i32,
+            sync_type: wa::history_sync::HistorySyncType::INITIAL_BOOTSTRAP,
             ..Default::default()
         };
 
@@ -340,11 +374,12 @@ mod tests {
     fn test_nct_salt_and_pushname_coexist() {
         let salt = vec![0x01, 0x02, 0x03];
         let hs = wa::HistorySync {
-            sync_type: wa::history_sync::HistorySyncType::InitialBootstrap as i32,
+            sync_type: wa::history_sync::HistorySyncType::INITIAL_BOOTSTRAP,
             nct_salt: Some(salt.clone()),
             pushnames: vec![wa::Pushname {
                 id: Some("0000000000".into()),
                 pushname: Some("TestUser".into()),
+                ..Default::default()
             }],
             ..Default::default()
         };

@@ -6,7 +6,7 @@
 //! Reference: WAWebHandleAdvDeviceNotificationUtils.decodeSignedKeyIndexBytes()
 
 use crate::store::traits::DeviceInfo;
-use prost::Message;
+use buffa::Message;
 
 /// Decoded fields from `ADVKeyIndexList` protobuf.
 #[derive(Debug, Clone)]
@@ -24,9 +24,10 @@ pub struct DecodedKeyIndex {
 /// (the notification arrives over a Noise-encrypted connection, so content is
 /// already authenticated).
 pub fn decode_key_index_list(signed_bytes: &[u8]) -> Option<DecodedKeyIndex> {
-    let signed = waproto::whatsapp::AdvSignedKeyIndexList::decode(signed_bytes).ok()?;
+    let signed = waproto::whatsapp::ADVSignedKeyIndexList::decode_from_slice(signed_bytes).ok()?;
     let details_bytes = signed.details.as_ref()?;
-    let key_index = waproto::whatsapp::AdvKeyIndexList::decode(details_bytes.as_slice()).ok()?;
+    let key_index =
+        waproto::whatsapp::ADVKeyIndexList::decode_from_slice(details_bytes.as_slice()).ok()?;
 
     let raw_id = key_index.raw_id?;
     let timestamp = key_index.timestamp?;
@@ -199,21 +200,20 @@ mod tests {
 
     #[test]
     fn decode_roundtrip() {
-        use prost::Message;
+        use buffa::Message;
 
-        let key_index = waproto::whatsapp::AdvKeyIndexList {
+        let key_index = waproto::whatsapp::ADVKeyIndexList {
             raw_id: Some(42),
             timestamp: Some(1000),
             current_index: Some(5),
             valid_indexes: vec![3, 5, 7],
-            account_type: None,
+            ..Default::default()
         };
         let details = key_index.encode_to_vec();
 
-        let signed = waproto::whatsapp::AdvSignedKeyIndexList {
+        let signed = waproto::whatsapp::ADVSignedKeyIndexList {
             details: Some(details),
-            account_signature: None,
-            account_signature_key: None,
+            ..Default::default()
         };
         let bytes = signed.encode_to_vec();
 

@@ -182,7 +182,7 @@ pub fn create_sticker_pack_zip(
             accessibility_label: input.accessibility_label.clone(),
             is_lottie: Some(false),
             mimetype: Some("image/webp".to_string()),
-            premium: None,
+            ..Default::default()
         });
     }
 
@@ -234,7 +234,7 @@ pub fn build_sticker_pack_message(
     };
 
     Ok(wa::Message {
-        sticker_pack_message: Some(Box::new(pack_msg)),
+        sticker_pack_message: buffa::MessageField::some(pack_msg),
         ..Default::default()
     })
 }
@@ -393,7 +393,7 @@ mod tests {
 
         let msg =
             build_sticker_pack_message(&zip_result, &zip_upload, &thumb_upload, metadata).unwrap();
-        let pack = msg.sticker_pack_message.unwrap();
+        let pack = msg.sticker_pack_message.as_option().unwrap();
 
         assert_eq!(pack.sticker_pack_id.as_deref(), Some("msg-test"));
         assert_eq!(pack.name.as_deref(), Some("Test Pack"));
