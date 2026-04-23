@@ -471,14 +471,16 @@ impl Client {
         // sync or long reconnect tails. Matches the
         // `placeholder_message_resend_maximum_days_limit` AB prop (default 14d)
         // enforced by WAWebNonMessageDataRequestPlaceholderMessageResendUtils.
-        const PDO_MAX_AGE_DAYS: i64 = 14;
+        // Compare in seconds to stay bit-for-bit with WA Web's `age_s > i`
+        // check — `num_days()` truncates and would let 14d1h through.
+        const PDO_MAX_AGE: chrono::Duration = chrono::Duration::days(14);
         let age = chrono::Utc::now().signed_duration_since(info.timestamp);
-        if age.num_days() > PDO_MAX_AGE_DAYS {
+        if age > PDO_MAX_AGE {
             debug!(
-                "PDO request skipped for message {} (age {}d exceeds {}d limit)",
+                "PDO request skipped for message {} (age {}s exceeds {}s limit)",
                 info.id,
-                age.num_days(),
-                PDO_MAX_AGE_DAYS,
+                age.num_seconds(),
+                PDO_MAX_AGE.num_seconds(),
             );
             return;
         }

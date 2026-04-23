@@ -5353,11 +5353,9 @@ mod tests {
     async fn test_pdo_armed_for_from_me() {
         let client = create_test_client_for_retry_with_id("pdo_from_me").await;
 
-        let mut info = create_test_message_info(
-            "85010891714716@lid",
-            "FROM_ME_MSG_1",
-            "5511777776666@s.whatsapp.net",
-        );
+        // When fromMe is true the sender is the user's own JID, not a peer.
+        let own_jid = "5511999998888@s.whatsapp.net";
+        let mut info = create_test_message_info("85010891714716@lid", "FROM_ME_MSG_1", own_jid);
         info.source.is_from_me = true;
         let info = Arc::new(info);
 
@@ -5386,6 +5384,32 @@ mod tests {
         assert!(
             client.pdo_pending_requests.get(&cache_key).await.is_none(),
             "messages older than 14 days must not register a PDO entry",
+        );
+    }
+
+    /// Boundary check: age of 14d plus a minute must reject (WA Web uses
+    /// seconds, not days, so 14d1m is already over the limit). Catches a
+    /// `num_days()` truncation that would otherwise accept this message.
+    #[tokio::test]
+    async fn test_pdo_rejects_just_past_14d_boundary() {
+        use wacore::types::message::ChatMessageId;
+
+        let client = create_test_client_for_retry_with_id("pdo_boundary").await;
+
+        let mut info =
+            create_test_message_info("85010891714716@lid", "BOUNDARY_MSG_1", "85010891714716@lid");
+        info.timestamp =
+            chrono::Utc::now() - chrono::Duration::days(14) - chrono::Duration::minutes(1);
+        let info = Arc::new(info);
+
+        let cache_key = ChatMessageId::new(info.source.chat.clone(), info.id.clone());
+
+        client.spawn_pdo_request_with_options(&info, true);
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        assert!(
+            client.pdo_pending_requests.get(&cache_key).await.is_none(),
+            "14d+1m must be over the limit, matching WA Web's seconds-based check",
         );
     }
 

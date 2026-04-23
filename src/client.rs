@@ -216,7 +216,7 @@ impl std::fmt::Display for MemoryDiagnostics {
         writeln!(f, "  message_retry_counts:   {}", self.message_retry_counts)?;
         writeln!(
             f,
-            "  undecryptable_dispatched:{}",
+            "  undec_dispatched:       {}",
             self.undecryptable_dispatched
         )?;
         writeln!(f, "  pdo_pending_requests:   {}", self.pdo_pending_requests)?;
