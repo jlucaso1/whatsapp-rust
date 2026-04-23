@@ -3513,4 +3513,41 @@ mod tests {
         assert!(response.description_owner.is_none());
         assert!(response.description_time.is_none());
     }
+
+    /// Locks down the trait conversions used by `AcceptGroupInviteV4Iq::build_iq`:
+    /// `i64` for `expiration` and `&Jid` for `admin`. Exercises the exact
+    /// `NodeBuilder::new("accept")` path that the perf refactor changed.
+    #[test]
+    fn test_accept_group_invite_v4_iq_attrs() {
+        let group_jid: Jid = "120363000000000042@g.us".parse().unwrap();
+        let admin_jid: Jid = "5511999887766@s.whatsapp.net".parse().unwrap();
+        let code = "A1B2C3D4".to_string();
+        let expiration: i64 = 1_700_000_123;
+
+        let spec = AcceptGroupInviteV4Iq::new(
+            group_jid.clone(),
+            code.clone(),
+            expiration,
+            admin_jid.clone(),
+        );
+        let iq = spec.build_iq();
+
+        assert_eq!(iq.to, group_jid);
+
+        let Some(NodeContent::Nodes(nodes)) = &iq.content else {
+            panic!("expected nodes content");
+        };
+        let accept = &nodes[0];
+        assert_eq!(accept.tag, "accept");
+
+        assert_eq!(
+            accept.attrs().optional_string("code").as_deref(),
+            Some(code.as_str()),
+        );
+        assert_eq!(
+            accept.attrs().optional_string("expiration").as_deref(),
+            Some("1700000123"),
+        );
+        assert_eq!(accept.attrs().optional_jid("admin"), Some(admin_jid));
+    }
 }
