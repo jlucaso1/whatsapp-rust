@@ -54,9 +54,9 @@ impl<'a> Polls<'a> {
             }
         }
 
-        let poll_options: Vec<wa::message::poll_creation_message::PollOption> = options
+        let poll_options: Vec<wa::message::poll_creation_message::Option> = options
             .iter()
-            .map(|name| wa::message::poll_creation_message::PollOption {
+            .map(|name| wa::message::poll_creation_message::Option {
                 option_name: Some(name.clone()),
                 ..Default::default()
             })

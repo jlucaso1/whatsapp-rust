@@ -207,7 +207,7 @@ dependencies = [
 [[package]]
 name = "buffa"
 version = "0.3.0"
-source = "git+https://github.com/anthropics/buffa?branch=main#687bee70142ce18ca37d274e5833cdcd7f4c0ba0"
+source = "git+https://github.com/anthropics/buffa?branch=main#f5690d71bd7786ff45fb196d9db5eb0334e92bfe"
 dependencies = [
  "base64",
  "bytes",
@@ -221,7 +221,7 @@ dependencies = [
 [[package]]
 name = "buffa-build"
 version = "0.3.0"
-source = "git+https://github.com/anthropics/buffa?branch=main#687bee70142ce18ca37d274e5833cdcd7f4c0ba0"
+source = "git+https://github.com/anthropics/buffa?branch=main#f5690d71bd7786ff45fb196d9db5eb0334e92bfe"
 dependencies = [
  "buffa",
  "buffa-codegen",
@@ -231,7 +231,7 @@ dependencies = [
 [[package]]
 name = "buffa-codegen"
 version = "0.3.0"
-source = "git+https://github.com/anthropics/buffa?branch=main#687bee70142ce18ca37d274e5833cdcd7f4c0ba0"
+source = "git+https://github.com/anthropics/buffa?branch=main#f5690d71bd7786ff45fb196d9db5eb0334e92bfe"
 dependencies = [
  "buffa",
  "buffa-descriptor",
@@ -245,7 +245,7 @@ dependencies = [
 [[package]]
 name = "buffa-descriptor"
 version = "0.3.0"
-source = "git+https://github.com/anthropics/buffa?branch=main#687bee70142ce18ca37d274e5833cdcd7f4c0ba0"
+source = "git+https://github.com/anthropics/buffa?branch=main#f5690d71bd7786ff45fb196d9db5eb0334e92bfe"
 dependencies = [
  "buffa",
 ]
@@ -703,7 +703,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1489,7 +1489,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -1767,7 +1767,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]

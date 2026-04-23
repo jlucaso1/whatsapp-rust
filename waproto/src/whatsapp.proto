@@ -3428,7 +3428,7 @@ message Message {
 
   message PollAddOptionMessage {
     optional MessageKey poll_creation_message_key = 1;
-    optional Message.PollCreationMessage.PollOption add_option = 2;
+    optional Message.PollCreationMessage.Option add_option = 2;
   }
 
   enum PollContentType {
@@ -3439,16 +3439,16 @@ message Message {
   message PollCreationMessage {
     optional bytes enc_key = 1;
     optional string name = 2;
-    repeated PollOption options = 3;
+    repeated Option options = 3;
     optional uint32 selectable_options_count = 4;
     optional ContextInfo context_info = 5;
     optional Message.PollContentType poll_content_type = 6;
     optional Message.PollType poll_type = 7;
-    optional PollOption correct_answer = 8;
+    optional Option correct_answer = 8;
     optional int64 end_time = 9;
     optional bool hide_participant_name = 10;
     optional bool allow_add_option = 11;
-    message PollOption {
+    message Option {
       optional string option_name = 1;
       optional string option_hash = 2;
     }
@@ -3981,7 +3981,7 @@ message MsgOpaqueData {
   optional string client_url = 15;
   optional string loc = 16;
   optional string poll_name = 17;
-  repeated PollOption poll_options = 18;
+  repeated Option poll_options = 18;
   optional uint32 poll_selectable_options_count = 20;
   optional bytes message_secret = 21;
   optional string original_self_author = 51;
@@ -4028,7 +4028,7 @@ message MsgOpaqueData {
     TEXT = 1;
     IMAGE = 2;
   }
-  message PollOption {
+  message Option {
     optional string name = 1;
     optional string hash = 2;
   }
@@ -4038,7 +4038,7 @@ message MsgOpaqueData {
     QUIZ = 1;
   }
   message PollVoteSnapshot {
-    optional MsgOpaqueData.PollOption option = 1;
+    optional MsgOpaqueData.Option option = 1;
     optional int32 option_vote_count = 2;
   }
 

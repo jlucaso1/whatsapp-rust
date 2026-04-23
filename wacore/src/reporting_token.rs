@@ -184,7 +184,7 @@ static GROUP_INVITE_MESSAGE_SUBFIELDS: &[ReportingField] = &[
     ReportingField::with_subfields(7, CONTEXT_INFO_SUBFIELDS), // contextInfo (at field 7 here)
 ];
 
-/// PollOption subfields
+/// `Option` (poll option) subfields
 static POLL_OPTION_SUBFIELDS: &[ReportingField] = &[
     ReportingField::new(1), // optionName
     ReportingField::new(2), // optionValue

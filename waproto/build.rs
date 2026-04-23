@@ -98,13 +98,11 @@ fn main() -> std::io::Result<()> {
             .compile()
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-        // Post-process: fix buffa codegen bug where as_option_mut() is called on
-        // MessageFieldView (views are immutable). Replace with always-set semantics.
-        // Filed upstream: https://github.com/anthropics/buffa/issues/36
-        // Post-process: add #[serde(skip)] to buffa internal fields on owned types only.
-        // buffa adds __buffa_unknown_fields and __buffa_cached_size to every struct,
-        // which don't implement serde traits. View types don't derive serde so we
-        // must only annotate owned-type fields (UnknownFields, not UnknownFieldsView).
+        // Add #[serde(skip)] to buffa internal fields on owned types only.
+        // buffa adds __buffa_unknown_fields and __buffa_cached_size to every
+        // struct, and neither impls serde traits. View types don't derive
+        // serde, so only owned-type fields are annotated (the replace targets
+        // `UnknownFields`, not `UnknownFieldsView`).
         let path = std::path::Path::new("src/whatsapp.rs");
         let content = std::fs::read_to_string(path)?;
         let content = content
