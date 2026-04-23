@@ -49,7 +49,7 @@
 //! - `WAWebPrivacySettings` (value enums)
 //! - `WAWebSchemaPrivacyDisallowedList` (disallowed list types)
 
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use crate::types::message::AddressingMode;
@@ -60,36 +60,36 @@ use wacore_binary::{Node, NodeContent, NodeRef};
 /// IQ namespace for privacy settings.
 pub const PRIVACY_NAMESPACE: &str = "privacy";
 
-#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
 pub enum PrivacyCategory {
     /// Last seen visibility (`all | contacts | contact_blacklist | none`)
-    #[str = "last"]
+    #[wire = "last"]
     Last,
     /// Online status visibility (`all | match_last_seen`)
-    #[str = "online"]
+    #[wire = "online"]
     Online,
     /// Profile photo visibility (`all | contacts | contact_blacklist | none`)
-    #[str = "profile"]
+    #[wire = "profile"]
     Profile,
     /// About/status text visibility (`all | contacts | contact_blacklist | none`)
-    #[str = "status"]
+    #[wire = "status"]
     Status,
     /// Group add permissions (`all | contacts | contact_blacklist | none`)
-    #[str = "groupadd"]
+    #[wire = "groupadd"]
     GroupAdd,
     /// Read receipts (`all | none`)
-    #[str = "readreceipts"]
+    #[wire = "readreceipts"]
     ReadReceipts,
     /// Call add permissions (`all | known | contacts`)
-    #[str = "calladd"]
+    #[wire = "calladd"]
     CallAdd,
     /// Message permissions / anti-brigading (`all | contacts`)
-    #[str = "messages"]
+    #[wire = "messages"]
     Messages,
     /// Defense mode (`off | on_standard`)
-    #[str = "defense"]
+    #[wire = "defense"]
     DefenseMode,
-    #[string_fallback]
+    #[wire_fallback]
     Other(String),
 }
 
@@ -126,28 +126,28 @@ impl PrivacyCategory {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
 pub enum PrivacyValue {
-    #[str = "all"]
+    #[wire = "all"]
     All,
-    #[str = "contacts"]
+    #[wire = "contacts"]
     Contacts,
-    #[str = "none"]
+    #[wire = "none"]
     None,
-    #[str = "contact_blacklist"]
+    #[wire = "contact_blacklist"]
     ContactBlacklist,
-    #[str = "match_last_seen"]
+    #[wire = "match_last_seen"]
     MatchLastSeen,
     /// `calladd` only
-    #[str = "known"]
+    #[wire = "known"]
     Known,
     /// `defense` only
-    #[str = "off"]
+    #[wire = "off"]
     Off,
     /// `defense` only
-    #[str = "on_standard"]
+    #[wire = "on_standard"]
     OnStandard,
-    #[string_fallback]
+    #[wire_fallback]
     Other(String),
 }
 
@@ -220,12 +220,12 @@ impl IqSpec for PrivacySettingsSpec {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum DisallowedListAction {
-    #[string_default]
-    #[str = "add"]
+    #[wire_default]
+    #[wire = "add"]
     Add,
-    #[str = "remove"]
+    #[wire = "remove"]
     Remove,
 }
 
@@ -373,7 +373,7 @@ impl IqSpec for SetDefaultDisappearingModeSpec {
             Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("disappearing_mode")
-                    .attr("duration", self.duration.to_string())
+                    .attr("duration", self.duration)
                     .build(),
             ])),
         )
@@ -546,7 +546,7 @@ mod tests {
         assert_eq!(response.get_value(&PrivacyCategory::Online), None);
     }
 
-    // --- StringEnum conversion tests ---
+    // --- WireEnum conversion tests ---
 
     #[test]
     fn test_privacy_category_from_str() {

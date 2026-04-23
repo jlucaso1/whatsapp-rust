@@ -1,28 +1,28 @@
 //! Spam report types and node building.
 
-use crate::StringEnum;
+use crate::WireEnum;
 use wacore_binary::Jid;
 use wacore_binary::Node;
 use wacore_binary::builder::NodeBuilder;
 
 /// The type of spam flow indicating the source of the report.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum SpamFlow {
     /// Report triggered from group spam banner
-    #[str = "GroupSpamBannerReport"]
+    #[wire = "GroupSpamBannerReport"]
     GroupSpamBannerReport,
     /// Report triggered from group info screen
-    #[str = "GroupInfoReport"]
+    #[wire = "GroupInfoReport"]
     GroupInfoReport,
     /// Report triggered from message context menu
-    #[string_default]
-    #[str = "MessageMenu"]
+    #[wire_default]
+    #[wire = "MessageMenu"]
     MessageMenu,
     /// Report triggered from contact info screen
-    #[str = "ContactInfo"]
+    #[wire = "ContactInfo"]
     ContactInfo,
     /// Report triggered from status view
-    #[str = "StatusReport"]
+    #[wire = "StatusReport"]
     StatusReport,
 }
 

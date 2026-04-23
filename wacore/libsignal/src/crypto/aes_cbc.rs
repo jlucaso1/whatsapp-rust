@@ -5,9 +5,7 @@
 
 use std::result::Result;
 
-use aes::Aes256;
-use aes::cipher::block_padding::Pkcs7;
-use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
+use crate::crypto::provider::provider;
 
 #[derive(Debug, displaydoc::Display, thiserror::Error)]
 pub enum EncryptionError {
@@ -31,35 +29,11 @@ pub fn aes_256_cbc_encrypt_into(
     iv: &[u8],
     output: &mut Vec<u8>,
 ) -> Result<(), EncryptionError> {
-    // Calculate the space needed for encryption + PKCS7 padding
-    // PKCS7 padding can add 1-16 bytes (always adds at least 1 byte)
-    let padding_needed = 16 - (ptext.len() % 16);
-    let encrypted_size = ptext.len() + padding_needed;
-
-    let start_pos = output.len();
-
-    // Reserve space for the encrypted data
-    output.resize(start_pos + encrypted_size, 0);
-
-    // Copy plaintext to the buffer
-    output[start_pos..start_pos + ptext.len()].copy_from_slice(ptext);
-
-    // Create encryptor and encrypt in place
-    let encryptor = cbc::Encryptor::<Aes256>::new_from_slices(key, iv)
-        .map_err(|_| EncryptionError::BadKeyOrIv)?;
-
-    // Encrypt the data in place with proper padding
-    let encrypted_len = {
-        let encrypted_slice = encryptor
-            .encrypt_padded::<Pkcs7>(&mut output[start_pos..], ptext.len())
-            .map_err(|_| EncryptionError::BadPadding)?;
-        encrypted_slice.len()
-    };
-
-    // Resize to actual encrypted length
-    output.truncate(start_pos + encrypted_len);
-
-    Ok(())
+    let key: &[u8; 32] = key.try_into().map_err(|_| EncryptionError::BadKeyOrIv)?;
+    let iv: &[u8; 16] = iv.try_into().map_err(|_| EncryptionError::BadKeyOrIv)?;
+    provider()
+        .aes_256_cbc_encrypt(key, iv, ptext, output)
+        .map_err(|_| EncryptionError::BadPadding)
 }
 
 /// The output buffer is cleared and filled with the decrypted plaintext.
@@ -69,27 +43,11 @@ pub fn aes_256_cbc_decrypt_into(
     iv: &[u8],
     output: &mut Vec<u8>,
 ) -> Result<(), DecryptionError> {
-    if ctext.is_empty() || !ctext.len().is_multiple_of(16) {
-        return Err(DecryptionError::BadCiphertext(
-            "ciphertext length must be a non-zero multiple of 16",
-        ));
-    }
-
-    output.clear();
-    output.reserve(ctext.len());
-    output.extend_from_slice(ctext);
-
-    let decryptor = cbc::Decryptor::<Aes256>::new_from_slices(key, iv)
-        .map_err(|_| DecryptionError::BadKeyOrIv)?;
-
-    let decrypted = decryptor
-        .decrypt_padded::<Pkcs7>(output)
-        .map_err(|_| DecryptionError::BadCiphertext("failed to decrypt"))?;
-
-    let decrypted_len = decrypted.len();
-    output.truncate(decrypted_len);
-
-    Ok(())
+    let key: &[u8; 32] = key.try_into().map_err(|_| DecryptionError::BadKeyOrIv)?;
+    let iv: &[u8; 16] = iv.try_into().map_err(|_| DecryptionError::BadKeyOrIv)?;
+    provider()
+        .aes_256_cbc_decrypt(key, iv, ctext, output)
+        .map_err(|_| DecryptionError::BadCiphertext("failed to decrypt"))
 }
 
 #[cfg(test)]

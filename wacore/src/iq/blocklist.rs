@@ -3,7 +3,7 @@
 //! This module provides type-safe structures for blocklist operations following
 //! the `ProtocolNode` pattern defined in `wacore/src/protocol.rs`.
 
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::iq::node::optional_child;
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
@@ -16,11 +16,11 @@ use wacore_binary::{Node, NodeContent, NodeRef};
 /// IQ namespace for blocklist operations.
 pub const BLOCKLIST_IQ_NAMESPACE: &str = "blocklist";
 /// Action to perform on a blocklist entry.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum BlocklistAction {
-    #[str = "block"]
+    #[wire = "block"]
     Block,
-    #[str = "unblock"]
+    #[wire = "unblock"]
     Unblock,
 }
 /// Request node for updating blocklist.

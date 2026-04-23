@@ -67,6 +67,21 @@ impl MessageContext {
         )
     }
 
+    /// Referential [`wa::MessageKey`] for [`wa::message::ReactionMessage::key`].
+    /// Sender-side revokes have a different shape; use [`Client::revoke_message`].
+    pub fn message_key(&self) -> wa::MessageKey {
+        use wacore_binary::JidExt;
+        let needs_participant =
+            self.info.source.is_group || self.info.source.chat.is_status_broadcast();
+        wa::MessageKey {
+            remote_jid: Some(self.info.source.chat.to_string()),
+            from_me: Some(self.info.source.is_from_me),
+            id: Some(self.info.id.clone()),
+            participant: needs_participant.then(|| self.info.source.sender.to_string()),
+            ..Default::default()
+        }
+    }
+
     pub async fn edit_message(
         &self,
         original_message_id: impl Into<String>,
@@ -652,10 +667,6 @@ impl BotBuilder<Provided, Provided, Provided, Provided> {
                 .map_err(|e| anyhow::anyhow!("Failed to create persistence manager: {}", e))?,
         );
 
-        persistence_manager
-            .clone()
-            .run_background_saver(runtime.clone(), std::time::Duration::from_secs(30));
-
         // Apply initial push name if specified (for deterministic mock server phone assignment)
         if let Some(name) = self.initial_push_name {
             persistence_manager
@@ -680,7 +691,7 @@ impl BotBuilder<Provided, Provided, Provided, Provided> {
 
         info!("Creating client...");
         let (client, sync_task_receiver) = Client::new_with_cache_config(
-            runtime,
+            runtime.clone(),
             persistence_manager.clone(),
             transport_factory,
             http_client,
@@ -688,6 +699,16 @@ impl BotBuilder<Provided, Provided, Provided, Provided> {
             self.cache_config,
         )
         .await;
+
+        let saver_handle = persistence_manager.run_background_saver(
+            runtime,
+            std::time::Duration::from_secs(30),
+            client.shutdown_signal(),
+        );
+        // Tie the saver task to Arc<Client> so extracting client() and outliving
+        // Bot keeps periodic persistence alive. Client::drop on the last Arc
+        // drops the AbortHandle and aborts the task.
+        let _ = client.saver_handle.set(saver_handle);
 
         // Register custom enc handlers
         for (enc_type, handler) in self.custom_enc_handlers {

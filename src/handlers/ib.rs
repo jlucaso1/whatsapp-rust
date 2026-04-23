@@ -2,6 +2,7 @@ use super::traits::StanzaHandler;
 use crate::client::Client;
 use crate::types::events::{Event, OfflineSyncPreview};
 use async_trait::async_trait;
+use futures::FutureExt;
 use log::{debug, info, warn};
 use std::sync::Arc;
 use wacore::appstate::patch_decode::WAPatchName;
@@ -164,15 +165,20 @@ async fn handle_ib_impl(client: Arc<Client>, node: &wacore_binary::NodeRef<'_>) 
                 client.complete_offline_sync(count);
 
                 let client_clone = Arc::clone(&client);
+                // Per-connection: the offline flush is tied to THIS connection.
+                // A reconnect fires the per-connection signal; the old task exits
+                // and the new connection spawns a fresh flush.
+                let shutdown = client_clone.connection_shutdown_signal();
                 client
                     .runtime
                     .spawn(Box::pin(async move {
                         // WA Web: OFFLINE_DEVICE_SYNC_DELAY = 2000ms
-                        client_clone
-                            .runtime
-                            .sleep(std::time::Duration::from_secs(2))
-                            .await;
-                        client_clone.flush_pending_device_sync().await;
+                        futures::select! {
+                            _ = client_clone.runtime.sleep(std::time::Duration::from_secs(2)).fuse() => {
+                                client_clone.flush_pending_device_sync().await;
+                            }
+                            _ = wacore::runtime::wait_for_shutdown(&shutdown).fuse() => {}
+                        }
                     }))
                     .detach();
             }

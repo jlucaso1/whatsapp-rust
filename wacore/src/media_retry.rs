@@ -10,8 +10,6 @@
 //! Reference: WAWebCryptoMediaRetry, WAWebSendServerErrorReceiptJob,
 //! WAWebHandleMediaRetryNotification (docs/captured-js/).
 
-use aes_gcm::Aes256Gcm;
-use aes_gcm::aead::{Aead, KeyInit, Payload};
 use anyhow::{Result, anyhow};
 use buffa::Message;
 use hkdf::Hkdf;
@@ -20,6 +18,7 @@ use sha2::Sha256;
 use wacore_binary::Jid;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::{Node, NodeContentRef, NodeRef};
+use wacore_libsignal::crypto::{aes_256_gcm_decrypt, aes_256_gcm_encrypt};
 use waproto::whatsapp as wa;
 
 const MEDIA_RETRY_HKDF_INFO: &str = "WhatsApp Media Retry Notification";
@@ -66,8 +65,6 @@ pub fn encrypt_media_retry_receipt(
     stanza_id: &str,
 ) -> Result<(Vec<u8>, [u8; ENC_IV_SIZE])> {
     let key = derive_media_retry_key(media_key)?;
-    let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("AES-GCM key init failed: {e}"))?;
 
     let mut iv = [0u8; ENC_IV_SIZE];
     rand::make_rng::<rand::rngs::StdRng>().fill_bytes(&mut iv);
@@ -78,14 +75,8 @@ pub fn encrypt_media_retry_receipt(
     };
     let plaintext = receipt.encode_to_vec();
 
-    let ciphertext = cipher
-        .encrypt(
-            (&iv).into(),
-            Payload {
-                msg: &plaintext,
-                aad: stanza_id.as_bytes(),
-            },
-        )
+    let mut ciphertext = Vec::with_capacity(plaintext.len() + 16);
+    aes_256_gcm_encrypt(&key, &iv, stanza_id.as_bytes(), &plaintext, &mut ciphertext)
         .map_err(|e| anyhow!("AES-GCM encrypt failed: {e}"))?;
 
     Ok((ciphertext, iv))
@@ -101,19 +92,17 @@ pub fn decrypt_media_retry_notification(
     ciphertext: &[u8],
 ) -> Result<wa::MediaRetryNotification> {
     let key = derive_media_retry_key(media_key)?;
-    let cipher =
-        Aes256Gcm::new_from_slice(&key).map_err(|e| anyhow!("AES-GCM key init failed: {e}"))?;
-
     let nonce: &[u8; 12] = iv.try_into().map_err(|_| anyhow!("Invalid IV length"))?;
-    let plaintext = cipher
-        .decrypt(
-            nonce.into(),
-            Payload {
-                msg: ciphertext,
-                aad: stanza_id.as_bytes(),
-            },
-        )
-        .map_err(|e| anyhow!("AES-GCM decrypt failed: {e}"))?;
+
+    let mut plaintext = Vec::with_capacity(ciphertext.len().saturating_sub(16));
+    aes_256_gcm_decrypt(
+        &key,
+        nonce,
+        stanza_id.as_bytes(),
+        ciphertext,
+        &mut plaintext,
+    )
+    .map_err(|e| anyhow!("AES-GCM decrypt failed: {e}"))?;
 
     wa::MediaRetryNotification::decode_from_slice(plaintext.as_slice())
         .map_err(|e| anyhow!("protobuf decode failed: {e}"))
@@ -150,7 +139,7 @@ pub fn build_media_retry_receipt(
 
     let mut rmr_builder = NodeBuilder::new("rmr")
         .attr("jid", chat_jid)
-        .attr("from_me", is_from_me.to_string());
+        .attr("from_me", is_from_me);
 
     if let Some(p) = participant {
         rmr_builder = rmr_builder.attr("participant", p);

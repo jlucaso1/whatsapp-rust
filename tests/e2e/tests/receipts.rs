@@ -353,3 +353,153 @@ async fn test_group_delivery_receipt() -> anyhow::Result<()> {
     client_b.disconnect().await;
     Ok(())
 }
+
+/// Regression test for issue #571: disconnect must flush in-flight delivery
+/// receipts so they don't race the transport tear-down. Burst of N messages
+/// reliably hits the race window for at least one receipt.
+#[tokio::test]
+async fn test_delivery_receipts_flushed_on_disconnect() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let mut client_a = TestClient::connect("e2e_rcpt_flush_a").await?;
+    let mut client_b = TestClient::connect("e2e_rcpt_flush_b").await?;
+
+    let jid_b = client_b.jid().await;
+
+    const N: usize = 5;
+    let mut msg_ids: Vec<String> = Vec::with_capacity(N);
+    for i in 0..N {
+        let text = format!("flush burst {i}");
+        let id = client_a
+            .client
+            .send_message(jid_b.clone(), text_msg(&text))
+            .await?
+            .message_id;
+        msg_ids.push(id);
+    }
+    info!("A sent {N} messages: {msg_ids:?}");
+
+    // Wait for every message event so later-arriving ones can't slip past the
+    // disconnect. Event::Message dispatches right after the receipt task is
+    // spawned, so by then the receipt may still be queued on the runtime.
+    let mut seen = std::collections::HashSet::<usize>::new();
+    while seen.len() < N {
+        let event = client_b
+            .wait_for_event(15, |e| {
+                matches!(e, Event::Message(m, _) if m
+                    .conversation
+                    .as_deref()
+                    .and_then(|c| c.strip_prefix("flush burst "))
+                    .and_then(|s| s.parse::<usize>().ok())
+                    .is_some_and(|i| i < N))
+            })
+            .await?;
+        if let Event::Message(m, _) = &*event
+            && let Some(i) = m
+                .conversation
+                .as_deref()
+                .and_then(|c| c.strip_prefix("flush burst "))
+                .and_then(|s| s.parse::<usize>().ok())
+        {
+            seen.insert(i);
+        }
+    }
+    info!("B saw all {N} message events");
+
+    client_b.disconnect().await;
+    info!("B disconnected");
+
+    // Dedupe by message_id — server may coalesce or split receipt stanzas.
+    let mut pending: std::collections::HashSet<String> = msg_ids.iter().cloned().collect();
+    while !pending.is_empty() {
+        let event = client_a
+            .wait_for_event(15, |e| {
+                matches!(
+                    e,
+                    Event::Receipt(r)
+                    if r.r#type == ReceiptType::Delivered
+                        && r.message_ids.iter().any(|id| pending.contains(id))
+                )
+            })
+            .await
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Timed out waiting for delivery receipts, still pending: {:?} ({e})",
+                    pending
+                )
+            })?;
+        if let Event::Receipt(r) = &*event {
+            for id in &r.message_ids {
+                pending.remove(id);
+            }
+        }
+    }
+    info!("A received all {N} delivery receipts");
+
+    client_a.disconnect().await;
+    Ok(())
+}
+
+/// Performance regression guard for issue #571 / PR #573: `disconnect()`
+/// must not pad latency when there are no pending receipt tasks. Cold
+/// disconnect (just connected, never received a message) should complete
+/// in milliseconds, not anywhere near the 5s drain cap.
+#[tokio::test]
+async fn test_disconnect_is_fast_with_no_pending_receipts() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client = TestClient::connect("e2e_rcpt_cold_disconnect").await?;
+
+    let start = std::time::Instant::now();
+    client.client.disconnect().await;
+    let elapsed = start.elapsed();
+
+    info!("cold disconnect took {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_millis(500),
+        "disconnect with zero pending receipts took {elapsed:?}, expected well under 500ms — \
+         likely waiting on the receipt-drain cap"
+    );
+    Ok(())
+}
+
+/// Hot disconnect: B receives a burst of messages from A and disconnects
+/// immediately. The drain SHOULD complete fast (each receipt is a single
+/// `<receipt>` send) — significantly faster than the 5s cap. Padding here
+/// would compound across every test that creates+tears-down a client.
+#[tokio::test]
+async fn test_disconnect_is_fast_with_pending_receipts() -> anyhow::Result<()> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let client_a = TestClient::connect("e2e_rcpt_hot_a").await?;
+    let mut client_b = TestClient::connect("e2e_rcpt_hot_b").await?;
+    let jid_b = client_b.jid().await;
+
+    const N: usize = 5;
+    for i in 0..N {
+        client_a
+            .client
+            .send_message(jid_b.clone(), text_msg(&format!("burst {i}")))
+            .await?;
+    }
+
+    // Wait until B observes the LAST message — receipt tasks are spawned
+    // by then but may still be in-flight on the runtime.
+    client_b
+        .wait_for_text(&format!("burst {}", N - 1), 15)
+        .await?;
+
+    let start = std::time::Instant::now();
+    client_b.client.disconnect().await;
+    let elapsed = start.elapsed();
+
+    info!("hot disconnect with {N} pending receipts took {elapsed:?}");
+    assert!(
+        elapsed < Duration::from_secs(1),
+        "disconnect with {N} pending receipts took {elapsed:?}, expected <1s — \
+         drain is hitting the 5s cap on every call"
+    );
+
+    client_a.disconnect().await;
+    Ok(())
+}

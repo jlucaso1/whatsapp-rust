@@ -1,4 +1,5 @@
 use crate::stanza::BusinessSubscription;
+use crate::types::call::IncomingCall;
 use crate::types::message::MessageInfo;
 use crate::types::presence::{ChatPresence, ChatPresenceMedia, ReceiptType};
 use buffa::Message;
@@ -211,13 +212,16 @@ pub struct SelfPushNameUpdated {
 
 /// Type of device list update notification.
 /// Matches WhatsApp Web's device notification types.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum DeviceListUpdateType {
     /// A device was added to the user's account
+    #[wire = "add"]
     Add,
     /// A device was removed from the user's account
+    #[wire = "remove"]
     Remove,
     /// Device information was updated
+    #[wire = "update"]
     Update,
 }
 
@@ -274,14 +278,22 @@ pub struct IdentityChange {
 }
 
 /// Type of business status update.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum BusinessUpdateType {
+    #[wire = "removed_as_business"]
     RemovedAsBusiness,
+    #[wire = "verified_name_changed"]
     VerifiedNameChanged,
+    #[wire = "profile_updated"]
     ProfileUpdated,
+    #[wire = "products_updated"]
     ProductsUpdated,
+    #[wire = "collections_updated"]
     CollectionsUpdated,
+    #[wire = "subscriptions_updated"]
     SubscriptionsUpdated,
+    #[wire_default]
+    #[wire = "unknown"]
     Unknown,
 }
 
@@ -392,6 +404,10 @@ pub enum Event {
     GroupUpdate(GroupUpdate),
     ContactUpdate(ContactUpdate),
 
+    /// Incoming `<call>` stanza from the server (offer, preaccept, accept,
+    /// reject, terminate). Mirror of WA Web's inbound call signaling.
+    IncomingCall(IncomingCall),
+
     PushNameUpdate(PushNameUpdate),
     SelfPushNameUpdated(SelfPushNameUpdated),
     PinUpdate(PinUpdate),
@@ -431,6 +447,22 @@ pub enum Event {
     /// Gated by `Client::set_raw_node_forwarding(true)` to avoid overhead when unused.
     #[serde(skip)]
     RawNode(Arc<OwnedNodeRef>),
+
+    /// Server-pushed MEX (GraphQL) update. Routed by the textual `op_name`,
+    /// which is stable across WA Web bundle releases.
+    MexNotification(MexNotification),
+}
+
+/// `payload` shape depends on `op_name`. `offline` mirrors the raw string
+/// the server sets when replaying backlog (often a timestamp); presence
+/// alone signals backlog vs live.
+#[derive(Debug, Clone, Serialize)]
+pub struct MexNotification {
+    pub op_name: String,
+    pub from: Option<Jid>,
+    pub stanza_id: Option<String>,
+    pub offline: Option<String>,
+    pub payload: serde_json::Value,
 }
 
 impl Event {
@@ -506,40 +538,21 @@ pub struct LoggedOut {
 #[derive(Debug, Clone, Serialize)]
 pub struct StreamReplaced;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::WireEnum)]
+#[wire(kind = "int")]
 pub enum TempBanReason {
+    #[wire = 101]
     SentToTooManyPeople,
+    #[wire = 102]
     BlockedByUsers,
+    #[wire = 103]
     CreatedTooManyGroups,
+    #[wire = 104]
     SentTooManySameMessage,
+    #[wire = 106]
     BroadcastList,
+    #[wire_fallback]
     Unknown(i32),
-}
-
-impl From<i32> for TempBanReason {
-    fn from(code: i32) -> Self {
-        match code {
-            101 => Self::SentToTooManyPeople,
-            102 => Self::BlockedByUsers,
-            103 => Self::CreatedTooManyGroups,
-            104 => Self::SentTooManySameMessage,
-            106 => Self::BroadcastList,
-            _ => Self::Unknown(code),
-        }
-    }
-}
-
-impl TempBanReason {
-    pub fn code(&self) -> i32 {
-        match self {
-            Self::SentToTooManyPeople => 101,
-            Self::BlockedByUsers => 102,
-            Self::CreatedTooManyGroups => 103,
-            Self::SentTooManySameMessage => 104,
-            Self::BroadcastList => 106,
-            Self::Unknown(code) => *code,
-        }
-    }
 }
 
 impl fmt::Display for TempBanReason {
@@ -566,69 +579,42 @@ pub struct TemporaryBan {
     pub expire: Duration,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Copy, Serialize)]
-
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
+#[wire(kind = "int")]
 pub enum ConnectFailureReason {
+    #[wire = 400]
     Generic,
+    #[wire = 401]
     LoggedOut,
+    #[wire = 402]
     TempBanned,
+    #[wire = 403]
     MainDeviceGone,
+    #[wire = 406]
     UnknownLogout,
+    #[wire = 405]
     ClientOutdated,
+    #[wire = 409]
     BadUserAgent,
+    #[wire = 413]
     CatExpired,
+    #[wire = 414]
     CatInvalid,
+    #[wire = 415]
     NotFound,
+    #[wire = 418]
     ClientUnknown,
+    #[wire = 500]
     InternalServerError,
+    #[wire = 501]
     Experimental,
+    #[wire = 503]
     ServiceUnavailable,
+    #[wire_fallback]
     Unknown(i32),
 }
 
-impl From<i32> for ConnectFailureReason {
-    fn from(code: i32) -> Self {
-        match code {
-            400 => Self::Generic,
-            401 => Self::LoggedOut,
-            402 => Self::TempBanned,
-            403 => Self::MainDeviceGone,
-            406 => Self::UnknownLogout,
-            405 => Self::ClientOutdated,
-            409 => Self::BadUserAgent,
-            413 => Self::CatExpired,
-            414 => Self::CatInvalid,
-            415 => Self::NotFound,
-            418 => Self::ClientUnknown,
-            500 => Self::InternalServerError,
-            501 => Self::Experimental,
-            503 => Self::ServiceUnavailable,
-            _ => Self::Unknown(code),
-        }
-    }
-}
-
 impl ConnectFailureReason {
-    pub fn code(&self) -> i32 {
-        match self {
-            Self::Generic => 400,
-            Self::LoggedOut => 401,
-            Self::TempBanned => 402,
-            Self::MainDeviceGone => 403,
-            Self::UnknownLogout => 406,
-            Self::ClientOutdated => 405,
-            Self::BadUserAgent => 409,
-            Self::CatExpired => 413,
-            Self::CatInvalid => 414,
-            Self::NotFound => 415,
-            Self::ClientUnknown => 418,
-            Self::InternalServerError => 500,
-            Self::Experimental => 501,
-            Self::ServiceUnavailable => 503,
-            Self::Unknown(code) => *code,
-        }
-    }
-
     pub fn is_logged_out(&self) -> bool {
         matches!(
             self,
@@ -671,15 +657,20 @@ pub struct OfflineSyncCompleted {
     pub count: i32,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum DecryptFailMode {
+    #[wire = "show"]
     Show,
+    #[wire = "hide"]
     Hide,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::WireEnum)]
 pub enum UnavailableType {
+    #[wire_default]
+    #[wire = "unknown"]
     Unknown,
+    #[wire = "view_once"]
     ViewOnce,
 }
 

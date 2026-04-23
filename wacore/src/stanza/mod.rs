@@ -3,6 +3,7 @@
 //! This module contains type-safe parsers for incoming notification stanzas.
 
 pub mod business;
+pub mod call;
 pub mod devices;
 pub mod groups;
 pub mod message;

@@ -21,6 +21,7 @@ pub mod http;
 pub mod types;
 
 pub mod client;
+pub(crate) mod flush_scope;
 pub use client::Client;
 #[cfg(feature = "debug-diagnostics")]
 pub use client::MemoryDiagnostics;

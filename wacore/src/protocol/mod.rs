@@ -25,7 +25,7 @@ pub trait ProtocolNode: Sized {
 
 /// Trait for parsing a string enum from a `&str`.
 ///
-/// Automatically implemented by the `StringEnum` derive macro for both
+/// Automatically implemented by the `WireEnum` derive macro for both
 /// standard enums (fails on unknown) and fallback enums (captures unknown).
 pub trait ParseStringEnum: Sized {
     fn parse_from_str(s: &str) -> Result<Self>;

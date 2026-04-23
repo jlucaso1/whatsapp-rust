@@ -182,7 +182,11 @@ pub async fn group_decrypt(
     let sender_key_state = match record.sender_key_state_for_chain_id(chain_id) {
         Some(state) => state,
         None => {
-            log::error!(
+            // Expected when the sender rotated their key (WA Web: rotateKey=true),
+            // re-registered, or when we missed the SKDM for this chain. Caller
+            // handles the typed error by triggering a retry receipt; WA Web
+            // emits `SenderKeyExpired` telemetry instead of an error log.
+            log::debug!(
                 "SenderKey could not find chain ID {} (known chain IDs: {:?})",
                 chain_id,
                 record.chain_ids_for_logging().collect::<Vec<_>>(),
@@ -336,6 +340,81 @@ pub async fn create_sender_key_distribution_message<R: Rng + CryptoRng>(
                 .store_sender_key(sender_key_name, record)
                 .await?;
             Ok(skdm)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::IdentityKeyPair;
+    use async_trait::async_trait;
+    use std::collections::HashMap;
+
+    struct InMemorySenderKeyStore {
+        keys: HashMap<SenderKeyName, SenderKeyRecord>,
+    }
+
+    #[async_trait]
+    impl SenderKeyStore for InMemorySenderKeyStore {
+        async fn store_sender_key(
+            &mut self,
+            name: &SenderKeyName,
+            record: SenderKeyRecord,
+        ) -> Result<()> {
+            self.keys.insert(name.clone(), record);
+            Ok(())
+        }
+
+        async fn load_sender_key(&self, name: &SenderKeyName) -> Result<Option<SenderKeyRecord>> {
+            Ok(self.keys.get(name).cloned())
+        }
+    }
+
+    /// Unknown chain IDs must return `NoSenderKeyState` (typed error) so the
+    /// caller can trigger a retry receipt. The log at this site is `debug!` —
+    /// WA Web treats this as expected (emits `SenderKeyExpired` WAM event, not
+    /// an error).
+    #[test]
+    fn unknown_chain_id_returns_no_sender_key_state() {
+        let mut rng = rand::rng();
+        let name = SenderKeyName::new("group@g.us".to_string(), "alice.0".to_string());
+
+        let mut alice_store = InMemorySenderKeyStore {
+            keys: HashMap::new(),
+        };
+
+        let skdm = futures::executor::block_on(create_sender_key_distribution_message(
+            &name,
+            &mut alice_store,
+            &mut rng,
+        ))
+        .expect("create skdm");
+
+        // Different chain ID — not in the record.
+        let unknown_chain_id = skdm.chain_id().wrapping_add(1);
+        let signing_key = IdentityKeyPair::generate(&mut rng);
+        let skm = SenderKeyMessage::new(
+            SENDERKEY_MESSAGE_CURRENT_VERSION,
+            unknown_chain_id,
+            0,
+            vec![0u8; 32].into_boxed_slice(),
+            &mut rng,
+            signing_key.private_key(),
+        )
+        .expect("build skm");
+
+        let result =
+            futures::executor::block_on(group_decrypt(skm.serialized(), &mut alice_store, &name));
+
+        match result {
+            Err(SignalProtocolError::NoSenderKeyState(msg)) => {
+                assert!(
+                    msg.contains(&unknown_chain_id.to_string()),
+                    "error message should reference the unknown chain id: {msg}"
+                );
+            }
+            other => panic!("expected NoSenderKeyState, got {other:?}"),
         }
     }
 }

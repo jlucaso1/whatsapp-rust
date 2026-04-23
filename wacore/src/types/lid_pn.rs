@@ -13,44 +13,41 @@
 
 /// The source from which a LID-PN mapping was learned.
 /// Different sources have different trust levels and handling for identity changes.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, crate::StringEnum,
-)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum LearningSource {
     /// Mapping learned from usync (device sync) query response
-    #[str = "usync"]
+    #[wire = "usync"]
     Usync,
     /// Mapping learned from incoming message with sender_lid attribute (sender is PN)
-    #[str = "peer_pn_message"]
+    #[wire = "peer_pn_message"]
     PeerPnMessage,
     /// Mapping learned from incoming message with sender_pn attribute (sender is LID)
-    #[str = "peer_lid_message"]
+    #[wire = "peer_lid_message"]
     PeerLidMessage,
     /// Mapping learned when looking up recipient's latest LID
-    #[str = "recipient_latest_lid"]
+    #[wire = "recipient_latest_lid"]
     RecipientLatestLid,
     /// Mapping learned from latest history sync migration
-    #[str = "migration_sync_latest"]
+    #[wire = "migration_sync_latest"]
     MigrationSyncLatest,
     /// Mapping learned from old history sync records
-    #[str = "migration_sync_old"]
+    #[wire = "migration_sync_old"]
     MigrationSyncOld,
     /// Mapping learned from active blocklist entry
-    #[str = "blocklist_active"]
+    #[wire = "blocklist_active"]
     BlocklistActive,
     /// Mapping learned from inactive blocklist entry
-    #[str = "blocklist_inactive"]
+    #[wire = "blocklist_inactive"]
     BlocklistInactive,
     /// Mapping learned from device pairing (own JID <-> LID)
-    #[str = "pairing"]
+    #[wire = "pairing"]
     Pairing,
     /// Mapping learned from device notification (when `lid` attribute present)
-    #[str = "device_notification"]
+    #[wire = "device_notification"]
     DeviceNotification,
     /// Mapping learned from other/unknown source
-    #[string_default]
-    #[str = "other"]
+    #[wire_default]
+    #[wire = "other"]
     Other,
 }
 

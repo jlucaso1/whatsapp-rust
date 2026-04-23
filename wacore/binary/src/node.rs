@@ -273,6 +273,31 @@ impl From<&Jid> for NodeValue {
     }
 }
 
+macro_rules! impl_from_integer_for_nodevalue {
+    ($($t:ty),* $(,)?) => {
+        $(
+            impl From<$t> for NodeValue {
+                #[inline]
+                fn from(n: $t) -> Self {
+                    let mut buf = itoa::Buffer::new();
+                    NodeValue::String(CompactString::from(buf.format(n)))
+                }
+            }
+        )*
+    };
+}
+
+impl_from_integer_for_nodevalue!(
+    u8, u16, u32, u64, u128, usize, i8, i16, i32, i64, i128, isize
+);
+
+impl From<bool> for NodeValue {
+    #[inline]
+    fn from(b: bool) -> Self {
+        NodeValue::String(CompactString::from(if b { "true" } else { "false" }))
+    }
+}
+
 /// A collection of node attributes stored as key-value pairs.
 /// Uses a Vec internally for better cache locality with small attribute counts (typically 3-6).
 /// Values can be either strings or JIDs, avoiding stringification overhead for JID attributes.

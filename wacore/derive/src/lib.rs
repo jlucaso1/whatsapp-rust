@@ -6,7 +6,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use wacore_derive::{ProtocolNode, StringEnum};
+//! use wacore_derive::{ProtocolNode, WireEnum};
 //!
 //! /// A query request node.
 //! /// Wire format: `<query request="interactive"/>`
@@ -18,11 +18,11 @@
 //! }
 //!
 //! /// An enum with string representation.
-//! #[derive(StringEnum)]
+//! #[derive(WireEnum)]
 //! pub enum MemberAddMode {
-//!     #[str = "admin_add"]
+//!     #[wire = "admin_add"]
 //!     AdminAdd,
-//!     #[str = "all_member_add"]
+//!     #[wire = "all_member_add"]
 //!     AllMemberAdd,
 //! }
 //! ```
@@ -41,7 +41,7 @@ use syn::{Data, DeriveInput, Fields, parse_macro_input};
 ///   For `Option<String>` fields, a default always yields `Some(default)`.
 /// - `#[attr(name = "attrname", jid)]` - Marks a Jid field as a JID attribute (required).
 /// - `#[attr(name = "attrname", jid, optional)]` - Marks an Option<Jid> field as optional.
-/// - `#[attr(name = "attrname", string_enum)]` - Marks a StringEnum field (uses `as_str()`/`TryFrom`).
+/// - `#[attr(name = "attrname", string_enum)]` - Marks a field whose type derives `WireEnum` in unit-string mode (uses `as_str()`/`TryFrom`).
 /// - `#[attr(name = "attrname", u64)]` - Marks a u64 numeric attribute.
 /// - `#[attr(name = "attrname", u32)]` - Marks a u32 numeric attribute.
 ///   Numeric fields can also be `Option<u64>` / `Option<u32>` for optional attributes.
@@ -162,13 +162,13 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                 (AttrType::U64, true) | (AttrType::U32, true) => {
                     quote! {
                         if let Some(v) = self.#field_ident {
-                            builder = builder.attr(#attr_name, v.to_string());
+                            builder = builder.attr(#attr_name, v);
                         }
                     }
                 }
                 (AttrType::U64, false) | (AttrType::U32, false) => {
                     quote! {
-                        builder = builder.attr(#attr_name, self.#field_ident.to_string());
+                        builder = builder.attr(#attr_name, self.#field_ident);
                     }
                 }
             }
@@ -529,309 +529,426 @@ fn is_option_type(ty: &syn::Type) -> bool {
     false
 }
 
-/// Derive macro for enums with string representations.
-///
-/// Automatically implements:
-/// - `as_str(&self) -> &'static str` (or `&str` with fallback)
-/// - `std::fmt::Display`
-/// - `TryFrom<&str>` (or `From<&str>` with fallback)
-/// - `Default` (first variant is default, or use `#[string_default]`)
-///
-/// # Attributes
-///
-/// - `#[str = "value"]` - Required on each unit variant. The string representation.
-/// - `#[string_default]` - Optional. Marks this variant as the default.
-/// - `#[string_fallback]` - Optional. Marks a `VariantName(String)` variant as catch-all.
-///   When present, unknown strings are captured instead of returning an error.
-///   Generates `From<&str>` instead of `TryFrom<&str>`, and `as_str()` returns `&str`.
-///
-/// # Example (standard)
-///
-/// ```ignore
-/// #[derive(StringEnum)]
-/// pub enum MemberAddMode {
-///     #[str = "admin_add"]
-///     AdminAdd,
-///     #[string_default]
-///     #[str = "all_member_add"]
-///     AllMemberAdd,
-/// }
-///
-/// assert_eq!(MemberAddMode::AdminAdd.as_str(), "admin_add");
-/// assert_eq!(MemberAddMode::try_from("all_member_add").unwrap(), MemberAddMode::AllMemberAdd);
-/// ```
-///
-/// # Example (with fallback)
-///
-/// ```ignore
-/// #[derive(StringEnum)]
-/// pub enum PrivacyCategory {
-///     #[str = "last"]
-///     Last,
-///     #[str = "online"]
-///     Online,
-///     #[string_fallback]
-///     Other(String),
-/// }
-///
-/// assert_eq!(PrivacyCategory::Last.as_str(), "last");
-/// assert_eq!(PrivacyCategory::from("last"), PrivacyCategory::Last);
-/// assert_eq!(PrivacyCategory::from("unknown"), PrivacyCategory::Other("unknown".to_string()));
-/// ```
-#[proc_macro_derive(StringEnum, attributes(str, string_default, string_fallback))]
-pub fn derive_string_enum(input: TokenStream) -> TokenStream {
+// =====================================================================
+// WireEnum — the unified replacement for StringEnum + manual impl Serialize
+// for tagged-with-payload and int-discriminated enums.
+//
+// Modes, inferred from attributes:
+//
+//   1. unit-string  (default when no #[wire(tag=...)] and no #[wire(kind="int")])
+//      Every variant is a unit (or a single #[wire_fallback] tuple with String).
+//      Emits: as_str, TryFrom<&str>/From<&str>, Default, Display, Serialize,
+//             Deserialize, ParseStringEnum. Drop-in replacement for StringEnum.
+//
+//   2. tagged       (enum has #[wire(tag = "type")])
+//      Variants carry payload (named fields or unit). One #[wire = "..."] per
+//      variant; optional #[wire_alias = "..."] adds parser-side aliases;
+//      #[wire(skip)] on a field excludes it from JSON; #[wire_fallback] with
+//      { tag: String } catches unknown tags.
+//      Emits: wire_tag(), impl Serialize (SerializeMap), and a sibling
+//             <Name>Tag unit enum (unit-string WireEnum) for parser dispatch.
+//      No Deserialize — follow-up work; not needed by current consumers.
+//
+//   3. int          (enum has #[wire(kind = "int")])
+//      Unit variants + optional #[wire_fallback] tuple with i32. Each variant
+//      has #[wire = NUM].
+//      Emits: code(), From<i32>, Serialize (as i32), Deserialize (from i32).
+//
+// The wire string/number lives exactly once per variant, in the #[wire = ...]
+// attribute. Everything else is derived.
+// =====================================================================
+
+#[proc_macro_derive(WireEnum, attributes(wire, wire_alias, wire_default, wire_fallback))]
+pub fn derive_wire_enum(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
 
-    let name = &input.ident;
-
     let variants = match &input.data {
-        Data::Enum(data) => &data.variants,
+        Data::Enum(e) => e.variants.clone(),
         _ => {
-            return syn::Error::new_spanned(
-                &input.ident,
-                "StringEnum can only be derived for enums",
-            )
-            .to_compile_error()
-            .into();
+            return syn::Error::new_spanned(&input.ident, "WireEnum can only be derived for enums")
+                .to_compile_error()
+                .into();
         }
     };
 
-    let mut variant_infos = Vec::with_capacity(variants.len());
-    let mut default_variant = None;
-    let mut fallback_variant: Option<syn::Ident> = None;
-    let mut seen_str_values: std::collections::HashMap<String, syn::Ident> =
-        std::collections::HashMap::new();
+    let cfg = match parse_enum_level_wire(&input.attrs) {
+        Ok(c) => c,
+        Err(e) => return e.to_compile_error().into(),
+    };
 
-    for variant in variants {
-        let variant_ident = &variant.ident;
-
-        let mut is_default = false;
-        let mut is_fallback = false;
-        let mut str_value = None;
-
-        for attr in &variant.attrs {
-            if attr.path().is_ident("str") {
-                if let syn::Meta::NameValue(nv) = &attr.meta
-                    && let syn::Expr::Lit(expr_lit) = &nv.value
-                    && let syn::Lit::Str(lit_str) = &expr_lit.lit
-                {
-                    str_value = Some(lit_str.value());
-                }
-            } else if attr.path().is_ident("string_default") {
-                is_default = true;
-            } else if attr.path().is_ident("string_fallback") {
-                is_fallback = true;
-            }
+    match cfg.kind {
+        WireKind::IntTagged => expand_wire_enum_int(&input.ident, &variants).into(),
+        WireKind::StringTagged(discriminator) => {
+            expand_wire_enum_tagged(&input.ident, &variants, &discriminator).into()
         }
+        WireKind::UnitString => expand_wire_enum_unit(&input.ident, &variants).into(),
+    }
+}
 
-        if is_fallback {
-            // Validate: fallback variant must have exactly one unnamed String field
-            match &variant.fields {
-                syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {}
-                _ => {
-                    return syn::Error::new_spanned(
-                        variant_ident,
-                        "string_fallback variant must have exactly one unnamed field: VariantName(String)",
-                    )
-                    .to_compile_error()
-                    .into();
-                }
-            }
-            if fallback_variant.is_some() {
-                return syn::Error::new_spanned(
-                    variant_ident,
-                    "Multiple #[string_fallback] attributes found; only one variant may be the fallback",
-                )
-                .to_compile_error()
-                .into();
-            }
-            if str_value.is_some() {
-                return syn::Error::new_spanned(
-                    variant_ident,
-                    "string_fallback variant should not have a #[str = \"...\"] attribute",
-                )
-                .to_compile_error()
-                .into();
-            }
-            fallback_variant = Some(variant_ident.clone());
+// ----- enum-level config -----
 
-            if is_default {
-                if default_variant.is_some() {
-                    return syn::Error::new_spanned(
-                        variant_ident,
-                        "Multiple #[string_default] attributes found; only one variant may be the default",
-                    )
-                    .to_compile_error()
-                    .into();
-                }
-                default_variant = Some(variant_ident.clone());
-            }
+enum WireKind {
+    UnitString,
+    StringTagged(String),
+    IntTagged,
+}
+
+struct WireEnumCfg {
+    kind: WireKind,
+}
+
+fn parse_enum_level_wire(attrs: &[syn::Attribute]) -> syn::Result<WireEnumCfg> {
+    let mut tag_field: Option<String> = None;
+    let mut kind_is_int = false;
+
+    for attr in attrs {
+        if !attr.path().is_ident("wire") {
             continue;
         }
-
-        // Non-fallback variant must be a unit variant
-        if !matches!(variant.fields, syn::Fields::Unit) {
-            return syn::Error::new_spanned(
-                variant_ident,
-                "StringEnum only supports unit variants (except the #[string_fallback] variant)",
-            )
-            .to_compile_error()
-            .into();
-        }
-
-        let str_val = match str_value {
-            Some(v) => v,
-            None => {
-                return syn::Error::new_spanned(
-                    variant_ident,
-                    format!(
-                        "StringEnum variant {} requires #[str = \"...\"] attribute",
-                        variant_ident
-                    ),
-                )
-                .to_compile_error()
-                .into();
+        attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("tag") {
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                tag_field = Some(lit.value());
+            } else if meta.path.is_ident("kind") {
+                let lit: syn::LitStr = meta.value()?.parse()?;
+                match lit.value().as_str() {
+                    "int" => kind_is_int = true,
+                    "string" => kind_is_int = false,
+                    other => {
+                        return Err(meta.error(format!(
+                            "unknown wire kind {other:?}; expected \"string\" or \"int\""
+                        )));
+                    }
+                }
+            } else {
+                return Err(meta.error("unknown attribute inside #[wire(...)]"));
             }
-        };
-
-        if let Some(prev_variant) = seen_str_values.get(&str_val) {
-            return syn::Error::new_spanned(
-                variant_ident,
-                format!(
-                    "duplicate #[str = \"{}\"] value; already used by variant `{}`",
-                    str_val, prev_variant
-                ),
-            )
-            .to_compile_error()
-            .into();
-        }
-        seen_str_values.insert(str_val.clone(), variant_ident.clone());
-
-        if is_default {
-            if default_variant.is_some() {
-                return syn::Error::new_spanned(
-                    variant_ident,
-                    "Multiple #[string_default] attributes found; only one variant may be the default",
-                )
-                .to_compile_error()
-                .into();
-            }
-            default_variant = Some(variant_ident.clone());
-        }
-
-        variant_infos.push((variant_ident.clone(), str_val));
+            Ok(())
+        })?;
     }
 
-    // Check for empty enums (must have at least one known variant or a fallback)
-    if variant_infos.is_empty() && fallback_variant.is_none() {
-        return syn::Error::new_spanned(
-            &input.ident,
-            "StringEnum cannot be derived for empty enums",
-        )
-        .to_compile_error()
-        .into();
-    }
+    let kind = if kind_is_int {
+        if tag_field.is_some() {
+            return Err(syn::Error::new_spanned(
+                &attrs[0],
+                "#[wire(kind = \"int\")] is incompatible with #[wire(tag = \"...\")]",
+            ));
+        }
+        WireKind::IntTagged
+    } else if let Some(t) = tag_field {
+        WireKind::StringTagged(t)
+    } else {
+        WireKind::UnitString
+    };
 
-    // If no explicit default, use first variant
-    let default_variant = default_variant.unwrap_or_else(|| variant_infos[0].0.clone());
+    Ok(WireEnumCfg { kind })
+}
 
-    if let Some(ref fallback_ident) = fallback_variant {
-        // === Fallback mode: as_str() returns &str, From<&str> instead of TryFrom ===
+// ----- variant-level helpers -----
 
-        let as_str_arms: Vec<_> = variant_infos
-            .iter()
-            .map(|(ident, str_val)| {
-                quote! { #name::#ident => #str_val }
-            })
-            .collect();
+enum VariantWire {
+    Str(String),
+    Int(i32),
+}
 
-        let from_arms: Vec<_> = variant_infos
-            .iter()
-            .map(|(ident, str_val)| {
-                quote! { #str_val => #name::#ident }
-            })
-            .collect();
+struct VariantInfo {
+    ident: syn::Ident,
+    fields: syn::Fields,
+    wire: Option<VariantWire>,
+    aliases: Vec<String>,
+    is_default: bool,
+    is_fallback: bool,
+}
 
-        let expanded = quote! {
-            impl #name {
-                /// Returns the string representation of this enum variant.
-                pub fn as_str(&self) -> &str {
-                    match self {
-                        #(#as_str_arms,)*
-                        #name::#fallback_ident(s) => s.as_str(),
+fn read_variant(v: &syn::Variant) -> syn::Result<VariantInfo> {
+    let mut wire: Option<VariantWire> = None;
+    let mut aliases: Vec<String> = Vec::new();
+    let mut is_default = false;
+    let mut is_fallback = false;
+
+    for attr in &v.attrs {
+        if attr.path().is_ident("wire_default") {
+            is_default = true;
+        } else if attr.path().is_ident("wire_fallback") {
+            is_fallback = true;
+        } else if attr.path().is_ident("wire_alias") {
+            if let syn::Meta::NameValue(nv) = &attr.meta
+                && let syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Str(s),
+                    ..
+                }) = &nv.value
+            {
+                aliases.push(s.value());
+            } else {
+                return Err(syn::Error::new_spanned(
+                    attr,
+                    "expected #[wire_alias = \"...\"] with a string literal",
+                ));
+            }
+        } else if attr.path().is_ident("wire") {
+            // Variant-level #[wire = "..."] or #[wire = 101]
+            if let syn::Meta::NameValue(nv) = &attr.meta {
+                match &nv.value {
+                    syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Str(s),
+                        ..
+                    }) => wire = Some(VariantWire::Str(s.value())),
+                    syn::Expr::Lit(syn::ExprLit {
+                        lit: syn::Lit::Int(n),
+                        ..
+                    }) => {
+                        // Reject out-of-range literals at macro parse time rather
+                        // than silently wrapping with `as i32`.
+                        let parsed: i32 = n.base10_parse().map_err(|_| {
+                            syn::Error::new_spanned(
+                                n,
+                                format!(
+                                    "#[wire = {}] does not fit in i32 ({}..={})",
+                                    n,
+                                    i32::MIN,
+                                    i32::MAX
+                                ),
+                            )
+                        })?;
+                        wire = Some(VariantWire::Int(parsed));
+                    }
+                    _ => {
+                        return Err(syn::Error::new_spanned(
+                            &nv.value,
+                            "#[wire = ...] expects a string or integer literal",
+                        ));
                     }
                 }
             }
+        }
+    }
 
-            impl ::core::fmt::Display for #name {
-                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                    f.write_str(self.as_str())
+    Ok(VariantInfo {
+        ident: v.ident.clone(),
+        fields: v.fields.clone(),
+        wire,
+        aliases,
+        is_default,
+        is_fallback,
+    })
+}
+
+fn field_has_wire_skip(attrs: &[syn::Attribute]) -> bool {
+    for attr in attrs {
+        if !attr.path().is_ident("wire") {
+            continue;
+        }
+        let mut found_skip = false;
+        let _ = attr.parse_nested_meta(|meta| {
+            if meta.path.is_ident("skip") {
+                found_skip = true;
+            }
+            Ok(())
+        });
+        if found_skip {
+            return true;
+        }
+    }
+    false
+}
+
+// ================== unit-string mode ==================
+
+fn expand_wire_enum_unit(
+    name: &syn::Ident,
+    variants: &syn::punctuated::Punctuated<syn::Variant, syn::Token![,]>,
+) -> proc_macro2::TokenStream {
+    let mut infos = Vec::with_capacity(variants.len());
+    for v in variants {
+        match read_variant(v) {
+            Ok(info) => infos.push(info),
+            Err(e) => return e.to_compile_error(),
+        }
+    }
+
+    let mut seen: std::collections::HashMap<String, syn::Ident> = Default::default();
+    let mut fallback: Option<&VariantInfo> = None;
+    let mut default_variant: Option<&VariantInfo> = None;
+
+    for info in &infos {
+        if info.is_fallback {
+            if fallback.is_some() {
+                return syn::Error::new_spanned(
+                    &info.ident,
+                    "only one #[wire_fallback] variant is allowed",
+                )
+                .to_compile_error();
+            }
+            match &info.fields {
+                syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {}
+                _ => {
+                    return syn::Error::new_spanned(
+                        &info.ident,
+                        "#[wire_fallback] on a unit-string enum requires VariantName(String)",
+                    )
+                    .to_compile_error();
                 }
             }
+            if info.wire.is_some() {
+                return syn::Error::new_spanned(
+                    &info.ident,
+                    "#[wire_fallback] variant must not carry #[wire = \"...\"]",
+                )
+                .to_compile_error();
+            }
+            fallback = Some(info);
+            if info.is_default {
+                default_variant = Some(info);
+            }
+            continue;
+        }
+        if !matches!(info.fields, syn::Fields::Unit) {
+            return syn::Error::new_spanned(
+                &info.ident,
+                "unit-string WireEnum only supports unit variants (use #[wire_fallback] for a catch-all)",
+            )
+            .to_compile_error();
+        }
+        let Some(VariantWire::Str(s)) = &info.wire else {
+            return syn::Error::new_spanned(&info.ident, "variant needs #[wire = \"...\"]")
+                .to_compile_error();
+        };
+        if let Some(prev) = seen.insert(s.clone(), info.ident.clone()) {
+            return syn::Error::new_spanned(
+                &info.ident,
+                format!("duplicate #[wire = \"{s}\"]; already used by {prev}"),
+            )
+            .to_compile_error();
+        }
+        if info.is_default {
+            if default_variant.is_some() {
+                return syn::Error::new_spanned(&info.ident, "only one #[wire_default] is allowed")
+                    .to_compile_error();
+            }
+            default_variant = Some(info);
+        }
+        for alias in &info.aliases {
+            if let Some(prev) = seen.insert(alias.clone(), info.ident.clone()) {
+                return syn::Error::new_spanned(
+                    &info.ident,
+                    format!(
+                        "#[wire_alias = \"{alias}\"] collides with existing wire tag from variant {prev}"
+                    ),
+                )
+                .to_compile_error();
+            }
+        }
+    }
 
+    let first_known: Option<&VariantInfo> = infos.iter().find(|i| !i.is_fallback);
+    let default_info = match (default_variant, first_known, fallback) {
+        (Some(d), _, _) => d,
+        (None, Some(f), _) => f,
+        (None, None, Some(fb)) => fb,
+        (None, None, None) => {
+            return syn::Error::new_spanned(name, "WireEnum cannot be derived for empty enums")
+                .to_compile_error();
+        }
+    };
+    let default_ident = &default_info.ident;
+    let default_ctor = if default_info.is_fallback {
+        quote! { #name::#default_ident(::std::string::String::new()) }
+    } else {
+        quote! { #name::#default_ident }
+    };
+
+    let known: Vec<(&syn::Ident, &String)> = infos
+        .iter()
+        .filter(|i| !i.is_fallback)
+        .map(|i| {
+            let VariantWire::Str(s) = i.wire.as_ref().unwrap() else {
+                unreachable!()
+            };
+            (&i.ident, s)
+        })
+        .collect();
+
+    // `as_str()` always returns the PRIMARY tag — aliases are parser-only and
+    // must never surface in serialization.
+    let as_str_arms: Vec<_> = known
+        .iter()
+        .map(|(id, s)| quote! { #name::#id => #s })
+        .collect();
+
+    // For parsing, include primary + each alias; all map to the same variant.
+    let try_from_arms: Vec<proc_macro2::TokenStream> = infos
+        .iter()
+        .filter(|i| !i.is_fallback)
+        .flat_map(|i| {
+            let id = &i.ident;
+            let VariantWire::Str(primary) = i.wire.as_ref().unwrap() else {
+                unreachable!()
+            };
+            std::iter::once(primary.clone())
+                .chain(i.aliases.iter().cloned())
+                .map(move |s| quote! { #s => ::core::result::Result::Ok(#name::#id) })
+        })
+        .collect();
+
+    let from_arms: Vec<proc_macro2::TokenStream> = infos
+        .iter()
+        .filter(|i| !i.is_fallback)
+        .flat_map(|i| {
+            let id = &i.ident;
+            let VariantWire::Str(primary) = i.wire.as_ref().unwrap() else {
+                unreachable!()
+            };
+            std::iter::once(primary.clone())
+                .chain(i.aliases.iter().cloned())
+                .map(move |s| quote! { #s => #name::#id })
+        })
+        .collect();
+
+    let as_str_return_ty;
+    let as_str_block;
+    let conversion_impls;
+
+    if let Some(fb) = fallback {
+        let fb_ident = &fb.ident;
+        as_str_return_ty = quote! { &str };
+        as_str_block = quote! {
+            match self {
+                #(#as_str_arms,)*
+                #name::#fb_ident(s) => s.as_str(),
+            }
+        };
+        conversion_impls = quote! {
             impl ::core::convert::From<&str> for #name {
                 fn from(value: &str) -> Self {
                     match value {
                         #(#from_arms,)*
-                        other => #name::#fallback_ident(other.to_string()),
+                        other => #name::#fb_ident(other.to_string()),
                     }
                 }
             }
 
             impl ::wacore::protocol::ParseStringEnum for #name {
                 fn parse_from_str(s: &str) -> ::anyhow::Result<Self> {
-                    Ok(::core::convert::From::from(s))
-                }
-            }
-
-            impl ::core::default::Default for #name {
-                fn default() -> Self {
-                    #name::#default_variant
+                    ::core::result::Result::Ok(::core::convert::From::from(s))
                 }
             }
         };
-
-        expanded.into()
     } else {
-        // === Standard mode: as_str() returns &'static str, TryFrom<&str> ===
-
-        let as_str_arms: Vec<_> = variant_infos
-            .iter()
-            .map(|(ident, str_val)| {
-                quote! { #name::#ident => #str_val }
-            })
-            .collect();
-
-        let try_from_arms: Vec<_> = variant_infos
-            .iter()
-            .map(|(ident, str_val)| {
-                quote! { #str_val => Ok(#name::#ident) }
-            })
-            .collect();
-
-        let expanded = quote! {
-            impl #name {
-                /// Returns the string representation of this enum variant.
-                pub fn as_str(&self) -> &'static str {
-                    match self {
-                        #(#as_str_arms),*
-                    }
-                }
+        as_str_return_ty = quote! { &'static str };
+        as_str_block = quote! {
+            match self {
+                #(#as_str_arms),*
             }
-
-            impl ::core::fmt::Display for #name {
-                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
-                    f.write_str(self.as_str())
-                }
-            }
-
+        };
+        conversion_impls = quote! {
             impl ::core::convert::TryFrom<&str> for #name {
                 type Error = ::anyhow::Error;
-
                 fn try_from(value: &str) -> ::core::result::Result<Self, Self::Error> {
                     match value {
                         #(#try_from_arms),*,
-                        _ => Err(::anyhow::anyhow!("unknown {}: {}", stringify!(#name), value)),
+                        _ => ::core::result::Result::Err(
+                            ::anyhow::anyhow!("unknown {}: {}", stringify!(#name), value)
+                        ),
                     }
                 }
             }
@@ -841,14 +958,448 @@ pub fn derive_string_enum(input: TokenStream) -> TokenStream {
                     ::core::convert::TryFrom::try_from(s)
                 }
             }
+        };
+    }
 
-            impl ::core::default::Default for #name {
-                fn default() -> Self {
-                    #name::#default_variant
+    let deserialize_impl = if fallback.is_some() {
+        quote! {
+            impl<'de> ::serde::Deserialize<'de> for #name {
+                fn deserialize<D: ::serde::Deserializer<'de>>(
+                    deserializer: D,
+                ) -> ::core::result::Result<Self, D::Error> {
+                    let s = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
+                    ::core::result::Result::Ok(<Self as ::core::convert::From<&str>>::from(s.as_str()))
                 }
             }
-        };
+        }
+    } else {
+        quote! {
+            impl<'de> ::serde::Deserialize<'de> for #name {
+                fn deserialize<D: ::serde::Deserializer<'de>>(
+                    deserializer: D,
+                ) -> ::core::result::Result<Self, D::Error> {
+                    let s = <::std::string::String as ::serde::Deserialize>::deserialize(deserializer)?;
+                    <Self as ::core::convert::TryFrom<&str>>::try_from(s.as_str())
+                        .map_err(|e| <D::Error as ::serde::de::Error>::custom(e.to_string()))
+                }
+            }
+        }
+    };
 
-        expanded.into()
+    quote! {
+        impl #name {
+            /// Wire string for this variant (single source of truth).
+            pub fn as_str(&self) -> #as_str_return_ty {
+                #as_str_block
+            }
+        }
+
+        impl ::core::fmt::Display for #name {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+        #conversion_impls
+
+        impl ::core::default::Default for #name {
+            fn default() -> Self {
+                #default_ctor
+            }
+        }
+
+        impl ::serde::Serialize for #name {
+            fn serialize<S: ::serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> ::core::result::Result<S::Ok, S::Error> {
+                serializer.serialize_str(self.as_str())
+            }
+        }
+
+        #deserialize_impl
+    }
+}
+
+// ================== int mode ==================
+
+fn expand_wire_enum_int(
+    name: &syn::Ident,
+    variants: &syn::punctuated::Punctuated<syn::Variant, syn::Token![,]>,
+) -> proc_macro2::TokenStream {
+    let mut infos = Vec::with_capacity(variants.len());
+    for v in variants {
+        match read_variant(v) {
+            Ok(info) => infos.push(info),
+            Err(e) => return e.to_compile_error(),
+        }
+    }
+
+    let mut fallback: Option<&VariantInfo> = None;
+    let mut seen: std::collections::HashMap<i32, syn::Ident> = Default::default();
+
+    for info in &infos {
+        if info.is_fallback {
+            if fallback.is_some() {
+                return syn::Error::new_spanned(
+                    &info.ident,
+                    "only one #[wire_fallback] is allowed",
+                )
+                .to_compile_error();
+            }
+            match &info.fields {
+                syn::Fields::Unnamed(fields) if fields.unnamed.len() == 1 => {}
+                _ => {
+                    return syn::Error::new_spanned(
+                        &info.ident,
+                        "#[wire_fallback] in int mode requires VariantName(i32)",
+                    )
+                    .to_compile_error();
+                }
+            }
+            fallback = Some(info);
+            continue;
+        }
+        if !matches!(info.fields, syn::Fields::Unit) {
+            return syn::Error::new_spanned(
+                &info.ident,
+                "int-mode WireEnum variants must be unit variants (except the #[wire_fallback])",
+            )
+            .to_compile_error();
+        }
+        let Some(VariantWire::Int(n)) = &info.wire else {
+            return syn::Error::new_spanned(&info.ident, "variant needs #[wire = NUMBER]")
+                .to_compile_error();
+        };
+        if let Some(prev) = seen.insert(*n, info.ident.clone()) {
+            return syn::Error::new_spanned(
+                &info.ident,
+                format!("duplicate #[wire = {n}]; already used by {prev}"),
+            )
+            .to_compile_error();
+        }
+    }
+
+    let Some(fb) = fallback else {
+        return syn::Error::new_spanned(
+            name,
+            "int-mode WireEnum requires a #[wire_fallback] variant like Unknown(i32)",
+        )
+        .to_compile_error();
+    };
+    let fb_ident = &fb.ident;
+
+    let code_arms: Vec<_> = infos
+        .iter()
+        .filter(|i| !i.is_fallback)
+        .map(|i| {
+            let id = &i.ident;
+            let VariantWire::Int(n) = i.wire.as_ref().unwrap() else {
+                unreachable!()
+            };
+            let lit = proc_macro2::Literal::i32_suffixed(*n);
+            quote! { #name::#id => #lit }
+        })
+        .collect();
+
+    let from_arms: Vec<_> = infos
+        .iter()
+        .filter(|i| !i.is_fallback)
+        .map(|i| {
+            let id = &i.ident;
+            let VariantWire::Int(n) = i.wire.as_ref().unwrap() else {
+                unreachable!()
+            };
+            let lit = proc_macro2::Literal::i32_suffixed(*n);
+            quote! { #lit => #name::#id }
+        })
+        .collect();
+
+    quote! {
+        impl #name {
+            /// Numeric wire code for this variant (single source of truth).
+            pub fn code(&self) -> i32 {
+                match self {
+                    #(#code_arms,)*
+                    #name::#fb_ident(n) => *n,
+                }
+            }
+        }
+
+        impl ::core::convert::From<i32> for #name {
+            fn from(code: i32) -> Self {
+                match code {
+                    #(#from_arms,)*
+                    other => #name::#fb_ident(other),
+                }
+            }
+        }
+
+        impl ::serde::Serialize for #name {
+            fn serialize<S: ::serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> ::core::result::Result<S::Ok, S::Error> {
+                serializer.serialize_i32(self.code())
+            }
+        }
+
+        impl<'de> ::serde::Deserialize<'de> for #name {
+            fn deserialize<D: ::serde::Deserializer<'de>>(
+                deserializer: D,
+            ) -> ::core::result::Result<Self, D::Error> {
+                let n = <i32 as ::serde::Deserialize>::deserialize(deserializer)?;
+                ::core::result::Result::Ok(<Self as ::core::convert::From<i32>>::from(n))
+            }
+        }
+    }
+}
+
+// ================== tagged mode ==================
+
+fn expand_wire_enum_tagged(
+    name: &syn::Ident,
+    variants: &syn::punctuated::Punctuated<syn::Variant, syn::Token![,]>,
+    discriminator: &str,
+) -> proc_macro2::TokenStream {
+    let mut infos = Vec::with_capacity(variants.len());
+    for v in variants {
+        match read_variant(v) {
+            Ok(info) => infos.push(info),
+            Err(e) => return e.to_compile_error(),
+        }
+    }
+
+    let mut seen: std::collections::HashMap<String, syn::Ident> = Default::default();
+    let mut fallback: Option<&VariantInfo> = None;
+
+    for info in &infos {
+        if info.is_fallback {
+            if fallback.is_some() {
+                return syn::Error::new_spanned(
+                    &info.ident,
+                    "only one #[wire_fallback] is allowed",
+                )
+                .to_compile_error();
+            }
+            // Must be { tag: String }
+            let ok = matches!(
+                &info.fields,
+                syn::Fields::Named(n)
+                    if n.named.len() == 1
+                        && n.named
+                            .first()
+                            .unwrap()
+                            .ident
+                            .as_ref()
+                            .map(|i| i == "tag")
+                            .unwrap_or(false)
+            );
+            if !ok {
+                return syn::Error::new_spanned(
+                    &info.ident,
+                    "tagged #[wire_fallback] must have exactly { tag: String }",
+                )
+                .to_compile_error();
+            }
+            if info.wire.is_some() {
+                return syn::Error::new_spanned(
+                    &info.ident,
+                    "#[wire_fallback] variant must not have #[wire = \"...\"]",
+                )
+                .to_compile_error();
+            }
+            fallback = Some(info);
+            continue;
+        }
+        let Some(VariantWire::Str(s)) = &info.wire else {
+            return syn::Error::new_spanned(&info.ident, "variant needs #[wire = \"...\"]")
+                .to_compile_error();
+        };
+        if let Some(prev) = seen.insert(s.clone(), info.ident.clone()) {
+            return syn::Error::new_spanned(
+                &info.ident,
+                format!("duplicate #[wire = \"{s}\"]; already used by {prev}"),
+            )
+            .to_compile_error();
+        }
+        for alias in &info.aliases {
+            if let Some(prev) = seen.insert(alias.clone(), info.ident.clone()) {
+                return syn::Error::new_spanned(
+                    &info.ident,
+                    format!(
+                        "#[wire_alias = \"{alias}\"] collides with wire tag from variant {prev}"
+                    ),
+                )
+                .to_compile_error();
+            }
+        }
+    }
+
+    // --- wire_tag(&self) -> &str ---
+
+    let wire_tag_arms: Vec<_> = infos
+        .iter()
+        .map(|info| {
+            let id = &info.ident;
+            if info.is_fallback {
+                // { tag: String } — return borrowed from the field
+                quote! { #name::#id { tag } => tag.as_str() }
+            } else {
+                let VariantWire::Str(s) = info.wire.as_ref().unwrap() else {
+                    unreachable!()
+                };
+                match &info.fields {
+                    syn::Fields::Unit => quote! { #name::#id => #s },
+                    syn::Fields::Named(_) => quote! { #name::#id { .. } => #s },
+                    syn::Fields::Unnamed(_) => quote! { #name::#id(..) => #s },
+                }
+            }
+        })
+        .collect();
+
+    // --- Serialize arms ---
+
+    let serialize_arms: Vec<_> = infos
+        .iter()
+        .map(|info| {
+            let id = &info.ident;
+            if info.is_fallback {
+                // Only the discriminator is written (already done before match).
+                quote! { #name::#id { tag: _ } => {} }
+            } else {
+                match &info.fields {
+                    syn::Fields::Unit => quote! { #name::#id => {} },
+                    syn::Fields::Named(named) => {
+                        let bindings: Vec<proc_macro2::TokenStream> = named
+                            .named
+                            .iter()
+                            .map(|f| {
+                                let id = f.ident.as_ref().unwrap();
+                                if field_has_wire_skip(&f.attrs) {
+                                    quote! { #id: _ }
+                                } else {
+                                    quote! { #id }
+                                }
+                            })
+                            .collect();
+                        let entries: Vec<proc_macro2::TokenStream> = named
+                            .named
+                            .iter()
+                            .filter(|f| !field_has_wire_skip(&f.attrs))
+                            .map(|f| {
+                                let id = f.ident.as_ref().unwrap();
+                                let key = id.to_string();
+                                if is_option_type(&f.ty) {
+                                    quote! {
+                                        if let ::core::option::Option::Some(__v) = #id {
+                                            ::serde::ser::SerializeMap::serialize_entry(
+                                                &mut map, #key, __v
+                                            )?;
+                                        }
+                                    }
+                                } else {
+                                    quote! {
+                                        ::serde::ser::SerializeMap::serialize_entry(
+                                            &mut map, #key, #id
+                                        )?;
+                                    }
+                                }
+                            })
+                            .collect();
+                        quote! {
+                            #name::#id { #(#bindings),* } => {
+                                #(#entries)*
+                            }
+                        }
+                    }
+                    syn::Fields::Unnamed(_) => {
+                        quote! {
+                            compile_error!("tagged WireEnum tuple variants are not supported — use named fields or unit");
+                        }
+                    }
+                }
+            }
+        })
+        .collect();
+
+    // --- Sibling <Name>Tag unit enum (unit-string WireEnum) ---
+
+    let tag_ident = quote::format_ident!("{}Tag", name);
+
+    let mut tag_variant_tokens: Vec<proc_macro2::TokenStream> = Vec::new();
+    for info in &infos {
+        let id = &info.ident;
+        if info.is_fallback {
+            tag_variant_tokens.push(quote! {
+                #[doc = "Unknown wire tag — captured for forward compatibility."]
+                #[wire_fallback]
+                Unknown(::std::string::String)
+            });
+            continue;
+        }
+        let VariantWire::Str(primary) = info.wire.as_ref().unwrap() else {
+            unreachable!()
+        };
+        // Primary tag + aliases collapse into ONE tag variant. The unit-string
+        // WireEnum derive on the tag enum expands `#[wire_alias = "..."]` into
+        // extra `From<&str>` arms pointing at the same variant, so parsers see
+        // `Tag::Foo` regardless of whether the wire tag was the primary or an
+        // alias.
+        let alias_attrs = info.aliases.iter().map(|a| quote! { #[wire_alias = #a] });
+        tag_variant_tokens.push(quote! {
+            #[wire = #primary]
+            #(#alias_attrs)*
+            #id
+        });
+    }
+
+    // --- Final expansion ---
+
+    let discriminator_lit = discriminator;
+
+    quote! {
+        impl #name {
+            /// The wire tag this variant serializes as — the JSON discriminator
+            /// and the exact tag the parser dispatches on.
+            pub fn wire_tag(&self) -> &str {
+                match self {
+                    #(#wire_tag_arms,)*
+                }
+            }
+
+            /// Back-compat alias of [`Self::wire_tag`].
+            #[inline]
+            pub fn tag_name(&self) -> &str {
+                self.wire_tag()
+            }
+        }
+
+        impl ::serde::Serialize for #name {
+            fn serialize<S: ::serde::Serializer>(
+                &self,
+                serializer: S,
+            ) -> ::core::result::Result<S::Ok, S::Error> {
+                use ::serde::ser::SerializeMap;
+                let mut map = serializer.serialize_map(None)?;
+                ::serde::ser::SerializeMap::serialize_entry(
+                    &mut map, #discriminator_lit, self.wire_tag()
+                )?;
+                match self {
+                    #(#serialize_arms,)*
+                }
+                ::serde::ser::SerializeMap::end(map)
+            }
+        }
+
+        /// Sibling unit enum listing every canonical wire tag for parser
+        /// dispatch. Primary wire tags and any `#[wire_alias]` entries all
+        /// resolve to the same variant via `From<&str>`.
+        #[doc = "Auto-generated by `#[derive(WireEnum)]`."]
+        #[derive(Debug, Clone, PartialEq, Eq, ::wacore::WireEnum)]
+        #[allow(clippy::enum_variant_names)]
+        pub enum #tag_ident {
+            #(#tag_variant_tokens,)*
+        }
     }
 }

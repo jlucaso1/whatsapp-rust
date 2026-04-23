@@ -1,4 +1,4 @@
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::iq::node::{collect_children, required_attr, required_child};
 use crate::iq::spec::IqSpec;
 use crate::protocol::ProtocolNode;
@@ -12,12 +12,6 @@ use wacore_binary::{Node, NodeContent, NodeRef};
 
 // Re-export AddressingMode from types::message for convenience
 pub use crate::types::message::AddressingMode;
-
-/// MEX (GraphQL) document IDs for group operations.
-pub mod mex_docs {
-    /// Update a group property (xwa2_group_update_property mutation).
-    pub const UPDATE_GROUP_PROPERTY: &str = "9418211574894172";
-}
 
 /// IQ namespace for group operations.
 pub const GROUP_IQ_NAMESPACE: &str = "w:g2";
@@ -38,40 +32,40 @@ pub const BATCH_GROUP_INFO_LIMIT: usize = 10_000;
 pub const BATCH_PROFILE_PICTURES_LIMIT: usize = 1_000;
 
 /// Member link mode for group invite links.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum MemberLinkMode {
-    #[str = "admin_link"]
+    #[wire = "admin_link"]
     AdminLink,
-    #[str = "all_member_link"]
+    #[wire = "all_member_link"]
     AllMemberLink,
 }
 
 /// Member add mode for who can add participants.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum MemberAddMode {
-    #[str = "admin_add"]
+    #[wire = "admin_add"]
     AdminAdd,
-    #[str = "all_member_add"]
+    #[wire = "all_member_add"]
     AllMemberAdd,
 }
 
 /// Membership approval mode for join requests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum MembershipApprovalMode {
-    #[string_default]
-    #[str = "off"]
+    #[wire_default]
+    #[wire = "off"]
     Off,
-    #[str = "on"]
+    #[wire = "on"]
     On,
 }
 
 /// Who can share message history with new members.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum MemberShareHistoryMode {
-    #[string_default]
-    #[str = "admin_share"]
+    #[wire_default]
+    #[wire = "admin_share"]
     AdminShare,
-    #[str = "all_member_share"]
+    #[wire = "all_member_share"]
     AllMemberShare,
 }
 
@@ -153,22 +147,22 @@ define_error_code_enum! {
 }
 
 /// Query request type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum GroupQueryRequestType {
-    #[string_default]
-    #[str = "interactive"]
+    #[wire_default]
+    #[wire = "interactive"]
     Interactive,
 }
 
 /// Participant type (admin level).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum ParticipantType {
-    #[string_default]
-    #[str = "member"]
+    #[wire_default]
+    #[wire = "member"]
     Member,
-    #[str = "admin"]
+    #[wire = "admin"]
     Admin,
-    #[str = "superadmin"]
+    #[wire = "superadmin"]
     SuperAdmin,
 }
 
@@ -397,7 +391,7 @@ pub fn build_create_group_node(options: &GroupCreateOptions) -> Node {
     if let Some(expiration) = &options.ephemeral_expiration {
         children.push(
             NodeBuilder::new("ephemeral")
-                .attr("expiration", expiration.to_string())
+                .attr("expiration", *expiration)
                 .build(),
         );
     }
@@ -578,10 +572,10 @@ impl ProtocolNode for GroupInfoResponse {
             children.push(NodeBuilder::new("announcement").build());
         }
         if self.ephemeral_expiration > 0 || self.ephemeral_trigger.is_some() {
-            let mut eph = NodeBuilder::new("ephemeral")
-                .attr("expiration", self.ephemeral_expiration.to_string());
+            let mut eph =
+                NodeBuilder::new("ephemeral").attr("expiration", self.ephemeral_expiration);
             if let Some(trigger) = self.ephemeral_trigger {
-                eph = eph.attr("trigger", trigger.to_string());
+                eph = eph.attr("trigger", trigger);
             }
             children.push(eph.build());
         }
@@ -621,7 +615,7 @@ impl ProtocolNode for GroupInfoResponse {
                 desc_builder = desc_builder.attr("participant", owner);
             }
             if let Some(t) = self.description_time {
-                desc_builder = desc_builder.attr("t", t.to_string());
+                desc_builder = desc_builder.attr("t", t);
             }
             if let Some(ref desc) = self.description {
                 desc_builder = desc_builder.children([NodeBuilder::new("body")
@@ -665,7 +659,7 @@ impl ProtocolNode for GroupInfoResponse {
             children.push(
                 NodeBuilder::new("growth_locked")
                     .attr("type", &gl.lock_type)
-                    .attr("expiration", gl.expiration.to_string())
+                    .attr("expiration", gl.expiration)
                     .build(),
             );
         }
@@ -697,16 +691,16 @@ impl ProtocolNode for GroupInfoResponse {
             builder = builder.attr("creator", creator);
         }
         if let Some(creation_time) = self.creation_time {
-            builder = builder.attr("creation", creation_time.to_string());
+            builder = builder.attr("creation", creation_time);
         }
         if let Some(subject_time) = self.subject_time {
-            builder = builder.attr("s_t", subject_time.to_string());
+            builder = builder.attr("s_t", subject_time);
         }
         if let Some(subject_owner) = self.subject_owner {
             builder = builder.attr("s_o", subject_owner);
         }
         if let Some(size) = self.size {
-            builder = builder.attr("size", size.to_string());
+            builder = builder.attr("size", size);
         }
 
         builder.children(children).build()
@@ -1063,19 +1057,28 @@ impl IqSpec for GroupCreateIq {
 // Group Management IQ Specs
 // ---------------------------------------------------------------------------
 
-/// Response for participant change operations (add/remove/promote/demote).
+/// Response for participant change operations.
 ///
-/// Wire format: `<participant jid="..." type="200" error="..."/>`
+/// Success is signaled by absent `error`; `type` is often omitted by the server.
 #[derive(Debug, Clone, crate::ProtocolNode)]
 #[protocol(tag = "participant")]
 pub struct ParticipantChangeResponse {
     #[attr(name = "jid", jid)]
     pub jid: Jid,
-    /// HTTP-like status code (e.g. 200, 403, 409).
     #[attr(name = "type")]
     pub status: Option<String>,
     #[attr(name = "error")]
     pub error: Option<String>,
+    #[attr(name = "phone_number", jid)]
+    pub phone_number: Option<Jid>,
+    #[attr(name = "username")]
+    pub username: Option<String>,
+}
+
+impl ParticipantChangeResponse {
+    pub fn is_ok(&self) -> bool {
+        self.error.is_none()
+    }
 }
 
 /// IQ specification for setting a group's subject.
@@ -1649,7 +1652,7 @@ impl IqSpec for SetGroupEphemeralIq {
     fn build_iq(&self) -> InfoQuery<'static> {
         let node = match self.expiration {
             Some(exp) => NodeBuilder::new("ephemeral")
-                .attr("expiration", exp.to_string())
+                .attr("expiration", exp.get())
                 .build(),
             None => NodeBuilder::new("not_ephemeral").build(),
         };
@@ -2243,8 +2246,8 @@ impl IqSpec for AcceptGroupInviteV4Iq {
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("accept")
                     .attr("code", &self.code)
-                    .attr("expiration", self.expiration.to_string())
-                    .attr("admin", self.admin_jid.to_string())
+                    .attr("expiration", self.expiration)
+                    .attr("admin", &self.admin_jid)
                     .build(),
             ])),
         )
@@ -3076,7 +3079,7 @@ mod tests {
     }
 
     #[test]
-    fn test_participant_change_response_parse() {
+    fn test_participant_change_response_parse_with_type() {
         let node = NodeBuilder::new("participant")
             .attr("jid", "1234567890@s.whatsapp.net")
             .attr("type", "200")
@@ -3085,6 +3088,48 @@ mod tests {
         let result = ParticipantChangeResponse::try_from_node(&node).unwrap();
         assert_eq!(result.jid.user, "1234567890");
         assert_eq!(result.status, Some("200".to_string()));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_participant_change_response_parse_without_type() {
+        let node = NodeBuilder::new("participant")
+            .attr("jid", "1234567890@s.whatsapp.net")
+            .build();
+
+        let result = ParticipantChangeResponse::try_from_node(&node).unwrap();
+        assert_eq!(result.status, None);
+        assert_eq!(result.error, None);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_participant_change_response_parse_error() {
+        let node = NodeBuilder::new("participant")
+            .attr("jid", "1234567890@s.whatsapp.net")
+            .attr("error", "403")
+            .build();
+
+        let result = ParticipantChangeResponse::try_from_node(&node).unwrap();
+        assert_eq!(result.error.as_deref(), Some("403"));
+        assert!(!result.is_ok());
+    }
+
+    #[test]
+    fn test_participant_change_response_parse_mixins() {
+        let node = NodeBuilder::new("participant")
+            .attr("jid", "100000000000001@lid")
+            .attr("phone_number", "15555550100@s.whatsapp.net")
+            .attr("username", "example_user")
+            .build();
+
+        let result = ParticipantChangeResponse::try_from_node(&node).unwrap();
+        assert!(result.is_ok());
+        assert_eq!(
+            result.phone_number.as_ref().map(|j| j.user.as_str()),
+            Some("15555550100")
+        );
+        assert_eq!(result.username.as_deref(), Some("example_user"));
     }
 
     #[test]
@@ -3467,5 +3512,47 @@ mod tests {
         assert!(response.description_id.is_none());
         assert!(response.description_owner.is_none());
         assert!(response.description_time.is_none());
+    }
+
+    /// Locks down the trait conversions used by `AcceptGroupInviteV4Iq::build_iq`:
+    /// `i64` for `expiration` and `&Jid` for `admin`. Exercises the exact
+    /// `NodeBuilder::new("accept")` path that the perf refactor changed and
+    /// asserts the serialized attribute strings so any drift in numeric
+    /// formatting or JID `Display` impl trips here first.
+    #[test]
+    fn test_accept_group_invite_v4_iq_attrs() {
+        let group_jid: Jid = "120363000000000042@g.us".parse().unwrap();
+        let admin_jid: Jid = "5511999887766@s.whatsapp.net".parse().unwrap();
+        let code = "A1B2C3D4".to_string();
+        let expiration: i64 = 1_700_000_123;
+
+        let spec = AcceptGroupInviteV4Iq::new(
+            group_jid.clone(),
+            code.clone(),
+            expiration,
+            admin_jid.clone(),
+        );
+        let iq = spec.build_iq();
+
+        assert_eq!(iq.to, group_jid);
+
+        let Some(NodeContent::Nodes(nodes)) = &iq.content else {
+            panic!("expected nodes content");
+        };
+        let accept = &nodes[0];
+        assert_eq!(accept.tag, "accept");
+
+        assert_eq!(
+            accept.attrs().optional_string("code").as_deref(),
+            Some(code.as_str()),
+        );
+        assert_eq!(
+            accept.attrs().optional_string("expiration").as_deref(),
+            Some("1700000123"),
+        );
+        assert_eq!(
+            accept.attrs().optional_string("admin").as_deref(),
+            Some("5511999887766@s.whatsapp.net"),
+        );
     }
 }

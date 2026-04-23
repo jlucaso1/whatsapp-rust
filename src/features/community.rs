@@ -9,11 +9,11 @@ use crate::features::groups::GroupParticipant;
 use crate::features::mex::{MexError, MexRequest};
 use log::warn;
 use serde_json::json;
-use wacore::iq::community::mex_docs;
 use wacore::iq::groups::{
     DeleteCommunityIq, GetLinkedGroupsParticipantsIq, GroupCreateIq, GroupCreateOptions,
     JoinLinkedGroupIq, LinkSubgroupsIq, QueryLinkedGroupIq, UnlinkSubgroupsIq,
 };
+use wacore::iq::mex_ids::community as community_docs;
 use wacore_binary::Jid;
 
 // Types
@@ -231,7 +231,7 @@ impl<'a> Community<'a> {
             .client
             .mex()
             .query(MexRequest {
-                doc_id: mex_docs::FETCH_ALL_SUBGROUPS,
+                doc: community_docs::FETCH_ALL_SUBGROUPS,
                 variables: json!({
                     "group_id": community_jid.to_string()
                 }),
@@ -278,7 +278,7 @@ impl<'a> Community<'a> {
             .client
             .mex()
             .query(MexRequest {
-                doc_id: mex_docs::FETCH_SUBGROUP_PARTICIPANT_COUNT,
+                doc: community_docs::FETCH_SUBGROUP_PARTICIPANT_COUNT,
                 variables: json!({
                     "input": {
                         "group_jid": community_jid.to_string()

@@ -295,10 +295,15 @@ impl Client {
         Ok(result)
     }
 
-    /// Send a status/story update to the given recipients using sender key encryption.
+    /// Send a status/story update using sender-key encryption.
     ///
-    /// This builds a `GroupInfo` from the provided recipients (always PN addressing mode),
-    /// then reuses the group encryption pipeline with `to = status@broadcast`.
+    /// Status uses LID addressing (matches `WAWebEncryptAndSendStatusMsg`):
+    /// LID recipients pass through, PN recipients are resolved to LID via
+    /// `Client::get_lid_pn_entry` (cache-aside), and unresolvable recipients
+    /// are skipped silently. The resulting `GroupInfo` carries
+    /// `AddressingMode::Lid`; `prepare_group_stanza` signs with `own_lid`
+    /// and emits `addressing_mode="lid"` on the stanza. Errors only if no
+    /// recipient could be resolved.
     pub(crate) async fn send_status_message(
         &self,
         message: wa::Message,
@@ -321,58 +326,48 @@ impl Client {
             .pn
             .take()
             .ok_or(crate::client::ClientError::NotLoggedIn)?;
-        let own_lid = device_snapshot
-            .lid
-            .take()
-            .unwrap_or_else(|| own_jid.clone());
+        // Status is LID-addressed (matches WA Web post-LID-migration). Without
+        // a real device LID we can't sign or fan out correctly; refuse rather
+        // than silently emit `addressing_mode="lid"` with a PN sender.
+        let own_lid = device_snapshot.lid.take().ok_or_else(|| {
+            anyhow!(
+                "Cannot send status: device has no LID yet. Finish pairing / LID \
+                 migration before posting status."
+            )
+        })?;
 
-        // Status always uses PN addressing. Resolve any LID recipients to their
-        // phone numbers so we don't end up with duplicate PN+LID entries for the
-        // same user (which causes server error 400).
-        // Reject non-user JIDs (groups, broadcasts, etc.) to prevent invalid
-        // <participants> entries that cause server errors.
-        let mut resolved_recipients = Vec::with_capacity(recipients.len());
+        // Fail fast for any JID that isn't a user (PN or LID). Mirrors WA
+        // Web's `asUserWidOrThrow` inside `toUserLid`: non-user inputs are a
+        // programming bug, not something to silently drop during resolution.
         for jid in recipients {
-            if jid.is_group() || jid.is_status_broadcast() || jid.is_broadcast_list() {
+            if !(jid.is_pn() || jid.is_lid()) {
                 return Err(anyhow!(
-                    "Invalid status recipient {}: must be a user JID, not a group/broadcast",
+                    "Invalid status recipient {}: must be a user JID (PN or LID), \
+                     not a group/broadcast/newsletter/hosted/etc.",
                     jid
                 ));
             }
-            if jid.is_lid() {
-                if let Some(pn) = self.lid_pn_cache.get_phone_number(&jid.user).await {
-                    resolved_recipients.push(Jid::new(&pn, Server::Pn));
-                } else {
-                    return Err(anyhow!(
-                        "No PN mapping for LID {}. Ensure the recipient has been \
-                         contacted previously.",
-                        jid
-                    ));
+        }
+
+        use std::collections::HashMap;
+        let mut resolved: Vec<Option<Jid>> = Vec::with_capacity(recipients.len());
+        let mut lid_to_pn_map: HashMap<wacore_binary::CompactString, Jid> =
+            HashMap::with_capacity(recipients.len() + 1);
+        for jid in recipients {
+            if let Some(lid_jid) = self.resolve_recipient_to_lid(jid).await {
+                if jid.is_pn() {
+                    lid_to_pn_map.insert(lid_jid.user.clone(), jid.to_non_ad());
                 }
+                resolved.push(Some(lid_jid));
             } else {
-                resolved_recipients.push(jid.clone());
+                resolved.push(None);
             }
         }
+        lid_to_pn_map.insert(own_lid.user.clone(), own_jid.to_non_ad());
 
-        if resolved_recipients.is_empty() {
-            return Err(anyhow!("No valid PN recipients after LID resolution"));
-        }
-
-        // Deduplicate by user (in case both LID and PN were provided for the same user)
-        let mut seen_users = std::collections::HashSet::new();
-        resolved_recipients.retain(|jid| seen_users.insert(jid.user.clone()));
-
-        let mut group_info = GroupInfo::new(resolved_recipients, AddressingMode::Pn);
-
-        // Ensure we're in the participant list
-        let own_base = own_jid.to_non_ad();
-        if !group_info
-            .participants
-            .iter()
-            .any(|p| p.is_same_user_as(&own_base))
-        {
-            group_info.participants.push(own_base);
-        }
+        let participants = wacore::send::assemble_status_participants(resolved, &own_lid)?;
+        let mut group_info =
+            GroupInfo::with_lid_to_pn_map(participants, AddressingMode::Lid, lid_to_pn_map);
 
         self.add_recent_message(&to, &request_id, &message).await;
 
@@ -381,7 +376,11 @@ impl Client {
 
         let force_skdm = {
             use wacore::libsignal::store::sender_key_name::SenderKeyName;
-            let sender_address = own_jid.to_protocol_address();
+            // Sender key name tracks the addressing mode of the group stanza.
+            // Since status now uses LID addressing (see send_status_message
+            // header), the key is stored under own_lid, matching the address
+            // prepare_group_stanza derives internally.
+            let sender_address = own_lid.to_protocol_address();
             let sender_key_name = SenderKeyName::from_parts(&to_str, sender_address.as_str());
 
             let device_guard = device_store_arc.read().await;
@@ -401,24 +400,22 @@ impl Client {
         let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
             None
         } else {
-            self.resolve_skdm_targets(&to_str, &group_info.participants, &own_jid)
+            self.resolve_skdm_targets(&to_str, &group_info, &own_lid)
                 .await
         };
 
-        // WhatsApp Web includes <meta status_setting="..."/> on non-revoke status messages.
-        // Revoke messages omit this node.
-        let is_revoke = message
-            .protocol_message
-            .as_option()
-            .is_some_and(|pm| pm.r#type == Some(wa::message::protocol_message::Type::REVOKE));
-        let extra_stanza_nodes = if is_revoke {
-            vec![]
-        } else {
+        // `<meta status_setting>` describes the POSTER's privacy on their own
+        // status. Reactions go through WA Web's addon path and never visit
+        // `WAWebEncryptAndSendStatusMsg`; attaching the meta on a reaction
+        // gets the stanza NACK'd with 479 (SmaxInvalid). Revokes also skip it.
+        let extra_stanza_nodes = if wacore::send::status_carries_privacy_meta(&message) {
             vec![
                 NodeBuilder::new("meta")
                     .attr("status_setting", options.privacy.as_str())
                     .build(),
             ]
+        } else {
+            vec![]
         };
 
         let prepared = match wacore::send::prepare_group_stanza(
@@ -526,15 +523,16 @@ impl Client {
         })
     }
 
-    /// Resolve which devices need SKDM by reading the per-device sender key map.
+    /// Resolve which devices need SKDM. Returns `None` for full distribution
+    /// (no cache data), or `Some(devices)` listing devices that need fresh SKDM.
     ///
-    /// Returns `None` for full distribution (no map data or all unknown), or
-    /// `Some(devices)` listing only the devices that need fresh SKDM.
-    /// Uses `Jid::device_key()` for O(1) lookups — no string allocations in the hot path.
+    /// For LID mode, uses `group_info.phone_jid_for_lid_user` to query devices
+    /// via PN when available (LID usync is unreliable for own JID), then
+    /// converts the result back to LID. Same fallback as `prepare_group_stanza`.
     async fn resolve_skdm_targets(
         &self,
         group_jid: &str,
-        participants: &[Jid],
+        group_info: &wacore::client::context::GroupInfo,
         own_sending_jid: &Jid,
     ) -> Option<Vec<Jid>> {
         use crate::sender_key_device_cache::SenderKeyDeviceMap;
@@ -565,10 +563,32 @@ impl Client {
             return None;
         }
 
-        let jids_to_resolve: Vec<Jid> = participants.iter().map(|jid| jid.to_non_ad()).collect();
+        let is_lid_mode = group_info.addressing_mode == wacore::types::message::AddressingMode::Lid;
+        let jids_to_resolve: Vec<Jid> = group_info
+            .participants
+            .iter()
+            .map(|jid| {
+                if is_lid_mode
+                    && jid.is_lid()
+                    && let Some(pn) = group_info.phone_jid_for_lid_user(&jid.user)
+                {
+                    return pn.to_non_ad();
+                }
+                jid.to_non_ad()
+            })
+            .collect();
 
         match SendContextResolver::resolve_devices(self, &jids_to_resolve).await {
             Ok(all_devices) => {
+                let all_devices: Vec<Jid> = if is_lid_mode {
+                    all_devices
+                        .into_iter()
+                        .map(|d| group_info.phone_device_jid_to_lid(&d))
+                        .collect()
+                } else {
+                    all_devices
+                };
+
                 let needs_skdm: Vec<Jid> = all_devices
                     .into_iter()
                     .filter(|device| {
@@ -849,12 +869,27 @@ impl Client {
         edit: Option<crate::types::message::EditAttribute>,
         extra_stanza_nodes: Vec<Node>,
     ) -> Result<(), anyhow::Error> {
-        // Status broadcasts must go through send_status_message() which provides recipients
-        if to.is_status_broadcast() {
-            return Err(anyhow!(
-                "Use send_status_message() or client.status() API for status@broadcast"
-            ));
-        }
+        // status@broadcast reactions fan out pairwise to the author's devices;
+        // status posts keep going through send_status_message (owns recipients).
+        let (to, is_status_addon) = if to.is_status_broadcast() {
+            let author = message
+                .reaction_message
+                .as_option()
+                .and_then(|rm| rm.key.as_option())
+                .and_then(|k| k.participant.as_deref())
+                .and_then(|p| p.parse::<Jid>().ok())
+                .filter(|jid| jid.is_pn() || jid.is_lid())
+                .ok_or_else(|| {
+                    anyhow!(
+                        "send_message to status@broadcast requires \
+                         reaction_message.key.participant = status author (user JID). \
+                         Use client.status() for posting new statuses."
+                    )
+                })?;
+            (author, true)
+        } else {
+            (to, false)
+        };
 
         // Generate request ID early (doesn't need lock)
         let request_id = match request_id_override {
@@ -957,7 +992,7 @@ impl Client {
             let skdm_target_devices: Option<Vec<Jid>> = if force_skdm {
                 None
             } else {
-                self.resolve_skdm_targets(&to_str, &group_info.participants, &own_sending_jid)
+                self.resolve_skdm_targets(&to_str, &group_info, &own_sending_jid)
                     .await
             };
 
@@ -1037,7 +1072,14 @@ impl Client {
             // Per-device locking to match decrypt path (message.rs:684),
             // preventing ratchet desync on concurrent send/receive.
 
-            self.add_recent_message(&to, &request_id, message).await;
+            // Status reaction retries arrive with `from=status@broadcast`;
+            // cache under the broadcast chat so take_recent_message hits.
+            if is_status_addon {
+                self.add_recent_message(&Jid::status_broadcast(), &request_id, message)
+                    .await;
+            } else {
+                self.add_recent_message(&to, &request_id, message).await;
+            }
 
             let device_snapshot = self.persistence_manager.get_device_snapshot().await;
             let own_jid = device_snapshot
@@ -1118,17 +1160,17 @@ impl Client {
                 !is_sender
             });
 
-            // Dedup for self-DMs: recipient and own device lists overlap
-            // when sending to own account (WA Web uses Map keyed by toString)
-            {
-                let mut seen = std::collections::HashSet::with_capacity(all_dm_jids.len());
-                all_dm_jids.retain(|j| seen.insert(j.clone()));
-            }
+            // Dedup for self-DMs: recipient and own device lists overlap when
+            // sending to own account. `participant_list_hash` sorts internally,
+            // so reordering here is safe.
+            wacore::types::jid::sort_dedup_by_device(&mut all_dm_jids);
 
             self.ensure_e2e_sessions(&all_dm_jids).await?;
 
             let mut extra_stanza_nodes = extra_stanza_nodes;
-            if !to.is_group() && !to.is_newsletter() {
+            // tctoken applies to 1:1 chats; status reactions share the fanout
+            // path but WA Web does not attach tctokens to them.
+            if !to.is_group() && !to.is_newsletter() && !is_status_addon {
                 let (should_issue_after_send, cached_token_key) = self
                     .maybe_include_tc_token(&to, &mut extra_stanza_nodes)
                     .await;
@@ -1181,6 +1223,13 @@ impl Client {
         } else {
             None
         };
+
+        // Server expects the outer `to` as the broadcast chat even though
+        // encryption targeted the author's devices (mirrors incoming `from`).
+        let mut stanza_to_send = stanza_to_send;
+        if is_status_addon {
+            stanza_to_send.attrs.insert("to", Jid::status_broadcast());
+        }
 
         if let Err(e) = self.send_node(stanza_to_send).await {
             if let Some((_, _, ref msg_id)) = ack {
@@ -1652,6 +1701,89 @@ impl Client {
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[tokio::test]
+    async fn send_message_to_status_without_reaction_errors() {
+        let client = crate::test_utils::create_test_client().await;
+        let to = Jid::status_broadcast();
+        let err = client
+            .send_message(
+                to,
+                wa::Message {
+                    conversation: Some("hi".into()),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("status@broadcast without reaction must error");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("reaction_message") || msg.contains("status"),
+            "unexpected error: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_message_to_status_reaction_rejects_non_user_participant() {
+        let client = crate::test_utils::create_test_client().await;
+        let to = Jid::status_broadcast();
+        let err = client
+            .send_message(
+                to,
+                wa::Message {
+                    reaction_message: buffa::MessageField::some(wa::message::ReactionMessage {
+                        key: buffa::MessageField::some(wa::MessageKey {
+                            remote_jid: Some("status@broadcast".into()),
+                            from_me: Some(false),
+                            id: Some("ORIGID".into()),
+                            participant: Some("120363040237990503@g.us".into()),
+                            ..Default::default()
+                        }),
+                        text: Some("❤️".into()),
+                        sender_timestamp_ms: Some(1),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("group JID as participant must error");
+        assert!(
+            format!("{err}").contains("user JID"),
+            "expected user-JID error, got: {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn send_message_to_status_reaction_without_participant_errors() {
+        let client = crate::test_utils::create_test_client().await;
+        let to = Jid::status_broadcast();
+        let err = client
+            .send_message(
+                to,
+                wa::Message {
+                    reaction_message: buffa::MessageField::some(wa::message::ReactionMessage {
+                        key: buffa::MessageField::some(wa::MessageKey {
+                            remote_jid: Some("status@broadcast".into()),
+                            from_me: Some(false),
+                            id: Some("ORIGID".into()),
+                            participant: None,
+                            ..Default::default()
+                        }),
+                        text: Some("❤️".into()),
+                        sender_timestamp_ms: Some(1),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )
+            .await
+            .expect_err("reaction without key.participant must error");
+        assert!(
+            format!("{err}").contains("participant"),
+            "expected participant error, got: {err}"
+        );
+    }
 
     #[test]
     fn test_revoke_type_default_is_sender() {

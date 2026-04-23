@@ -50,7 +50,7 @@
 //! </iq>
 //! ```
 
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
 use anyhow::anyhow;
@@ -61,29 +61,29 @@ use wacore_binary::{Jid, Server};
 use wacore_binary::{Node, NodeContent, NodeContentRef, NodeRef};
 
 /// Usync mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum UsyncMode {
     /// Query mode - used for contact lookups.
-    #[string_default]
-    #[str = "query"]
+    #[wire_default]
+    #[wire = "query"]
     Query,
     /// Full mode - used for user info with more details.
-    #[str = "full"]
+    #[wire = "full"]
     Full,
 }
 
 /// Usync context.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum UsyncContext {
     /// Interactive context - for user-initiated operations.
-    #[string_default]
-    #[str = "interactive"]
+    #[wire_default]
+    #[wire = "interactive"]
     Interactive,
     /// Background context - for background sync operations.
-    #[str = "background"]
+    #[wire = "background"]
     Background,
     /// Message context - for message-related operations.
-    #[str = "message"]
+    #[wire = "message"]
     Message,
 }
 

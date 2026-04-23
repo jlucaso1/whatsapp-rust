@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use wacore_binary::{Jid, JidExt, MessageId, MessageServerId};
 use waproto::whatsapp as wa;
 
-use crate::StringEnum;
+use crate::WireEnum;
 
 /// Identifies a specific message within a chat.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -19,31 +19,24 @@ impl ChatMessageId {
 }
 
 /// Addressing mode for a group (phone number vs LID).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, crate::StringEnum)]
-#[serde(rename_all = "lowercase")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, crate::WireEnum)]
 pub enum AddressingMode {
-    #[string_default]
-    #[str = "pn"]
+    #[wire_default]
+    #[wire = "pn"]
     Pn,
-    #[str = "lid"]
+    #[wire = "lid"]
     Lid,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
 pub enum MessageCategory {
-    #[string_default]
-    #[str = ""]
+    #[wire_default]
+    #[wire = ""]
     Empty,
-    #[str = "peer"]
+    #[wire = "peer"]
     Peer,
-    #[string_fallback]
+    #[wire_fallback]
     Other(String),
-}
-
-impl serde::Serialize for MessageCategory {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -71,22 +64,22 @@ pub struct DeviceSentMeta {
     pub phash: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, crate::StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::WireEnum)]
 pub enum EditAttribute {
-    #[string_default]
-    #[str = ""]
+    #[wire_default]
+    #[wire = ""]
     Empty,
-    #[str = "1"]
+    #[wire = "1"]
     MessageEdit,
-    #[str = "2"]
+    #[wire = "2"]
     PinInChat,
-    #[str = "3"]
+    #[wire = "3"]
     AdminEdit,
-    #[str = "7"]
+    #[wire = "7"]
     SenderRevoke,
-    #[str = "8"]
+    #[wire = "8"]
     AdminRevoke,
-    #[string_fallback]
+    #[wire_fallback]
     Unknown(String),
 }
 

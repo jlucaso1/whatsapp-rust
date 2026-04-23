@@ -13,7 +13,7 @@ use wacore::iq::groups::{
     SetMemberAddModeIq, SetNoFrequentlyForwardedIq, normalize_participants,
 };
 use wacore::types::message::AddressingMode;
-use wacore_binary::Jid;
+use wacore_binary::{Jid, JidExt as _};
 
 use wacore::iq::groups::BatchGroupInfoResult as RawBatchResult;
 pub use wacore::iq::groups::{
@@ -193,22 +193,45 @@ impl<'a> Groups<'a> {
 
         let group = self.client.execute(GroupQueryIq::new(jid)).await?;
 
-        let participants: Vec<Jid> = group.participants.iter().map(|p| p.jid.clone()).collect();
+        // Single pass: move participants out and build lid_to_pn_map alongside.
+        let n = group.participants.len();
+        let is_lid = group.addressing_mode == AddressingMode::Lid;
+        let mut participants: Vec<Jid> = Vec::with_capacity(n);
+        let mut lid_to_pn_map: HashMap<wacore_binary::CompactString, Jid> = if is_lid {
+            HashMap::with_capacity(n)
+        } else {
+            HashMap::new()
+        };
+        for p in group.participants {
+            if is_lid && let Some(pn) = p.phone_number {
+                lid_to_pn_map.insert(p.jid.user.clone(), pn);
+            }
+            participants.push(p.jid);
+        }
 
-        let lid_to_pn_map: HashMap<wacore_binary::CompactString, Jid> =
-            if group.addressing_mode == AddressingMode::Lid {
-                group
-                    .participants
-                    .iter()
-                    .filter_map(|p| {
-                        p.phone_number
-                            .as_ref()
-                            .map(|pn| (p.jid.user.clone(), pn.clone()))
-                    })
-                    .collect()
-            } else {
-                HashMap::new()
-            };
+        // Populate lid_pn_cache so silent-observer participants (no messages
+        // from them) get their mapping; otherwise `invalidate_device_cache`
+        // can't resolve the PN alias and leaves zombie registry entries.
+        // One batched call mirrors WA Web's single `createLidPnMappings`
+        // invocation from `QueryGroupJob`, so N participants = 1 persist
+        // task + 1 DB transaction instead of N detached tasks.
+        if !lid_to_pn_map.is_empty()
+            && let Some(client_arc) = self.client.self_weak.get().and_then(|w| w.upgrade())
+        {
+            let mut batch: Vec<(String, String)> = Vec::with_capacity(lid_to_pn_map.len());
+            for (lid_user, pn_jid) in &lid_to_pn_map {
+                if pn_jid.is_pn() {
+                    batch.push((lid_user.as_str().to_string(), pn_jid.user.to_string()));
+                }
+            }
+            client_arc
+                .learn_lid_pn_mappings_batch(
+                    batch,
+                    crate::lid_pn_cache::LearningSource::Other,
+                    false,
+                )
+                .await;
+        }
 
         let mut info = GroupInfo::new(participants, group.addressing_mode);
         if !lid_to_pn_map.is_empty() {
@@ -257,7 +280,7 @@ impl<'a> Groups<'a> {
                 let entry = self
                     .client
                     .get_lid_pn_entry(&participant.jid)
-                    .await
+                    .await?
                     .ok_or_else(|| {
                         anyhow::anyhow!("Missing phone number mapping for LID {}", participant.jid)
                     })?;
@@ -332,19 +355,15 @@ impl<'a> Groups<'a> {
         };
 
         let result = self.client.execute(iq).await?;
-        // Patch cache with only the participants the server accepted (status 200).
-        // Note: the get→mutate→insert is not atomic; a concurrent notification
-        // for the same group could race.  This is acceptable — the cache is
-        // best-effort and a full refetch on next query_info() corrects it.
-        let accepted: Vec<_> = result
-            .iter()
-            .filter(|r| r.status.as_deref() == Some("200"))
-            .map(|r| (r.jid.clone(), None))
-            .collect();
-        if !accepted.is_empty() {
+        if result.iter().any(|r| r.is_ok()) {
             let group_cache = self.client.get_group_cache().await;
             if let Some(mut info) = group_cache.get(jid).await {
-                info.add_participants(&accepted);
+                info.add_participants(
+                    result
+                        .iter()
+                        .filter(|r| r.is_ok())
+                        .map(|r| (&r.jid, r.phone_number.as_ref())),
+                );
                 group_cache.insert(jid.clone(), info).await;
             }
         }
@@ -360,10 +379,9 @@ impl<'a> Groups<'a> {
             .client
             .execute(RemoveParticipantsIq::new(jid, participants))
             .await?;
-        // Patch cache with only the participants the server accepted.
         let accepted: Vec<&str> = result
             .iter()
-            .filter(|r| r.status.as_deref() == Some("200"))
+            .filter(|r| r.is_ok())
             .map(|r| r.jid.user.as_str())
             .collect();
         if !accepted.is_empty() {
@@ -701,7 +719,7 @@ impl<'a> Groups<'a> {
             .client
             .mex()
             .mutate(MexRequest {
-                doc_id: wacore::iq::groups::mex_docs::UPDATE_GROUP_PROPERTY,
+                doc: wacore::iq::mex_ids::groups::UPDATE_GROUP_PROPERTY,
                 variables: serde_json::json!({
                     "group_id": jid.to_string(),
                     "update": update,
@@ -723,6 +741,26 @@ impl<'a> Groups<'a> {
         }
 
         Ok(())
+    }
+
+    /// Set or clear the bot's per-group member label. Empty clears.
+    ///
+    /// WA Web sends this as a `ProtocolMessage` over the normal message path,
+    /// not as an IQ.
+    pub async fn update_member_label(
+        &self,
+        group_jid: &Jid,
+        label: impl Into<String>,
+    ) -> Result<(), anyhow::Error> {
+        if !group_jid.is_group() {
+            return Err(anyhow::anyhow!(
+                "update_member_label requires a group JID, got {group_jid}"
+            ));
+        }
+        let msg = wacore::send::build_member_label_message(label.into(), wacore::time::now_secs());
+        self.client
+            .send_message_impl(group_jid.clone(), &msg, None, false, false, None, vec![])
+            .await
     }
 
     async fn resolve_participant_tokens(&self, jids: &[Jid]) -> Vec<GroupParticipantOptions> {

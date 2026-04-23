@@ -113,7 +113,8 @@ impl<'a> Polls<'a> {
             .get_pn()
             .await
             .ok_or_else(|| anyhow!("Not logged in — cannot determine own JID"))?;
-        let voter_jid_str = my_jid.to_non_ad().to_string();
+        let my_base = my_jid.to_non_ad();
+        let voter_jid_str = my_base.to_string();
         let creator_jid_str = poll_creator_jid.to_non_ad().to_string();
 
         let selected_hashes: Vec<Vec<u8>> = option_names
@@ -131,7 +132,7 @@ impl<'a> Polls<'a> {
         let (enc_payload, iv) =
             poll::encrypt_poll_vote(&selected_hashes, &key, poll_msg_id, &voter_jid_str)?;
 
-        let from_me = my_jid.to_non_ad() == poll_creator_jid.to_non_ad();
+        let from_me = my_base.is_same_user_as(poll_creator_jid);
 
         let poll_update = wa::message::PollUpdateMessage {
             poll_creation_message_key: buffa::MessageField::some(wa::MessageKey {
@@ -196,24 +197,33 @@ impl<'a> Polls<'a> {
             .map(|name| (poll::compute_option_hash(name), name.as_str()))
             .collect();
 
+        // `creator_str` is invariant across voters; `decrypt_vote` used to
+        // recompute it per voter via `poll_creator_jid.to_non_ad().to_string()`.
+        let creator_str = poll_creator_jid.to_non_ad().to_string();
+
         // Last-vote-wins: each new vote from the same voter replaces the previous
-        let mut latest_votes: HashMap<String, Vec<Vec<u8>>> = HashMap::new();
+        let mut latest_votes: HashMap<String, Vec<Vec<u8>>> = HashMap::with_capacity(votes.len());
         for (voter_jid, enc_payload, enc_iv) in votes {
-            let voter_key = voter_jid.to_non_ad().to_string();
-            match Self::decrypt_vote(
-                enc_payload,
-                enc_iv,
+            let voter_str = voter_jid.to_non_ad().to_string();
+            let key = match poll::derive_vote_encryption_key(
                 message_secret,
                 poll_msg_id,
-                poll_creator_jid,
-                voter_jid,
+                &creator_str,
+                &voter_str,
             ) {
+                Ok(k) => k,
+                Err(e) => {
+                    log::warn!("Failed to derive vote key for {voter_jid}: {e}");
+                    continue;
+                }
+            };
+            match poll::decrypt_poll_vote(enc_payload, enc_iv, &key, poll_msg_id, &voter_str) {
                 Ok(selected_hashes) => {
                     if selected_hashes.is_empty() {
                         // Empty selection = voter cleared their vote
-                        latest_votes.remove(&voter_key);
+                        latest_votes.remove(&voter_str);
                     } else {
-                        latest_votes.insert(voter_key, selected_hashes);
+                        latest_votes.insert(voter_str, selected_hashes);
                     }
                 }
                 Err(e) => {

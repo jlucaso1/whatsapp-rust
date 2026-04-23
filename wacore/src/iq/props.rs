@@ -98,11 +98,11 @@ impl crate::protocol::ProtocolNode for AbProp {
 
     fn into_node(self) -> Node {
         let mut builder = NodeBuilder::new("prop")
-            .attr("config_code", self.config_code.to_string())
+            .attr("config_code", self.config_code)
             .attr("config_value", &*self.config_value);
 
         if let Some(expo_key) = self.config_expo_key {
-            builder = builder.attr("config_expo_key", expo_key.to_string());
+            builder = builder.attr("config_expo_key", expo_key);
         }
 
         builder.build()
@@ -150,8 +150,8 @@ impl crate::protocol::ProtocolNode for SamplingProp {
 
     fn into_node(self) -> Node {
         NodeBuilder::new("prop")
-            .attr("event_code", self.event_code.to_string())
-            .attr("sampling_weight", self.sampling_weight.to_string())
+            .attr("event_code", self.event_code)
+            .attr("sampling_weight", self.sampling_weight)
             .build()
     }
 
@@ -270,12 +270,12 @@ impl crate::protocol::ProtocolNode for PropsResponse {
             builder = builder.attr("hash", hash);
         }
         if let Some(refresh) = self.refresh {
-            builder = builder.attr("refresh", refresh.to_string());
+            builder = builder.attr("refresh", refresh);
         }
         if let Some(refresh_id) = self.refresh_id {
-            builder = builder.attr("refresh_id", refresh_id.to_string());
+            builder = builder.attr("refresh_id", refresh_id);
         }
-        builder = builder.attr("delta_update", self.delta_update.to_string());
+        builder = builder.attr("delta_update", self.delta_update);
 
         builder.build()
     }
@@ -362,7 +362,7 @@ impl IqSpec for PropsSpec {
         }
 
         if let Some(refresh_id) = self.refresh_id {
-            builder = builder.attr("refresh_id", refresh_id.to_string());
+            builder = builder.attr("refresh_id", refresh_id);
         }
 
         InfoQuery::get(

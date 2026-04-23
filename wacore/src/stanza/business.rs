@@ -8,35 +8,29 @@ use wacore_binary::Jid;
 use wacore_binary::NodeRef;
 
 /// Business notification type based on child element.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, crate::WireEnum)]
 pub enum BusinessNotificationType {
+    #[wire = "remove_jid"]
     RemoveJid,
+    #[wire = "remove_hash"]
     RemoveHash,
+    #[wire = "verified_name_jid"]
     VerifiedNameJid,
+    #[wire = "verified_name_hash"]
     VerifiedNameHash,
+    #[wire = "profile"]
     Profile,
+    #[wire = "profile_hash"]
     ProfileHash,
+    #[wire = "product"]
     Product,
+    #[wire = "collection"]
     Collection,
+    #[wire = "subscriptions"]
     Subscriptions,
+    #[wire_default]
+    #[wire = "unknown"]
     Unknown,
-}
-
-impl std::fmt::Display for BusinessNotificationType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::RemoveJid => write!(f, "remove_jid"),
-            Self::RemoveHash => write!(f, "remove_hash"),
-            Self::VerifiedNameJid => write!(f, "verified_name_jid"),
-            Self::VerifiedNameHash => write!(f, "verified_name_hash"),
-            Self::Profile => write!(f, "profile"),
-            Self::ProfileHash => write!(f, "profile_hash"),
-            Self::Product => write!(f, "product"),
-            Self::Collection => write!(f, "collection"),
-            Self::Subscriptions => write!(f, "subscriptions"),
-            Self::Unknown => write!(f, "unknown"),
-        }
-    }
 }
 
 /// Verified name certificate information.

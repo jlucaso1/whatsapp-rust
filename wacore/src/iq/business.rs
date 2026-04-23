@@ -1,6 +1,6 @@
 //! Business profile IQ specification (namespace `w:biz`).
 
-use crate::StringEnum;
+use crate::WireEnum;
 use crate::iq::node::optional_attr;
 use crate::iq::spec::IqSpec;
 use crate::request::InfoQuery;
@@ -8,48 +8,36 @@ use wacore_binary::builder::NodeBuilder;
 use wacore_binary::{Jid, Server};
 use wacore_binary::{NodeContent, NodeContentRef, NodeRef};
 
-#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
 pub enum DayOfWeek {
-    #[str = "sun"]
+    #[wire = "sun"]
     Sunday,
-    #[str = "mon"]
+    #[wire = "mon"]
     Monday,
-    #[str = "tue"]
+    #[wire = "tue"]
     Tuesday,
-    #[str = "wed"]
+    #[wire = "wed"]
     Wednesday,
-    #[str = "thu"]
+    #[wire = "thu"]
     Thursday,
-    #[str = "fri"]
+    #[wire = "fri"]
     Friday,
-    #[str = "sat"]
+    #[wire = "sat"]
     Saturday,
-    #[string_fallback]
+    #[wire_fallback]
     Other(String),
 }
 
-impl serde::Serialize for DayOfWeek {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, PartialEq, Eq, WireEnum)]
 pub enum BusinessHourMode {
-    #[str = "open_24h"]
+    #[wire = "open_24h"]
     Open24H,
-    #[str = "specific_hours"]
+    #[wire = "specific_hours"]
     SpecificHours,
-    #[str = "appointment_only"]
+    #[wire = "appointment_only"]
     AppointmentOnly,
-    #[string_fallback]
+    #[wire_fallback]
     Other(String),
-}
-
-impl serde::Serialize for BusinessHourMode {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(self.as_str())
-    }
 }
 
 fn node_text(node: &NodeRef<'_>) -> Option<String> {

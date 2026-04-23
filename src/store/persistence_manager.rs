@@ -8,7 +8,7 @@ use log::{debug, error};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
-use wacore::runtime::Runtime;
+use wacore::runtime::{AbortHandle, Runtime, ShutdownSignal, wait_for_shutdown};
 
 pub struct PersistenceManager {
     device: Arc<RwLock<Device>>,
@@ -136,50 +136,93 @@ impl PersistenceManager {
         }
     }
 
-    pub fn run_background_saver(self: Arc<Self>, runtime: Arc<dyn Runtime>, interval: Duration) {
+    /// Spawn the background saver. The task wakes on `save_notify`, the
+    /// interval tick, or the `shutdown` signal; runs `save_to_disk` after
+    /// each wake (no-op when the dirty flag is clear); and performs a final
+    /// flush before exiting on shutdown.
+    ///
+    /// Caller must keep the returned [`AbortHandle`] — dropping it aborts
+    /// the task. [`ShutdownSignal`] is sticky (see [`ShutdownNotifier`]):
+    /// a notify that races the task's first [`listen()`](event_listener::Event::listen)
+    /// is observed via the flag on the first iteration, so no data is stranded.
+    pub fn run_background_saver(
+        self: Arc<Self>,
+        runtime: Arc<dyn Runtime>,
+        interval: Duration,
+        shutdown: ShutdownSignal,
+    ) -> AbortHandle {
         const MAX_CONSECUTIVE_FAILURES: u32 = 10;
 
         let rt = runtime.clone();
         let weak = Arc::downgrade(&self);
         drop(self);
-        runtime
-            .spawn(Box::pin(async move {
-                let mut consecutive_failures: u32 = 0;
-                loop {
-                    let Some(this) = weak.upgrade() else {
-                        debug!("PersistenceManager dropped, exiting background saver.");
-                        return;
-                    };
-                    let listener = this.save_notify.listen();
-                    drop(this);
+        debug!("Background saver started (interval {interval:?})");
+        runtime.spawn(Box::pin(async move {
+            let mut consecutive_failures: u32 = 0;
 
-                    futures::select! {
-                        _ = listener.fuse() => {}
-                        _ = rt.sleep(interval).fuse() => {}
-                    }
+            // Flush any state dirtied during construction. save_notify is
+            // edge-triggered and fires from SetDeviceProps etc. before Bot::build
+            // spawns this task, so the dirty flag is our sticky catch for
+            // pre-spawn writes.
+            if let Some(this) = weak.upgrade()
+                && let Err(e) = this.save_to_disk().await
+            {
+                error!("Background saver: initial flush failed: {e}");
+                consecutive_failures = 1;
+            }
 
-                    let Some(this) = weak.upgrade() else {
-                        debug!("PersistenceManager dropped, exiting background saver.");
-                        return;
-                    };
-                    if let Err(e) = this.save_to_disk().await {
-                        consecutive_failures += 1;
-                        if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
-                            this.saver_halted.store(true, Ordering::Release);
-                            error!(
-                                "Background saver: {consecutive_failures} consecutive flush failures, \
-                                 halting to prevent silent data loss. Last error: {e}"
-                            );
-                            return;
+            loop {
+                let Some(this) = weak.upgrade() else {
+                    debug!("PersistenceManager dropped, exiting background saver.");
+                    return;
+                };
+                let save_listener = this.save_notify.listen();
+                drop(this);
+
+                let should_exit = futures::select! {
+                    _ = save_listener.fuse() => false,
+                    _ = rt.sleep(interval).fuse() => false,
+                    _ = wait_for_shutdown(&shutdown).fuse() => true,
+                };
+
+                let Some(this) = weak.upgrade() else {
+                    debug!("PersistenceManager dropped, exiting background saver.");
+                    return;
+                };
+                let flush_result = this.save_to_disk().await;
+
+                // On the shutdown path the task is terminating either way; a failed
+                // final flush should not permanently flag the store as halted.
+                if should_exit {
+                    match &flush_result {
+                        Err(e) => {
+                            error!("Background saver: final flush on shutdown failed: {e}");
                         }
-                        error!("Background saver flush failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {e}");
-                    } else {
-                        consecutive_failures = 0;
+                        Ok(()) => {
+                            debug!("Background saver received shutdown; final flush complete.");
+                        }
                     }
+                    return;
                 }
-            }))
-            .detach();
-        debug!("Background saver task started with interval {interval:?}");
+
+                if let Err(e) = flush_result {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= MAX_CONSECUTIVE_FAILURES {
+                        this.saver_halted.store(true, Ordering::Release);
+                        error!(
+                            "Background saver: {consecutive_failures} consecutive flush failures, \
+                             halting to prevent silent data loss. Last error: {e}"
+                        );
+                        return;
+                    }
+                    error!(
+                        "Background saver flush failed ({consecutive_failures}/{MAX_CONSECUTIVE_FAILURES}): {e}"
+                    );
+                } else {
+                    consecutive_failures = 0;
+                }
+            }
+        }))
     }
 }
 
@@ -221,5 +264,141 @@ impl PersistenceManager {
             .clear_sender_key_devices(group_jid)
             .await
             .map_err(db_err)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime_impl::TokioRuntime;
+    use std::time::Instant;
+
+    // Saver must observe shutdown.notify, run a final flush, and exit so the
+    // AbortHandle-backed task doesn't outlive the Bot.
+    #[tokio::test]
+    async fn saver_flushes_and_exits_on_shutdown() {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(
+            PersistenceManager::new(backend.clone())
+                .await
+                .expect("pm init"),
+        );
+
+        let notifier = wacore::runtime::ShutdownNotifier::new();
+        let shutdown_signal = notifier.subscribe();
+
+        let runtime: Arc<dyn Runtime> = Arc::new(TokioRuntime);
+        // Interval far in the future so only shutdown can wake the saver.
+        let handle =
+            pm.clone()
+                .run_background_saver(runtime, Duration::from_secs(3600), shutdown_signal);
+
+        // Let the task enter its select before mutating.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        pm.modify_device(|d| {
+            d.push_name = "shutdown-flush".to_string();
+        })
+        .await;
+
+        notifier.notify();
+
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if let Ok(Some(d)) = backend.load().await
+                && d.push_name == "shutdown-flush"
+            {
+                break;
+            }
+            if Instant::now() > deadline {
+                panic!("final flush did not reach backend after shutdown");
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // Dropping the handle must be a no-op when the task already exited.
+        drop(handle);
+    }
+
+    // Drop of the AbortHandle must actually terminate the task — not merely
+    // "not panic." Use the runtime Arc's strong count as the observable:
+    // the spawned task captures one reference via `rt = runtime.clone()`,
+    // which is released when the task's state machine is dropped.
+    #[tokio::test]
+    async fn saver_exits_when_abort_handle_dropped_without_signal() {
+        let backend = crate::test_utils::create_test_backend().await;
+        let pm = Arc::new(PersistenceManager::new(backend).await.expect("pm init"));
+
+        let runtime: Arc<dyn Runtime> = Arc::new(TokioRuntime);
+        let baseline = Arc::strong_count(&runtime);
+
+        let handle = pm.clone().run_background_saver(
+            Arc::clone(&runtime),
+            Duration::from_secs(3600),
+            ShutdownSignal::never(),
+        );
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            Arc::strong_count(&runtime) > baseline,
+            "running saver should hold a captured runtime Arc"
+        );
+
+        drop(handle);
+
+        let deadline = Instant::now() + Duration::from_secs(1);
+        while Arc::strong_count(&runtime) > baseline {
+            if Instant::now() > deadline {
+                panic!(
+                    "saver task did not release the runtime Arc within 1s of AbortHandle drop \
+                     (strong_count={}, baseline={})",
+                    Arc::strong_count(&runtime),
+                    baseline
+                );
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
+    // Regression guard for the Client-lifetime-tie fix: storing the saver's
+    // AbortHandle inside a struct held by Arc means the handle survives Arc
+    // clones and only runs abort when the LAST strong ref drops. If the
+    // handle were held by Bot alone, extracting Arc<Client> and dropping
+    // Bot would leave the Client without periodic persistence.
+    //
+    // Tested at the primitive level (Arc<T> + OnceLock<AbortHandle>) because
+    // Client's internal detached tasks hold their own strong refs and would
+    // keep Client alive regardless. Rust's Drop semantics guarantee the
+    // chain Arc::drop -> T::drop -> OnceLock::drop -> AbortHandle::drop.
+    #[tokio::test]
+    async fn abort_handle_in_arc_drops_only_when_last_ref_released() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        struct Owner(std::sync::OnceLock<AbortHandle>);
+
+        let owner = Arc::new(Owner(std::sync::OnceLock::new()));
+
+        let aborted = Arc::new(AtomicBool::new(false));
+        let aborted_clone = Arc::clone(&aborted);
+        owner
+            .0
+            .set(AbortHandle::new(move || {
+                aborted_clone.store(true, Ordering::SeqCst);
+            }))
+            .ok()
+            .expect("first set");
+
+        let owner_clone = Arc::clone(&owner);
+        drop(owner);
+        assert!(
+            !aborted.load(Ordering::SeqCst),
+            "handle must survive while another Arc ref is held"
+        );
+
+        drop(owner_clone);
+        assert!(
+            aborted.load(Ordering::SeqCst),
+            "last Arc drop must release the handle and fire abort"
+        );
     }
 }

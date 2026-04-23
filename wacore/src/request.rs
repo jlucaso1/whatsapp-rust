@@ -1,4 +1,4 @@
-use crate::StringEnum;
+use crate::WireEnum;
 use rand::Rng;
 use sha2::{Digest, Sha256};
 use std::time::Duration;
@@ -8,11 +8,11 @@ use wacore_binary::{Jid, JidExt, LEGACY_USER_SERVER};
 use wacore_binary::{Node, NodeContent, NodeRef};
 
 /// IQ request type for WhatsApp protocol queries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, StringEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
 pub enum InfoQueryType {
-    #[str = "set"]
+    #[wire = "set"]
     Set,
-    #[str = "get"]
+    #[wire = "get"]
     Get,
 }
 
