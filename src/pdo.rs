@@ -75,7 +75,13 @@ impl Client {
         // NonMessageDataRequest.js:412-421 (toUserLid when isLidMigrated).
         // The phone stores messages by LID after migration.
         let resolved_jid = self.resolve_encryption_jid(&info.source.chat).await;
-        let participant = if info.source.is_group {
+        // WAWebE2EProtoUtils.msgKeyToProtobuf omits participant when fromMe or
+        // when the MsgKey has no participant (i.e. a DM, where the chat JID is
+        // the sender). Groups and broadcast chats need it so the phone can
+        // locate the stored message.
+        let participant = if !info.source.is_from_me
+            && (info.source.is_group || info.source.chat.server == wacore_binary::Server::Broadcast)
+        {
             Some(self.resolve_encryption_jid(&info.source.sender).await)
         } else {
             None
@@ -457,10 +463,23 @@ impl Client {
         info: &Arc<MessageInfo>,
         immediate: bool,
     ) {
-        if info.source.is_from_me {
-            return;
-        }
-        if info.source.chat.server == wacore_binary::Server::Broadcast {
+        // `fromMe` is NOT excluded here: when the user's other devices send a
+        // message and the fanout copy to this client fails to decrypt, PDO is
+        // the only recovery path. Matches WAWebNonMessageDataRequestPlaceholderMessageResendUtils.
+
+        // Avoid asking the phone to re-deliver ancient messages during offline
+        // sync or long reconnect tails. Matches the
+        // `placeholder_message_resend_maximum_days_limit` AB prop (default 14d)
+        // enforced by WAWebNonMessageDataRequestPlaceholderMessageResendUtils.
+        const PDO_MAX_AGE_DAYS: i64 = 14;
+        let age = chrono::Utc::now().signed_duration_since(info.timestamp);
+        if age.num_days() > PDO_MAX_AGE_DAYS {
+            debug!(
+                "PDO request skipped for message {} (age {}d exceeds {}d limit)",
+                info.id,
+                age.num_days(),
+                PDO_MAX_AGE_DAYS,
+            );
             return;
         }
 
