@@ -9,8 +9,24 @@
 //!    only editors of the proto do.
 
 fn main() -> std::io::Result<()> {
+    // Rerun on desc change (new codegen) and proto change (so the staleness
+    // guard below runs). `build.rs` itself too.
     println!("cargo:rerun-if-changed=src/whatsapp.desc");
+    println!("cargo:rerun-if-changed=src/whatsapp.proto");
     println!("cargo:rerun-if-changed=build.rs");
+
+    // Fail the build if whatsapp.proto has been edited without refreshing
+    // whatsapp.desc — catching the "forgot to run the regen script" footgun
+    // at compile time instead of shipping a stale descriptor.
+    let proto_mtime = std::fs::metadata("src/whatsapp.proto")?.modified()?;
+    let desc_mtime = std::fs::metadata("src/whatsapp.desc")?.modified()?;
+    if proto_mtime > desc_mtime {
+        return Err(std::io::Error::other(
+            "waproto: src/whatsapp.proto is newer than src/whatsapp.desc. \
+             Run `scripts/regenerate-proto-desc.sh` to refresh the descriptor \
+             and commit both files.",
+        ));
+    }
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR must be set by cargo");
     let out_path = std::path::PathBuf::from(&out_dir);
@@ -86,21 +102,25 @@ fn main() -> std::io::Result<()> {
         .compile()
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
 
-    // Add #[serde(skip)] to buffa internal fields on owned types only.
-    // Neither `UnknownFields` nor `CachedSize` impl serde traits, and view
-    // structs don't derive serde, so the replace only targets owned types.
+    // Add #[serde(skip)] to `__buffa_cached_size` fields on owned structs.
+    // `CachedSize` doesn't impl serde traits, and view structs don't derive
+    // serde, so the replace naturally only hits owned types. The raw
+    // `.replace` would silently no-op if buffa renamed the field, so the
+    // match count is asserted to fail fast on upstream drift.
     let generated = out_path.join("whatsapp.rs");
-    let content = std::fs::read_to_string(&generated)?;
-    let content = content
-        .replace(
-            "pub __buffa_unknown_fields: ::buffa::UnknownFields,",
-            "#[serde(skip)]\n    pub __buffa_unknown_fields: ::buffa::UnknownFields,",
-        )
-        .replace(
-            "pub __buffa_cached_size:",
-            "#[serde(skip)]\n    pub __buffa_cached_size:",
-        );
-    std::fs::write(&generated, content)?;
+    let original = std::fs::read_to_string(&generated)?;
+    let needle = "pub __buffa_cached_size:";
+    let count = original.matches(needle).count();
+    if count == 0 {
+        return Err(std::io::Error::other(
+            "waproto post-processing: expected `pub __buffa_cached_size:` to \
+             appear in the generated file; buffa codegen likely renamed the \
+             field and the `#[serde(skip)]` injection is no longer covering \
+             it. Review buffa changelog and update this replace.",
+        ));
+    }
+    let patched = original.replace(needle, &format!("#[serde(skip)]\n    {needle}"));
+    std::fs::write(&generated, patched)?;
 
     Ok(())
 }
