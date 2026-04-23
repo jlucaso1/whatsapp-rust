@@ -295,10 +295,7 @@ fn handle_digest_key(client: &Arc<Client>) {
 /// WA Web defers this when offline. We process immediately because all cleanup
 /// is local-only, and `ensure_e2e_sessions` self-defers via `wait_for_offline_delivery_end`.
 async fn handle_identity_change(client: &Arc<Client>, node: &NodeRef<'_>) {
-    let Some(from_jid) = node.attrs().optional_jid("from") else {
-        warn!("Identity change notification missing 'from' attribute");
-        return;
-    };
+    let from_jid = crate::require_from_jid!(node, "Identity change notification");
 
     // Only primary device identity changes matter
     if from_jid.device != 0 {
@@ -530,13 +527,11 @@ async fn handle_account_sync_devices(
     devices_node: &NodeRef<'_>,
 ) {
     // Extract the "from" JID - this is the account the notification is about
-    let from_jid = match node.attrs().optional_jid("from") {
-        Some(jid) => jid,
-        None => {
-            warn!(target: "Client/AccountSync", "account_sync devices missing 'from' attribute");
-            return;
-        }
-    };
+    let from_jid = crate::require_from_jid!(
+        node,
+        target: "Client/AccountSync",
+        "account_sync devices"
+    );
 
     // Get our own JIDs (PN and LID) to verify this is about our account
     let device_snapshot = client.persistence_manager.get_device_snapshot().await;
@@ -869,13 +864,11 @@ async fn handle_business_notification(client: &Arc<Client>, node: &NodeRef<'_>) 
 /// </notification>
 /// ```
 fn handle_picture_notification(client: &Arc<Client>, node: &NodeRef<'_>) {
-    let from = match node.attrs().optional_jid("from") {
-        Some(jid) => jid,
-        None => {
-            warn!(target: "Client/Picture", "picture notification missing 'from' attribute");
-            return;
-        }
-    };
+    let from = crate::require_from_jid!(
+        node,
+        target: "Client/Picture",
+        "picture notification"
+    );
 
     let timestamp = notification_timestamp(node);
 
@@ -959,13 +952,11 @@ fn handle_picture_notification(client: &Arc<Client>, node: &NodeRef<'_>) {
 /// </notification>
 /// ```
 fn handle_status_notification(client: &Arc<Client>, node: &NodeRef<'_>) {
-    let from = match node.attrs().optional_jid("from") {
-        Some(jid) => jid,
-        None => {
-            warn!(target: "Client/Status", "status notification missing 'from' attribute");
-            return;
-        }
-    };
+    let from = crate::require_from_jid!(
+        node,
+        target: "Client/Status",
+        "status notification"
+    );
 
     let timestamp = notification_timestamp(node);
 

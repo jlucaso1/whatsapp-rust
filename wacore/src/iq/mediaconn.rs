@@ -279,19 +279,19 @@ impl ProtocolNode for MediaConnResponseExtended {
     fn into_node(self) -> Node {
         let mut builder = NodeBuilder::new("media_conn")
             .attr("auth", &self.auth)
-            .attr("ttl", self.ttl.to_string());
+            .attr("ttl", self.ttl);
 
         if let Some(auth_ttl) = self.auth_ttl {
-            builder = builder.attr("auth_ttl", auth_ttl.to_string());
+            builder = builder.attr("auth_ttl", auth_ttl);
         }
         if let Some(max_buckets) = self.max_buckets {
-            builder = builder.attr("max_buckets", max_buckets.to_string());
+            builder = builder.attr("max_buckets", max_buckets);
         }
         if let Some(ref ip_token) = self.ip_token {
             builder = builder.attr("ip_token", ip_token);
         }
         if let Some(set_ip_token) = self.set_ip_token {
-            builder = builder.attr("set_ip_token", set_ip_token.to_string());
+            builder = builder.attr("set_ip_token", set_ip_token);
         }
 
         let host_nodes: Vec<Node> = self.hosts.into_iter().map(|h| h.into_node()).collect();

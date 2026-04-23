@@ -255,7 +255,7 @@ impl IqSpec for IssuePrivacyTokensSpec {
             .map(|jid| {
                 NodeBuilder::new("token")
                     .attr("jid", jid)
-                    .attr("t", self.timestamp.to_string())
+                    .attr("t", self.timestamp)
                     .attr("type", "trusted_contact")
                     .build()
             })
@@ -383,7 +383,7 @@ pub fn build_tc_token_node(token: &[u8]) -> Node {
 /// Build a `<tctoken>` stanza child with timestamp attribute.
 pub fn build_tc_token_node_with_timestamp(token: &[u8], timestamp: i64) -> Node {
     NodeBuilder::new("tctoken")
-        .attr("t", timestamp.to_string())
+        .attr("t", timestamp)
         .bytes(token.to_vec())
         .build()
 }

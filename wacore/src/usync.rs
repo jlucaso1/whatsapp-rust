@@ -239,11 +239,7 @@ mod tests {
             .map(|(jid, device_ids, phash)| {
                 let device_nodes: Vec<Node> = device_ids
                     .iter()
-                    .map(|id| {
-                        NodeBuilder::new("device")
-                            .attr("id", id.to_string())
-                            .build()
-                    })
+                    .map(|id| NodeBuilder::new("device").attr("id", *id).build())
                     .collect();
 
                 let mut device_list_builder = NodeBuilder::new("device-list");

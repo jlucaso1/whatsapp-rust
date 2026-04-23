@@ -39,3 +39,7 @@ serde_json = { workspace = true, features = ["std"] }
 [[bench]]
 name = "binary_benchmark"
 harness = false
+
+[[bench]]
+name = "numeric_attr_benchmark"
+harness = false

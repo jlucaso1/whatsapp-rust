@@ -138,7 +138,7 @@ pub fn build_media_retry_receipt(
 
     let mut rmr_builder = NodeBuilder::new("rmr")
         .attr("jid", chat_jid)
-        .attr("from_me", is_from_me.to_string());
+        .attr("from_me", is_from_me);
 
     if let Some(p) = participant {
         rmr_builder = rmr_builder.attr("participant", p);

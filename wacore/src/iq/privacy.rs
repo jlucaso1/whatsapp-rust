@@ -373,7 +373,7 @@ impl IqSpec for SetDefaultDisappearingModeSpec {
             Jid::new("", Server::Pn),
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("disappearing_mode")
-                    .attr("duration", self.duration.to_string())
+                    .attr("duration", self.duration)
                     .build(),
             ])),
         )

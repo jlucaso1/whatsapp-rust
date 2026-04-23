@@ -61,7 +61,7 @@ impl ProtocolNode for KeyIndexInfo {
     }
 
     fn into_node(self) -> Node {
-        let mut builder = NodeBuilder::new("key-index-list").attr("ts", self.timestamp.to_string());
+        let mut builder = NodeBuilder::new("key-index-list").attr("ts", self.timestamp);
         if let Some(bytes) = self.signed_bytes {
             builder = builder.bytes(bytes);
         }
@@ -129,7 +129,7 @@ impl ProtocolNode for DeviceElement {
     fn into_node(self) -> Node {
         let mut builder = NodeBuilder::new("device").attr("jid", self.jid);
         if let Some(ki) = self.key_index {
-            builder = builder.attr("key-index", ki.to_string());
+            builder = builder.attr("key-index", ki);
         }
         if let Some(lid) = self.lid {
             builder = builder.attr("lid", lid);

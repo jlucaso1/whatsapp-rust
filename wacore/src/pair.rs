@@ -248,7 +248,7 @@ impl PairUtils {
     ) -> Node {
         let response_content = NodeBuilder::new("pair-device-sign")
             .children([NodeBuilder::new("device-identity")
-                .attr("key-index", key_index.to_string())
+                .attr("key-index", key_index)
                 .bytes(self_signed_identity_bytes)
                 .build()])
             .build();

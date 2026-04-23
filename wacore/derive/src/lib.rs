@@ -162,13 +162,13 @@ pub fn derive_protocol_node(input: TokenStream) -> TokenStream {
                 (AttrType::U64, true) | (AttrType::U32, true) => {
                     quote! {
                         if let Some(v) = self.#field_ident {
-                            builder = builder.attr(#attr_name, v.to_string());
+                            builder = builder.attr(#attr_name, v);
                         }
                     }
                 }
                 (AttrType::U64, false) | (AttrType::U32, false) => {
                     quote! {
-                        builder = builder.attr(#attr_name, self.#field_ident.to_string());
+                        builder = builder.attr(#attr_name, self.#field_ident);
                     }
                 }
             }

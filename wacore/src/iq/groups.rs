@@ -391,7 +391,7 @@ pub fn build_create_group_node(options: &GroupCreateOptions) -> Node {
     if let Some(expiration) = &options.ephemeral_expiration {
         children.push(
             NodeBuilder::new("ephemeral")
-                .attr("expiration", expiration.to_string())
+                .attr("expiration", *expiration)
                 .build(),
         );
     }
@@ -572,10 +572,10 @@ impl ProtocolNode for GroupInfoResponse {
             children.push(NodeBuilder::new("announcement").build());
         }
         if self.ephemeral_expiration > 0 || self.ephemeral_trigger.is_some() {
-            let mut eph = NodeBuilder::new("ephemeral")
-                .attr("expiration", self.ephemeral_expiration.to_string());
+            let mut eph =
+                NodeBuilder::new("ephemeral").attr("expiration", self.ephemeral_expiration);
             if let Some(trigger) = self.ephemeral_trigger {
-                eph = eph.attr("trigger", trigger.to_string());
+                eph = eph.attr("trigger", trigger);
             }
             children.push(eph.build());
         }
@@ -615,7 +615,7 @@ impl ProtocolNode for GroupInfoResponse {
                 desc_builder = desc_builder.attr("participant", owner);
             }
             if let Some(t) = self.description_time {
-                desc_builder = desc_builder.attr("t", t.to_string());
+                desc_builder = desc_builder.attr("t", t);
             }
             if let Some(ref desc) = self.description {
                 desc_builder = desc_builder.children([NodeBuilder::new("body")
@@ -659,7 +659,7 @@ impl ProtocolNode for GroupInfoResponse {
             children.push(
                 NodeBuilder::new("growth_locked")
                     .attr("type", &gl.lock_type)
-                    .attr("expiration", gl.expiration.to_string())
+                    .attr("expiration", gl.expiration)
                     .build(),
             );
         }
@@ -691,16 +691,16 @@ impl ProtocolNode for GroupInfoResponse {
             builder = builder.attr("creator", creator);
         }
         if let Some(creation_time) = self.creation_time {
-            builder = builder.attr("creation", creation_time.to_string());
+            builder = builder.attr("creation", creation_time);
         }
         if let Some(subject_time) = self.subject_time {
-            builder = builder.attr("s_t", subject_time.to_string());
+            builder = builder.attr("s_t", subject_time);
         }
         if let Some(subject_owner) = self.subject_owner {
             builder = builder.attr("s_o", subject_owner);
         }
         if let Some(size) = self.size {
-            builder = builder.attr("size", size.to_string());
+            builder = builder.attr("size", size);
         }
 
         builder.children(children).build()
@@ -1652,7 +1652,7 @@ impl IqSpec for SetGroupEphemeralIq {
     fn build_iq(&self) -> InfoQuery<'static> {
         let node = match self.expiration {
             Some(exp) => NodeBuilder::new("ephemeral")
-                .attr("expiration", exp.to_string())
+                .attr("expiration", exp.get())
                 .build(),
             None => NodeBuilder::new("not_ephemeral").build(),
         };
@@ -2246,8 +2246,8 @@ impl IqSpec for AcceptGroupInviteV4Iq {
             Some(NodeContent::Nodes(vec![
                 NodeBuilder::new("accept")
                     .attr("code", &self.code)
-                    .attr("expiration", self.expiration.to_string())
-                    .attr("admin", self.admin_jid.to_string())
+                    .attr("expiration", self.expiration)
+                    .attr("admin", &self.admin_jid)
                     .build(),
             ])),
         )
