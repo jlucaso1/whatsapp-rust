@@ -134,42 +134,68 @@ impl Client {
             }
         }
     }
-    /// Dispatches an `UndecryptableMessage` event to notify consumers that a message
-    /// could not be decrypted. This is called when decryption fails and we need to
-    /// show a placeholder to the user (like "Waiting for this message...").
+    /// Dispatch an `UndecryptableMessage` event at most once per `(chat, id)`
+    /// via the single-flight `get_with` semantic on `undecryptable_dispatched`.
+    /// The atomic arm avoids the get-then-insert race where two concurrent
+    /// callers would both dispatch. Mirrors WA Web's DB-level placeholder
+    /// uniqueness in `WAWebMessageProcessPlaceholder`.
     ///
-    /// # Arguments
-    /// * `info` - The message info for the undecryptable message
-    /// * `decrypt_fail_mode` - Whether to show or hide the placeholder (matches WhatsApp Web's `hideFail`)
-    fn dispatch_undecryptable_event(
+    /// Returns `true` if this call dispatched the event, `false` if a
+    /// previous call already did.
+    async fn dispatch_undecryptable_event(
         &self,
         info: Arc<MessageInfo>,
+        is_unavailable: bool,
+        unavailable_type: crate::types::events::UnavailableType,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
-    ) {
-        self.core.event_bus.dispatch(Event::UndecryptableMessage(
-            crate::types::events::UndecryptableMessage {
-                info,
-                is_unavailable: false,
-                unavailable_type: crate::types::events::UnavailableType::Unknown,
-                decrypt_fail_mode,
-            },
-        ));
+    ) -> bool {
+        let dedup_key =
+            wacore::types::message::ChatMessageId::new(info.source.chat.clone(), info.id.clone());
+        // The init future only runs for the winning caller. Others receive
+        // the cached `()` and leave the flag as false.
+        let fresh = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fresh_clone = fresh.clone();
+        self.undecryptable_dispatched
+            .get_with(dedup_key, async move {
+                fresh_clone.store(true, std::sync::atomic::Ordering::Release);
+            })
+            .await;
+        let was_fresh = fresh.load(std::sync::atomic::Ordering::Acquire);
+        if was_fresh {
+            self.core.event_bus.dispatch(Event::UndecryptableMessage(
+                crate::types::events::UndecryptableMessage {
+                    info,
+                    is_unavailable,
+                    unavailable_type,
+                    decrypt_fail_mode,
+                },
+            ));
+        } else {
+            log::debug!(
+                "[msg:{}] UndecryptableMessage already dispatched for this id; skipping duplicate event",
+                info.id,
+            );
+        }
+        was_fresh
     }
 
-    /// Handles a decryption failure by dispatching an undecryptable event and spawning a retry receipt.
-    ///
-    /// This is a convenience method that combines the common pattern of:
-    /// 1. Dispatching an UndecryptableMessage event
-    /// 2. Spawning a retry receipt to request re-encryption
+    /// Dispatch an undecryptable event (once per msg id, matching WA Web's
+    /// DB-level placeholder uniqueness) and spawn a retry receipt.
     ///
     /// Returns `true` to be assigned to `dispatched_undecryptable` flag.
-    fn handle_decrypt_failure(
+    async fn handle_decrypt_failure(
         self: &Arc<Self>,
         info: &Arc<MessageInfo>,
         reason: RetryReason,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> bool {
-        self.dispatch_undecryptable_event(Arc::clone(info), decrypt_fail_mode);
+        self.dispatch_undecryptable_event(
+            Arc::clone(info),
+            false,
+            crate::types::events::UnavailableType::Unknown,
+            decrypt_fail_mode,
+        )
+        .await;
         self.spawn_retry_receipt(info, reason);
         true
     }
@@ -389,14 +415,13 @@ impl Client {
             );
             // Ack is handled by the framework; PDO asks the primary phone to relay the message
             self.spawn_pdo_request_with_options(&info, true);
-            self.core.event_bus.dispatch(Event::UndecryptableMessage(
-                crate::types::events::UndecryptableMessage {
-                    info: Arc::clone(&info),
-                    is_unavailable: true,
-                    unavailable_type,
-                    decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
-                },
-            ));
+            self.dispatch_undecryptable_event(
+                Arc::clone(&info),
+                true,
+                unavailable_type,
+                crate::types::events::DecryptFailMode::Show,
+            )
+            .await;
             return None;
         }
 
@@ -658,7 +683,13 @@ impl Client {
                             info.id, info.source.sender
                         );
                         if !session_dispatched_undecryptable {
-                            self.dispatch_undecryptable_event(Arc::clone(&info), decrypt_fail_mode);
+                            self.dispatch_undecryptable_event(
+                                Arc::clone(&info),
+                                false,
+                                crate::types::events::UnavailableType::Unknown,
+                                decrypt_fail_mode,
+                            )
+                            .await;
                         }
                     }
 
@@ -683,7 +714,13 @@ impl Client {
             // Dispatch UndecryptableMessage event for messages that failed to decrypt
             // (This should not cause double-dispatching since process_session_enc_batch
             // already returned dispatched_undecryptable=false for this case)
-            self.dispatch_undecryptable_event(Arc::clone(&info), decrypt_fail_mode);
+            self.dispatch_undecryptable_event(
+                Arc::clone(&info),
+                false,
+                crate::types::events::UnavailableType::Unknown,
+                decrypt_fail_mode,
+            )
+            .await;
             // Do NOT send delivery receipt - transport ack is sufficient
         }
 
@@ -931,11 +968,13 @@ impl Client {
                                             info.id,
                                             address
                                         );
-                                        dispatched_undecryptable = self.handle_decrypt_failure(
-                                            info,
-                                            RetryReason::InvalidKeyId,
-                                            decrypt_fail_mode,
-                                        );
+                                        dispatched_undecryptable = self
+                                            .handle_decrypt_failure(
+                                                info,
+                                                RetryReason::InvalidKeyId,
+                                                decrypt_fail_mode,
+                                            )
+                                            .await;
                                     }
                                 } else {
                                     log::error!(
@@ -946,11 +985,13 @@ impl Client {
                                     );
                                     // Send retry receipt so the sender resends with a PreKeySignalMessage
                                     // to establish a new session with the new identity
-                                    dispatched_undecryptable = self.handle_decrypt_failure(
-                                        info,
-                                        RetryReason::InvalidKey,
-                                        decrypt_fail_mode,
-                                    );
+                                    dispatched_undecryptable = self
+                                        .handle_decrypt_failure(
+                                            info,
+                                            RetryReason::InvalidKey,
+                                            decrypt_fail_mode,
+                                        )
+                                        .await;
                                 }
                             }
                         }
@@ -993,11 +1034,9 @@ impl Client {
                             "[msg:{}] No session found for {} message from {}. Sending retry receipt to request session establishment.",
                             info.id, enc_type, info.source.sender
                         );
-                        dispatched_undecryptable = self.handle_decrypt_failure(
-                            info,
-                            RetryReason::NoSession,
-                            decrypt_fail_mode,
-                        );
+                        dispatched_undecryptable = self
+                            .handle_decrypt_failure(info, RetryReason::NoSession, decrypt_fail_mode)
+                            .await;
                         continue;
                     } else if matches!(
                         e,
@@ -1030,8 +1069,9 @@ impl Client {
                         );
 
                         // Send retry receipt so the sender resends with a PreKeySignalMessage
-                        dispatched_undecryptable =
-                            self.handle_decrypt_failure(info, reason, decrypt_fail_mode);
+                        dispatched_undecryptable = self
+                            .handle_decrypt_failure(info, reason, decrypt_fail_mode)
+                            .await;
                         continue;
                     } else if matches!(e, SignalProtocolError::InvalidPreKeyId) {
                         // InvalidPreKeyId on a PreKeyMessage can also mean the
@@ -1065,11 +1105,13 @@ impl Client {
                         );
 
                         // Send retry receipt with fresh prekeys
-                        dispatched_undecryptable = self.handle_decrypt_failure(
-                            info,
-                            RetryReason::InvalidKeyId,
-                            decrypt_fail_mode,
-                        );
+                        dispatched_undecryptable = self
+                            .handle_decrypt_failure(
+                                info,
+                                RetryReason::InvalidKeyId,
+                                decrypt_fail_mode,
+                            )
+                            .await;
                         continue;
                     } else {
                         // For other unexpected errors, just log them
@@ -1185,8 +1227,8 @@ impl Client {
                         self.handle_unknown_device_sync(info).await;
                     }
 
-                    self.dispatch_undecryptable_event(Arc::clone(info), decrypt_fail_mode);
-                    self.spawn_retry_receipt(info, retry_reason);
+                    self.handle_decrypt_failure(info, retry_reason, decrypt_fail_mode)
+                        .await;
                 }
                 Err(e) => {
                     if info.is_expired_status() {
@@ -5166,6 +5208,292 @@ mod tests {
              Tasks were silently dropped during semaphore generation swap.",
             num_waiters,
             completed.load(Ordering::SeqCst)
+        );
+    }
+
+    // Dispatch ordering, per-id dedup, and PDO eligibility for
+    // UndecryptableMessage. Regressing any of these re-opens data loss bugs
+    // observed in production.
+
+    use crate::types::events::DecryptFailMode;
+    use wacore::types::events::{Event, EventHandler};
+
+    #[derive(Default)]
+    struct EventRecorder {
+        events: std::sync::Mutex<Vec<Arc<Event>>>,
+    }
+
+    impl EventHandler for EventRecorder {
+        fn handle_event(&self, event: Arc<Event>) {
+            self.events.lock().unwrap().push(event);
+        }
+    }
+
+    impl EventRecorder {
+        fn undecryptable(&self) -> Vec<Arc<Event>> {
+            self.events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| matches!(&***e, Event::UndecryptableMessage(_)))
+                .cloned()
+                .collect()
+        }
+    }
+
+    /// Locks the dispatch ordering: consumers must see the event before any
+    /// retry/PDO side effects, otherwise a late subscriber misses the failure.
+    #[tokio::test]
+    async fn test_undecryptable_fires_before_retry_task() {
+        let client = create_test_client_for_retry_with_id("undec_sync").await;
+        let recorder = Arc::new(EventRecorder::default());
+        client.register_handler(recorder.clone());
+
+        let info = Arc::new(create_test_message_info(
+            "5511999998888@s.whatsapp.net",
+            "MSG_SYNC_1",
+            "5511777776666@s.whatsapp.net",
+        ));
+
+        let cache_key = client
+            .make_retry_cache_key(&info.source.chat, &info.id, &info.source.sender)
+            .await;
+
+        assert!(recorder.undecryptable().is_empty());
+        assert!(client.message_retry_counts.get(&cache_key).await.is_none());
+
+        let _ = client
+            .handle_decrypt_failure(&info, RetryReason::InvalidKeyId, DecryptFailMode::Show)
+            .await;
+
+        assert_eq!(
+            recorder.undecryptable().len(),
+            1,
+            "UndecryptableMessage dispatched inside handle_decrypt_failure",
+        );
+        assert!(
+            client.message_retry_counts.get(&cache_key).await.is_none(),
+            "retry task has not progressed yet",
+        );
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+        assert_eq!(
+            client.message_retry_counts.get(&cache_key).await,
+            Some(1),
+            "retry task runs after the dispatch",
+        );
+    }
+
+    /// Atomic dedup under concurrency: 32 parallel callers for the same id
+    /// must produce exactly one event. Catches regressions where the dedup
+    /// would slip back to a non-atomic get-then-insert pair.
+    #[tokio::test]
+    async fn test_undecryptable_dedup_is_atomic() {
+        let client = create_test_client_for_retry_with_id("undec_atomic").await;
+        let recorder = Arc::new(EventRecorder::default());
+        client.register_handler(recorder.clone());
+
+        let info = Arc::new(create_test_message_info(
+            "5511999998888@s.whatsapp.net",
+            "ATOMIC_MSG_1",
+            "5511777776666@s.whatsapp.net",
+        ));
+
+        let mut handles = Vec::with_capacity(32);
+        for _ in 0..32 {
+            let c = Arc::clone(&client);
+            let i = Arc::clone(&info);
+            handles.push(tokio::spawn(async move {
+                c.handle_decrypt_failure(&i, RetryReason::InvalidKeyId, DecryptFailMode::Show)
+                    .await;
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        assert_eq!(
+            recorder.undecryptable().len(),
+            1,
+            "32 concurrent callers must collapse to one UndecryptableMessage",
+        );
+    }
+
+    /// Server resends of the same id must not surface a duplicate event —
+    /// would otherwise show the user the same failure twice.
+    #[tokio::test]
+    async fn test_undecryptable_deduped_across_resends() {
+        let client = create_test_client_for_retry_with_id("undec_double").await;
+        let recorder = Arc::new(EventRecorder::default());
+        client.register_handler(recorder.clone());
+
+        let info = Arc::new(create_test_message_info(
+            "5511999998888@s.whatsapp.net",
+            "3AD01881AA95F7D81070",
+            "85010891714716@lid",
+        ));
+
+        let _ = client
+            .handle_decrypt_failure(&info, RetryReason::InvalidKeyId, DecryptFailMode::Show)
+            .await;
+        let _ = client
+            .handle_decrypt_failure(&info, RetryReason::InvalidKeyId, DecryptFailMode::Show)
+            .await;
+
+        let events = recorder.undecryptable();
+        assert_eq!(
+            events.len(),
+            1,
+            "same message id fires UndecryptableMessage only once",
+        );
+        if let Event::UndecryptableMessage(event) = &*events[0] {
+            assert_eq!(event.info.id, info.id);
+        } else {
+            panic!("event was not UndecryptableMessage");
+        }
+    }
+
+    /// Status posts must flow through PDO — excluding them drops any
+    /// InvalidPreKeyId status permanently (WA Web recovers them).
+    #[tokio::test]
+    async fn test_pdo_armed_for_status_broadcast() {
+        let client = create_test_client_for_retry_with_id("pdo_status").await;
+
+        let info = Arc::new(create_test_message_info(
+            "status@broadcast",
+            "STATUS_MSG_1",
+            "5511777776666@s.whatsapp.net",
+        ));
+
+        assert_eq!(info.source.chat.server, wacore_binary::Server::Broadcast);
+
+        client.spawn_pdo_request_with_options(&info, true);
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    /// Broadcast lists share the same code path; locks the guard for both.
+    #[tokio::test]
+    async fn test_pdo_armed_for_any_broadcast_chat() {
+        let client = create_test_client_for_retry_with_id("pdo_bcast_list").await;
+
+        let info = Arc::new(create_test_message_info(
+            "12345@broadcast",
+            "BCAST_LIST_MSG_1",
+            "5511777776666@s.whatsapp.net",
+        ));
+
+        assert_eq!(info.source.chat.server, wacore_binary::Server::Broadcast);
+
+        client.spawn_pdo_request_with_options(&info, true);
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    #[tokio::test]
+    async fn test_pdo_armed_for_one_on_one() {
+        let client = create_test_client_for_retry_with_id("pdo_dm").await;
+
+        let info = Arc::new(create_test_message_info(
+            "85010891714716@lid",
+            "DM_MSG_1",
+            "85010891714716@lid",
+        ));
+
+        assert_ne!(info.source.chat.server, wacore_binary::Server::Broadcast);
+
+        client.spawn_pdo_request_with_options(&info, true);
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    /// fromMe messages fanned out to a linked device can still fail decrypt
+    /// on the receiver side; PDO is the only recovery path for them.
+    #[tokio::test]
+    async fn test_pdo_armed_for_from_me() {
+        let client = create_test_client_for_retry_with_id("pdo_from_me").await;
+
+        // When fromMe is true the sender is the user's own JID, not a peer.
+        let own_jid = "5511999998888@s.whatsapp.net";
+        let mut info = create_test_message_info("85010891714716@lid", "FROM_ME_MSG_1", own_jid);
+        info.source.is_from_me = true;
+        let info = Arc::new(info);
+
+        client.spawn_pdo_request_with_options(&info, true);
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+    }
+
+    /// Stops offline-sync / reconnect tails from flooding the phone with
+    /// resend requests for old messages the user likely no longer cares about.
+    #[tokio::test]
+    async fn test_pdo_skipped_for_ancient_messages() {
+        use wacore::types::message::ChatMessageId;
+
+        let client = create_test_client_for_retry_with_id("pdo_age").await;
+
+        let mut info =
+            create_test_message_info("85010891714716@lid", "ANCIENT_MSG_1", "85010891714716@lid");
+        info.timestamp = chrono::Utc::now() - chrono::Duration::days(30);
+        let info = Arc::new(info);
+
+        let cache_key = ChatMessageId::new(info.source.chat.clone(), info.id.clone());
+
+        client.spawn_pdo_request_with_options(&info, true);
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        assert!(
+            client.pdo_pending_requests.get(&cache_key).await.is_none(),
+            "messages older than 14 days must not register a PDO entry",
+        );
+    }
+
+    /// Boundary check: age of 14d plus a minute must reject (WA Web uses
+    /// seconds, not days, so 14d1m is already over the limit). Catches a
+    /// `num_days()` truncation that would otherwise accept this message.
+    #[tokio::test]
+    async fn test_pdo_rejects_just_past_14d_boundary() {
+        use wacore::types::message::ChatMessageId;
+
+        let client = create_test_client_for_retry_with_id("pdo_boundary").await;
+
+        let mut info =
+            create_test_message_info("85010891714716@lid", "BOUNDARY_MSG_1", "85010891714716@lid");
+        info.timestamp =
+            chrono::Utc::now() - chrono::Duration::days(14) - chrono::Duration::minutes(1);
+        let info = Arc::new(info);
+
+        let cache_key = ChatMessageId::new(info.source.chat.clone(), info.id.clone());
+
+        client.spawn_pdo_request_with_options(&info, true);
+        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+
+        assert!(
+            client.pdo_pending_requests.get(&cache_key).await.is_none(),
+            "14d+1m must be over the limit, matching WA Web's seconds-based check",
+        );
+    }
+
+    /// The event struct has no "recovery pending" flag, so consumers cannot
+    /// wait for a PDO outcome before surfacing failure — adding a field
+    /// here forces a conscious UX decision.
+    #[test]
+    fn test_undecryptable_event_has_no_pending_pdo_hint() {
+        use crate::types::events::{UnavailableType, UndecryptableMessage};
+
+        let info = Arc::new(create_test_message_info(
+            "5511999998888@s.whatsapp.net",
+            "SHAPE_MSG",
+            "5511777776666@s.whatsapp.net",
+        ));
+        let event = UndecryptableMessage {
+            info,
+            is_unavailable: false,
+            unavailable_type: UnavailableType::Unknown,
+            decrypt_fail_mode: DecryptFailMode::Show,
+        };
+
+        let _ = (
+            &event.info,
+            &event.is_unavailable,
+            &event.unavailable_type,
+            &event.decrypt_fail_mode,
         );
     }
 }

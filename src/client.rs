@@ -174,6 +174,7 @@ pub struct MemoryDiagnostics {
     pub recent_messages: u64,
     pub sender_key_device_cache: u64,
     pub message_retry_counts: u64,
+    pub undecryptable_dispatched: u64,
     pub pdo_pending_requests: u64,
     // -- Moka caches (capacity-only, no TTL) --
     pub session_locks: u64,
@@ -213,6 +214,11 @@ impl std::fmt::Display for MemoryDiagnostics {
             self.sender_key_device_cache
         )?;
         writeln!(f, "  message_retry_counts:   {}", self.message_retry_counts)?;
+        writeln!(
+            f,
+            "  undec_dispatched:       {}",
+            self.undecryptable_dispatched
+        )?;
         writeln!(f, "  pdo_pending_requests:   {}", self.pdo_pending_requests)?;
         writeln!(f, "--- Moka caches (capacity-only) ---")?;
         writeln!(f, "  session_locks:          {}", self.session_locks)?;
@@ -401,6 +407,12 @@ pub struct Client {
     /// Key: "{chat}:{msg_id}:{sender}", Value: retry count
     /// Matches WhatsApp Web's MAX_RETRY = 5 behavior.
     pub(crate) message_retry_counts: Cache<String, u8>,
+
+    /// Dispatch-once gate for `UndecryptableMessage`: a server resend of a
+    /// failed id re-enters the failure path and would otherwise fire a
+    /// duplicate event. Mirrors WA Web's DB-level placeholder uniqueness
+    /// in `WAWebMessageProcessPlaceholder`.
+    pub(crate) undecryptable_dispatched: Cache<ChatMessageId, ()>,
 
     pub enable_auto_reconnect: Arc<AtomicBool>,
     pub auto_reconnect_errors: Arc<AtomicU32>,
@@ -739,6 +751,8 @@ impl Client {
             pending_retries: Arc::new(std::sync::Mutex::new(HashSet::new())),
 
             message_retry_counts: cache_config.message_retry_counts.build_with_ttl(),
+
+            undecryptable_dispatched: cache_config.undecryptable_dispatched.build_with_ttl(),
 
             offline_sync_metrics: Arc::new(OfflineSyncMetrics {
                 active: AtomicBool::new(false),
@@ -1416,6 +1430,7 @@ impl Client {
             recent_messages: self.recent_messages.entry_count(),
             sender_key_device_cache: self.sender_key_device_cache.entry_count(),
             message_retry_counts: self.message_retry_counts.entry_count(),
+            undecryptable_dispatched: self.undecryptable_dispatched.entry_count(),
             pdo_pending_requests: self.pdo_pending_requests.entry_count(),
             session_locks: self.session_locks.entry_count(),
             chat_lanes: self.chat_lanes.entry_count(),

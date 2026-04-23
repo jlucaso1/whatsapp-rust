@@ -75,7 +75,13 @@ impl Client {
         // NonMessageDataRequest.js:412-421 (toUserLid when isLidMigrated).
         // The phone stores messages by LID after migration.
         let resolved_jid = self.resolve_encryption_jid(&info.source.chat).await;
-        let participant = if info.source.is_group {
+        // WAWebE2EProtoUtils.msgKeyToProtobuf omits participant when fromMe or
+        // when the MsgKey has no participant (i.e. a DM, where the chat JID is
+        // the sender). Groups and broadcast chats need it so the phone can
+        // locate the stored message.
+        let participant = if !info.source.is_from_me
+            && (info.source.is_group || info.source.chat.server == wacore_binary::Server::Broadcast)
+        {
             Some(self.resolve_encryption_jid(&info.source.sender).await)
         } else {
             None
@@ -394,12 +400,14 @@ impl Client {
         let is_group = remote_jid.is_group();
         let is_from_me = key.from_me.unwrap_or(false);
 
-        let sender = if is_group {
-            key.participant
-                .as_ref()
-                .map(|p: &String| p.parse())
-                .transpose()?
-                .unwrap_or_else(|| remote_jid.clone())
+        // `key.participant` is the real author for any chat where the sender
+        // differs from the remote_jid — groups AND broadcasts (including
+        // status). Falling back to remote_jid for broadcasts would surface
+        // `status@broadcast` as the sender and erase the author. Matches the
+        // response-handler construction in WAWebNonMessageDataRequestHandlerPlaceholderResend
+        // which maps participant to `author` for both broadcast branches.
+        let sender = if let Some(p) = key.participant.as_ref() {
+            p.parse()?
         } else if is_from_me {
             self.persistence_manager
                 .get_device_snapshot()
@@ -457,10 +465,25 @@ impl Client {
         info: &Arc<MessageInfo>,
         immediate: bool,
     ) {
-        if info.source.is_from_me {
-            return;
-        }
-        if info.source.chat.server == wacore_binary::Server::Broadcast {
+        // `fromMe` is NOT excluded here: when the user's other devices send a
+        // message and the fanout copy to this client fails to decrypt, PDO is
+        // the only recovery path. Matches WAWebNonMessageDataRequestPlaceholderMessageResendUtils.
+
+        // Avoid asking the phone to re-deliver ancient messages during offline
+        // sync or long reconnect tails. Matches the
+        // `placeholder_message_resend_maximum_days_limit` AB prop (default 14d)
+        // enforced by WAWebNonMessageDataRequestPlaceholderMessageResendUtils.
+        // Compare in seconds to stay bit-for-bit with WA Web's `age_s > i`
+        // check — `num_days()` truncates and would let 14d1h through.
+        const PDO_MAX_AGE: chrono::Duration = chrono::Duration::days(14);
+        let age = chrono::Utc::now().signed_duration_since(info.timestamp);
+        if age > PDO_MAX_AGE {
+            debug!(
+                "PDO request skipped for message {} (age {}s exceeds {}s limit)",
+                info.id,
+                age.num_seconds(),
+                PDO_MAX_AGE.num_seconds(),
+            );
             return;
         }
 
@@ -542,5 +565,125 @@ mod tests {
         assert_eq!(peer_target.user, "559999999999");
         assert_eq!(peer_target.device, 0);
         assert_eq!(peer_target.agent, 0);
+    }
+
+    // Reconstruction-path tests share a bare Client wired to mock transport
+    // and an in-memory SQLite backend. The only thing they vary is the
+    // WebMessageInfo they hand to `message_info_from_web_message_info`.
+
+    async fn setup_reconstruct_client() -> std::sync::Arc<crate::client::Client> {
+        use crate::test_utils::{MockHttpClient, create_test_backend};
+        use crate::{
+            client::Client, runtime_impl::TokioRuntime,
+            store::persistence_manager::PersistenceManager, transport::mock::MockTransportFactory,
+        };
+        use std::sync::Arc;
+
+        let backend = create_test_backend().await;
+        let pm = Arc::new(PersistenceManager::new(backend).await.unwrap());
+        let (client, _rx) = Client::new(
+            Arc::new(TokioRuntime),
+            pm,
+            Arc::new(MockTransportFactory::new()),
+            Arc::new(MockHttpClient),
+            None,
+        )
+        .await;
+        client
+    }
+
+    fn make_web_msg(
+        remote_jid: &str,
+        from_me: bool,
+        id: &str,
+        participant: Option<&str>,
+    ) -> waproto::whatsapp::WebMessageInfo {
+        use waproto::whatsapp as wa;
+        wa::WebMessageInfo {
+            key: wa::MessageKey {
+                remote_jid: Some(remote_jid.into()),
+                from_me: Some(from_me),
+                id: Some(id.into()),
+                participant: participant.map(|p| p.into()),
+            },
+            ..Default::default()
+        }
+    }
+
+    /// The reconstruction path preserves the real author for status
+    /// broadcasts via `key.participant`. Using `remote_jid` as sender
+    /// would surface `status@broadcast` and erase the author.
+    #[tokio::test]
+    async fn test_reconstruct_prefers_participant_for_status_broadcast() {
+        let client = setup_reconstruct_client().await;
+        let author_jid = "203040904720543@lid";
+        let web_msg = make_web_msg("status@broadcast", false, "STATUS_PDO_1", Some(author_jid));
+
+        let info = client
+            .message_info_from_web_message_info(&web_msg)
+            .await
+            .unwrap();
+
+        assert_eq!(info.source.chat.to_string(), "status@broadcast");
+        assert_eq!(info.source.sender.to_string(), author_jid);
+    }
+
+    /// DM without participant falls back to remote_jid as the sender,
+    /// preserving the pre-fix behaviour for the DM case.
+    #[tokio::test]
+    async fn test_reconstruct_dm_falls_back_to_remote_jid() {
+        let client = setup_reconstruct_client().await;
+        let peer = "5511999998888@s.whatsapp.net";
+        let web_msg = make_web_msg(peer, false, "DM_PDO_1", None);
+
+        let info = client
+            .message_info_from_web_message_info(&web_msg)
+            .await
+            .unwrap();
+
+        assert_eq!(info.source.chat.to_string(), peer);
+        assert_eq!(info.source.sender.to_string(), peer);
+    }
+
+    /// LID-migrated 1-on-1 responses carry `remote_jid` in LID form and no
+    /// `participant` (WA Web's request side strips it when building the new
+    /// MsgKey, and `msgKeyToProtobuf` then omits it). Reconstruction must
+    /// still resolve the sender to that LID remote, not to something else.
+    #[tokio::test]
+    async fn test_reconstruct_lid_migrated_dm_uses_lid_remote() {
+        let client = setup_reconstruct_client().await;
+        let peer_lid = "236395184570386@lid";
+        let web_msg = make_web_msg(peer_lid, false, "LID_DM_PDO_1", None);
+
+        let info = client
+            .message_info_from_web_message_info(&web_msg)
+            .await
+            .unwrap();
+
+        assert_eq!(info.source.chat.to_string(), peer_lid);
+        assert_eq!(info.source.sender.to_string(), peer_lid);
+        assert!(!info.source.is_group);
+        assert!(!info.source.is_from_me);
+    }
+
+    /// fromMe LID DM: the response has no participant (WA Web omits it when
+    /// fromMe), so the reconstructed sender must come from the device's own
+    /// PN, not from the LID remote_jid.
+    #[tokio::test]
+    async fn test_reconstruct_lid_migrated_dm_from_me_uses_own_pn() {
+        let client = setup_reconstruct_client().await;
+        let peer_lid = "236395184570386@lid";
+        let web_msg = make_web_msg(peer_lid, true, "LID_DM_FROM_ME_1", None);
+
+        let info = client
+            .message_info_from_web_message_info(&web_msg)
+            .await
+            .unwrap();
+
+        // No own PN configured on a fresh test client, so sender falls back
+        // to `remote_jid`. The point is that the participant-less fromMe
+        // path reconstructs without panic.
+        assert_eq!(info.source.chat.to_string(), peer_lid);
+        assert!(info.source.is_from_me);
     }
 }

@@ -169,6 +169,10 @@ pub struct CacheConfig {
     pub recent_messages: CacheEntryConfig,
     /// Message retry counts (time_to_live). Default: 5m TTL, 1000 entries.
     pub message_retry_counts: CacheEntryConfig,
+    /// Dedup key for `UndecryptableMessage` dispatch so a server resend of
+    /// the same id does not surface a second notification. Default: 5m TTL,
+    /// 1000 entries.
+    pub undecryptable_dispatched: CacheEntryConfig,
     /// PDO pending requests (time_to_live). Default: 30s TTL, 500 entries.
     pub pdo_pending_requests: CacheEntryConfig,
     /// Sender key device tracking cache (time_to_idle). Default: 1h TTI, 500 entries.
@@ -208,6 +212,7 @@ impl std::fmt::Debug for CacheConfig {
             .field("lid_pn_cache", &self.lid_pn_cache)
             .field("recent_messages", &self.recent_messages)
             .field("message_retry_counts", &self.message_retry_counts)
+            .field("undecryptable_dispatched", &self.undecryptable_dispatched)
             .field("pdo_pending_requests", &self.pdo_pending_requests)
             .field("sender_key_devices_cache", &self.sender_key_devices_cache)
             .field("session_locks_capacity", &self.session_locks_capacity)
@@ -240,6 +245,7 @@ impl Default for CacheConfig {
             lid_pn_cache: CacheEntryConfig::new(one_hour, 10_000),
             recent_messages: CacheEntryConfig::new(five_min, 0),
             message_retry_counts: CacheEntryConfig::new(five_min, 1_000),
+            undecryptable_dispatched: CacheEntryConfig::new(five_min, 1_000),
             pdo_pending_requests: CacheEntryConfig::new(Some(Duration::from_secs(30)), 500),
             sender_key_devices_cache: CacheEntryConfig::new(one_hour, 500),
             // Coordination caches hold live mutexes/senders; capacity eviction
