@@ -134,26 +134,49 @@ impl Client {
             }
         }
     }
-    /// Dispatches an `UndecryptableMessage` event to notify consumers that a message
-    /// could not be decrypted. This is called when decryption fails and we need to
-    /// show a placeholder to the user (like "Waiting for this message...").
+    /// Dispatch an `UndecryptableMessage` event at most once per `(chat, id)`
+    /// via the single-flight `get_with` semantic on `undecryptable_dispatched`.
+    /// The atomic arm avoids the get-then-insert race where two concurrent
+    /// callers would both dispatch. Mirrors WA Web's DB-level placeholder
+    /// uniqueness in `WAWebMessageProcessPlaceholder`.
     ///
-    /// # Arguments
-    /// * `info` - The message info for the undecryptable message
-    /// * `decrypt_fail_mode` - Whether to show or hide the placeholder (matches WhatsApp Web's `hideFail`)
-    fn dispatch_undecryptable_event(
+    /// Returns `true` if this call dispatched the event, `false` if a
+    /// previous call already did.
+    async fn dispatch_undecryptable_event(
         &self,
         info: Arc<MessageInfo>,
+        is_unavailable: bool,
+        unavailable_type: crate::types::events::UnavailableType,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
-    ) {
-        self.core.event_bus.dispatch(Event::UndecryptableMessage(
-            crate::types::events::UndecryptableMessage {
-                info,
-                is_unavailable: false,
-                unavailable_type: crate::types::events::UnavailableType::Unknown,
-                decrypt_fail_mode,
-            },
-        ));
+    ) -> bool {
+        let dedup_key =
+            wacore::types::message::ChatMessageId::new(info.source.chat.clone(), info.id.clone());
+        // The init future only runs for the winning caller. Others receive
+        // the cached `()` and leave the flag as false.
+        let fresh = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let fresh_clone = fresh.clone();
+        self.undecryptable_dispatched
+            .get_with(dedup_key, async move {
+                fresh_clone.store(true, std::sync::atomic::Ordering::Release);
+            })
+            .await;
+        let was_fresh = fresh.load(std::sync::atomic::Ordering::Acquire);
+        if was_fresh {
+            self.core.event_bus.dispatch(Event::UndecryptableMessage(
+                crate::types::events::UndecryptableMessage {
+                    info,
+                    is_unavailable,
+                    unavailable_type,
+                    decrypt_fail_mode,
+                },
+            ));
+        } else {
+            log::debug!(
+                "[msg:{}] UndecryptableMessage already dispatched for this id; skipping duplicate event",
+                info.id,
+            );
+        }
+        was_fresh
     }
 
     /// Dispatch an undecryptable event (once per msg id, matching WA Web's
@@ -166,25 +189,13 @@ impl Client {
         reason: RetryReason,
         decrypt_fail_mode: crate::types::events::DecryptFailMode,
     ) -> bool {
-        let dedup_key =
-            wacore::types::message::ChatMessageId::new(info.source.chat.clone(), info.id.clone());
-        // get+insert is not atomic: two simultaneous racers both see `None`
-        // and both dispatch. Accepted — duplicate events for truly-parallel
-        // arrivals beat the overhead of a cache-wide mutex.
-        let first_time = self
-            .undecryptable_dispatched
-            .get(&dedup_key)
-            .await
-            .is_none();
-        if first_time {
-            self.undecryptable_dispatched.insert(dedup_key, ()).await;
-            self.dispatch_undecryptable_event(Arc::clone(info), decrypt_fail_mode);
-        } else {
-            log::debug!(
-                "[msg:{}] UndecryptableMessage already dispatched for this id; skipping duplicate event",
-                info.id,
-            );
-        }
+        self.dispatch_undecryptable_event(
+            Arc::clone(info),
+            false,
+            crate::types::events::UnavailableType::Unknown,
+            decrypt_fail_mode,
+        )
+        .await;
         self.spawn_retry_receipt(info, reason);
         true
     }
@@ -404,14 +415,13 @@ impl Client {
             );
             // Ack is handled by the framework; PDO asks the primary phone to relay the message
             self.spawn_pdo_request_with_options(&info, true);
-            self.core.event_bus.dispatch(Event::UndecryptableMessage(
-                crate::types::events::UndecryptableMessage {
-                    info: Arc::clone(&info),
-                    is_unavailable: true,
-                    unavailable_type,
-                    decrypt_fail_mode: crate::types::events::DecryptFailMode::Show,
-                },
-            ));
+            self.dispatch_undecryptable_event(
+                Arc::clone(&info),
+                true,
+                unavailable_type,
+                crate::types::events::DecryptFailMode::Show,
+            )
+            .await;
             return None;
         }
 
@@ -673,7 +683,13 @@ impl Client {
                             info.id, info.source.sender
                         );
                         if !session_dispatched_undecryptable {
-                            self.dispatch_undecryptable_event(Arc::clone(&info), decrypt_fail_mode);
+                            self.dispatch_undecryptable_event(
+                                Arc::clone(&info),
+                                false,
+                                crate::types::events::UnavailableType::Unknown,
+                                decrypt_fail_mode,
+                            )
+                            .await;
                         }
                     }
 
@@ -698,7 +714,13 @@ impl Client {
             // Dispatch UndecryptableMessage event for messages that failed to decrypt
             // (This should not cause double-dispatching since process_session_enc_batch
             // already returned dispatched_undecryptable=false for this case)
-            self.dispatch_undecryptable_event(Arc::clone(&info), decrypt_fail_mode);
+            self.dispatch_undecryptable_event(
+                Arc::clone(&info),
+                false,
+                crate::types::events::UnavailableType::Unknown,
+                decrypt_fail_mode,
+            )
+            .await;
             // Do NOT send delivery receipt - transport ack is sufficient
         }
 
@@ -1205,8 +1227,8 @@ impl Client {
                         self.handle_unknown_device_sync(info).await;
                     }
 
-                    self.dispatch_undecryptable_event(Arc::clone(info), decrypt_fail_mode);
-                    self.spawn_retry_receipt(info, retry_reason);
+                    self.handle_decrypt_failure(info, retry_reason, decrypt_fail_mode)
+                        .await;
                 }
                 Err(e) => {
                     if info.is_expired_status() {
@@ -5259,6 +5281,41 @@ mod tests {
             client.message_retry_counts.get(&cache_key).await,
             Some(1),
             "retry task runs after the dispatch",
+        );
+    }
+
+    /// Atomic dedup under concurrency: 32 parallel callers for the same id
+    /// must produce exactly one event. Catches regressions where the dedup
+    /// would slip back to a non-atomic get-then-insert pair.
+    #[tokio::test]
+    async fn test_undecryptable_dedup_is_atomic() {
+        let client = create_test_client_for_retry_with_id("undec_atomic").await;
+        let recorder = Arc::new(EventRecorder::default());
+        client.register_handler(recorder.clone());
+
+        let info = Arc::new(create_test_message_info(
+            "5511999998888@s.whatsapp.net",
+            "ATOMIC_MSG_1",
+            "5511777776666@s.whatsapp.net",
+        ));
+
+        let mut handles = Vec::with_capacity(32);
+        for _ in 0..32 {
+            let c = Arc::clone(&client);
+            let i = Arc::clone(&info);
+            handles.push(tokio::spawn(async move {
+                c.handle_decrypt_failure(&i, RetryReason::InvalidKeyId, DecryptFailMode::Show)
+                    .await;
+            }));
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        assert_eq!(
+            recorder.undecryptable().len(),
+            1,
+            "32 concurrent callers must collapse to one UndecryptableMessage",
         );
     }
 
