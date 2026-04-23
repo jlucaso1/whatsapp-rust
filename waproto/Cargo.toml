@@ -9,7 +9,6 @@ description = "Protocol Buffers definitions for WhatsApp"
 
 [features]
 default = []
-generate = ["dep:buffa-build"]
 serde-deserialize = []
 serde-snake-case = ["serde-deserialize"]
 
@@ -19,4 +18,4 @@ bytes = { workspace = true }
 serde = { workspace = true }
 
 [build-dependencies]
-buffa-build = { workspace = true, optional = true }
+buffa-build = { workspace = true }

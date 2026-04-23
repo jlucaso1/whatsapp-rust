@@ -1,7 +1,9 @@
-// This module contains the auto-generated protobuf definitions.
-// The code is generated from `whatsapp.proto` and checked into version control.
-// To regenerate, run `cargo build -p waproto --features generate`.
-// See `build.rs` for the full proto compilation config.
+//! Auto-generated protobuf definitions for the WhatsApp wire format.
+//!
+//! The Rust source (`whatsapp.rs`) is produced by `build.rs` from the
+//! pre-compiled descriptor set `whatsapp.desc`, and written to `OUT_DIR` —
+//! not tracked in git. To regenerate the descriptor after editing
+//! `whatsapp.proto`, run `scripts/regenerate-proto-desc.sh` (wraps `protoc`).
 
 #![allow(clippy::large_enum_variant)]
 pub mod whatsapp {
@@ -14,5 +16,5 @@ pub mod whatsapp {
         clippy::needless_else
     )]
     #[rustfmt::skip]
-    include!("whatsapp.rs");
+    include!(concat!(env!("OUT_DIR"), "/whatsapp.rs"));
 }
