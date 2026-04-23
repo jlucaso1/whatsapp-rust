@@ -3516,7 +3516,9 @@ mod tests {
 
     /// Locks down the trait conversions used by `AcceptGroupInviteV4Iq::build_iq`:
     /// `i64` for `expiration` and `&Jid` for `admin`. Exercises the exact
-    /// `NodeBuilder::new("accept")` path that the perf refactor changed.
+    /// `NodeBuilder::new("accept")` path that the perf refactor changed and
+    /// asserts the serialized attribute strings so any drift in numeric
+    /// formatting or JID `Display` impl trips here first.
     #[test]
     fn test_accept_group_invite_v4_iq_attrs() {
         let group_jid: Jid = "120363000000000042@g.us".parse().unwrap();
@@ -3548,6 +3550,9 @@ mod tests {
             accept.attrs().optional_string("expiration").as_deref(),
             Some("1700000123"),
         );
-        assert_eq!(accept.attrs().optional_jid("admin"), Some(admin_jid));
+        assert_eq!(
+            accept.attrs().optional_string("admin").as_deref(),
+            Some("5511999887766@s.whatsapp.net"),
+        );
     }
 }
