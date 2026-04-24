@@ -402,7 +402,9 @@ impl Client {
             return None;
         }
 
-        if let Some(unavailable) = unavailable_node {
+        if let Some(unavailable) = unavailable_node
+            && all_enc_nodes.is_empty()
+        {
             let unavailable_type = match unavailable.get_attr("type").map(|v| v.as_str()).as_deref()
             {
                 Some("view_once") => crate::types::events::UnavailableType::ViewOnce,
@@ -2037,7 +2039,7 @@ mod tests {
         );
 
         // Should not panic or retry loop - skmsg is skipped after msg failure
-        client.handle_incoming_message(message_node).await;
+        client.clone().handle_incoming_message(message_node).await;
     }
 
     /// Test case for reproducing sender key JID mismatch in LID group messages
@@ -2807,7 +2809,7 @@ mod tests {
         );
 
         // Should NOT skip skmsg - before the fix this would incorrectly skip
-        client.handle_incoming_message(message_node).await;
+        client.clone().handle_incoming_message(message_node).await;
     }
 
     /// Test case for UntrustedIdentity error handling and recovery
@@ -5239,6 +5241,55 @@ mod tests {
                 .cloned()
                 .collect()
         }
+
+        /// Count of `UndecryptableMessage` events marked as the "stub"
+        /// variant (`is_unavailable=true`, `UnavailableType::ViewOnce`) —
+        /// i.e. the branch that routes to PDO instead of falling through to
+        /// decrypt.
+        fn view_once_unavailable_count(&self) -> usize {
+            use crate::types::events::UnavailableType;
+            self.events
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|e| {
+                    matches!(
+                        &***e,
+                        Event::UndecryptableMessage(u)
+                            if u.is_unavailable
+                                && matches!(u.unavailable_type, UnavailableType::ViewOnce)
+                    )
+                })
+                .count()
+        }
+    }
+
+    fn build_unavailable_stanza(sender: &str, msg_id: &str, with_enc: bool) -> Arc<OwnedNodeRef> {
+        let t = wacore::time::now_secs().to_string();
+        let unavailable = NodeBuilder::new("unavailable")
+            .attr("type", "view_once")
+            .build();
+        let children = if with_enc {
+            vec![
+                unavailable,
+                NodeBuilder::new("enc")
+                    .attr("type", "msg")
+                    .attr("v", "2")
+                    .bytes(vec![0xDE, 0xAD, 0xBE, 0xEF])
+                    .build(),
+            ]
+        } else {
+            vec![unavailable]
+        };
+        node_to_arc(
+            NodeBuilder::new("message")
+                .attr("from", sender)
+                .attr("id", msg_id)
+                .attr("t", &t)
+                .attr("type", "media")
+                .children(children)
+                .build(),
+        )
     }
 
     /// Locks the dispatch ordering: consumers must see the event before any
@@ -5467,6 +5518,50 @@ mod tests {
         assert!(
             client.pdo_pending_requests.get(&cache_key).await.is_none(),
             "14d+1m must be over the limit, matching WA Web's seconds-based check",
+        );
+    }
+
+    /// Server-trusted companions (Android-class `DeviceProps.PlatformType`)
+    /// receive `<unavailable>` as a marker alongside `<enc>`. The cipher
+    /// must still be decrypted — skipping would discard content the server
+    /// specifically released for this companion. Decrypt eventually fails
+    /// on the garbage payload, but via the normal decrypt-failure path,
+    /// not the `ViewOnce` short-circuit.
+    #[tokio::test]
+    async fn test_unavailable_with_enc_skips_unavailable_shortcut() {
+        let client = create_test_client_for_retry_with_id("unavailable_with_enc").await;
+        let recorder = Arc::new(EventRecorder::default());
+        client.register_handler(recorder.clone());
+
+        let node =
+            build_unavailable_stanza("5511777776666@s.whatsapp.net", "UNAV_WITH_ENC_1", true);
+        client.clone().handle_incoming_message(node).await;
+
+        assert_eq!(
+            recorder.view_once_unavailable_count(),
+            0,
+            "<unavailable> alongside <enc> must fall through to decrypt, \
+             not emit a ViewOnce UndecryptableMessage",
+        );
+    }
+
+    /// Untrusted companions (web-class `PlatformType`) get the bare stub —
+    /// `<unavailable>` without `<enc>`. That path must still emit a
+    /// `ViewOnce` `UndecryptableMessage` so consumers surface the failure
+    /// while the phone relays via PDO.
+    #[tokio::test]
+    async fn test_unavailable_without_enc_dispatches_view_once_event() {
+        let client = create_test_client_for_retry_with_id("unavailable_stub").await;
+        let recorder = Arc::new(EventRecorder::default());
+        client.register_handler(recorder.clone());
+
+        let node = build_unavailable_stanza("5511777776666@s.whatsapp.net", "UNAV_STUB_1", false);
+        client.clone().handle_incoming_message(node).await;
+
+        assert_eq!(
+            recorder.view_once_unavailable_count(),
+            1,
+            "bare <unavailable> stub must dispatch exactly one ViewOnce UndecryptableMessage",
         );
     }
 
