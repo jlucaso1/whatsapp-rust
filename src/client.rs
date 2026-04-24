@@ -620,6 +620,33 @@ impl Client {
         self.skip_history_sync.store(enabled, Ordering::Relaxed);
     }
 
+    /// Override `DeviceProps` fields before the initial pairing. Only fields
+    /// with `Some` are changed. In-memory only — WA Web regenerates
+    /// `device_props` at each registration, and it has no wire effect after
+    /// pairing. Call before `connect()` on every process start that still
+    /// needs to pair.
+    pub async fn set_device_props(&self, override_: wacore::store::DevicePropsOverride) {
+        use wacore::store::commands::DeviceCommand;
+        if override_.is_empty() {
+            return;
+        }
+        if self
+            .persistence_manager
+            .get_device_snapshot()
+            .await
+            .pn
+            .is_some()
+        {
+            warn!(
+                target: "Client/DeviceProps",
+                "set_device_props called after pairing — stored but not sent on the wire"
+            );
+        }
+        self.persistence_manager
+            .process_command(DeviceCommand::SetDeviceProps(override_))
+            .await;
+    }
+
     /// Public entry point for processing [`MajorSyncTask`] from the sync channel.
     pub async fn process_sync_task(self: &Arc<Self>, task: crate::sync_task::MajorSyncTask) {
         match task {

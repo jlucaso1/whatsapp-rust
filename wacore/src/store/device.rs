@@ -103,6 +103,75 @@ fn build_base_client_payload(
     }
 }
 
+/// Override for selected `DeviceProps` fields before pairing. `None` fields
+/// preserve the current value on the device.
+#[derive(Debug, Clone, Default)]
+pub struct DevicePropsOverride {
+    pub os: Option<String>,
+    pub version: Option<wa::device_props::AppVersion>,
+    pub platform_type: Option<wa::device_props::PlatformType>,
+    pub history_sync_config: Option<wa::device_props::HistorySyncConfig>,
+}
+
+impl DevicePropsOverride {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn with_os(mut self, os: impl Into<String>) -> Self {
+        self.os = Some(os.into());
+        self
+    }
+
+    pub fn with_version(mut self, version: wa::device_props::AppVersion) -> Self {
+        self.version = Some(version);
+        self
+    }
+
+    pub fn with_platform_type(mut self, platform_type: wa::device_props::PlatformType) -> Self {
+        self.platform_type = Some(platform_type);
+        self
+    }
+
+    /// Replaces the entire `HistorySyncConfig`. Spread [`default_history_sync_config`]
+    /// into the literal to patch only specific fields while keeping sane defaults.
+    pub fn with_history_sync_config(
+        mut self,
+        history_sync_config: wa::device_props::HistorySyncConfig,
+    ) -> Self {
+        self.history_sync_config = Some(history_sync_config);
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.os.is_none()
+            && self.version.is_none()
+            && self.platform_type.is_none()
+            && self.history_sync_config.is_none()
+    }
+}
+
+/// Default `HistorySyncConfig` aligned with WA Web's static claims
+/// (`Payload.js` in `WAWebClientPayload`). Runtime-derived fields like
+/// `storage_quota_mb`, `on_demand_ready`, and justknobx-gated flags are left
+/// unset so callers can populate them through
+/// [`DevicePropsOverride::with_history_sync_config`] without fighting stale
+/// hardcoded values.
+pub fn default_history_sync_config() -> wa::device_props::HistorySyncConfig {
+    wa::device_props::HistorySyncConfig {
+        full_sync_days_limit: Some(30),
+        inline_initial_payload_in_e2_ee_msg: Some(true),
+        support_bot_user_agent_chat_history: Some(true),
+        support_cag_reactions_and_polls: Some(true),
+        support_recent_sync_chunk_message_count_tuning: Some(true),
+        support_hosted_group_msg: Some(true),
+        support_biz_hosted_msg: Some(true),
+        support_fbid_bot_chat_history: Some(true),
+        support_message_association: Some(true),
+        ..Default::default()
+    }
+}
+
 pub static DEVICE_PROPS: LazyLock<wa::DeviceProps> = LazyLock::new(|| wa::DeviceProps {
     os: Some("rust".to_string()),
     version: Some(wa::device_props::AppVersion {
@@ -113,13 +182,7 @@ pub static DEVICE_PROPS: LazyLock<wa::DeviceProps> = LazyLock::new(|| wa::Device
     }),
     platform_type: Some(wa::device_props::PlatformType::Unknown as i32),
     require_full_sync: Some(true),
-    history_sync_config: Some(wa::device_props::HistorySyncConfig {
-        full_sync_days_limit: Some(30),
-        inline_initial_payload_in_e2_ee_msg: Some(true),
-        storage_quota_mb: Some(10240),
-        support_message_association: Some(true),
-        ..Default::default()
-    }),
+    history_sync_config: Some(default_history_sync_config()),
 });
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -245,20 +308,18 @@ impl Device {
         self.pn.is_some() && !self.push_name.is_empty()
     }
 
-    pub fn set_device_props(
-        &mut self,
-        os: Option<String>,
-        version: Option<wa::device_props::AppVersion>,
-        platform_type: Option<wa::device_props::PlatformType>,
-    ) {
-        if let Some(os) = os {
+    pub fn set_device_props(&mut self, o: DevicePropsOverride) {
+        if let Some(os) = o.os {
             self.device_props.os = Some(os);
         }
-        if let Some(version) = version {
+        if let Some(version) = o.version {
             self.device_props.version = Some(version);
         }
-        if let Some(platform_type) = platform_type {
+        if let Some(platform_type) = o.platform_type {
             self.device_props.platform_type = Some(platform_type as i32);
+        }
+        if let Some(history_sync_config) = o.history_sync_config {
+            self.device_props.history_sync_config = Some(history_sync_config);
         }
     }
 
@@ -392,6 +453,80 @@ mod tests {
         );
         assert_eq!(acc.account_signature.as_deref(), Some([2u8; 64].as_slice()));
         assert_eq!(acc.device_signature.as_deref(), Some([3u8; 64].as_slice()));
+    }
+
+    /// Override survives the ClientPayload → bytes → DeviceProps round-trip;
+    /// `None` fields preserve the prior value.
+    #[test]
+    fn set_device_props_override_reaches_registration_payload() {
+        let mut device = Device::new();
+        assert!(device.pn.is_none());
+
+        device.set_device_props(
+            DevicePropsOverride::new()
+                .with_os("Android 14")
+                .with_platform_type(wa::device_props::PlatformType::AndroidPhone),
+        );
+
+        let payload = device.get_client_payload();
+        let reg = payload.device_pairing_data.expect("device_pairing_data");
+        let bytes = reg.device_props.expect("device_props bytes");
+        let props = wa::DeviceProps::decode(bytes.as_slice()).expect("decode DeviceProps");
+
+        assert_eq!(props.os.as_deref(), Some("Android 14"));
+        assert_eq!(
+            props.platform_type,
+            Some(wa::device_props::PlatformType::AndroidPhone as i32)
+        );
+        // None preserves the default version.
+        assert_eq!(props.version, Some(Device::default_device_props_version()));
+    }
+
+    /// `HistorySyncConfig` override is delivered whole — users patch by
+    /// spreading [`default_history_sync_config`] into the literal.
+    #[test]
+    fn history_sync_config_override_reaches_registration_payload() {
+        let mut device = Device::new();
+        device.set_device_props(DevicePropsOverride::new().with_history_sync_config(
+            wa::device_props::HistorySyncConfig {
+                full_sync_days_limit: Some(365),
+                support_group_history: Some(true),
+                ..default_history_sync_config()
+            },
+        ));
+
+        let payload = device.get_client_payload();
+        let bytes = payload
+            .device_pairing_data
+            .expect("device_pairing_data")
+            .device_props
+            .expect("device_props bytes");
+        let props = wa::DeviceProps::decode(bytes.as_slice()).expect("decode DeviceProps");
+        let hsc = props.history_sync_config.expect("history_sync_config");
+
+        assert_eq!(hsc.full_sync_days_limit, Some(365));
+        assert_eq!(hsc.support_group_history, Some(true));
+        // Defaults spread in via default_history_sync_config() survive.
+        assert_eq!(hsc.support_message_association, Some(true));
+        assert_eq!(hsc.inline_initial_payload_in_e2_ee_msg, Some(true));
+    }
+
+    /// After pairing, `device_props` must not leak into the login payload —
+    /// WA Web only sends it during registration.
+    #[test]
+    fn login_payload_has_no_device_props() {
+        let mut device = Device::new();
+        device.pn = Some("12345@s.whatsapp.net".parse().unwrap());
+        device.set_device_props(
+            DevicePropsOverride::new()
+                .with_platform_type(wa::device_props::PlatformType::AndroidPhone),
+        );
+
+        let payload = device.get_client_payload();
+        assert!(
+            payload.device_pairing_data.is_none(),
+            "login payload must not carry device_pairing_data"
+        );
     }
 
     /// Backward compat: missing `account` field deserializes as `None`.

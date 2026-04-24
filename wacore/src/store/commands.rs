@@ -1,4 +1,5 @@
 use crate::store::Device;
+use crate::store::device::DevicePropsOverride;
 use wacore_binary::Jid;
 use waproto::whatsapp as wa;
 
@@ -9,11 +10,7 @@ pub enum DeviceCommand {
     SetPushName(String),
     SetAccount(Option<wa::AdvSignedDeviceIdentity>),
     SetAppVersion((u32, u32, u32)),
-    SetDeviceProps(
-        Option<String>,
-        Option<wa::device_props::AppVersion>,
-        Option<wa::device_props::PlatformType>,
-    ),
+    SetDeviceProps(DevicePropsOverride),
     SetPropsHash(Option<String>),
     SetNextPreKeyId(u32),
     SetAdvSecretKey([u8; 32]),
@@ -41,8 +38,8 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
             device.app_version_tertiary = t;
             device.app_version_last_fetched_ms = crate::time::now_millis();
         }
-        DeviceCommand::SetDeviceProps(os, version, platform_type) => {
-            device.set_device_props(os, version, platform_type);
+        DeviceCommand::SetDeviceProps(override_) => {
+            device.set_device_props(override_);
         }
         DeviceCommand::SetPropsHash(hash) => {
             device.props_hash = hash;
