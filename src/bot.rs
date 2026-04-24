@@ -520,18 +520,19 @@ impl<B, T, H, R> BotBuilder<B, T, H, R> {
     ///
     /// # Example
     /// ```rust,ignore
-    /// use whatsapp_rust::pair_code::{PairCodeOptions, PlatformId};
+    /// use whatsapp_rust::pair_code::PairCodeOptions;
     ///
+    /// // Platform identity is derived from `DeviceProps` configured via
+    /// // `Bot::builder().with_device_props(...)`. Explicit overrides below
+    /// // are optional — omit them to let derivation do the right thing.
     /// let bot = Bot::builder()
     ///     .with_backend(backend)
     ///     .with_transport_factory(transport)
     ///     .with_http_client(http_client)
     ///     .with_pair_code(PairCodeOptions {
     ///         phone_number: "15551234567".to_string(),
-    ///         show_push_notification: true,
     ///         custom_code: Some("ABCD1234".to_string()),
-    ///         platform_id: PlatformId::Chrome,
-    ///         platform_display: "Chrome (Linux)".to_string(),
+    ///         ..Default::default()
     ///     })
     ///     .on_event(|event, client| async move {
     ///         match &*event {

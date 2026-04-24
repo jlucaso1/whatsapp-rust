@@ -19,7 +19,6 @@
 //! - Ephemeral encryption: AES-256-CTR
 //! - Bundle encryption: AES-256-GCM after HKDF key derivation
 
-use crate::WireEnum;
 use crate::libsignal::crypto::aes_256_gcm_encrypt;
 use crate::libsignal::protocol::{KeyPair, PublicKey};
 use aes::cipher::{KeyIvInit, StreamCipher};
@@ -31,6 +30,7 @@ use sha2::Sha256;
 use wacore_binary::SERVER_JID;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::{Node, NodeContentRef, NodeRef};
+use waproto::whatsapp as wa;
 
 // Type aliases
 type Aes256Ctr = Ctr128BE<aes::Aes256>;
@@ -78,32 +78,89 @@ fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], rounds: u32, output: &mut [u
 /// Validity duration for pair codes (approximately).
 const PAIR_CODE_VALIDITY_SECS: u64 = 180;
 
-/// Platform identifiers for companion devices.
-/// These match the DeviceProps.PlatformType protobuf enum.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, WireEnum)]
-#[repr(u8)]
-pub enum PlatformId {
-    #[wire = "0"]
-    Unknown = 0,
-    #[wire_default]
-    #[wire = "1"]
-    Chrome = 1,
-    #[wire = "2"]
-    Firefox = 2,
-    #[wire = "3"]
-    InternetExplorer = 3,
-    #[wire = "4"]
-    Opera = 4,
-    #[wire = "5"]
-    Safari = 5,
-    #[wire = "6"]
-    Edge = 6,
-    #[wire = "7"]
-    Electron = 7,
-    #[wire = "8"]
-    Uwp = 8,
-    #[wire = "9"]
-    OtherWebClient = 9,
+/// Human-readable label for a `DeviceProps.PlatformType`, used to build
+/// `companion_platform_display`. Mirrors WA Web's `WAWebMiscBrowserUtils.info().name`
+/// for web entries and extends the table with mobile/desktop labels for companions
+/// that aren't browsers.
+///
+/// Match is exhaustive on purpose: a new variant in the proto must force a conscious
+/// decision instead of silently falling through.
+pub fn platform_friendly_name(pt: wa::device_props::PlatformType) -> &'static str {
+    use wa::device_props::PlatformType as P;
+    match pt {
+        P::Unknown => "Unknown",
+        P::Chrome => "Chrome",
+        P::Firefox => "Firefox",
+        P::Ie => "IE",
+        P::Opera => "Opera",
+        P::Safari => "Safari",
+        P::Edge => "Edge",
+        P::Desktop => "Desktop",
+        P::Ipad => "iPad",
+        P::AndroidTablet => "Android",
+        P::Ohana => "Ohana",
+        P::Aloha => "Aloha",
+        P::Catalina => "Catalina",
+        P::TclTv => "TCL TV",
+        P::IosPhone => "iPhone",
+        P::IosCatalyst => "Mac Catalyst",
+        P::AndroidPhone => "Android",
+        P::AndroidAmbiguous => "Android",
+        P::WearOs => "Wear OS",
+        P::ArWrist => "AR Wrist",
+        P::ArDevice => "AR Device",
+        P::Uwp => "UWP",
+        P::Vr => "VR",
+        P::CloudApi => "Cloud API",
+        P::Smartglasses => "Smart Glasses",
+    }
+}
+
+/// Derives `(companion_platform_id, companion_platform_display)` from `DeviceProps`.
+///
+/// Mirrors WA Web's pattern `"<name> (<os>)"` where `name` comes from the running
+/// browser and `os` from the OS detection. For a non-web companion the equivalent
+/// pair is `(platform_friendly_name(platform_type), device_props.os)`.
+///
+/// - `platform_type` missing or invalid → `Unknown`.
+/// - `os` missing/empty → display omits the parenthesised OS and uses the friendly
+///   name only.
+pub fn derive_companion_platform(props: &wa::DeviceProps) -> (String, String) {
+    let pt = props
+        .platform_type
+        .and_then(|v| wa::device_props::PlatformType::try_from(v).ok())
+        .unwrap_or(wa::device_props::PlatformType::Unknown);
+
+    let id = (pt as i32).to_string();
+    let name = platform_friendly_name(pt);
+    let os = props.os.as_deref().unwrap_or("").trim();
+    let display = if os.is_empty() {
+        name.to_string()
+    } else {
+        format!("{name} ({os})")
+    };
+
+    (id, display)
+}
+
+/// Resolves the companion platform strings to send in the `companion_hello` IQ,
+/// honouring explicit overrides from `PairCodeOptions` and falling back to
+/// [`derive_companion_platform`] for any `None` field.
+///
+/// This is the single point where the pairing code flow decides what `companion_*`
+/// values to announce to the primary device; the registration payload route
+/// (`Device::get_client_payload`) is unaffected.
+pub fn resolve_companion_platform(
+    options: &PairCodeOptions,
+    props: &wa::DeviceProps,
+) -> (String, String) {
+    let (derived_id, derived_display) = derive_companion_platform(props);
+    let id = options
+        .platform_id
+        .map(|pt| (pt as i32).to_string())
+        .unwrap_or(derived_id);
+    let display = options.platform_display.clone().unwrap_or(derived_display);
+    (id, display)
 }
 
 /// Options for pair code authentication.
@@ -111,14 +168,17 @@ pub enum PlatformId {
 pub struct PairCodeOptions {
     /// Phone number with country code, no leading zeros or special chars (e.g., "15551234567").
     pub phone_number: String,
-    /// Whether to show push notification on phone (default: true).
+    /// Whether to show push notification on phone (default `true`, matching WA Web).
     pub show_push_notification: bool,
     /// Custom pairing code (8 chars from Crockford alphabet, or None for random).
     pub custom_code: Option<String>,
-    /// Platform identifier for companion device.
-    pub platform_id: PlatformId,
-    /// Platform display name (e.g., "Chrome (Linux)").
-    pub platform_display: String,
+    /// Override for `companion_platform_id`. `None` derives from `Device.device_props`
+    /// via [`resolve_companion_platform`]. Uses the proto `DeviceProps.PlatformType`
+    /// enum directly, so only valid wire values can be expressed at compile time.
+    pub platform_id: Option<wa::device_props::PlatformType>,
+    /// Override for `companion_platform_display`. `None` derives from
+    /// `Device.device_props` via [`resolve_companion_platform`].
+    pub platform_display: Option<String>,
 }
 
 impl Default for PairCodeOptions {
@@ -127,8 +187,18 @@ impl Default for PairCodeOptions {
             phone_number: String::new(),
             show_push_notification: true,
             custom_code: None,
-            platform_id: PlatformId::Chrome,
-            platform_display: "Chrome (Linux)".to_string(),
+            platform_id: None,
+            platform_display: None,
+        }
+    }
+}
+
+impl PairCodeOptions {
+    /// Convenience constructor with the phone number preset and other fields defaulted.
+    pub fn for_phone(phone_number: impl Into<String>) -> Self {
+        Self {
+            phone_number: phone_number.into(),
+            ..Self::default()
         }
     }
 }
@@ -290,11 +360,15 @@ impl PairCodeUtils {
     }
 
     /// Builds the stage 1 (companion_hello) IQ node.
+    ///
+    /// `platform_id` and `platform_display` are the resolved strings — callers
+    /// typically obtain them through [`resolve_companion_platform`] so that
+    /// `Device.device_props` is the single source of truth.
     pub fn build_companion_hello_iq(
         phone_number: &str,
         noise_static_pub: &[u8; 32],
         wrapped_ephemeral: &[u8; 80],
-        platform_id: PlatformId,
+        platform_id: &str,
         platform_display: &str,
         show_push_notification: bool,
         req_id: String,
@@ -316,7 +390,7 @@ impl PairCodeUtils {
                     .bytes(noise_static_pub.to_vec())
                     .build(),
                 NodeBuilder::new("companion_platform_id")
-                    .bytes(platform_id.as_str().as_bytes().to_vec())
+                    .bytes(platform_id.as_bytes().to_vec())
                     .build(),
                 NodeBuilder::new("companion_platform_display")
                     .bytes(platform_display.as_bytes().to_vec())
@@ -517,6 +591,7 @@ pub enum PairCodeError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wacore_binary::NodeContent;
 
     #[test]
     fn test_generate_code() {
@@ -614,14 +689,179 @@ mod tests {
         ));
     }
 
+    fn props(os: Option<&str>, pt: Option<wa::device_props::PlatformType>) -> wa::DeviceProps {
+        wa::DeviceProps {
+            os: os.map(|s| s.to_string()),
+            platform_type: pt.map(|v| v as i32),
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn test_platform_id_string_enum() {
-        // WireEnum derive works correctly
-        assert_eq!(PlatformId::Chrome.as_str(), "1");
-        assert_eq!(PlatformId::Firefox.to_string(), "2");
-        assert_eq!(PlatformId::default(), PlatformId::Chrome);
-        // repr(u8) values match DeviceProps.PlatformType protobuf enum
-        assert_eq!(PlatformId::Chrome as u8, 1);
+    fn derive_chrome_linux_matches_wa_web() {
+        let p = props(Some("Linux"), Some(wa::device_props::PlatformType::Chrome));
+        assert_eq!(
+            derive_companion_platform(&p),
+            ("1".to_string(), "Chrome (Linux)".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_android_phone() {
+        let p = props(
+            Some("Android"),
+            Some(wa::device_props::PlatformType::AndroidPhone),
+        );
+        assert_eq!(
+            derive_companion_platform(&p),
+            ("16".to_string(), "Android (Android)".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_ios_phone() {
+        let p = props(Some("iOS"), Some(wa::device_props::PlatformType::IosPhone));
+        assert_eq!(
+            derive_companion_platform(&p),
+            ("14".to_string(), "iPhone (iOS)".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_ipad() {
+        let p = props(Some("iPadOS"), Some(wa::device_props::PlatformType::Ipad));
+        assert_eq!(
+            derive_companion_platform(&p),
+            ("8".to_string(), "iPad (iPadOS)".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_no_os() {
+        let p = props(None, Some(wa::device_props::PlatformType::AndroidPhone));
+        assert_eq!(
+            derive_companion_platform(&p),
+            ("16".to_string(), "Android".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_empty_os_trims_parenthesis() {
+        let p = props(Some("   "), Some(wa::device_props::PlatformType::IosPhone));
+        assert_eq!(
+            derive_companion_platform(&p),
+            ("14".to_string(), "iPhone".to_string())
+        );
+    }
+
+    #[test]
+    fn derive_unknown_proto() {
+        let p = props(None, None);
+        assert_eq!(
+            derive_companion_platform(&p),
+            ("0".to_string(), "Unknown".to_string())
+        );
+    }
+
+    /// Regression guard for the `Chrome (Linux)` hardcode: a bare `DeviceProps::default()`
+    /// (what `Device::new()` effectively starts with before `set_device_props`) MUST NOT
+    /// produce the legacy web identifier.
+    #[test]
+    fn derive_bare_device_props_never_emits_chrome_linux() {
+        let (id, display) = derive_companion_platform(&wa::DeviceProps::default());
+        assert_ne!(id, "1", "bare DeviceProps must not claim Chrome");
+        assert_ne!(
+            display, "Chrome (Linux)",
+            "bare DeviceProps must not claim Chrome (Linux)"
+        );
+    }
+
+    #[test]
+    fn resolve_explicit_id_only() {
+        let p = props(
+            Some("Android"),
+            Some(wa::device_props::PlatformType::AndroidPhone),
+        );
+        let opts = PairCodeOptions {
+            platform_id: Some(wa::device_props::PlatformType::Chrome),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_companion_platform(&opts, &p),
+            ("1".to_string(), "Android (Android)".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_explicit_display_only() {
+        let p = props(
+            Some("Android"),
+            Some(wa::device_props::PlatformType::AndroidPhone),
+        );
+        let opts = PairCodeOptions {
+            platform_display: Some("My Bot".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_companion_platform(&opts, &p),
+            ("16".to_string(), "My Bot".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_full_override_ignores_device_props() {
+        let p = props(
+            Some("Android"),
+            Some(wa::device_props::PlatformType::AndroidPhone),
+        );
+        let opts = PairCodeOptions {
+            platform_id: Some(wa::device_props::PlatformType::Chrome),
+            platform_display: Some("Chrome (Linux)".into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            resolve_companion_platform(&opts, &p),
+            ("1".to_string(), "Chrome (Linux)".to_string())
+        );
+    }
+
+    #[test]
+    fn friendly_name_exhaustive_non_empty() {
+        use wa::device_props::PlatformType as P;
+        for pt in [
+            P::Unknown,
+            P::Chrome,
+            P::Firefox,
+            P::Ie,
+            P::Opera,
+            P::Safari,
+            P::Edge,
+            P::Desktop,
+            P::Ipad,
+            P::AndroidTablet,
+            P::Ohana,
+            P::Aloha,
+            P::Catalina,
+            P::TclTv,
+            P::IosPhone,
+            P::IosCatalyst,
+            P::AndroidPhone,
+            P::AndroidAmbiguous,
+            P::WearOs,
+            P::ArWrist,
+            P::ArDevice,
+            P::Uwp,
+            P::Vr,
+            P::CloudApi,
+            P::Smartglasses,
+        ] {
+            let name = platform_friendly_name(pt);
+            assert!(!name.is_empty(), "empty label for {pt:?}");
+            assert!(
+                !name.contains('_'),
+                "label for {pt:?} should be human-readable, not raw enum name: {name}"
+            );
+        }
     }
 
     #[test]
@@ -699,14 +939,23 @@ mod tests {
         assert_ne!(key1, key2);
     }
 
+    /// `Default` must not carry any implicit platform identity — the `Chrome (Linux)`
+    /// hardcode caused the companion_hello IQ to claim Chrome even when
+    /// `DeviceProps` said Android. Keep this assertion as a regression guard.
     #[test]
-    fn test_pair_code_options_default() {
+    fn pair_code_options_default_has_no_platform_hardcode() {
         let options = PairCodeOptions::default();
         assert!(options.phone_number.is_empty());
-        assert!(options.show_push_notification);
+        assert!(options.show_push_notification, "default must keep push on");
         assert!(options.custom_code.is_none());
-        assert_eq!(options.platform_id, PlatformId::Chrome);
-        assert_eq!(options.platform_display, "Chrome (Linux)");
+        assert!(
+            options.platform_id.is_none(),
+            "platform_id default must be None so derivation kicks in"
+        );
+        assert!(
+            options.platform_display.is_none(),
+            "platform_display default must be None so derivation kicks in"
+        );
     }
 
     #[test]
@@ -766,5 +1015,142 @@ mod tests {
         let bytes = [0x00, 0x00, 0x00, 0x00, 0x01]; // Last 5 bits = 1 = '2'
         let encoded = PairCodeUtils::encode_crockford(&bytes);
         assert_eq!(encoded.chars().last().unwrap(), '2');
+    }
+
+    // ----- Wire format + regression tests for companion_platform_{id,display} -----
+
+    fn child_bytes<'a>(node: &'a Node, tag: &str) -> &'a [u8] {
+        let n = node
+            .get_optional_child_by_tag(&[tag])
+            .unwrap_or_else(|| panic!("missing <{tag}>"));
+        match n.content.as_ref() {
+            Some(NodeContent::Bytes(b)) => b.as_slice(),
+            other => panic!("expected Bytes for <{tag}>, got {other:?}"),
+        }
+    }
+
+    fn build_iq(pid: &str, pdisp: &str) -> Node {
+        let noise = [0xAAu8; 32];
+        let wrapped = [0xBBu8; 80];
+        PairCodeUtils::build_companion_hello_iq(
+            "15551234567",
+            &noise,
+            &wrapped,
+            pid,
+            pdisp,
+            true,
+            "req-1".to_string(),
+        )
+    }
+
+    #[test]
+    fn companion_hello_iq_shape() {
+        let iq = build_iq("16", "Android (Android)");
+        assert_eq!(iq.tag, "iq");
+
+        let reg = iq
+            .get_optional_child_by_tag(&["link_code_companion_reg"])
+            .expect("link_code_companion_reg");
+        let attrs: std::collections::HashMap<String, String> = reg
+            .attrs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.as_str().into_owned()))
+            .collect();
+        assert_eq!(
+            attrs.get("stage").map(String::as_str),
+            Some("companion_hello")
+        );
+        assert_eq!(
+            attrs.get("jid").map(String::as_str),
+            Some("15551234567@s.whatsapp.net")
+        );
+        assert_eq!(
+            attrs
+                .get("should_show_push_notification")
+                .map(String::as_str),
+            Some("true")
+        );
+
+        // Nonce is the string "0", per whatsmeow/baileys parity.
+        assert_eq!(child_bytes(reg, "link_code_pairing_nonce"), b"0");
+    }
+
+    #[test]
+    fn companion_hello_iq_android_wire_strings() {
+        let iq = build_iq("16", "Android (Android)");
+        let reg = iq
+            .get_optional_child_by_tag(&["link_code_companion_reg"])
+            .unwrap();
+        assert_eq!(child_bytes(reg, "companion_platform_id"), b"16");
+        assert_eq!(
+            child_bytes(reg, "companion_platform_display"),
+            b"Android (Android)"
+        );
+    }
+
+    #[test]
+    fn companion_hello_iq_chrome_linux_wire_parity() {
+        // Guarantees the refactor didn't shift wire bytes for the legacy web case.
+        let iq = build_iq("1", "Chrome (Linux)");
+        let reg = iq
+            .get_optional_child_by_tag(&["link_code_companion_reg"])
+            .unwrap();
+        assert_eq!(child_bytes(reg, "companion_platform_id"), b"1");
+        assert_eq!(
+            child_bytes(reg, "companion_platform_display"),
+            b"Chrome (Linux)"
+        );
+    }
+
+    /// End-to-end for the reported bug: a caller that only configured
+    /// `DeviceProps` (os=Android, platform_type=ANDROID_PHONE) and used
+    /// `PairCodeOptions::default()` must see the companion_hello IQ carry
+    /// `companion_platform_id=16` and an Android-flavoured display — not the
+    /// legacy "1" / "Chrome (Linux)".
+    #[test]
+    fn bug_android_device_props_no_longer_emit_chrome_linux() {
+        let props = wa::DeviceProps {
+            os: Some("Android".into()),
+            platform_type: Some(wa::device_props::PlatformType::AndroidPhone as i32),
+            ..Default::default()
+        };
+        let (pid, pdisp) = resolve_companion_platform(&PairCodeOptions::default(), &props);
+        assert_eq!(pid, "16");
+        assert_eq!(pdisp, "Android (Android)");
+
+        let iq = build_iq(&pid, &pdisp);
+        let reg = iq
+            .get_optional_child_by_tag(&["link_code_companion_reg"])
+            .unwrap();
+        assert_eq!(child_bytes(reg, "companion_platform_id"), b"16");
+        assert_eq!(
+            child_bytes(reg, "companion_platform_display"),
+            b"Android (Android)"
+        );
+        // Negative side of the regression: not Chrome anymore.
+        assert_ne!(child_bytes(reg, "companion_platform_id"), b"1");
+        assert_ne!(
+            child_bytes(reg, "companion_platform_display"),
+            b"Chrome (Linux)"
+        );
+    }
+
+    /// Explicit override survives: power users that want to impersonate a
+    /// specific web client can still do so.
+    #[test]
+    fn explicit_options_still_beat_device_props() {
+        let props = wa::DeviceProps {
+            os: Some("Android".into()),
+            platform_type: Some(wa::device_props::PlatformType::AndroidPhone as i32),
+            ..Default::default()
+        };
+        let opts = PairCodeOptions {
+            platform_id: Some(wa::device_props::PlatformType::Chrome),
+            platform_display: Some("Chrome (Linux)".into()),
+            ..Default::default()
+        };
+        let (pid, pdisp) = resolve_companion_platform(&opts, &props);
+        assert_eq!(pid, "1");
+        assert_eq!(pdisp, "Chrome (Linux)");
     }
 }
