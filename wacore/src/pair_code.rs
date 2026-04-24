@@ -157,7 +157,7 @@ pub fn resolve_companion_platform(
     let (derived_id, derived_display) = derive_companion_platform(props);
     let id = options
         .platform_id
-        .map(|n| n.to_string())
+        .map(|pt| (pt as i32).to_string())
         .unwrap_or(derived_id);
     let display = options.platform_display.clone().unwrap_or(derived_display);
     (id, display)
@@ -173,9 +173,9 @@ pub struct PairCodeOptions {
     /// Custom pairing code (8 chars from Crockford alphabet, or None for random).
     pub custom_code: Option<String>,
     /// Override for `companion_platform_id`. `None` derives from `Device.device_props`
-    /// via [`resolve_companion_platform`]. Values follow the proto
-    /// `DeviceProps.PlatformType` integer encoding (e.g., `16` for `ANDROID_PHONE`).
-    pub platform_id: Option<i32>,
+    /// via [`resolve_companion_platform`]. Uses the proto `DeviceProps.PlatformType`
+    /// enum directly, so only valid wire values can be expressed at compile time.
+    pub platform_id: Option<wa::device_props::PlatformType>,
     /// Override for `companion_platform_display`. `None` derives from
     /// `Device.device_props` via [`resolve_companion_platform`].
     pub platform_display: Option<String>,
@@ -783,7 +783,7 @@ mod tests {
             Some(wa::device_props::PlatformType::AndroidPhone),
         );
         let opts = PairCodeOptions {
-            platform_id: Some(1),
+            platform_id: Some(wa::device_props::PlatformType::Chrome),
             ..Default::default()
         };
         assert_eq!(
@@ -815,7 +815,7 @@ mod tests {
             Some(wa::device_props::PlatformType::AndroidPhone),
         );
         let opts = PairCodeOptions {
-            platform_id: Some(1),
+            platform_id: Some(wa::device_props::PlatformType::Chrome),
             platform_display: Some("Chrome (Linux)".into()),
             ..Default::default()
         };
@@ -1145,7 +1145,7 @@ mod tests {
             ..Default::default()
         };
         let opts = PairCodeOptions {
-            platform_id: Some(1),
+            platform_id: Some(wa::device_props::PlatformType::Chrome),
             platform_display: Some("Chrome (Linux)".into()),
             ..Default::default()
         };
