@@ -385,7 +385,9 @@ impl TestClient {
                 continue;
             }
         }
-        self.client.reconnect().await;
+        // This helper is for tests that only need a fresh online connection.
+        // Offline-window tests call `reconnect()` directly.
+        self.client.reconnect_immediately().await;
         self.wait_for_event(10, |e| matches!(e, Event::Connected(_)))
             .await?;
         Ok(())
