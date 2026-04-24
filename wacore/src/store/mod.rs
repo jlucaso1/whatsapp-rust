@@ -10,7 +10,7 @@ pub mod traits;
 
 pub use cache::CacheStore;
 pub use commands::*;
-pub use device::Device;
+pub use device::{Device, DevicePropsOverride};
 pub use in_memory::InMemoryBackend;
 pub use persistence::PersistenceManager;
 pub use signal_cache::SignalStoreCache;

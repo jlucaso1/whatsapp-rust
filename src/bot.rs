@@ -16,6 +16,7 @@ use std::pin::Pin;
 use std::sync::Arc;
 use thiserror::Error;
 use wacore::runtime::Runtime;
+use wacore::store::DevicePropsOverride;
 use waproto::whatsapp as wa;
 
 /// Typestate marker: a required builder field has not been provided yet.
@@ -268,11 +269,7 @@ pub struct BotBuilder<B = Missing, T = Missing, H = Missing, R = Missing> {
     event_handler: Option<EventHandlerCallback>,
     custom_enc_handlers: HashMap<String, Arc<dyn EncHandler>>,
     override_version: Option<(u32, u32, u32)>,
-    os_info: Option<(
-        Option<String>,
-        Option<wa::device_props::AppVersion>,
-        Option<wa::device_props::PlatformType>,
-    )>,
+    device_props_override: Option<DevicePropsOverride>,
     pair_code_options: Option<PairCodeOptions>,
     skip_history_sync: bool,
     initial_push_name: Option<String>,
@@ -290,7 +287,7 @@ impl BotBuilder<Missing, Missing, Missing, Missing> {
             event_handler: None,
             custom_enc_handlers: HashMap::new(),
             override_version: None,
-            os_info: None,
+            device_props_override: None,
             pair_code_options: None,
             skip_history_sync: false,
             initial_push_name: None,
@@ -326,7 +323,7 @@ impl<T, H, R> BotBuilder<Missing, T, H, R> {
             event_handler: self.event_handler,
             custom_enc_handlers: self.custom_enc_handlers,
             override_version: self.override_version,
-            os_info: self.os_info,
+            device_props_override: self.device_props_override,
             pair_code_options: self.pair_code_options,
             skip_history_sync: self.skip_history_sync,
             initial_push_name: self.initial_push_name,
@@ -365,7 +362,7 @@ impl<B, H, R> BotBuilder<B, Missing, H, R> {
             event_handler: self.event_handler,
             custom_enc_handlers: self.custom_enc_handlers,
             override_version: self.override_version,
-            os_info: self.os_info,
+            device_props_override: self.device_props_override,
             pair_code_options: self.pair_code_options,
             skip_history_sync: self.skip_history_sync,
             initial_push_name: self.initial_push_name,
@@ -403,7 +400,7 @@ impl<B, T, R> BotBuilder<B, T, Missing, R> {
             event_handler: self.event_handler,
             custom_enc_handlers: self.custom_enc_handlers,
             override_version: self.override_version,
-            os_info: self.os_info,
+            device_props_override: self.device_props_override,
             pair_code_options: self.pair_code_options,
             skip_history_sync: self.skip_history_sync,
             initial_push_name: self.initial_push_name,
@@ -426,7 +423,7 @@ impl<B, T, H> BotBuilder<B, T, H, Missing> {
             event_handler: self.event_handler,
             custom_enc_handlers: self.custom_enc_handlers,
             override_version: self.override_version,
-            os_info: self.os_info,
+            device_props_override: self.device_props_override,
             pair_code_options: self.pair_code_options,
             skip_history_sync: self.skip_history_sync,
             initial_push_name: self.initial_push_name,
@@ -491,52 +488,24 @@ impl<B, T, H, R> BotBuilder<B, T, H, R> {
     /// Override the device properties sent to WhatsApp servers.
     /// This allows customizing how your device appears on the linked devices list.
     ///
-    /// # Arguments
-    /// * `os_name` - Optional OS name (e.g., "macOS", "Windows", "Linux")
-    /// * `version` - Optional app version as AppVersion struct
-    /// * `platform_type` - Optional platform type that determines the device name shown
-    ///   on the phone's linked devices list (e.g., Chrome, Firefox, Safari, Desktop)
-    ///
-    /// **Important**: The `platform_type` determines what device name is shown on the phone.
-    /// Common values: `Chrome`, `Firefox`, `Safari`, `Edge`, `Desktop`, `Ipad`, etc.
-    /// If not set, defaults to `Unknown` which shows as "Unknown device".
-    ///
-    /// You can pass `None` for any parameter to keep the default value.
+    /// `platform_type` controls the display name in Linked Devices; defaults
+    /// to `Unknown` ("Unknown device"). Only applied on the initial pairing.
     ///
     /// # Example
     /// ```rust,ignore
-    /// use waproto::whatsapp::device_props::{self, PlatformType};
+    /// use waproto::whatsapp::device_props::PlatformType;
+    /// use wacore::store::DevicePropsOverride;
     ///
-    /// // Show as "Chrome" on linked devices
-    /// let bot = Bot::builder()
+    /// Bot::builder()
     ///     .with_backend(backend)
     ///     .with_device_props(
-    ///         Some("macOS".to_string()),
-    ///         Some(device_props::AppVersion {
-    ///             primary: Some(2),
-    ///             secondary: Some(0),
-    ///             tertiary: Some(0),
-    ///             ..Default::default()
-    ///         }),
-    ///         Some(PlatformType::Chrome),
-    ///     )
-    ///     .build()
-    ///     .await?;
-    ///
-    /// // Show as "Desktop" on linked devices
-    /// let bot = Bot::builder()
-    ///     .with_backend(backend)
-    ///     .with_device_props(None, None, Some(PlatformType::Desktop))
-    ///     .build()
-    ///     .await?;
+    ///         DevicePropsOverride::new()
+    ///             .with_os("macOS")
+    ///             .with_platform_type(PlatformType::Chrome),
+    ///     );
     /// ```
-    pub fn with_device_props(
-        mut self,
-        os_name: Option<String>,
-        version: Option<wa::device_props::AppVersion>,
-        platform_type: Option<wa::device_props::PlatformType>,
-    ) -> Self {
-        self.os_info = Some((os_name, version, platform_type));
+    pub fn with_device_props(mut self, override_: DevicePropsOverride) -> Self {
+        self.device_props_override = Some(override_);
         self
     }
 
@@ -673,18 +642,12 @@ impl BotBuilder<Provided, Provided, Provided, Provided> {
                 .await;
         }
 
-        // Apply device props override if specified
-        if let Some((os_name, version, platform_type)) = self.os_info {
-            info!(
-                "Applying device props override: os={:?}, version={:?}, platform_type={:?}",
-                os_name, version, platform_type
-            );
+        if let Some(override_) = self.device_props_override
+            && !override_.is_empty()
+        {
+            info!("Applying device props override: {:?}", override_);
             persistence_manager
-                .process_command(DeviceCommand::SetDeviceProps(
-                    os_name,
-                    version,
-                    platform_type,
-                ))
+                .process_command(DeviceCommand::SetDeviceProps(override_))
                 .await;
         }
 
@@ -902,7 +865,11 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(http_client)
-            .with_device_props(Some(custom_os.clone()), Some(custom_version), None)
+            .with_device_props(
+                DevicePropsOverride::new()
+                    .with_os(custom_os.clone())
+                    .with_version(custom_version),
+            )
             .with_runtime(TokioRuntime)
             .build()
             .await
@@ -929,7 +896,7 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(http_client)
-            .with_device_props(Some(custom_os.clone()), None, None)
+            .with_device_props(DevicePropsOverride::new().with_os(custom_os.clone()))
             .with_runtime(TokioRuntime)
             .build()
             .await
@@ -965,7 +932,7 @@ mod tests {
             .with_backend(backend)
             .with_http_client(http_client)
             .with_transport_factory(transport)
-            .with_device_props(None, Some(custom_version), None)
+            .with_device_props(DevicePropsOverride::new().with_version(custom_version))
             .with_runtime(TokioRuntime)
             .build()
             .await
@@ -994,7 +961,10 @@ mod tests {
             .with_backend(backend)
             .with_transport_factory(transport)
             .with_http_client(http_client)
-            .with_device_props(None, None, Some(wa::device_props::PlatformType::Chrome))
+            .with_device_props(
+                DevicePropsOverride::new()
+                    .with_platform_type(wa::device_props::PlatformType::Chrome),
+            )
             .with_runtime(TokioRuntime)
             .build()
             .await
@@ -1040,9 +1010,10 @@ mod tests {
             .with_transport_factory(transport)
             .with_http_client(http_client)
             .with_device_props(
-                Some(custom_os.clone()),
-                Some(custom_version),
-                Some(custom_platform),
+                DevicePropsOverride::new()
+                    .with_os(custom_os.clone())
+                    .with_version(custom_version)
+                    .with_platform_type(custom_platform),
             )
             .with_runtime(TokioRuntime)
             .build()
