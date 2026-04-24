@@ -52,12 +52,12 @@ use log::{error, info, warn};
 
 use std::sync::Arc;
 use wacore::libsignal::protocol::KeyPair;
-use wacore::pair_code::{PairCodeError, PairCodeState, PairCodeUtils};
+use wacore::pair_code::{PairCodeError, PairCodeState, PairCodeUtils, resolve_companion_platform};
 use wacore_binary::Jid;
 use wacore_binary::{NodeContent, NodeContentRef, NodeRef};
 
 // Re-export types for user convenience
-pub use wacore::pair_code::{PairCodeOptions, PlatformId};
+pub use wacore::pair_code::PairCodeOptions;
 
 impl Client {
     /// Initiates pair code authentication as an alternative to QR code pairing.
@@ -160,14 +160,22 @@ impl Client {
         })
         .await;
 
+        // Resolve companion_platform_{id,display} from options + device_props.
+        // This is the single point where the pairing code flow picks what
+        // identity to announce; bare `PairCodeOptions::default()` derives from
+        // `Device.device_props` (os + platform_type) rather than the legacy
+        // "Chrome (Linux)" hardcode.
+        let (platform_id_str, platform_display_str) =
+            resolve_companion_platform(&options, &device_snapshot.device_props);
+
         // Build the stage 1 IQ node
         let req_id = self.generate_request_id();
         let iq_content = PairCodeUtils::build_companion_hello_iq(
             &phone_number,
             &noise_static_pub,
             &wrapped_ephemeral,
-            options.platform_id,
-            &options.platform_display,
+            &platform_id_str,
+            &platform_display_str,
             options.show_push_notification,
             req_id.clone(),
         );
