@@ -160,7 +160,6 @@ impl DevicePropsOverride {
 pub fn default_history_sync_config() -> wa::device_props::HistorySyncConfig {
     wa::device_props::HistorySyncConfig {
         full_sync_days_limit: Some(30),
-        storage_quota_mb: Some(10240),
         inline_initial_payload_in_e2_ee_msg: Some(true),
         support_bot_user_agent_chat_history: Some(true),
         support_cag_reactions_and_polls: Some(true),
