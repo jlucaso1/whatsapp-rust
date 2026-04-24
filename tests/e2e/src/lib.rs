@@ -43,6 +43,14 @@ impl TestClient {
     /// Create a client, connect to the mock server, and wait for PairSuccess + Connected.
     /// Returns the connected TestClient with its JID available via `client.get_pn()`.
     pub async fn connect(prefix: &str) -> anyhow::Result<Self> {
+        Self::connect_inner(prefix, Some(unique_push_name(prefix))).await
+    }
+
+    /// Connect without pre-seeding a push name.
+    ///
+    /// Use only for tests that explicitly cover the fresh-pairing app-state
+    /// path where push name arrives from server sync.
+    pub async fn connect_without_push_name(prefix: &str) -> anyhow::Result<Self> {
         Self::connect_inner(prefix, None).await
     }
 
@@ -385,7 +393,9 @@ impl TestClient {
                 continue;
             }
         }
-        self.client.reconnect().await;
+        // This helper is for tests that only need a fresh online connection.
+        // Offline-window tests call `reconnect()` directly.
+        self.client.reconnect_immediately().await;
         self.wait_for_event(10, |e| matches!(e, Event::Connected(_)))
             .await?;
         Ok(())

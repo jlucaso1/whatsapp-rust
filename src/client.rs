@@ -1157,6 +1157,7 @@ impl Client {
         self.is_ready.store(false, Ordering::Relaxed);
         self.is_connected.store(false, Ordering::Relaxed);
         self.offline_sync_completed.store(false, Ordering::Relaxed);
+        self.outbound_flush.reopen();
 
         // WA Web: both MQTT and DGW transports use a 20s connect timeout.
         // Without this, a dead network blocks on the OS TCP SYN timeout (~60-75s).
@@ -1256,24 +1257,19 @@ impl Client {
         self.expected_disconnect.store(true, Ordering::Relaxed);
         self.is_running.store(false, Ordering::Relaxed);
         self.shutdown_notifier.notify();
-        // Stop the read loop first so no new stanzas enter the pipeline while
-        // we're flushing receipts (issue #571).
-        self.notify_connection_shutdown();
 
+        // Prevent late receipt producers from escaping the drain window.
+        self.outbound_flush.close();
         self.outbound_flush
             .flush(&*self.runtime, std::time::Duration::from_secs(5))
             .await;
+        self.notify_connection_shutdown();
 
         if let Err(e) = self.persistence_manager.flush().await {
             log::error!("Failed to flush device state during disconnect: {e}");
         }
 
-        // Explicitly close the socket here (AFTER flush) so any in-flight
-        // receipts see a live transport. `cleanup_connection_state` below is
-        // a belt-and-suspenders guard for the concurrent-disconnect race
-        // (run loop could reach cleanup first and clear the transport before
-        // this branch runs); the JS / tokio transport impl makes
-        // `disconnect()` idempotent so double-fire is safe.
+        // Close after flush; cleanup may also win this race on the run loop.
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
         }
@@ -1305,11 +1301,12 @@ impl Client {
         self.intentional_reconnect.store(true, Ordering::Relaxed);
         self.auto_reconnect_errors
             .store(Self::RECONNECT_BACKOFF_STEP, Ordering::Relaxed);
-        self.notify_connection_shutdown();
 
+        self.outbound_flush.close();
         self.outbound_flush
             .flush(&*self.runtime, std::time::Duration::from_secs(2))
             .await;
+        self.notify_connection_shutdown();
 
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
@@ -1324,11 +1321,12 @@ impl Client {
     pub async fn reconnect_immediately(self: &Arc<Self>) {
         info!("Reconnecting immediately (expected disconnect).");
         self.expected_disconnect.store(true, Ordering::Relaxed);
-        self.notify_connection_shutdown();
 
+        self.outbound_flush.close();
         self.outbound_flush
             .flush(&*self.runtime, std::time::Duration::from_secs(2))
             .await;
+        self.notify_connection_shutdown();
 
         if let Some(transport) = self.transport.lock().await.as_ref() {
             transport.disconnect().await;
@@ -5894,6 +5892,127 @@ mod tests {
         assert!(
             client.is_connected(),
             "is_connected() must return true even while noise_socket mutex is held"
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_does_not_signal_connection_cleanup_before_outbound_flush() {
+        use crate::socket::NoiseSocket;
+        use async_trait::async_trait;
+        use bytes::Bytes;
+        use wacore::handshake::NoiseCipher;
+
+        struct BlockingTransport {
+            send_started: async_channel::Sender<()>,
+            release_send: async_channel::Receiver<()>,
+            send_done: Arc<AtomicBool>,
+            disconnect_called: Arc<AtomicBool>,
+            disconnect_before_send_done: Arc<AtomicBool>,
+        }
+
+        #[async_trait]
+        impl crate::transport::Transport for BlockingTransport {
+            async fn send(&self, _data: Bytes) -> Result<(), anyhow::Error> {
+                let _ = self.send_started.try_send(());
+                let _ = self.release_send.recv().await;
+                self.send_done.store(true, Ordering::Release);
+                Ok(())
+            }
+
+            async fn disconnect(&self) {
+                if !self.send_done.load(Ordering::Acquire) {
+                    self.disconnect_before_send_done
+                        .store(true, Ordering::Release);
+                }
+                self.disconnect_called.store(true, Ordering::Release);
+            }
+        }
+
+        let client = crate::test_utils::create_test_client().await;
+        let (send_started_tx, send_started_rx) = async_channel::bounded(1);
+        let (release_send_tx, release_send_rx) = async_channel::bounded(1);
+        let send_done = Arc::new(AtomicBool::new(false));
+        let disconnect_called = Arc::new(AtomicBool::new(false));
+        let disconnect_before_send_done = Arc::new(AtomicBool::new(false));
+
+        let transport_impl = Arc::new(BlockingTransport {
+            send_started: send_started_tx,
+            release_send: release_send_rx,
+            send_done: Arc::clone(&send_done),
+            disconnect_called: Arc::clone(&disconnect_called),
+            disconnect_before_send_done: Arc::clone(&disconnect_before_send_done),
+        });
+        let transport: Arc<dyn crate::transport::Transport> = transport_impl;
+
+        let key = [0u8; 32];
+        let write_key = NoiseCipher::new(&key).expect("valid key");
+        let read_key = NoiseCipher::new(&key).expect("valid key");
+        let noise_socket = NoiseSocket::new(
+            client.runtime.clone(),
+            Arc::clone(&transport),
+            write_key,
+            read_key,
+        );
+
+        *client.transport.lock().await = Some(transport);
+        *client.noise_socket.lock().await = Some(Arc::new(noise_socket));
+        client.is_connected.store(true, Ordering::Release);
+
+        let cleanup_signal = client.connection_shutdown_signal();
+        let cleanup_client = Arc::clone(&client);
+        let cleanup_task = tokio::spawn(async move {
+            wacore::runtime::wait_for_shutdown(&cleanup_signal).await;
+            cleanup_client.cleanup_connection_state().await;
+        });
+
+        let send_client = Arc::clone(&client);
+        client.outbound_flush.spawn(&*client.runtime, async move {
+            let receipt = NodeBuilder::new("receipt")
+                .attr("id", "TEST-FLUSH-ORDER")
+                .attr("to", "1234567890@s.whatsapp.net")
+                .build();
+            let _ = send_client.send_node(receipt).await;
+        });
+
+        tokio::time::timeout(Duration::from_secs(1), send_started_rx.recv())
+            .await
+            .expect("tracked send should start")
+            .expect("send_started sender should stay open");
+
+        let disconnect_client = Arc::clone(&client);
+        let disconnect_task = tokio::spawn(async move {
+            disconnect_client.disconnect().await;
+        });
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            !client.connection_shutdown_signal().is_fired(),
+            "connection cleanup must not fire while outbound flush is blocked"
+        );
+        assert!(
+            !disconnect_called.load(Ordering::Acquire),
+            "transport must stay open while outbound flush is blocked"
+        );
+
+        release_send_tx
+            .send(())
+            .await
+            .expect("blocked send should still be waiting");
+
+        tokio::time::timeout(Duration::from_secs(1), disconnect_task)
+            .await
+            .expect("disconnect should finish")
+            .expect("disconnect task should not panic");
+        tokio::time::timeout(Duration::from_secs(1), cleanup_task)
+            .await
+            .expect("cleanup should finish")
+            .expect("cleanup task should not panic");
+
+        assert!(send_done.load(Ordering::Acquire));
+        assert!(disconnect_called.load(Ordering::Acquire));
+        assert!(
+            !disconnect_before_send_done.load(Ordering::Acquire),
+            "cleanup closed the transport before the tracked send completed"
         );
     }
 
