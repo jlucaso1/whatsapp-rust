@@ -612,7 +612,6 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
- "chrono",
  "dhat",
  "env_logger",
  "futures",
