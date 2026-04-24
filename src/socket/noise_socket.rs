@@ -42,9 +42,9 @@ impl NoiseSocket {
         let write_key = Arc::new(write_key);
         let read_key = Arc::new(read_key);
 
-        // Create channel for send jobs. Buffer size of 32 allows multiple
-        // callers to enqueue work without blocking on channel capacity.
-        let (send_job_tx, send_job_rx) = async_channel::bounded::<SendJob>(32);
+        // Buffer of 8 is sufficient since the sender task processes jobs
+        // serially in <1ms each. Overflow backpressures producers.
+        let (send_job_tx, send_job_rx) = async_channel::bounded::<SendJob>(8);
 
         // Spawn the dedicated sender task
         let transport_clone = transport.clone();
