@@ -5430,7 +5430,7 @@ mod tests {
 
         let mut info =
             create_test_message_info("85010891714716@lid", "ANCIENT_MSG_1", "85010891714716@lid");
-        info.timestamp = chrono::Utc::now() - chrono::Duration::days(30);
+        info.timestamp = wacore::time::now_utc() - chrono::Duration::days(30);
         let info = Arc::new(info);
 
         let cache_key = ChatMessageId::new(info.source.chat.clone(), info.id.clone());
@@ -5456,7 +5456,7 @@ mod tests {
         let mut info =
             create_test_message_info("85010891714716@lid", "BOUNDARY_MSG_1", "85010891714716@lid");
         info.timestamp =
-            chrono::Utc::now() - chrono::Duration::days(14) - chrono::Duration::minutes(1);
+            wacore::time::now_utc() - chrono::Duration::days(14) - chrono::Duration::minutes(1);
         let info = Arc::new(info);
 
         let cache_key = ChatMessageId::new(info.source.chat.clone(), info.id.clone());

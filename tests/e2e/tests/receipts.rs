@@ -450,7 +450,7 @@ async fn test_disconnect_is_fast_with_no_pending_receipts() -> anyhow::Result<()
 
     let client = TestClient::connect("e2e_rcpt_cold_disconnect").await?;
 
-    let start = std::time::Instant::now();
+    let start = wacore::time::Instant::now();
     client.client.disconnect().await;
     let elapsed = start.elapsed();
 
@@ -489,7 +489,7 @@ async fn test_disconnect_is_fast_with_pending_receipts() -> anyhow::Result<()> {
         .wait_for_text(&format!("burst {}", N - 1), 15)
         .await?;
 
-    let start = std::time::Instant::now();
+    let start = wacore::time::Instant::now();
     client_b.client.disconnect().await;
     let elapsed = start.elapsed();
 

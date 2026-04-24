@@ -476,7 +476,7 @@ impl Client {
         // Compare in seconds to stay bit-for-bit with WA Web's `age_s > i`
         // check — `num_days()` truncates and would let 14d1h through.
         const PDO_MAX_AGE: chrono::Duration = chrono::Duration::days(14);
-        let age = chrono::Utc::now().signed_duration_since(info.timestamp);
+        let age = wacore::time::now_utc().signed_duration_since(info.timestamp);
         if age > PDO_MAX_AGE {
             debug!(
                 "PDO request skipped for message {} (age {}s exceeds {}s limit)",

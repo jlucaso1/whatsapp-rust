@@ -15,7 +15,8 @@
 //! the transport also closes it.
 
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use wacore::time::Instant;
 
 use e2e_tests::{TestClient, text_msg};
 use wacore::types::events::Event;

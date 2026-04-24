@@ -43,3 +43,6 @@ harness = false
 [[bench]]
 name = "numeric_attr_benchmark"
 harness = false
+
+[lints]
+workspace = true

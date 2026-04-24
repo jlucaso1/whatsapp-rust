@@ -103,7 +103,7 @@ impl Drop for DecrementOnDrop {
 mod tests {
     use super::*;
     use std::sync::atomic::AtomicBool;
-    use std::time::Instant;
+    use wacore::time::Instant;
 
     fn rt() -> Arc<dyn Runtime> {
         Arc::new(crate::runtime_impl::TokioRuntime)

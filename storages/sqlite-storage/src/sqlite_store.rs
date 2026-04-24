@@ -1735,10 +1735,7 @@ impl ProtocolStore for SqliteStore {
                 .map(|(jid, has_key)| (jid.to_string(), *has_key))
                 .collect(),
         );
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        let now = wacore::time::now_secs();
         self.with_retry("set_sender_key_status", || {
             let group_jid = group_jid.clone();
             let owned_entries = Arc::clone(&owned_entries);
@@ -1969,10 +1966,7 @@ impl ProtocolStore for SqliteStore {
         let address = address.to_string();
         let message_id = message_id.to_string();
         let base_key = base_key.to_vec();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i32;
+        let now = wacore::time::now_secs() as i32;
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
@@ -2059,10 +2053,7 @@ impl ProtocolStore for SqliteStore {
         let device_id = self.device_id;
         let devices_json = serde_json::to_string(&record.devices)
             .map_err(|e| StoreError::Serialization(e.to_string()))?;
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i32;
+        let now = wacore::time::now_secs() as i32;
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
@@ -2195,10 +2186,7 @@ impl ProtocolStore for SqliteStore {
         let device_id = self.device_id;
         let jid = jid.to_string();
         let entry = entry.clone();
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64;
+        let now = wacore::time::now_secs();
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
@@ -2442,10 +2430,7 @@ impl DeviceStore for SqliteStore {
                 .get()
                 .map_err(|e| StoreError::Connection(e.to_string()))?;
 
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
+            let timestamp = wacore::time::now_secs();
 
             // Construct target path: db_path.snapshot-TIMESTAMP-SANITIZED_NAME
             let target_path = format!("{}.snapshot-{}-{}", db_path, timestamp, sanitized_name);

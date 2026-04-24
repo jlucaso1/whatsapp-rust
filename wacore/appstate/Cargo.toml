@@ -31,3 +31,6 @@ wacore-libsignal = { workspace = true }
 waproto = { workspace = true }
 
 [dev-dependencies]
+
+[lints]
+workspace = true

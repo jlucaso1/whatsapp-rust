@@ -41,3 +41,6 @@ iai-callgrind = { workspace = true }
 [[bench]]
 name = "libsignal_benchmark"
 harness = false
+
+[lints]
+workspace = true

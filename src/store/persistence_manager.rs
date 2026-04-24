@@ -271,7 +271,7 @@ impl PersistenceManager {
 mod tests {
     use super::*;
     use crate::runtime_impl::TokioRuntime;
-    use std::time::Instant;
+    use wacore::time::Instant;
 
     // Saver must observe shutdown.notify, run a final flush, and exit so the
     // AbortHandle-backed task doesn't outlive the Bot.

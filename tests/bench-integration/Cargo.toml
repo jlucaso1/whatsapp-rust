@@ -33,3 +33,6 @@ whatsapp-rust = { path = "../..", default-features = false, features = [
   "tokio-native",
   "signal",
 ] }
+
+[lints]
+workspace = true

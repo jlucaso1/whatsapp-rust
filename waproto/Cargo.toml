@@ -19,3 +19,6 @@ serde = { workspace = true }
 
 [build-dependencies]
 prost-build = { workspace = true, optional = true }
+
+[lints]
+workspace = true
