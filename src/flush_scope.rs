@@ -14,6 +14,7 @@ use wacore::runtime::Runtime;
 pub struct FlushScope {
     count: AtomicUsize,
     idle: event_listener::Event,
+    closed: std::sync::Mutex<bool>,
 }
 
 impl Default for FlushScope {
@@ -27,7 +28,16 @@ impl FlushScope {
         Self {
             count: AtomicUsize::new(0),
             idle: event_listener::Event::new(),
+            closed: std::sync::Mutex::new(false),
         }
+    }
+
+    pub fn close(&self) {
+        *self.closed.lock().unwrap_or_else(|e| e.into_inner()) = true;
+    }
+
+    pub fn reopen(&self) {
+        *self.closed.lock().unwrap_or_else(|e| e.into_inner()) = false;
     }
 
     /// Spawn a tracked task. The counter decrements on completion OR if the
@@ -37,7 +47,14 @@ impl FlushScope {
     where
         F: Future<Output = ()> + Send + 'static,
     {
-        self.count.fetch_add(1, Ordering::Relaxed);
+        {
+            let closed = self.closed.lock().unwrap_or_else(|e| e.into_inner());
+            if *closed {
+                return;
+            }
+            self.count.fetch_add(1, Ordering::Relaxed);
+        }
+
         // Construct the guard outside the async block so it's captured as an
         // upvalue. This puts it in the future's state machine BEFORE the first
         // poll, so even if the runtime drops the future without polling it,
@@ -135,6 +152,29 @@ mod tests {
         let start = Instant::now();
         scope.flush(&*runtime, Duration::from_secs(5)).await;
         assert!(start.elapsed() < Duration::from_millis(10));
+    }
+
+    #[tokio::test]
+    async fn close_rejects_new_tasks_until_reopened() {
+        let scope = Arc::new(FlushScope::new());
+        let runtime = rt();
+        let ran = Arc::new(AtomicBool::new(false));
+
+        scope.close();
+        let ran_closed = Arc::clone(&ran);
+        scope.spawn(&*runtime, async move {
+            ran_closed.store(true, Ordering::Relaxed);
+        });
+        scope.flush(&*runtime, Duration::from_secs(1)).await;
+        assert!(!ran.load(Ordering::Relaxed));
+
+        scope.reopen();
+        let ran_open = Arc::clone(&ran);
+        scope.spawn(&*runtime, async move {
+            ran_open.store(true, Ordering::Relaxed);
+        });
+        scope.flush(&*runtime, Duration::from_secs(1)).await;
+        assert!(ran.load(Ordering::Relaxed));
     }
 
     #[tokio::test]

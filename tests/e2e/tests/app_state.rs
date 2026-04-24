@@ -13,7 +13,7 @@ use whatsapp_rust::waproto::whatsapp as wa;
 async fn test_initial_sync_delivers_push_name() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let mut client = TestClient::connect("e2e_as_init_sync").await?;
+    let mut client = TestClient::connect_without_push_name("e2e_as_init_sync").await?;
     client.wait_for_app_state_sync().await?;
 
     let push_name = client.client.get_push_name().await;
