@@ -32,3 +32,6 @@ wacore = { workspace = true }
 [dev-dependencies]
 portable-atomic = { workspace = true }
 tokio = { workspace = true, features = ["sync", "rt", "time", "macros"] }
+
+[lints]
+workspace = true

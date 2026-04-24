@@ -168,7 +168,7 @@ async fn test_mute_chat_with_expiry() -> anyhow::Result<()> {
     client_a.wait_for_app_state_sync().await?;
 
     // Mute for 8 hours from now
-    let mute_end = chrono::Utc::now().timestamp_millis() + (8 * 60 * 60 * 1000);
+    let mute_end = wacore::time::now_millis() + (8 * 60 * 60 * 1000);
 
     client_a
         .client

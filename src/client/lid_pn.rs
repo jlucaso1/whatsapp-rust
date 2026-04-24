@@ -743,7 +743,7 @@ mod tests {
         // LID key). That strictly happens after both `put_lid_mappings` and
         // `migrate_device_registry_on_lid_discovery`, so observing it
         // guarantees both steps ran.
-        let start = std::time::Instant::now();
+        let start = wacore::time::Instant::now();
         let deadline = std::time::Duration::from_secs(5);
         loop {
             if backend.get_devices(lid).await.unwrap().is_some() {

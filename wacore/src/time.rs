@@ -16,6 +16,10 @@ pub trait TimeProvider: Send + Sync + 'static {
 struct ChronoTimeProvider;
 
 impl TimeProvider for ChronoTimeProvider {
+    // The single legitimate call to `chrono::Utc::now()`: this IS the default
+    // provider backing `wacore::time::now_utc()`. Everywhere else must go
+    // through the abstraction — see clippy.toml.
+    #[allow(clippy::disallowed_methods)]
     fn now_millis(&self) -> i64 {
         chrono::Utc::now().timestamp_millis()
     }

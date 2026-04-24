@@ -9,7 +9,7 @@ static GLOBAL: dhat::Alloc = dhat::Alloc;
 #[global_allocator]
 static GLOBAL: counting_alloc::CountingAlloc = counting_alloc::CountingAlloc;
 
-use std::time::Instant;
+use wacore::time::Instant;
 
 use e2e_tests::{TestClient, text_msg};
 use serde::Serialize;

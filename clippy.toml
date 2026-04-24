@@ -1,0 +1,6 @@
+disallowed-methods = [
+    { path = "chrono::Utc::now", reason = "use wacore::time::now_utc() to respect the pluggable TimeProvider (WASM + deterministic tests)" },
+    { path = "chrono::Local::now", reason = "use wacore::time::now_utc() (Local depends on SystemTime which panics on WASM)" },
+    { path = "std::time::SystemTime::now", reason = "use wacore::time::now_millis() / now_utc()" },
+    { path = "std::time::Instant::now", reason = "use wacore::time::Instant::now()" },
+]

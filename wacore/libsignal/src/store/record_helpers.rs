@@ -152,7 +152,8 @@ mod tests {
         let key_pair = KeyPair::generate(&mut rand::rng());
         let mut signature = [0u8; 64];
         rand::rng().fill_bytes(&mut signature);
-        let timestamp = chrono::Utc::now();
+        let timestamp = chrono::DateTime::from_timestamp(1_700_000_000, 0)
+            .expect("fixed timestamp is in range");
         let id = 123u32;
 
         // Create structure using new_signed_pre_key_record

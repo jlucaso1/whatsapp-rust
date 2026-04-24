@@ -31,3 +31,6 @@ tokio-websockets = { version = "0.13.0", features = [
 ] }
 wacore = { workspace = true }
 webpki-roots = "1.0.4"
+
+[lints]
+workspace = true

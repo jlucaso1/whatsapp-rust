@@ -280,13 +280,7 @@ async fn test_multi_device_app_state_sync() -> anyhow::Result<()> {
 
     // Use a unique push name each run so the test is idempotent even if the
     // mock server persists push_name state across sessions (like the real server).
-    let new_name = format!(
-        "MultiDev_{}",
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_millis()
-    );
+    let new_name = format!("MultiDev_{}", wacore::time::now_millis());
     client_a1.client.profile().set_push_name(&new_name).await?;
     info!("A1 set push name to '{new_name}'");
 

@@ -39,6 +39,11 @@ default-members = [
     "waproto",
 ]
 
+[workspace.lints.clippy]
+# Force the wacore::time abstraction so WASM/deterministic-test builds don't
+# regress. Exceptions carry `#[allow(clippy::disallowed_methods)]` inline.
+disallowed_methods = "deny"
+
 [workspace.dependencies]
 # Shared dependencies
 aes = "0.9.0"
@@ -86,6 +91,9 @@ wacore-libsignal = { path = "./wacore/libsignal", version = "0.5.0" }
 wacore-noise = { path = "./wacore/noise", version = "0.5.0" }
 waproto = { path = "./waproto", version = "0.5.0" }
 yoke = { version = "0.8", features = ["derive"] }
+
+[lints]
+workspace = true
 
 [features]
 debug-diagnostics = ["wacore/debug-diagnostics"]

@@ -4385,7 +4385,7 @@ mod tests {
             .store(true, std::sync::atomic::Ordering::Relaxed);
 
         // This should return immediately (not wait 10 seconds)
-        let start = std::time::Instant::now();
+        let start = wacore::time::Instant::now();
         client.wait_for_offline_delivery_end().await;
         let elapsed = start.elapsed();
 
@@ -4426,7 +4426,7 @@ mod tests {
 
         // Flag is false by default, so use a short timeout and verify the helper
         // marks the sync complete on timeout.
-        let start = std::time::Instant::now();
+        let start = wacore::time::Instant::now();
         client
             .wait_for_offline_delivery_end_with_timeout(std::time::Duration::from_millis(50))
             .await;
@@ -4493,7 +4493,7 @@ mod tests {
             client_clone.offline_sync_notifier.notify(usize::MAX);
         });
 
-        let start = std::time::Instant::now();
+        let start = wacore::time::Instant::now();
         client.wait_for_offline_delivery_end().await;
         let elapsed = start.elapsed();
 
@@ -4702,7 +4702,7 @@ mod tests {
         let test_jid = Jid::pn("559999999999");
         let ensure_handle = tokio::spawn(async move {
             // This will wait for offline sync before proceeding
-            let start = std::time::Instant::now();
+            let start = wacore::time::Instant::now();
             let _ = client_clone.ensure_e2e_sessions(&[test_jid]).await;
             start.elapsed()
         });
@@ -4775,7 +4775,7 @@ mod tests {
 
         // Call establish_primary_phone_session_immediate
         // It should NOT wait for offline sync - it should proceed immediately
-        let start = std::time::Instant::now();
+        let start = wacore::time::Instant::now();
 
         // Note: This will fail because we can't actually fetch prekeys in tests,
         // but the important thing is that it doesn't WAIT for offline sync
