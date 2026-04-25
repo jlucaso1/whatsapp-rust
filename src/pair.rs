@@ -16,14 +16,15 @@ pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
 /// Derives `CompanionWebClientType` from `device_props.platform_type`. Use
 /// [`make_qr_data_with_client_type`] to override.
-pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
+pub fn make_qr_data(store: &crate::store::Device, ref_str: &str) -> String {
     let client_type = companion_web_client_type_for_props(&store.device_props);
     make_qr_data_with_client_type(store, ref_str, client_type)
 }
 
+/// Same as [`make_qr_data`] but with an explicit `CompanionWebClientType`.
 pub fn make_qr_data_with_client_type(
     store: &crate::store::Device,
-    ref_str: String,
+    ref_str: &str,
     client_type: CompanionWebClientType,
 ) -> String {
     let device_state = DeviceState {
@@ -68,11 +69,7 @@ pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
                         if let Some(bytes) = grandchild.content_bytes()
                             && let Ok(r) = std::str::from_utf8(bytes)
                         {
-                            codes.push(PairUtils::make_qr_data(
-                                &device_state,
-                                r.to_string(),
-                                client_type,
-                            ));
+                            codes.push(PairUtils::make_qr_data(&device_state, r, client_type));
                         }
                     }
 

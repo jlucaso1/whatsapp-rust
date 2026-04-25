@@ -42,10 +42,12 @@ impl std::fmt::Display for CompanionWebClientType {
     }
 }
 
-/// Browser name suitable for `companion_platform_display`. Server validates
-/// this field and rejects anything outside the 6 real browsers, so non-browser
-/// variants fall back to "Chrome" — what WA Web's `info().name` would emit
-/// even from Electron contexts (Electron's userAgent reports "Chrome").
+/// Browser-name component of `companion_platform_display`. whatsmeow's
+/// `PairPhone` doc reports the server validates that field strictly as
+/// `Browser (OS)` with browser ∈ the 6 names returned here. Non-browser
+/// variants fall back to "Chrome", matching what WA Web's
+/// `WAWebMiscBrowserUtils.info().name` would emit from an Electron-style
+/// runtime (Electron's userAgent reports "Chrome").
 pub const fn companion_browser_name(ct: CompanionWebClientType) -> &'static str {
     match ct {
         CompanionWebClientType::Chrome => "Chrome",
@@ -62,7 +64,7 @@ pub const fn companion_browser_name(ct: CompanionWebClientType) -> &'static str 
     }
 }
 
-pub fn companion_web_client_type_for_platform(
+pub const fn companion_web_client_type_for_platform(
     pt: wa::device_props::PlatformType,
 ) -> CompanionWebClientType {
     use CompanionWebClientType as C;
@@ -104,12 +106,12 @@ pub fn companion_web_client_type_for_props(props: &wa::DeviceProps) -> Companion
         .unwrap_or_default()
 }
 
-/// Builds the `companion_platform_display` string. WA Web sends
-/// `<browser_name> (<os>)` where `browser_name` is one of 6 valid browsers and
-/// `os` is non-empty; the server validates and 400s on anything else.
+/// Builds the `companion_platform_display` string as `<browser> (<os>)`,
+/// matching what WA Web emits from `WAWebMiscBrowserUtils.info()`. whatsmeow's
+/// `PairPhone` doc reports the server 400s on anything else.
 ///
-/// Empty/whitespace OS falls back to "Linux" since WA Web never sends bare
-/// browser names — keeping the parenthesised OS slot is required.
+/// Empty/whitespace OS falls back to "Linux" — WA Web never sends a bare
+/// browser name and the parenthesised OS slot appears to be required.
 pub fn companion_platform_display(ct: CompanionWebClientType, os: &str) -> String {
     let os = os.trim();
     let os = if os.is_empty() { "Linux" } else { os };
@@ -159,6 +161,21 @@ mod tests {
         assert_eq!(ct.code(), 42);
         let ct = CompanionWebClientType::from(-1);
         assert_eq!(ct, CompanionWebClientType::Unrecognized(-1));
+    }
+
+    #[test]
+    fn display_renders_decimal_wire_integer() {
+        assert_eq!(format!("{}", CompanionWebClientType::Unknown), "0");
+        assert_eq!(format!("{}", CompanionWebClientType::Chrome), "1");
+        assert_eq!(format!("{}", CompanionWebClientType::OtherWebClient), "9");
+        assert_eq!(
+            format!("{}", CompanionWebClientType::Unrecognized(42)),
+            "42"
+        );
+        assert_eq!(
+            format!("{}", CompanionWebClientType::Unrecognized(-1)),
+            "-1"
+        );
     }
 
     #[test]

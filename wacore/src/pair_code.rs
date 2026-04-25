@@ -83,9 +83,8 @@ const PAIR_CODE_VALIDITY_SECS: u64 = 180;
 
 /// Derives `(companion_platform_id, companion_platform_display)` from `DeviceProps`.
 /// Mirrors WA Web (`docs/captured-js/WAWeb/Alt/DeviceLinkingIq.js:35-42`):
-/// id ← `CompanionWebClientType` (10-value web-client enum), display ←
-/// `<browser> (<os>)` with browser ∈ {Chrome,Edge,Firefox,IE,Opera,Safari}.
-/// The server validates the display string and 400s on anything else.
+/// id ← `CompanionWebClientType`, display ← `companion_platform_display(id, os)`.
+/// See `companion_platform_display` for the server-validation caveat.
 pub fn derive_companion_platform(props: &wa::DeviceProps) -> (CompanionWebClientType, String) {
     let id = companion_web_client_type_for_props(props);
     let os = props.os.as_deref().unwrap_or("");

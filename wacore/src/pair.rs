@@ -58,7 +58,7 @@ impl PairUtils {
     /// client type is required since tulir/whatsmeow#1110.
     pub fn make_qr_data(
         device_state: &DeviceState,
-        ref_str: String,
+        ref_str: &str,
         client_type: CompanionWebClientType,
     ) -> String {
         let noise_b64 =
@@ -67,14 +67,7 @@ impl PairUtils {
             BASE64_STANDARD.encode(device_state.identity_key.public_key.public_key_bytes());
         let adv_b64 = BASE64_STANDARD.encode(device_state.adv_secret_key);
 
-        [
-            ref_str,
-            noise_b64,
-            identity_b64,
-            adv_b64,
-            client_type.to_string(),
-        ]
-        .join(",")
+        format!("{ref_str},{noise_b64},{identity_b64},{adv_b64},{client_type}")
     }
 
     /// Builds acknowledgment node for a pairing request
@@ -278,7 +271,10 @@ impl PairUtils {
 
     /// Parses a pairing QR payload. Accepts the legacy 4-field form, the
     /// current 5-field form, an optional `https://wa.me/settings/linked_devices#`
-    /// prefix, and a trailing FAQ URL — all shapes WA Web has emitted.
+    /// prefix, and a trailing FAQ URL. WA Web emits prefix and FAQ-suffix
+    /// mutually exclusively (`isNativeCameraQRLinkedDeviceTest()` vs
+    /// `justknobx._("770")`); the parser is permissive and accepts both
+    /// together for e2e replay convenience.
     pub fn parse_qr_code(qr_code: &str) -> Result<(String, [u8; 32], [u8; 32]), anyhow::Error> {
         const NATIVE_CAMERA_PREFIX: &str = "https://wa.me/settings/linked_devices#";
 
@@ -295,11 +291,10 @@ impl PairUtils {
         let pairing_ref = parts[0].to_string();
         let dut_noise_pub_b64 = parts[1];
         let dut_identity_pub_b64 = parts[2];
-        let adv_secret_b64 = parts[3];
         if pairing_ref.is_empty()
             || dut_noise_pub_b64.is_empty()
             || dut_identity_pub_b64.is_empty()
-            || adv_secret_b64.is_empty()
+            || parts[3].is_empty()
         {
             return Err(anyhow::anyhow!(
                 "Invalid QR code format: ref / noise / identity / adv fields must be non-empty"
@@ -416,11 +411,7 @@ mod tests {
     #[test]
     fn make_qr_data_has_five_fields_with_client_type_suffix() {
         let state = dummy_device_state();
-        let qr = PairUtils::make_qr_data(
-            &state,
-            "the-ref".to_string(),
-            CompanionWebClientType::Chrome,
-        );
+        let qr = PairUtils::make_qr_data(&state, "the-ref", CompanionWebClientType::Chrome);
         let parts: Vec<&str> = qr.split(',').collect();
         assert_eq!(parts.len(), 5, "expected 5 fields, got {qr:?}");
         assert_eq!(parts[0], "the-ref");
@@ -442,7 +433,7 @@ mod tests {
             (CompanionWebClientType::Uwp, "8"),
             (CompanionWebClientType::OtherWebClient, "9"),
         ] {
-            let qr = PairUtils::make_qr_data(&state, "r".to_string(), ct);
+            let qr = PairUtils::make_qr_data(&state, "r", ct);
             assert_eq!(qr.rsplit(',').next(), Some(wire), "{ct:?}");
         }
     }
@@ -450,11 +441,7 @@ mod tests {
     #[test]
     fn parse_qr_code_accepts_new_five_field_format() {
         let state = dummy_device_state();
-        let qr = PairUtils::make_qr_data(
-            &state,
-            "the-ref".to_string(),
-            CompanionWebClientType::OtherWebClient,
-        );
+        let qr = PairUtils::make_qr_data(&state, "the-ref", CompanionWebClientType::OtherWebClient);
         let (pairing_ref, noise, identity) = PairUtils::parse_qr_code(&qr).unwrap();
         assert_eq!(pairing_ref, "the-ref");
         assert_eq!(noise, *state.noise_key.public_key.public_key_bytes());
@@ -480,8 +467,7 @@ mod tests {
     #[test]
     fn parse_qr_code_accepts_native_camera_prefix() {
         let state = dummy_device_state();
-        let inner =
-            PairUtils::make_qr_data(&state, "r".to_string(), CompanionWebClientType::Chrome);
+        let inner = PairUtils::make_qr_data(&state, "r", CompanionWebClientType::Chrome);
         let prefixed = format!("https://wa.me/settings/linked_devices#{inner}");
         let (pairing_ref, _, _) = PairUtils::parse_qr_code(&prefixed).unwrap();
         assert_eq!(pairing_ref, "r");
@@ -490,8 +476,7 @@ mod tests {
     #[test]
     fn parse_qr_code_accepts_faq_url_suffix() {
         let state = dummy_device_state();
-        let inner =
-            PairUtils::make_qr_data(&state, "r".to_string(), CompanionWebClientType::Chrome);
+        let inner = PairUtils::make_qr_data(&state, "r", CompanionWebClientType::Chrome);
         let suffixed = format!("{inner},https://faq.whatsapp.com/r/ld");
         let (pairing_ref, _, _) = PairUtils::parse_qr_code(&suffixed).unwrap();
         assert_eq!(pairing_ref, "r");
@@ -565,7 +550,7 @@ mod tests {
                 ..Default::default()
             };
             let ct = companion_web_client_type_for_props(&props);
-            let qr = PairUtils::make_qr_data(&state, "ref".to_string(), ct);
+            let qr = PairUtils::make_qr_data(&state, "ref", ct);
             let trailing = qr.rsplit(',').next().unwrap();
             assert_eq!(trailing, expected_wire, "{pt:?}");
         }
@@ -581,7 +566,7 @@ mod tests {
 
         let state = dummy_device_state();
         let ct = companion_web_client_type_for_props(&wa::DeviceProps::default());
-        let qr = PairUtils::make_qr_data(&state, "ref".to_string(), ct);
+        let qr = PairUtils::make_qr_data(&state, "ref", ct);
         let parts: Vec<&str> = qr.split(',').collect();
         assert_eq!(parts.len(), 5);
         assert_eq!(parts[4], "0");
@@ -605,7 +590,7 @@ mod tests {
             CompanionWebClientType::Uwp,
             CompanionWebClientType::OtherWebClient,
         ] {
-            let qr = PairUtils::make_qr_data(&state, "the-ref".to_string(), ct);
+            let qr = PairUtils::make_qr_data(&state, "the-ref", ct);
             let (pairing_ref, noise, identity) = PairUtils::parse_qr_code(&qr)
                 .unwrap_or_else(|e| panic!("{ct:?} round-trip failed: {e}"));
             assert_eq!(pairing_ref, "the-ref", "{ct:?}");
@@ -625,7 +610,7 @@ mod tests {
             CompanionWebClientType::OtherWebClient,
             CompanionWebClientType::Uwp,
         ] {
-            let qr = PairUtils::make_qr_data(&state, "r".to_string(), ct);
+            let qr = PairUtils::make_qr_data(&state, "r", ct);
             let trailing = qr.rsplit(',').next().unwrap();
             assert_eq!(trailing, ct.code().to_string());
         }
