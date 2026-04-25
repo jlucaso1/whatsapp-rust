@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 
+use wacore::net::{HttpClient, HttpRequest};
 use wacore::store::InMemoryBackend;
 use wacore::store::traits::TcTokenEntry;
 use wacore::types::events::{ChannelEventHandler, Event};
@@ -14,6 +16,60 @@ use whatsapp_rust_ureq_http_client::UreqHttpClient;
 /// Returns the mock server WebSocket URL from env, or the default.
 pub fn mock_server_url() -> String {
     std::env::var("MOCK_SERVER_URL").unwrap_or_else(|_| "wss://127.0.0.1:8080/ws/chat".to_string())
+}
+
+/// Translate the `MOCK_SERVER_URL` (a `ws[s]://host:port/ws/chat` WebSocket
+/// URL) to the matching admin HTTP URL for the QR-scan endpoint exposed by
+/// bartender. Same host/port, scheme `ws`→`http` / `wss`→`https`, path
+/// `/admin/mock-phone/scan-qr`.
+fn mock_admin_scan_qr_url() -> String {
+    let ws = mock_server_url();
+    let http_scheme = if ws.starts_with("wss://") {
+        "https://"
+    } else {
+        "http://"
+    };
+    let after_scheme = ws.split("://").nth(1).unwrap_or(&ws);
+    let host_port = after_scheme.split('/').next().unwrap_or(after_scheme);
+    format!("{http_scheme}{host_port}/admin/mock-phone/scan-qr")
+}
+
+/// Spawn an in-test "phone" that watches `event_rx` for the first
+/// `Event::PairingQrCode` and POSTs the QR string to the mock-server's
+/// admin endpoint. This is the out-of-process equivalent of bartender's
+/// in-process `spawn_qr_autoresponder`. Idempotent: stops after one scan.
+fn spawn_qr_autoresponder_http(
+    event_rx: async_channel::Receiver<Arc<Event>>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let url = mock_admin_scan_qr_url();
+        let http = UreqHttpClient::new();
+        while let Ok(event) = event_rx.recv().await {
+            if let Event::PairingQrCode { code, .. } = &*event {
+                let req = HttpRequest {
+                    url: url.clone(),
+                    method: "POST".into(),
+                    headers: HashMap::new(),
+                    body: Some(code.as_bytes().to_vec()),
+                };
+                match http.execute(req).await {
+                    Ok(resp) if (200..300).contains(&resp.status_code) => return,
+                    Ok(resp) => {
+                        eprintln!(
+                            "qr-autoresponder: admin POST returned status {}: {}",
+                            resp.status_code,
+                            String::from_utf8_lossy(&resp.body)
+                        );
+                        return;
+                    }
+                    Err(e) => {
+                        eprintln!("qr-autoresponder: admin POST transport error: {e}");
+                        return;
+                    }
+                }
+            }
+        }
+    })
 }
 
 pub fn unique_push_name(prefix: &str) -> String {
@@ -82,6 +138,17 @@ impl TestClient {
 
         let client = bot.client();
         client.register_handler(event_handler);
+
+        // The mock server no longer auto-pairs (legacy timer is off by
+        // default). Spawn an out-of-process "phone" that POSTs the first
+        // QR this client emits to the admin endpoint, mirroring the
+        // in-process autoresponder used by bartender's own e2e suite.
+        // Uses its own ChannelEventHandler because async_channel is MPMC:
+        // sharing event_rx would steal events from wait_for_event below.
+        let (qr_handler, qr_rx) = ChannelEventHandler::new();
+        client.register_handler(qr_handler);
+        let _qr_responder = spawn_qr_autoresponder_http(qr_rx);
+
         let run_handle = bot.run().await?;
 
         // Wait for PairSuccess + Connected.
