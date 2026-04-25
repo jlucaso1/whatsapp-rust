@@ -291,9 +291,10 @@ impl PairUtils {
             || dut_noise_pub_b64.is_empty()
             || dut_identity_pub_b64.is_empty()
             || parts[3].is_empty()
+            || parts.iter().skip(4).any(|p| p.is_empty())
         {
             return Err(anyhow::anyhow!(
-                "Invalid QR code format: ref / noise / identity / adv fields must be non-empty"
+                "Invalid QR code format: all comma-separated fields must be non-empty"
             ));
         }
         let dut_noise_pub_bytes = BASE64_STANDARD
@@ -490,6 +491,20 @@ mod tests {
     #[test]
     fn parse_qr_code_rejects_empty_fields() {
         let err = PairUtils::parse_qr_code(",,,,").unwrap_err();
+        assert!(
+            err.to_string().contains("non-empty"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_qr_code_rejects_empty_trailing_client_type() {
+        let state = dummy_device_state();
+        let noise = BASE64_STANDARD.encode(state.noise_key.public_key.public_key_bytes());
+        let identity = BASE64_STANDARD.encode(state.identity_key.public_key.public_key_bytes());
+        let adv = BASE64_STANDARD.encode(state.adv_secret_key);
+        let qr = format!("ref,{noise},{identity},{adv},");
+        let err = PairUtils::parse_qr_code(&qr).unwrap_err();
         assert!(
             err.to_string().contains("non-empty"),
             "unexpected error: {err}"
