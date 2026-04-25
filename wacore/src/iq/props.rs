@@ -578,29 +578,31 @@ mod tests {
             "expected one <prop> per experiment_props entry"
         );
 
-        for child in &children {
-            assert_eq!(child.tag, "prop");
-            assert!(
-                child.attrs.contains_key("config_code"),
-                "missing config_code"
-            );
-            assert!(
-                child.attrs.contains_key("config_value"),
-                "missing config_value"
-            );
-        }
-
-        let codes: Vec<String> = children
+        let pairs: Vec<(String, String)> = children
             .iter()
             .map(|n| {
-                n.attrs
+                assert_eq!(n.tag, "prop");
+                let code = n
+                    .attrs
                     .get("config_code")
                     .map(|v| v.to_string())
-                    .unwrap_or_default()
+                    .expect("missing config_code");
+                let value = n
+                    .attrs
+                    .get("config_value")
+                    .map(|v| v.to_string())
+                    .expect("missing config_value");
+                (code, value)
             })
             .collect();
-        assert!(codes.iter().any(|c| c == "11262"));
-        assert!(codes.iter().any(|c| c == "11103"));
+        assert_eq!(
+            pairs,
+            vec![
+                ("11262".to_string(), "1".to_string()),
+                ("11103".to_string(), "0".to_string()),
+            ],
+            "code/value pairs must be preserved with their original mapping"
+        );
     }
 
     #[test]
