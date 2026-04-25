@@ -6,6 +6,7 @@ use prost::Message;
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use wacore::companion_reg::{CompanionWebClientType, companion_web_client_type_for_props};
 use wacore::libsignal::protocol::KeyPair;
 use wacore_binary::NodeRef;
 use wacore_binary::{Jid, SERVER_JID};
@@ -13,13 +14,24 @@ use waproto::whatsapp as wa;
 
 pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
+/// Derives `CompanionWebClientType` from `device_props.platform_type`. Use
+/// [`make_qr_data_with_client_type`] to override.
 pub fn make_qr_data(store: &crate::store::Device, ref_str: String) -> String {
+    let client_type = companion_web_client_type_for_props(&store.device_props);
+    make_qr_data_with_client_type(store, ref_str, client_type)
+}
+
+pub fn make_qr_data_with_client_type(
+    store: &crate::store::Device,
+    ref_str: String,
+    client_type: CompanionWebClientType,
+) -> String {
     let device_state = DeviceState {
         identity_key: store.identity_key.clone(),
         noise_key: store.noise_key.clone(),
         adv_secret_key: store.adv_secret_key,
     };
-    PairUtils::make_qr_data(&device_state, ref_str)
+    PairUtils::make_qr_data(&device_state, ref_str, client_type)
 }
 
 pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
@@ -49,12 +61,18 @@ pub async fn handle_iq(client: &Arc<Client>, node: &NodeRef<'_>) -> bool {
                         noise_key: device_snapshot.noise_key.clone(),
                         adv_secret_key: device_snapshot.adv_secret_key,
                     };
+                    let client_type =
+                        companion_web_client_type_for_props(&device_snapshot.device_props);
 
                     for grandchild in child.get_children_by_tag("ref") {
                         if let Some(bytes) = grandchild.content_bytes()
                             && let Ok(r) = std::str::from_utf8(bytes)
                         {
-                            codes.push(PairUtils::make_qr_data(&device_state, r.to_string()));
+                            codes.push(PairUtils::make_qr_data(
+                                &device_state,
+                                r.to_string(),
+                                client_type,
+                            ));
                         }
                     }
 
