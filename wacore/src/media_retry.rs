@@ -8,7 +8,7 @@
 //! - Parsing the notification node
 //!
 //! Reference: WAWebCryptoMediaRetry, WAWebSendServerErrorReceiptJob,
-//! WAWebHandleMediaRetryNotification (docs/captured-js/).
+//! WAWebHandleMediaRetryNotification.
 
 use anyhow::{Result, anyhow};
 use hkdf::Hkdf;
