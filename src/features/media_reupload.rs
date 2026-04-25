@@ -4,7 +4,7 @@
 //! sends a `<receipt type="server-error">` stanza and waits for a
 //! `<notification type="mediaretry">` response with a new `directPath`.
 //!
-//! Reference: WAWebRequestMediaReuploadManager (docs/captured-js/).
+//! Reference: WAWebRequestMediaReuploadManager.
 
 use crate::client::{Client, ClientError, NodeFilter};
 use anyhow::Result;

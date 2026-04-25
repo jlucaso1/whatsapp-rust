@@ -274,10 +274,8 @@ impl PairUtils {
     /// or any combination (used by e2e replay; WA Web only emits one shape
     /// at a time).
     pub fn parse_qr_code(qr_code: &str) -> Result<(String, [u8; 32], [u8; 32]), anyhow::Error> {
-        const NATIVE_CAMERA_PREFIX: &str = "https://wa.me/settings/linked_devices#";
-
         let body = qr_code
-            .strip_prefix(NATIVE_CAMERA_PREFIX)
+            .strip_prefix(crate::companion_reg::NATIVE_CAMERA_DEEP_LINK_PREFIX)
             .unwrap_or(qr_code);
         let parts: Vec<&str> = body.split(',').collect();
         if parts.len() < 4 {

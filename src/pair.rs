@@ -12,7 +12,7 @@ use wacore_binary::NodeRef;
 use wacore_binary::{Jid, SERVER_JID};
 use waproto::whatsapp as wa;
 
-pub use wacore::companion_reg::CompanionWebClientType;
+pub use wacore::companion_reg::{CompanionWebClientType, NATIVE_CAMERA_DEEP_LINK_PREFIX};
 pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
 /// Auto-derives client type from `device_props`; see

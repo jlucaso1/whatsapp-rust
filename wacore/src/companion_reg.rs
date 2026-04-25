@@ -1,7 +1,10 @@
-//! Mirrors `WAWebCompanionRegClientUtils.DEVICE_PLATFORM`
-//! (`docs/captured-js/WAWeb/Companion/RegClientUtils.js`).
+//! Mirrors `WAWebCompanionRegClientUtils.DEVICE_PLATFORM`.
 
 use waproto::whatsapp as wa;
+
+/// Prefix `WAWebLinkDeviceQrcode` uses when iOS native-camera linking is on.
+/// Concatenate with `make_qr_data` output to get a scannable deep-link URL.
+pub const NATIVE_CAMERA_DEEP_LINK_PREFIX: &str = "https://wa.me/settings/linked_devices#";
 
 /// Encode-only: discriminants pinned to wire ints, no decode fallback.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]

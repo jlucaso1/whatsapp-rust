@@ -472,10 +472,9 @@ impl Client {
     }
 
     /// Resolve any user JID to its bare LID form, or `None` when no LID is
-    /// available. Mirrors WA Web's `WAWebLidMigrationUtils.toUserLid`
-    /// (`docs/captured-js/WAWeb/Lid/MigrationUtils.js:17-20`): LID passes
-    /// through, PN goes through the cache-aside mapping, anything else and
-    /// any lookup failure returns `None`.
+    /// available. Mirrors WA Web's `WAWebLidMigrationUtils.toUserLid`: LID
+    /// passes through, PN goes through the cache-aside mapping, anything
+    /// else and any lookup failure returns `None`.
     ///
     /// Used by `send_status_message` to replicate WA Web's
     /// `compactMap(list, toUserLid)` skip-on-unresolvable semantics.
