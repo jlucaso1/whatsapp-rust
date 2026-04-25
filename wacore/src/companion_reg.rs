@@ -1,39 +1,29 @@
-//! Companion registration client type used by both pairing flows.
 //! Mirrors `WAWebCompanionRegClientUtils.DEVICE_PLATFORM`
-//! (`docs/captured-js/WAWeb/Link/DeviceQrcode.react.js`,
-//! `Companion/RegClientUtils.js`, `Alt/DeviceLinkingIq.js`).
+//! (`docs/captured-js/WAWeb/Companion/RegClientUtils.js`).
 
 use waproto::whatsapp as wa;
 
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, crate::WireEnum)]
-#[wire(kind = "int")]
+/// Encode-only: discriminants pinned to wire ints, no decode fallback.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[repr(i32)]
 pub enum CompanionWebClientType {
     #[default]
-    #[wire = 0]
-    Unknown,
-    #[wire = 1]
-    Chrome,
-    #[wire = 2]
-    Edge,
-    #[wire = 3]
-    Firefox,
-    #[wire = 4]
-    Ie,
-    #[wire = 5]
-    Opera,
-    #[wire = 6]
-    Safari,
-    #[wire = 7]
-    Electron,
-    #[wire = 8]
-    Uwp,
-    #[wire = 9]
-    OtherWebClient,
-    /// Forward-compat for wire integers WA Web hasn't shipped yet.
-    /// Never produced by `companion_web_client_type_for_*`; only constructed
-    /// via `From<i32>` when decoding an unrecognised value.
-    #[wire_fallback]
-    Unrecognized(i32),
+    Unknown = 0,
+    Chrome = 1,
+    Edge = 2,
+    Firefox = 3,
+    Ie = 4,
+    Opera = 5,
+    Safari = 6,
+    Electron = 7,
+    Uwp = 8,
+    OtherWebClient = 9,
+}
+
+impl CompanionWebClientType {
+    pub const fn code(self) -> i32 {
+        self as i32
+    }
 }
 
 impl std::fmt::Display for CompanionWebClientType {
@@ -42,12 +32,9 @@ impl std::fmt::Display for CompanionWebClientType {
     }
 }
 
-/// Browser-name component of `companion_platform_display`. whatsmeow's
-/// `PairPhone` doc reports the server validates that field strictly as
-/// `Browser (OS)` with browser ∈ the 6 names returned here. Non-browser
-/// variants fall back to "Chrome", matching what WA Web's
-/// `WAWebMiscBrowserUtils.info().name` would emit from an Electron-style
-/// runtime (Electron's userAgent reports "Chrome").
+/// One of the 6 browsers the server accepts in `companion_platform_display`
+/// (per whatsmeow `PairPhone` doc). Non-browser variants fall back to "Chrome"
+/// since WA Web emits the same when the underlying renderer is Chromium.
 pub const fn companion_browser_name(ct: CompanionWebClientType) -> &'static str {
     match ct {
         CompanionWebClientType::Chrome => "Chrome",
@@ -59,24 +46,14 @@ pub const fn companion_browser_name(ct: CompanionWebClientType) -> &'static str 
         CompanionWebClientType::Unknown
         | CompanionWebClientType::Electron
         | CompanionWebClientType::Uwp
-        | CompanionWebClientType::OtherWebClient
-        | CompanionWebClientType::Unrecognized(_) => "Chrome",
+        | CompanionWebClientType::OtherWebClient => "Chrome",
     }
 }
 
-/// Maps `DeviceProps.PlatformType` to the QR pairing enum. Non-web platforms
-/// collapse to `OtherWebClient`, matching WA Web's fall-through for
-/// unrecognised `WAWebMiscBrowserUtils.info().name`.
-///
-/// WA Web's runtime selector (`docs/captured-js/WAWeb/Companion/RegClientUtils.js:32-50`)
-/// also short-circuits to `UWP` when `WAWebEnvironment.isWindows` is true.
-/// That flag is `gkx("4112")` per `WAWeb/Environment.js:5`, a GateKeeper
-/// experiment that fires only when the JS is bundled inside the Microsoft
-/// Store / UWP shell — *not* when the user's OS is Windows. A Rust library
-/// has no analogous host-shell detection, so the user expresses intent by
-/// setting `PlatformType::Uwp` explicitly. Same principle for `Electron`:
-/// WA Web never emits it from the runtime selector either (Electron's
-/// userAgent reports "Chrome"), but the user can claim it via `Desktop`.
+/// Non-web platforms collapse to `OtherWebClient`, matching WA Web's
+/// `info().name` fall-through. WA Web's `gkx("4112") ⇒ UWP` host-shell
+/// short-circuit isn't replicated — caller sets `PlatformType::Uwp`
+/// explicitly. Same for `Electron` via `Desktop`.
 pub const fn companion_web_client_type_for_platform(
     pt: wa::device_props::PlatformType,
 ) -> CompanionWebClientType {
@@ -119,12 +96,8 @@ pub fn companion_web_client_type_for_props(props: &wa::DeviceProps) -> Companion
         .unwrap_or_default()
 }
 
-/// Builds the `companion_platform_display` string as `<browser> (<os>)`,
-/// matching what WA Web emits from `WAWebMiscBrowserUtils.info()`. whatsmeow's
-/// `PairPhone` doc reports the server 400s on anything else.
-///
-/// Empty/whitespace OS falls back to "Linux" — WA Web never sends a bare
-/// browser name and the parenthesised OS slot appears to be required.
+/// `<browser> (<os>)` as WA Web emits. Empty OS falls back to "Linux"
+/// since WA Web never sends a bare browser.
 pub fn companion_platform_display(ct: CompanionWebClientType, os: &str) -> String {
     let os = os.trim();
     let os = if os.is_empty() { "Linux" } else { os };
@@ -150,45 +123,10 @@ mod tests {
     }
 
     #[test]
-    fn from_i32_round_trips_known_values() {
-        for ct in [
-            CompanionWebClientType::Unknown,
-            CompanionWebClientType::Chrome,
-            CompanionWebClientType::Edge,
-            CompanionWebClientType::Firefox,
-            CompanionWebClientType::Ie,
-            CompanionWebClientType::Opera,
-            CompanionWebClientType::Safari,
-            CompanionWebClientType::Electron,
-            CompanionWebClientType::Uwp,
-            CompanionWebClientType::OtherWebClient,
-        ] {
-            assert_eq!(CompanionWebClientType::from(ct.code()), ct);
-        }
-    }
-
-    #[test]
-    fn from_i32_unknown_value_uses_unrecognized_fallback() {
-        let ct = CompanionWebClientType::from(42);
-        assert_eq!(ct, CompanionWebClientType::Unrecognized(42));
-        assert_eq!(ct.code(), 42);
-        let ct = CompanionWebClientType::from(-1);
-        assert_eq!(ct, CompanionWebClientType::Unrecognized(-1));
-    }
-
-    #[test]
     fn display_renders_decimal_wire_integer() {
         assert_eq!(format!("{}", CompanionWebClientType::Unknown), "0");
         assert_eq!(format!("{}", CompanionWebClientType::Chrome), "1");
         assert_eq!(format!("{}", CompanionWebClientType::OtherWebClient), "9");
-        assert_eq!(
-            format!("{}", CompanionWebClientType::Unrecognized(42)),
-            "42"
-        );
-        assert_eq!(
-            format!("{}", CompanionWebClientType::Unrecognized(-1)),
-            "-1"
-        );
     }
 
     #[test]
@@ -318,7 +256,6 @@ mod tests {
             CompanionWebClientType::Electron,
             CompanionWebClientType::Uwp,
             CompanionWebClientType::OtherWebClient,
-            CompanionWebClientType::Unrecognized(42),
         ] {
             assert_eq!(companion_browser_name(ct), "Chrome", "{ct:?}");
         }

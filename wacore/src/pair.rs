@@ -53,9 +53,9 @@ pub struct DeviceState {
 pub struct PairUtils;
 
 impl PairUtils {
-    /// Builds the pairing QR payload: `<ref>,<noise>,<identity>,<adv>,<client_type>`.
-    /// Matches WA Web's default in `WAWebLinkDeviceQrcode.react`; the trailing
-    /// client type is required since tulir/whatsmeow#1110.
+    /// `<ref>,<noise>,<identity>,<adv>,<client_type>` per WA Web
+    /// (`WAWebLinkDeviceQrcode.react`); 4-field form rejected since
+    /// tulir/whatsmeow#1110.
     pub fn make_qr_data(
         device_state: &DeviceState,
         ref_str: &str,
@@ -269,12 +269,10 @@ impl PairUtils {
             .build()
     }
 
-    /// Parses a pairing QR payload. Accepts the legacy 4-field form, the
-    /// current 5-field form, an optional `https://wa.me/settings/linked_devices#`
-    /// prefix, and a trailing FAQ URL. WA Web emits prefix and FAQ-suffix
-    /// mutually exclusively (`isNativeCameraQRLinkedDeviceTest()` vs
-    /// `justknobx._("770")`); the parser is permissive and accepts both
-    /// together for e2e replay convenience.
+    /// Permissive: accepts legacy 4-field, current 5-field, optional
+    /// `https://wa.me/settings/linked_devices#` prefix, trailing FAQ URL,
+    /// or any combination (used by e2e replay; WA Web only emits one shape
+    /// at a time).
     pub fn parse_qr_code(qr_code: &str) -> Result<(String, [u8; 32], [u8; 32]), anyhow::Error> {
         const NATIVE_CAMERA_PREFIX: &str = "https://wa.me/settings/linked_devices#";
 
@@ -523,9 +521,7 @@ mod tests {
         );
     }
 
-    /// End-to-end: feeding a `DeviceProps` through the auto-derive path and
-    /// into `make_qr_data` produces a QR whose trailing field is the wire ID
-    /// expected by WA Web.
+    /// E2E: DeviceProps → auto-derive → QR wire id matches WA Web.
     #[test]
     fn auto_derive_from_device_props_round_trip() {
         use crate::companion_reg::companion_web_client_type_for_props;
@@ -556,9 +552,7 @@ mod tests {
         }
     }
 
-    /// Bare `DeviceProps::default()` (no platform_type set) must produce a
-    /// well-formed 5-field QR with trailing "0", not panic or fall back to a
-    /// hardcoded browser ID.
+    /// Bare `DeviceProps` produces 5-field QR with trailing "0", no panic.
     #[test]
     fn auto_derive_default_device_props_yields_unknown_zero() {
         use crate::companion_reg::companion_web_client_type_for_props;
@@ -572,9 +566,7 @@ mod tests {
         assert_eq!(parts[4], "0");
     }
 
-    /// Round-trip: `make_qr_data` output must always parse back via the
-    /// loosened `parse_qr_code`. Guards against ever introducing a separator
-    /// or escape that breaks the symmetric pair.
+    /// `make_qr_data` output must always round-trip through `parse_qr_code`.
     #[test]
     fn round_trip_make_then_parse_for_every_client_type() {
         let state = dummy_device_state();
@@ -599,9 +591,7 @@ mod tests {
         }
     }
 
-    /// The trailing wire integer in `make_qr_data` must be the same string
-    /// that `companion_platform_id` would carry, so a primary device sees a
-    /// consistent companion identity across both pairing flows.
+    /// QR trailing field == `code()` (parity with `companion_platform_id`).
     #[test]
     fn qr_trailing_field_matches_companion_web_client_type_code() {
         let state = dummy_device_state();

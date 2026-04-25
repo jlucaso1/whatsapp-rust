@@ -81,10 +81,9 @@ fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], rounds: u32, output: &mut [u
 /// Validity duration for pair codes (approximately).
 const PAIR_CODE_VALIDITY_SECS: u64 = 180;
 
-/// Derives `(companion_platform_id, companion_platform_display)` from `DeviceProps`.
-/// Mirrors WA Web (`docs/captured-js/WAWeb/Alt/DeviceLinkingIq.js:35-42`):
-/// id ← `CompanionWebClientType`, display ← `companion_platform_display(id, os)`.
-/// See `companion_platform_display` for the server-validation caveat.
+/// `(companion_platform_id, companion_platform_display)` per WA Web's
+/// `Alt/DeviceLinkingIq.js`. Display always Browser-valid (see
+/// `companion_platform_display`).
 pub fn derive_companion_platform(props: &wa::DeviceProps) -> (CompanionWebClientType, String) {
     let id = companion_web_client_type_for_props(props);
     let os = props.os.as_deref().unwrap_or("");
@@ -92,10 +91,8 @@ pub fn derive_companion_platform(props: &wa::DeviceProps) -> (CompanionWebClient
     (id, display)
 }
 
-/// Resolves the `companion_hello` IQ platform fields, honouring an explicit
-/// `PairCodeOptions::platform_id` override and otherwise auto-deriving from
-/// `Device.device_props`. The display string is always derived: WA Web has no
-/// equivalent override and the server rejects arbitrary strings.
+/// Honours `PairCodeOptions::platform_id` override; display is always
+/// derived (no override — WA Web has none, server rejects arbitrary strings).
 pub fn resolve_companion_platform(
     options: &PairCodeOptions,
     props: &wa::DeviceProps,
@@ -117,9 +114,7 @@ pub struct PairCodeOptions {
     pub show_push_notification: bool,
     /// Custom pairing code (8 chars from Crockford alphabet, or None for random).
     pub custom_code: Option<String>,
-    /// Override for `companion_platform_id`. `None` auto-derives from
-    /// `Device.device_props.platform_type` via the same mapping used by the
-    /// pairing QR (`companion_web_client_type_for_props`).
+    /// `None` auto-derives from `Device.device_props.platform_type`.
     pub platform_id: Option<CompanionWebClientType>,
 }
 
@@ -649,8 +644,7 @@ mod tests {
 
     #[test]
     fn derive_firefox_uses_companion_web_client_wire() {
-        // Regression for the proto-vs-CompanionWebClientType bug: proto
-        // PlatformType::Firefox = 2 but CompanionWebClientType::Firefox = 3.
+        // Regression: proto Firefox=2 vs CWCT Firefox=3.
         let p = props(Some("Linux"), Some(wa::device_props::PlatformType::Firefox));
         let (id, display) = derive_companion_platform(&p);
         assert_eq!(id, CompanionWebClientType::Firefox);
@@ -669,8 +663,7 @@ mod tests {
 
     #[test]
     fn derive_android_phone_falls_back_to_other_web_client_and_chrome() {
-        // Regression for the server-rejection bug: previously emitted
-        // ("16", "Android (Android)"), now must emit a server-valid display.
+        // Regression: previously ("16","Android (Android)"); server rejects.
         let p = props(
             Some("Android"),
             Some(wa::device_props::PlatformType::AndroidPhone),
@@ -691,8 +684,6 @@ mod tests {
 
     #[test]
     fn derive_no_os_substitutes_linux() {
-        // Display must always be Browser (OS) — server 400s on a bare browser
-        // name without parenthesised OS, and WA Web never emits one.
         let p = props(None, Some(wa::device_props::PlatformType::Chrome));
         assert_eq!(
             derive_companion_platform(&p),
@@ -721,9 +712,7 @@ mod tests {
         );
     }
 
-    /// Display string is always one of the 6 server-accepted browsers + an OS.
-    /// Total scan over every proto PlatformType — guards against silently
-    /// reintroducing a non-browser display when the proto adds a new variant.
+    /// Total scan: display always `<valid_browser> (Linux)` for every proto variant.
     #[test]
     fn derive_display_always_uses_valid_browser_for_every_proto_variant() {
         use wa::device_props::PlatformType as P;
@@ -784,8 +773,6 @@ mod tests {
             platform_id: Some(CompanionWebClientType::Chrome),
             ..Default::default()
         };
-        // Override forces id=Chrome and display matches the chosen browser
-        // since display is a pure function of (id, os).
         assert_eq!(
             resolve_companion_platform(&opts, &p),
             (
@@ -1013,9 +1000,6 @@ mod tests {
 
     #[test]
     fn companion_hello_iq_android_wire_strings() {
-        // Mobile DeviceProps now produce a server-valid id (=9, OtherWebClient)
-        // and "Chrome (<os>)" display, since whatsmeow's pair-code doc states
-        // the server 400s on non-browser display strings.
         let iq = build_iq("9", "Chrome (Android)");
         let reg = iq
             .get_optional_child_by_tag(&["link_code_companion_reg"])
@@ -1041,10 +1025,7 @@ mod tests {
         );
     }
 
-    /// End-to-end: mobile DeviceProps + default PairCodeOptions must produce a
-    /// companion_hello IQ the server accepts. Wire integers must be in
-    /// CompanionWebClientType range (0..=9) and the display must be
-    /// `<browser> (<os>)` with one of the 6 valid browsers.
+    /// E2E: mobile DeviceProps + default options emit server-valid companion_hello.
     #[test]
     fn android_device_props_emit_server_valid_companion_hello() {
         let props = wa::DeviceProps {
@@ -1068,9 +1049,6 @@ mod tests {
         );
     }
 
-    /// Explicit `platform_id` override forces the wire id; display is then
-    /// derived from that override + os, so power users get a coherent
-    /// (browser, os) pair without a separate display knob.
     #[test]
     fn explicit_options_override_id_and_display_follows() {
         let props = wa::DeviceProps {
@@ -1087,8 +1065,7 @@ mod tests {
         assert_eq!(pdisp, "Chrome (Android)");
     }
 
-    /// Same wire id as the QR pairing string: the two flows now share a
-    /// single CompanionWebClientType derivation.
+    /// Pair-code and QR share derivation.
     #[test]
     fn pair_code_id_matches_qr_id_for_same_device_props() {
         use crate::companion_reg::companion_web_client_type_for_props;

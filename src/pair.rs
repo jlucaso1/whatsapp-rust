@@ -14,14 +14,13 @@ use waproto::whatsapp as wa;
 
 pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
-/// Derives `CompanionWebClientType` from `device_props.platform_type`. Use
+/// Auto-derives client type from `device_props`; see
 /// [`make_qr_data_with_client_type`] to override.
 pub fn make_qr_data(store: &crate::store::Device, ref_str: &str) -> String {
     let client_type = companion_web_client_type_for_props(&store.device_props);
     make_qr_data_with_client_type(store, ref_str, client_type)
 }
 
-/// Same as [`make_qr_data`] but with an explicit `CompanionWebClientType`.
 pub fn make_qr_data_with_client_type(
     store: &crate::store::Device,
     ref_str: &str,
