@@ -64,6 +64,19 @@ pub const fn companion_browser_name(ct: CompanionWebClientType) -> &'static str 
     }
 }
 
+/// Maps `DeviceProps.PlatformType` to the QR pairing enum. Non-web platforms
+/// collapse to `OtherWebClient`, matching WA Web's fall-through for
+/// unrecognised `WAWebMiscBrowserUtils.info().name`.
+///
+/// WA Web's runtime selector (`docs/captured-js/WAWeb/Companion/RegClientUtils.js:32-50`)
+/// also short-circuits to `UWP` when `WAWebEnvironment.isWindows` is true.
+/// That flag is `gkx("4112")` per `WAWeb/Environment.js:5`, a GateKeeper
+/// experiment that fires only when the JS is bundled inside the Microsoft
+/// Store / UWP shell — *not* when the user's OS is Windows. A Rust library
+/// has no analogous host-shell detection, so the user expresses intent by
+/// setting `PlatformType::Uwp` explicitly. Same principle for `Electron`:
+/// WA Web never emits it from the runtime selector either (Electron's
+/// userAgent reports "Chrome"), but the user can claim it via `Desktop`.
 pub const fn companion_web_client_type_for_platform(
     pt: wa::device_props::PlatformType,
 ) -> CompanionWebClientType {
