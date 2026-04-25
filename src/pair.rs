@@ -6,12 +6,13 @@ use prost::Message;
 
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
-use wacore::companion_reg::{CompanionWebClientType, companion_web_client_type_for_props};
+use wacore::companion_reg::companion_web_client_type_for_props;
 use wacore::libsignal::protocol::KeyPair;
 use wacore_binary::NodeRef;
 use wacore_binary::{Jid, SERVER_JID};
 use waproto::whatsapp as wa;
 
+pub use wacore::companion_reg::CompanionWebClientType;
 pub use wacore::pair::{DeviceState, PairCryptoError, PairUtils};
 
 /// Auto-derives client type from `device_props`; see

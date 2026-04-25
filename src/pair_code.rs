@@ -57,6 +57,7 @@ use wacore_binary::Jid;
 use wacore_binary::{NodeContent, NodeContentRef, NodeRef};
 
 // Re-export types for user convenience
+pub use wacore::companion_reg::CompanionWebClientType;
 pub use wacore::pair_code::PairCodeOptions;
 
 impl Client {
