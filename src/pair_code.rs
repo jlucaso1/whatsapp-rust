@@ -160,22 +160,17 @@ impl Client {
         })
         .await;
 
-        // Resolve companion_platform_{id,display} from options + device_props.
-        // This is the single point where the pairing code flow picks what
-        // identity to announce; bare `PairCodeOptions::default()` derives from
-        // `Device.device_props` (os + platform_type) rather than the legacy
-        // "Chrome (Linux)" hardcode.
-        let (platform_id_str, platform_display_str) =
+        let (platform_id, platform_display) =
             resolve_companion_platform(&options, &device_snapshot.device_props);
+        let platform_id_str = platform_id.to_string();
 
-        // Build the stage 1 IQ node
         let req_id = self.generate_request_id();
         let iq_content = PairCodeUtils::build_companion_hello_iq(
             &phone_number,
             &noise_static_pub,
             &wrapped_ephemeral,
             &platform_id_str,
-            &platform_display_str,
+            &platform_display,
             options.show_push_notification,
             req_id.clone(),
         );
