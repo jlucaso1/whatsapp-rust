@@ -257,9 +257,6 @@ impl crate::protocol::ProtocolNode for PropsResponse {
         "props"
     }
 
-    /// Serializes metadata attrs only. Individual `<prop>` children are not
-    /// emitted since experiment_props stores lightweight (code, value) tuples
-    /// without the full AbPropConfig structure needed for node construction.
     fn into_node(self) -> Node {
         let mut builder = NodeBuilder::new("props").attr("protocol", PROPS_PROTOCOL_VERSION);
 
@@ -277,7 +274,20 @@ impl crate::protocol::ProtocolNode for PropsResponse {
         }
         builder = builder.attr("delta_update", self.delta_update);
 
-        builder.build()
+        // Round-trip with try_from_node_ref. config_expo_key is dropped on
+        // both sides; extend the tuple type before adding it back.
+        let prop_nodes: Vec<Node> = self
+            .experiment_props
+            .into_iter()
+            .map(|(code, value)| {
+                NodeBuilder::new("prop")
+                    .attr("config_code", code)
+                    .attr("config_value", &*value)
+                    .build()
+            })
+            .collect();
+
+        builder.children(prop_nodes).build()
     }
 
     fn try_from_node_ref(node: &NodeRef<'_>) -> Result<Self, anyhow::Error> {
@@ -537,6 +547,62 @@ mod tests {
         assert_eq!(parsed.refresh, response.refresh);
         assert_eq!(parsed.refresh_id, response.refresh_id);
         assert_eq!(parsed.delta_update, response.delta_update);
+        assert_eq!(parsed.experiment_props, response.experiment_props);
+    }
+
+    /// `<props>` must carry one `<prop config_code config_value/>` per
+    /// experiment, matching `WASmaxInAbPropsExperimentConfigMixin`.
+    #[test]
+    fn test_props_response_into_node_emits_wa_web_compliant_prop_children() {
+        let response = PropsResponse {
+            ab_key: None,
+            hash: None,
+            refresh: None,
+            refresh_id: None,
+            delta_update: false,
+            experiment_props: vec![
+                (11_262, CompactString::from("1")),
+                (11_103, CompactString::from("0")),
+            ],
+        };
+
+        let node = response.into_node();
+
+        let children = match node.content {
+            Some(NodeContent::Nodes(c)) => c,
+            other => panic!("<props> must have Node children, got {other:?}"),
+        };
+        assert_eq!(
+            children.len(),
+            2,
+            "expected one <prop> per experiment_props entry"
+        );
+
+        let pairs: Vec<(String, String)> = children
+            .iter()
+            .map(|n| {
+                assert_eq!(n.tag, "prop");
+                let code = n
+                    .attrs
+                    .get("config_code")
+                    .map(|v| v.to_string())
+                    .expect("missing config_code");
+                let value = n
+                    .attrs
+                    .get("config_value")
+                    .map(|v| v.to_string())
+                    .expect("missing config_value");
+                (code, value)
+            })
+            .collect();
+        assert_eq!(
+            pairs,
+            vec![
+                ("11262".to_string(), "1".to_string()),
+                ("11103".to_string(), "0".to_string()),
+            ],
+            "code/value pairs must be preserved with their original mapping"
+        );
     }
 
     #[test]

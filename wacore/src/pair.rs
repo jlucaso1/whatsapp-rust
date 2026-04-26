@@ -150,7 +150,7 @@ impl PairUtils {
                 text: "internal-error",
                 source: anyhow::anyhow!("HMAC container missing details"),
             })?;
-        let _hmac_bytes = hmac_container
+        let hmac_bytes = hmac_container
             .hmac
             .as_deref()
             .ok_or_else(|| PairCryptoError {
@@ -163,11 +163,15 @@ impl PairUtils {
             mac.update(ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE);
         }
         mac.update(details_bytes);
-        // TODO(security): HMAC verification skipped — adv_secret_key is only
-        // rotated in the pair-code flow (see handle_pair_code_notification() in
-        // pair_code.rs, via DeviceCommand::SetAdvSecretKey). QR pairing uses
-        // the initial random key from Device::new() which won't match.
-        // Re-enable once both pairing paths persist the correct key.
+        // adv_secret is shared with the primary out-of-band (QR string or
+        // pair-code DH). HMAC mismatch means the container is forged:
+        // account_signature alone is not a backstop, since its key comes
+        // from the same untrusted blob.
+        mac.verify_slice(hmac_bytes).map_err(|_| PairCryptoError {
+            code: 401,
+            text: "hmac-mismatch",
+            source: anyhow::anyhow!("ADV signed-device-identity HMAC verification failed"),
+        })?;
 
         // 2. Unmarshal inner container and verify account signature
         let mut signed_identity =
@@ -602,6 +606,100 @@ mod tests {
             assert_eq!(noise, *state.noise_key.public_key.public_key_bytes());
             assert_eq!(identity, *state.identity_key.public_key.public_key_bytes());
         }
+    }
+
+    /// Synthesize a signed pair-success payload whose HMAC is keyed by
+    /// `adv_secret_for_hmac`. Mirrors the verifier's hosted/E2EE branching
+    /// for both the account signature and the outer HMAC.
+    fn build_pair_success_payload(
+        state: &DeviceState,
+        adv_secret_for_hmac: &[u8; 32],
+        is_hosted: bool,
+    ) -> Vec<u8> {
+        use prost::Message;
+        use waproto::whatsapp as wa;
+
+        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+        let account_kp = KeyPair::generate(&mut rng);
+        let account_type_value = if is_hosted { 1 } else { 0 };
+        let inner = wa::AdvDeviceIdentity {
+            raw_id: Some(1),
+            timestamp: Some(0),
+            key_index: Some(0),
+            account_type: Some(account_type_value),
+            device_type: Some(account_type_value),
+        }
+        .encode_to_vec();
+        let account_sig_prefix: &[u8] = if is_hosted {
+            ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE
+        } else {
+            ADV_PREFIX_ACCOUNT_SIGNATURE
+        };
+        let mut to_sign = Vec::new();
+        to_sign.extend_from_slice(account_sig_prefix);
+        to_sign.extend_from_slice(&inner);
+        to_sign.extend_from_slice(state.identity_key.public_key.public_key_bytes());
+        let sig = account_kp
+            .private_key
+            .calculate_signature(&to_sign, &mut rng)
+            .unwrap();
+        let signed = wa::AdvSignedDeviceIdentity {
+            details: Some(inner),
+            account_signature_key: Some(account_kp.public_key.public_key_bytes().to_vec()),
+            account_signature: Some(sig.to_vec()),
+            device_signature: None,
+        }
+        .encode_to_vec();
+        let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(adv_secret_for_hmac).unwrap();
+        if is_hosted {
+            mac.update(ADV_HOSTED_PREFIX_ACCOUNT_SIGNATURE);
+        }
+        mac.update(&signed);
+        let hmac_bytes = mac.finalize().into_bytes().to_vec();
+        wa::AdvSignedDeviceIdentityHmac {
+            details: Some(signed),
+            hmac: Some(hmac_bytes),
+            account_type: Some(account_type_value),
+        }
+        .encode_to_vec()
+    }
+
+    #[test]
+    fn do_pair_crypto_accepts_matching_hmac() {
+        let state = dummy_device_state();
+        let payload = build_pair_success_payload(&state, &state.adv_secret_key, false);
+        PairUtils::do_pair_crypto(&state, &payload).expect("matching HMAC must verify");
+    }
+
+    #[test]
+    fn do_pair_crypto_rejects_mismatched_hmac() {
+        let state = dummy_device_state();
+        // Different secret than the companion holds: tampered/forged pair-success.
+        let wrong_secret = [0xCDu8; 32];
+        let payload = build_pair_success_payload(&state, &wrong_secret, false);
+        let err = PairUtils::do_pair_crypto(&state, &payload)
+            .expect_err("mismatched HMAC must abort pairing");
+        assert_eq!(err.code, 401, "expected 401 unauthorized, got {}", err.code);
+        assert_eq!(err.text, "hmac-mismatch");
+    }
+
+    #[test]
+    fn do_pair_crypto_accepts_matching_hmac_for_hosted_account() {
+        let state = dummy_device_state();
+        let payload = build_pair_success_payload(&state, &state.adv_secret_key, true);
+        PairUtils::do_pair_crypto(&state, &payload)
+            .expect("hosted-account HMAC with matching secret must verify");
+    }
+
+    #[test]
+    fn do_pair_crypto_rejects_mismatched_hmac_for_hosted_account() {
+        let state = dummy_device_state();
+        let wrong_secret = [0xCDu8; 32];
+        let payload = build_pair_success_payload(&state, &wrong_secret, true);
+        let err = PairUtils::do_pair_crypto(&state, &payload)
+            .expect_err("hosted-account HMAC with wrong secret must abort pairing");
+        assert_eq!(err.code, 401, "expected 401 unauthorized, got {}", err.code);
+        assert_eq!(err.text, "hmac-mismatch");
     }
 
     /// QR trailing field == `code()` (parity with `companion_platform_id`).
