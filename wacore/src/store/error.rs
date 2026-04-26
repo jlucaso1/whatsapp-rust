@@ -45,7 +45,7 @@ impl StoreError {
     pub fn is_database_busy_or_locked(&self) -> bool {
         let mut layer: &dyn std::error::Error = self;
         loop {
-            let s = layer.to_string();
+            let s = layer.to_string().to_lowercase();
             if s.contains("locked") || s.contains("busy") {
                 return true;
             }
@@ -90,5 +90,24 @@ mod tests {
         let inner = DummyBackendError("permission denied");
         let se = StoreError::Database(Box::new(inner));
         assert!(!se.is_database_busy_or_locked());
+    }
+
+    #[test]
+    fn is_busy_or_locked_is_case_insensitive() {
+        // SQLite drivers in different ecosystems vary on casing for these
+        // diagnostic strings ("database is LOCKED", "Busy", etc.). The check
+        // must not depend on the exact casing the underlying driver chose.
+        for msg in [
+            "database is LOCKED",
+            "SQLITE_BUSY: write contention",
+            "Busy",
+            "Locked",
+        ] {
+            let se = StoreError::Database(Box::new(DummyBackendError(msg)));
+            assert!(
+                se.is_database_busy_or_locked(),
+                "expected {msg:?} to be detected"
+            );
+        }
     }
 }
