@@ -2,13 +2,21 @@
 //! children so future server additions don't break the handler.
 
 use anyhow::{Result, anyhow};
+use log::debug;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::{Jid, Node, NodeRef};
 
 use crate::time::from_secs;
 use crate::types::call::{CallAction, CallAudioCodec, IncomingCall};
 
-const KNOWN_ACTIONS: &[&str] = &["offer", "preaccept", "accept", "reject", "terminate"];
+const KNOWN_ACTIONS: &[&str] = &[
+    "offer",
+    "offer_notice",
+    "preaccept",
+    "accept",
+    "reject",
+    "terminate",
+];
 
 pub fn parse_call_stanza(node: &NodeRef<'_>) -> Result<Option<IncomingCall>> {
     if node.tag != "call" {
@@ -97,6 +105,12 @@ fn parse_action(node: &NodeRef<'_>) -> Result<CallAction> {
                 .optional_string("joinable")
                 .map(|s| s == "1")
                 .unwrap_or(false);
+            // Baileys (Socket/messages-recv.ts:1552-1553): grupo pode vir como
+            // `type="group"` ou `group-jid="...@g.us"`. Expomos os 2 — alguns
+            // layouts trazem só `type` sem `group-jid`, então o consumidor
+            // precisa dos 2 sinais pra detectar.
+            let is_group_type = attrs.optional_string("type").is_some_and(|s| s == "group");
+            let group_jid = attrs.optional_jid("group-jid");
 
             attrs.finish().map_err(|e| anyhow!("<offer> attrs: {e}"))?;
 
@@ -117,6 +131,32 @@ fn parse_action(node: &NodeRef<'_>) -> Result<CallAction> {
                 joinable,
                 is_video,
                 audio,
+                group_jid,
+                is_group_type,
+            }
+        }
+        "offer_notice" => {
+            let media = attrs.optional_string("media").map(|s| s.into_owned());
+            let caller_pn = attrs.optional_jid("caller_pn");
+            // `type` and `reason` aren't used downstream but logging them at
+            // debug level keeps observability so future protocol drift
+            // doesn't degrade silently.
+            let unhandled_type = attrs.optional_string("type");
+            let unhandled_reason = attrs.optional_string("reason");
+            if unhandled_type.is_some() || unhandled_reason.is_some() {
+                debug!(
+                    "<offer_notice> unhandled attrs: type={:?} reason={:?} call_id={} call_creator={}",
+                    unhandled_type.as_deref(),
+                    unhandled_reason.as_deref(),
+                    call_id,
+                    call_creator
+                );
+            }
+            CallAction::OfferNotice {
+                call_id,
+                call_creator,
+                media,
+                caller_pn,
             }
         }
         "preaccept" => CallAction::PreAccept {
@@ -254,6 +294,8 @@ mod tests {
                 joinable,
                 is_video,
                 audio,
+                group_jid,
+                is_group_type,
             } => {
                 assert_eq!(call_id, "CALL-ID-0001");
                 assert_eq!(call_creator, fake_caller_lid());
@@ -266,6 +308,8 @@ mod tests {
                 assert_eq!(audio[0].enc, "opus");
                 assert_eq!(audio[0].rate, 16000);
                 assert_eq!(audio[1].rate, 8000);
+                assert_eq!(group_jid, None);
+                assert!(!is_group_type);
             }
             other => panic!("expected Offer, got {other:?}"),
         }
@@ -328,6 +372,101 @@ mod tests {
                 assert!(audio.is_empty());
             }
             other => panic!("expected Offer, got {other:?}"),
+        }
+    }
+
+    /// `<offer>` carrying explicit group context — `type="group"` and
+    /// `group-jid="…@g.us"` per Baileys (`Socket/messages-recv.ts:1552`).
+    /// Distinct from `<offer_notice>` (the more common signaling shape).
+    #[test]
+    fn offer_with_group_jid_and_type() {
+        let group_jid = Jid::new("123456789", Server::Group);
+        let node = base_call_builder()
+            .children([offer_builder_base()
+                .attr("type", "group")
+                .attr("group-jid", group_jid.clone())
+                .children([NodeBuilder::new("audio")
+                    .attr("enc", "opus")
+                    .attr("rate", "16000")
+                    .build()])
+                .build()])
+            .build();
+
+        let call = parse_call_stanza(&as_ref(&node)).unwrap().unwrap();
+        match call.action {
+            CallAction::Offer {
+                group_jid: parsed_group,
+                is_group_type,
+                is_video,
+                audio,
+                ..
+            } => {
+                assert_eq!(parsed_group, Some(group_jid));
+                assert!(is_group_type);
+                assert!(!is_video);
+                assert_eq!(audio.len(), 1);
+            }
+            other => panic!("expected Offer, got {other:?}"),
+        }
+    }
+
+    /// `<offer>` with only `type="group"` and no `group-jid` — Baileys treats
+    /// this as a group call too. Tests that `is_group_type` carries the signal
+    /// even when `group-jid` is absent.
+    #[test]
+    fn offer_with_only_type_group() {
+        let node = base_call_builder()
+            .children([offer_builder_base().attr("type", "group").build()])
+            .build();
+
+        let call = parse_call_stanza(&as_ref(&node)).unwrap().unwrap();
+        match call.action {
+            CallAction::Offer {
+                group_jid,
+                is_group_type,
+                ..
+            } => {
+                assert_eq!(group_jid, None);
+                assert!(is_group_type);
+            }
+            other => panic!("expected Offer, got {other:?}"),
+        }
+    }
+
+    /// Group call signaling: WA Web entrega `<offer_notice type="group">` aos
+    /// membros do grupo (não `<offer>`). Captured stanza shape from production:
+    /// `<call from=caller@lid id=... t=...><offer_notice call-creator=caller@lid
+    /// call-id=... media=audio type=group reason=427 caller_pn=...></offer_notice></call>`.
+    #[test]
+    fn offer_notice_group_call() {
+        let node = NodeBuilder::new("call")
+            .attr("from", fake_caller_lid())
+            .attr("id", "STANZA-ID-GROUP")
+            .attr("t", "1766847151")
+            .children([NodeBuilder::new("offer_notice")
+                .attr("call-creator", fake_caller_lid())
+                .attr("call-id", "GROUP-CALL-ID")
+                .attr("media", "audio")
+                .attr("type", "group")
+                .attr("reason", "427")
+                .attr("caller_pn", fake_caller_pn())
+                .build()])
+            .build();
+
+        let call = parse_call_stanza(&as_ref(&node)).unwrap().unwrap();
+        match call.action {
+            CallAction::OfferNotice {
+                call_id,
+                call_creator,
+                media,
+                caller_pn,
+            } => {
+                assert_eq!(call_id, "GROUP-CALL-ID");
+                assert_eq!(call_creator, fake_caller_lid());
+                assert_eq!(media.as_deref(), Some("audio"));
+                assert_eq!(caller_pn, Some(fake_caller_pn()));
+            }
+            other => panic!("expected OfferNotice, got {other:?}"),
         }
     }
 
