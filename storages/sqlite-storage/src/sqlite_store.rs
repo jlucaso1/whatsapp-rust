@@ -567,6 +567,7 @@ impl SqliteStore {
                 app_version_tertiary: row.app_version_tertiary.try_into().unwrap_or(0u32),
                 app_version_last_fetched_ms: row.app_version_last_fetched_ms,
                 device_props: wacore::store::device::DEVICE_PROPS.clone(),
+                client_profile: wacore::client_profile::ClientProfile::web(),
                 edge_routing_info: row.edge_routing_info,
                 props_hash: row.props_hash,
                 next_pre_key_id: row.next_pre_key_id as u32,

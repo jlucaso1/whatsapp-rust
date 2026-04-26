@@ -647,6 +647,15 @@ impl Client {
             .await;
     }
 
+    /// Set the noise-handshake `ClientPayload` profile. In-memory only;
+    /// call before each `connect()` on a fresh process.
+    pub async fn set_client_profile(&self, profile: wacore::client_profile::ClientProfile) {
+        use wacore::store::commands::DeviceCommand;
+        self.persistence_manager
+            .process_command(DeviceCommand::SetClientProfile(profile))
+            .await;
+    }
+
     /// Public entry point for processing [`MajorSyncTask`] from the sync channel.
     pub async fn process_sync_task(self: &Arc<Self>, task: crate::sync_task::MajorSyncTask) {
         match task {

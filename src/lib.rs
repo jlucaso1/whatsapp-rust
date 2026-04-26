@@ -1,3 +1,4 @@
+pub use wacore::client_profile::ClientProfile;
 pub use wacore::{
     iq::privacy as privacy_settings, proto_helpers, sticker_pack, store::traits, webp,
 };

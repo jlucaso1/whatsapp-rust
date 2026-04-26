@@ -1,3 +1,4 @@
+use crate::client_profile::ClientProfile;
 use crate::store::Device;
 use crate::store::device::DevicePropsOverride;
 use wacore_binary::Jid;
@@ -11,6 +12,7 @@ pub enum DeviceCommand {
     SetAccount(Option<wa::AdvSignedDeviceIdentity>),
     SetAppVersion((u32, u32, u32)),
     SetDeviceProps(DevicePropsOverride),
+    SetClientProfile(ClientProfile),
     SetPropsHash(Option<String>),
     SetNextPreKeyId(u32),
     SetAdvSecretKey([u8; 32]),
@@ -40,6 +42,9 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
         }
         DeviceCommand::SetDeviceProps(override_) => {
             device.set_device_props(override_);
+        }
+        DeviceCommand::SetClientProfile(profile) => {
+            device.set_client_profile(profile);
         }
         DeviceCommand::SetPropsHash(hash) => {
             device.props_hash = hash;
