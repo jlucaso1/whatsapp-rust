@@ -30,6 +30,13 @@ pub enum HandshakeError {
     Core(#[from] CoreHandshakeError),
     #[error("Timed out waiting for handshake response")]
     Timeout,
+    /// Producer side of `transport_events` was dropped — distinct from a
+    /// timeout because nothing more will ever arrive on the channel,
+    /// regardless of how long we wait. Surfaced separately so callers can
+    /// log it accurately and so retry policies that pace themselves on
+    /// timeout don't silently swallow a teardown.
+    #[error("Transport event stream closed before handshake completed")]
+    StreamClosed,
     #[error("Disconnected during handshake")]
     Disconnected,
     #[error("Unexpected event during handshake: {0}")]
@@ -42,15 +49,56 @@ impl HandshakeError {
     pub fn is_transient(&self) -> bool {
         matches!(
             self,
-            Self::Transport(_) | Self::Timeout | Self::Disconnected
+            Self::Transport(_) | Self::Timeout | Self::Disconnected | Self::StreamClosed
         )
     }
 
     /// Crypto-fatal: a cached server static or cert chain is no longer
     /// trustworthy. The orchestration layer must clear the IK cache and
     /// fall back to XX on the next attempt.
+    ///
+    /// Narrowed to the `Core` variants that actually point at a stale or
+    /// poisoned cache. Programmer-side bugs (`Proto` encode failure, our
+    /// own crypto provider misuse, HKDF impossible failure, counter
+    /// exhaustion in a single handshake) are NOT crypto-fatal — they
+    /// indicate a code defect, and clearing the cache would mask it. A
+    /// stream-closed event during recv is treated as transient by
+    /// `is_transient`, not here.
     pub fn is_crypto_fatal(&self) -> bool {
-        matches!(self, Self::Core(_))
+        let Self::Core(inner) = self else {
+            return false;
+        };
+        use wacore::handshake::HandshakeError as Core;
+        use wacore::noise::NoiseError;
+        match inner {
+            // Server-supplied bytes failed AEAD authentication or had the
+            // wrong shape — canonical "the static we used to derive ee/se
+            // doesn't actually belong to this server" signal.
+            Core::Noise(NoiseError::Decrypt(_))
+            | Core::Noise(NoiseError::CiphertextTooShort)
+            | Core::Noise(NoiseError::InvalidKeyLength { .. }) => true,
+            // Cert content didn't match the static we just decrypted, or
+            // the chain was structurally invalid.
+            Core::CertVerification(_) => true,
+            // Server sent a structurally invalid response. Either it's
+            // out of sync with our cached static or it has a real bug;
+            // either way IK won't recover, so fall back.
+            Core::IncompleteResponse
+            | Core::InvalidLength { .. }
+            | Core::InvalidKeyLength
+            | Core::ProtoDecode(_) => true,
+            // Programmer-side: our encode shouldn't fail with a valid
+            // Device, our own crypto provider shouldn't reject our own
+            // inputs, HKDF can't reasonably fail, and a single handshake
+            // can't exhaust the counter. None of these mean the cache
+            // is bad.
+            Core::Proto(_)
+            | Core::Crypto(_)
+            | Core::Noise(NoiseError::Encrypt(_))
+            | Core::Noise(NoiseError::HkdfExpandFailed)
+            | Core::Noise(NoiseError::InvalidPatternLength { .. })
+            | Core::Noise(NoiseError::CounterExhausted) => false,
+        }
     }
 }
 
@@ -303,7 +351,8 @@ async fn recv_frame(
             }
             Ok(Ok(TransportEvent::Connected)) => continue,
             Ok(Ok(TransportEvent::Disconnected)) => return Err(HandshakeError::Disconnected),
-            Ok(Err(_)) => return Err(HandshakeError::Timeout),
+            // Channel closed (no more producers) — distinct from a real timeout.
+            Ok(Err(_)) => return Err(HandshakeError::StreamClosed),
             Err(_) => return Err(HandshakeError::Timeout),
         }
     }
@@ -387,14 +436,32 @@ mod tests {
 
     #[test]
     fn handshake_error_classification() {
+        // Transient — never invalidate the cache.
         assert!(HandshakeError::Timeout.is_transient());
         assert!(HandshakeError::Disconnected.is_transient());
+        assert!(HandshakeError::StreamClosed.is_transient());
         assert!(!HandshakeError::Timeout.is_crypto_fatal());
         assert!(!HandshakeError::Disconnected.is_crypto_fatal());
+        assert!(!HandshakeError::StreamClosed.is_crypto_fatal());
 
-        let core_err = HandshakeError::Core(CoreHandshakeError::IncompleteResponse);
-        assert!(core_err.is_crypto_fatal());
-        assert!(!core_err.is_transient());
+        // Stale-cache-indicating Core variants.
+        for err in [
+            HandshakeError::Core(CoreHandshakeError::IncompleteResponse),
+            HandshakeError::Core(CoreHandshakeError::CertVerification("x".into())),
+            HandshakeError::Core(CoreHandshakeError::InvalidKeyLength),
+        ] {
+            assert!(err.is_crypto_fatal(), "{err:?} should be crypto-fatal");
+            assert!(!err.is_transient(), "{err:?} should not be transient");
+        }
+
+        // Programmer-side bug: Crypto(String) wraps generic crypto-provider
+        // misuse; not a server-side cache problem.
+        let bug = HandshakeError::Core(CoreHandshakeError::Crypto("bug".into()));
+        assert!(
+            !bug.is_crypto_fatal(),
+            "generic Crypto(String) errors must not invalidate the cache"
+        );
+        assert!(!bug.is_transient());
     }
 
     /// Both the XX and IK initial messages must travel inside a frame whose

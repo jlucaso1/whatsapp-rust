@@ -164,14 +164,24 @@ to either oscillating back to XX needlessly or looping on a stale cache.
 ### Persisted state (`Device.server_cert_chain`)
 
 `CachedServerCertChain { intermediate, leaf }` with each cert reduced to
-`{ key: [u8; 32], not_before: i64, not_after: i64 }`. Mirrors the JSON
-shape WA Web persists (`PrefsInfoStore.js:setCertificateChain`) — full
-protobuf signatures + issuer serial are validated at reception and then
-dropped, since they are not needed for IK or expiry checks.
+`{ key: [u8; 32], not_before: i64, not_after: i64 }`. Mirrors the
+storage layout WA Web uses in `PrefsInfoStore.js:setCertificateChain` —
+only those fields end up on disk.
+
+Reception-time validation in `verify_server_cert` checks structural
+shape, the intermediate issuer-serial pin (must equal `WA_CERT_ISSUER_SERIAL`),
+the chain link (`leaf.issuer_serial == intermediate.serial`), and that
+`leaf.key` equals the `static` decrypted from the Noise transcript. Full
+XEd25519 signature verification against `WA_CERT_PUB_KEY` (matching
+`WAVerifyChainCertificateWA6`) is **not yet implemented** and is a
+deliberate follow-up — the AEAD MAC of the Noise channel already
+authenticates the chain bytes as coming from a server in possession of
+the static private key, so this gap is defense in depth. Same gap exists
+in whatsmeow and Baileys today.
 
 ### Logs (matching WA Web's `[socket]` lines)
 
-```
+```text
 [socket] doFullHandshake: openChatSocket send hello
 [socket] resumeNoiseHandshake started
 [socket] resumeNoiseHandshake send hello
