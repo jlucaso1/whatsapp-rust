@@ -1,3 +1,4 @@
+use crate::client_profile::ClientProfile;
 use crate::libsignal::protocol::{IdentityKeyPair, KeyPair};
 use prost::Message;
 use serde::{Deserialize, Serialize};
@@ -77,26 +78,31 @@ pub mod key_pair_serde {
 
 fn build_base_client_payload(
     app_version: wa::client_payload::user_agent::AppVersion,
+    profile: &ClientProfile,
 ) -> wa::ClientPayload {
     wa::ClientPayload {
         user_agent: Some(wa::client_payload::UserAgent {
-            platform: Some(wa::client_payload::user_agent::Platform::Web as i32),
+            platform: Some(profile.user_agent_platform as i32),
             release_channel: Some(wa::client_payload::user_agent::ReleaseChannel::Release as i32),
             app_version: Some(app_version),
             mcc: Some("000".to_string()),
             mnc: Some("000".to_string()),
-            os_version: Some("0.1.0".to_string()),
-            manufacturer: Some("".to_string()),
-            device: Some("Desktop".to_string()),
-            os_build_number: Some("0.1.0".to_string()),
+            os_version: Some(profile.os_version.clone()),
+            manufacturer: Some(profile.manufacturer.clone()),
+            device: Some(profile.device.clone()),
+            os_build_number: Some(profile.os_version.clone()),
             locale_language_iso6391: Some("en".to_string()),
             locale_country_iso31661_alpha2: Some("en".to_string()),
             ..Default::default()
         }),
-        web_info: Some(wa::client_payload::WebInfo {
-            web_sub_platform: Some(wa::client_payload::web_info::WebSubPlatform::WebBrowser as i32),
-            ..Default::default()
-        }),
+        web_info: profile
+            .include_web_info
+            .then(|| wa::client_payload::WebInfo {
+                web_sub_platform: Some(
+                    wa::client_payload::web_info::WebSubPlatform::WebBrowser as i32,
+                ),
+                ..Default::default()
+            }),
         connect_type: Some(wa::client_payload::ConnectType::WifiUnknown as i32),
         connect_reason: Some(wa::client_payload::ConnectReason::UserActivated as i32),
         ..Default::default()
@@ -209,6 +215,9 @@ pub struct Device {
     pub app_version_last_fetched_ms: i64,
     #[serde(skip)]
     pub device_props: wa::DeviceProps,
+    /// Runtime-only. Set before `connect()` on every process start.
+    #[serde(skip)]
+    pub client_profile: ClientProfile,
     /// Edge routing info received from server, used for optimized reconnection.
     /// When present, this should be sent as a pre-intro before the Noise handshake.
     #[serde(default)]
@@ -280,6 +289,7 @@ impl Device {
             app_version_tertiary: 1035617621,
             app_version_last_fetched_ms: 0,
             device_props: DEVICE_PROPS.clone(),
+            client_profile: ClientProfile::web(),
             edge_routing_info: None,
             props_hash: None,
             next_pre_key_id: 1,
@@ -323,6 +333,10 @@ impl Device {
         }
     }
 
+    pub fn set_client_profile(&mut self, profile: ClientProfile) {
+        self.client_profile = profile;
+    }
+
     pub fn get_client_payload(&self) -> wa::ClientPayload {
         match &self.pn {
             Some(jid) => self.get_login_payload(jid),
@@ -337,7 +351,7 @@ impl Device {
             tertiary: Some(self.app_version_tertiary),
             ..Default::default()
         };
-        let mut payload = build_base_client_payload(app_version);
+        let mut payload = build_base_client_payload(app_version, &self.client_profile);
         payload.username = jid.user.parse::<u64>().ok();
         payload.device = Some(jid.device as u32);
         payload.passive = Some(true);
@@ -351,7 +365,7 @@ impl Device {
             tertiary: Some(self.app_version_tertiary),
             ..Default::default()
         };
-        let mut payload = build_base_client_payload(app_version);
+        let mut payload = build_base_client_payload(app_version, &self.client_profile);
 
         let device_props_bytes = self.device_props.encode_to_vec();
 
@@ -527,6 +541,99 @@ mod tests {
             payload.device_pairing_data.is_none(),
             "login payload must not carry device_pairing_data"
         );
+    }
+
+    #[test]
+    fn default_profile_emits_legacy_web_payload() {
+        let device = Device::new();
+        let payload = device.get_client_payload();
+        let ua = payload.user_agent.expect("user_agent");
+        assert_eq!(ua.platform(), wa::client_payload::user_agent::Platform::Web);
+        assert_eq!(ua.device.as_deref(), Some("Desktop"));
+        assert_eq!(ua.os_version.as_deref(), Some("0.1.0"));
+        assert_eq!(ua.os_build_number.as_deref(), Some("0.1.0"));
+        assert_eq!(ua.manufacturer.as_deref(), Some(""));
+        let web_info = payload.web_info.expect("web profile must include web_info");
+        assert_eq!(
+            web_info.web_sub_platform(),
+            wa::client_payload::web_info::WebSubPlatform::WebBrowser
+        );
+    }
+
+    #[test]
+    fn android_profile_emits_android_payload_without_web_info() {
+        let mut device = Device::new();
+        device.set_client_profile(ClientProfile::android("13"));
+
+        let payload = device.get_client_payload();
+        let ua = payload.user_agent.expect("user_agent");
+        assert_eq!(
+            ua.platform(),
+            wa::client_payload::user_agent::Platform::Android
+        );
+        assert_eq!(ua.device.as_deref(), Some("Smartphone"));
+        assert_eq!(ua.os_version.as_deref(), Some("13"));
+        assert_eq!(ua.os_build_number.as_deref(), Some("13"));
+        assert!(
+            payload.web_info.is_none(),
+            "android profile must omit web_info"
+        );
+    }
+
+    #[test]
+    fn android_profile_survives_login_payload_path() {
+        let mut device = Device::new();
+        device.set_client_profile(ClientProfile::android("13"));
+        device.pn = Some("12345@s.whatsapp.net".parse().unwrap());
+
+        let payload = device.get_client_payload();
+        let ua = payload.user_agent.expect("user_agent");
+        assert_eq!(
+            ua.platform(),
+            wa::client_payload::user_agent::Platform::Android
+        );
+        assert!(payload.web_info.is_none());
+        assert!(
+            payload.device_pairing_data.is_none(),
+            "login payload still must not carry device_pairing_data"
+        );
+    }
+
+    #[test]
+    fn client_profile_independent_of_device_props_platform_type() {
+        let mut device = Device::new();
+        device.set_device_props(
+            DevicePropsOverride::new()
+                .with_platform_type(wa::device_props::PlatformType::AndroidPhone),
+        );
+
+        let payload = device.get_client_payload();
+        let ua = payload.user_agent.expect("user_agent");
+        assert_eq!(ua.platform(), wa::client_payload::user_agent::Platform::Web);
+        assert!(payload.web_info.is_some());
+    }
+
+    #[test]
+    fn every_native_profile_drops_web_info_in_payload() {
+        for profile in [
+            ClientProfile::android("13"),
+            ClientProfile::smb_android("13"),
+            ClientProfile::ios("17.4"),
+            ClientProfile::macos("14.4"),
+            ClientProfile::windows("10.0.22631"),
+        ] {
+            let mut device = Device::new();
+            let platform = profile.user_agent_platform;
+            device.set_client_profile(profile);
+
+            let payload = device.get_client_payload();
+            let ua = payload.user_agent.expect("user_agent");
+            assert_eq!(ua.platform(), platform);
+            assert!(
+                payload.web_info.is_none(),
+                "{platform:?} must omit web_info"
+            );
+        }
     }
 
     /// Backward compat: missing `account` field deserializes as `None`.
