@@ -24,7 +24,8 @@
 //! # Example (WhatsApp)
 //!
 //! ```ignore
-//! use wacore_noise::{NoiseHandshake, HandshakeUtils};
+//! use wacore_noise::NoiseHandshake;
+//! use wacore_binary::consts::{NOISE_PATTERN_XX, WA_CONN_HEADER};
 //!
 //! let mut nh = NoiseHandshake::new(NOISE_PATTERN_XX, &WA_CONN_HEADER)?;
 //! nh.authenticate(&ephemeral_public);

@@ -116,8 +116,15 @@ mod tests {
 
     #[test]
     fn clear_server_cert_chain_drops_field() {
+        // Seed via the command path rather than mutating Device directly,
+        // so that the test exercises the same single mutation surface used
+        // in production (PersistenceManager::process_command -> apply_*).
         let mut device = Device::new();
-        device.server_cert_chain = Some(dummy_chain());
+        apply_command_to_device(
+            &mut device,
+            DeviceCommand::SetServerCertChain(dummy_chain()),
+        );
+        assert!(device.server_cert_chain.is_some(), "seed precondition");
 
         apply_command_to_device(&mut device, DeviceCommand::ClearServerCertChain);
         assert!(device.server_cert_chain.is_none());
