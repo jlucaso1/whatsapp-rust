@@ -119,9 +119,7 @@ impl PersistenceManager {
         #[cfg(feature = "debug-snapshots")]
         {
             self.save_to_disk().await?;
-            self.backend
-                .snapshot_db(name, extra_content)
-                .await
+            self.backend.snapshot_db(name, extra_content).await
         }
         #[cfg(not(feature = "debug-snapshots"))]
         {
@@ -198,9 +196,7 @@ impl PersistenceManager {
         &self,
         group_jid: &str,
     ) -> Result<Vec<(String, bool)>, StoreError> {
-        self.backend
-            .get_sender_key_devices(group_jid)
-            .await
+        self.backend.get_sender_key_devices(group_jid).await
     }
 
     pub async fn set_sender_key_status(
@@ -208,14 +204,10 @@ impl PersistenceManager {
         group_jid: &str,
         entries: &[(&str, bool)],
     ) -> Result<(), StoreError> {
-        self.backend
-            .set_sender_key_status(group_jid, entries)
-            .await
+        self.backend.set_sender_key_status(group_jid, entries).await
     }
 
     pub async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<(), StoreError> {
-        self.backend
-            .clear_sender_key_devices(group_jid)
-            .await
+        self.backend.clear_sender_key_devices(group_jid).await
     }
 }
