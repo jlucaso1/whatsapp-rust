@@ -262,7 +262,7 @@ impl HandshakeState {
     /// # Arguments
     /// * `static_kp` - The device's static Noise key pair
     /// * `client_payload` - The encoded client payload bytes
-    /// * `pattern` - The Noise pattern string (e.g., NOISE_START_PATTERN)
+    /// * `pattern` - The Noise pattern string (e.g., NOISE_PATTERN_XX)
     /// * `prologue` - The prologue/header bytes (e.g., WA_CONN_HEADER)
     pub fn new(
         static_kp: KeyPair,

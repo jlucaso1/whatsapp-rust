@@ -9,7 +9,7 @@ use wacore::handshake::{
     HandshakeError as CoreHandshakeError, HandshakeState, build_handshake_header,
 };
 use wacore::runtime::{Runtime, timeout as rt_timeout};
-use wacore_binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER};
+use wacore_binary::consts::{NOISE_PATTERN_XX, WA_CONN_HEADER};
 
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -51,7 +51,7 @@ pub async fn do_handshake(
     let mut handshake_state = HandshakeState::new(
         device.core.noise_key.clone(),
         client_payload,
-        NOISE_START_PATTERN,
+        NOISE_PATTERN_XX,
         &WA_CONN_HEADER,
     )?;
     let mut frame_decoder = wacore::framing::FrameDecoder::new();

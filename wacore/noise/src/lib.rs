@@ -26,7 +26,7 @@
 //! ```ignore
 //! use wacore_noise::{NoiseHandshake, HandshakeUtils};
 //!
-//! let mut nh = NoiseHandshake::new(NOISE_START_PATTERN, &WA_CONN_HEADER)?;
+//! let mut nh = NoiseHandshake::new(NOISE_PATTERN_XX, &WA_CONN_HEADER)?;
 //! nh.authenticate(&ephemeral_public);
 //! nh.mix_shared_secret(&private_key, &their_public)?;
 //! let (write_key, read_key) = nh.finish()?;

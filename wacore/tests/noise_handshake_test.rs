@@ -6,7 +6,7 @@ use wacore::handshake::NoiseHandshake;
 use wacore::libsignal::crypto::CryptographicHash;
 use wacore::libsignal::protocol::{PrivateKey, PublicKey};
 use wacore::noise::generate_iv;
-use wacore_binary::consts::{NOISE_START_PATTERN, WA_CONN_HEADER};
+use wacore_binary::consts::{NOISE_PATTERN_XX, WA_CONN_HEADER};
 
 fn hex_to_bytes<const N: usize>(hex_str: &str) -> [u8; N] {
     hex::decode(hex_str)
@@ -169,7 +169,7 @@ fn test_full_handshake_flow_with_go_data() {
         hex_to_bytes::<32>("4a82b448599eb44f85bacedaff0a81820999a87be156b08989c2857b8651d4d2");
 
     println!("Step 1: Prologue");
-    let mut nh = NoiseHandshake::new(NOISE_START_PATTERN, wa_header)
+    let mut nh = NoiseHandshake::new(NOISE_PATTERN_XX, wa_header)
         .expect("noise handshake should initialize");
     assert_eq!(*nh.hash(), hash_after_prologue, "Mismatch after prologue");
 
@@ -283,8 +283,8 @@ fn test_initial_pattern_hash() {
 ///         print(hashlib.sha256(h).hexdigest())"
 #[test]
 fn test_xx_h_after_init_matches_known_vector() {
-    let nh = NoiseHandshake::new(NOISE_START_PATTERN, &WA_CONN_HEADER)
-        .expect("noise init should succeed");
+    let nh =
+        NoiseHandshake::new(NOISE_PATTERN_XX, &WA_CONN_HEADER).expect("noise init should succeed");
 
     let expected: [u8; 32] =
         hex_to_bytes("ffff0c9267310966f1311170c04b38c79504285bf5edf763e5c946492a50a755");
