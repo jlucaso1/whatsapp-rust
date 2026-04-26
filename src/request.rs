@@ -1,5 +1,6 @@
 use crate::client::Client;
-use crate::socket::error::SocketError;
+use crate::client::ClientError;
+use crate::socket::error::{EncryptSendError, SocketError};
 use futures::FutureExt;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
@@ -14,19 +15,23 @@ pub use wacore::request::{InfoQuery, InfoQueryType, RequestUtils};
 pub enum IqError {
     #[error("IQ request timed out")]
     Timeout,
-    #[error("Client is not connected")]
+    #[error("client is not connected")]
     NotConnected,
-    #[error("Socket error: {0}")]
+    #[error("socket error")]
     Socket(#[from] SocketError),
-    #[error("Received disconnect node during IQ wait: {0:?}")]
+    #[error("encrypted send pipeline failed")]
+    EncryptSend(#[from] EncryptSendError),
+    #[error("client state prevented send")]
+    ClientState(#[source] ClientError),
+    #[error("received disconnect node during IQ wait: {0:?}")]
     Disconnected(Node),
-    #[error("Received a server error response: code={code}, text='{text}'")]
+    #[error("received a server error response: code={code}, text='{text}'")]
     ServerError { code: u16, text: String },
-    #[error("Internal channel closed unexpectedly")]
+    #[error("internal channel closed unexpectedly")]
     InternalChannelClosed,
-    #[error("Failed to encode IQ request: {0}")]
-    EncodeError(anyhow::Error),
-    #[error("Failed to parse IQ response: {0}")]
+    #[error("failed to encode IQ request")]
+    EncodeError(#[source] anyhow::Error),
+    #[error("failed to parse IQ response")]
     ParseError(#[from] anyhow::Error),
 }
 
@@ -40,7 +45,6 @@ impl From<wacore::request::IqError> for IqError {
                 Self::ServerError { code, text }
             }
             wacore::request::IqError::InternalChannelClosed => Self::InternalChannelClosed,
-            wacore::request::IqError::Network(msg) => Self::Socket(SocketError::Crypto(msg)),
         }
     }
 }
@@ -225,9 +229,12 @@ impl Client {
         if let Err(e) = send_fn.await {
             self.response_waiters.lock().await.remove(&req_id);
             return match e {
-                crate::client::ClientError::Socket(s_err) => Err(IqError::Socket(s_err)),
-                crate::client::ClientError::NotConnected => Err(IqError::NotConnected),
-                _ => Err(IqError::Socket(SocketError::Crypto(e.to_string()))),
+                ClientError::Socket(s_err) => Err(IqError::Socket(s_err)),
+                ClientError::EncryptSend(es_err) => Err(IqError::EncryptSend(es_err)),
+                ClientError::NotConnected => Err(IqError::NotConnected),
+                other @ (ClientError::AlreadyConnected | ClientError::NotLoggedIn) => {
+                    Err(IqError::ClientState(other))
+                }
             };
         }
 

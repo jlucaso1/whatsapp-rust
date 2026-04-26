@@ -24,6 +24,12 @@ pub enum SignalProtocolError {
     /// invalid state for call to {0} to succeed: {1}
     InvalidState(&'static str, String),
 
+    /// backend store error in {0}
+    BackendError(
+        &'static str,
+        #[source] Box<dyn std::error::Error + Send + Sync>,
+    ),
+
     /// protobuf encoding was invalid
     InvalidProtobufEncoding,
 
@@ -114,5 +120,27 @@ impl From<CurveError> for SignalProtocolError {
             CurveError::BadKeyType(raw) => Self::BadKeyType(raw),
             CurveError::BadKeyLength(key_type, len) => Self::BadKeyLength(key_type, len),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Debug, thiserror::Error)]
+    #[error("synthetic backend failure: {code}")]
+    struct DummyBackendError {
+        code: u32,
+    }
+
+    #[test]
+    fn backend_error_preserves_typed_source_via_downcast() {
+        let dummy = DummyBackendError { code: 42 };
+        let spe = SignalProtocolError::BackendError("test_context", Box::new(dummy));
+        let src = std::error::Error::source(&spe).expect("source preserved");
+        let inner = src
+            .downcast_ref::<DummyBackendError>()
+            .expect("downcasts to DummyBackendError");
+        assert_eq!(inner.code, 42);
     }
 }

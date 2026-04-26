@@ -7,6 +7,7 @@ use crate::request::IqError;
 use serde_json::Value;
 use thiserror::Error;
 use wacore::iq::mex::MexQuerySpec;
+use wacore_binary::jid::JidError;
 
 // Re-export types from wacore
 pub use wacore::iq::mex::{MexDoc, MexErrorExtensions, MexGraphQLError, MexResponse};
@@ -14,16 +15,21 @@ pub use wacore::iq::mex::{MexDoc, MexErrorExtensions, MexGraphQLError, MexRespon
 /// Error types for MEX operations.
 #[derive(Debug, Error)]
 pub enum MexError {
+    /// Payload missing or otherwise malformed in a way that has no underlying
+    /// typed source (descriptive message only — e.g. "missing data").
     #[error("MEX payload parsing error: {0}")]
     PayloadParsing(String),
+
+    #[error("MEX payload contained an invalid JID")]
+    InvalidJid(#[from] JidError),
 
     #[error("MEX extension error: code={code}, message='{message}'")]
     ExtensionError { code: i32, message: String },
 
-    #[error("IQ request failed: {0}")]
+    #[error("IQ request failed")]
     Request(#[from] IqError),
 
-    #[error("JSON error: {0}")]
+    #[error("JSON error")]
     Json(#[from] serde_json::Error),
 }
 
@@ -236,5 +242,29 @@ mod tests {
         assert!(ext.is_summary.is_none());
         assert!(ext.is_retryable.is_none());
         assert!(ext.severity.is_none());
+    }
+
+    #[test]
+    fn invalid_jid_preserves_jid_error_source() {
+        let raw: Result<wacore_binary::Jid, JidError> = "not-a-valid-jid".parse();
+        let jid_err = raw.unwrap_err();
+        let me: MexError = jid_err.into();
+        let src = std::error::Error::source(&me).expect("source preserved");
+        let inner = src
+            .downcast_ref::<JidError>()
+            .expect("downcasts to JidError");
+        assert!(matches!(inner, JidError::InvalidFormat(_)));
+    }
+
+    #[test]
+    fn request_preserves_iq_error_source() {
+        let iq = IqError::ServerError {
+            code: 404,
+            text: "not-found".into(),
+        };
+        let me: MexError = iq.into();
+        let src = std::error::Error::source(&me).expect("source preserved");
+        let inner = src.downcast_ref::<IqError>().expect("downcasts to IqError");
+        assert!(matches!(inner, IqError::ServerError { code: 404, .. }));
     }
 }

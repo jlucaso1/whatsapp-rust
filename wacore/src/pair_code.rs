@@ -22,8 +22,8 @@
 use crate::companion_reg::{
     CompanionWebClientType, companion_platform_display, companion_web_client_type_for_props,
 };
-use crate::libsignal::crypto::aes_256_gcm_encrypt;
-use crate::libsignal::protocol::{KeyPair, PublicKey};
+use crate::libsignal::crypto::{CryptoProviderError, aes_256_gcm_encrypt};
+use crate::libsignal::protocol::{CurveError, KeyPair, PublicKey};
 use aes::cipher::{KeyIvInit, StreamCipher};
 use ctr::Ctr128BE;
 use hkdf::Hkdf;
@@ -412,29 +412,21 @@ impl PairCodeUtils {
         primary_identity_pub: &[u8; 32],
         identity_key: &KeyPair,
     ) -> Result<(Vec<u8>, [u8; 32]), PairCodeError> {
-        // Parse primary's ephemeral public key
-        let primary_eph_pub =
-            PublicKey::from_djb_public_key_bytes(primary_ephemeral_pub).map_err(|e| {
-                PairCodeError::CryptoError(format!("Invalid primary ephemeral key: {e}"))
-            })?;
+        let primary_eph_pub = PublicKey::from_djb_public_key_bytes(primary_ephemeral_pub)
+            .map_err(PairCodeError::InvalidPrimaryEphemeralKey)?;
 
-        // Parse primary's identity public key
-        let primary_id_pub =
-            PublicKey::from_djb_public_key_bytes(primary_identity_pub).map_err(|e| {
-                PairCodeError::CryptoError(format!("Invalid primary identity key: {e}"))
-            })?;
+        let primary_id_pub = PublicKey::from_djb_public_key_bytes(primary_identity_pub)
+            .map_err(PairCodeError::InvalidPrimaryIdentityKey)?;
 
-        // DH 1: Ephemeral key exchange
         let ephemeral_shared = ephemeral_keypair
             .private_key
             .calculate_agreement(&primary_eph_pub)
-            .map_err(|e| PairCodeError::CryptoError(format!("Ephemeral DH failed: {e}")))?;
+            .map_err(PairCodeError::EphemeralKeyAgreement)?;
 
-        // DH 2: Identity key exchange (for ADV secret derivation)
         let identity_shared = identity_key
             .private_key
             .calculate_agreement(&primary_id_pub)
-            .map_err(|e| PairCodeError::CryptoError(format!("Identity DH failed: {e}")))?;
+            .map_err(PairCodeError::IdentityKeyAgreement)?;
 
         // Generate random bytes for ADV secret derivation
         let mut random_bytes = [0u8; 32];
@@ -451,7 +443,7 @@ impl PairCodeUtils {
         let mut new_adv_secret = [0u8; 32];
         hk_adv
             .expand(b"adv_secret", &mut new_adv_secret)
-            .map_err(|_| PairCodeError::CryptoError("HKDF expand for adv_secret failed".into()))?;
+            .map_err(|_| PairCodeError::AdvSecretKeyDerivation)?;
 
         // Prepare bundle: companion_identity_pub (32) + primary_identity_pub (32) + random_bytes (32) = 96 bytes
         let mut bundle = Vec::with_capacity(96);
@@ -469,9 +461,7 @@ impl PairCodeUtils {
         let mut enc_key = [0u8; 32];
         hk_bundle
             .expand(b"link_code_pairing_key_bundle_encryption_key", &mut enc_key)
-            .map_err(|_| {
-                PairCodeError::CryptoError("HKDF expand for bundle encryption key failed".into())
-            })?;
+            .map_err(|_| PairCodeError::BundleKeyDerivation)?;
 
         // Generate random IV for AES-GCM (12 bytes)
         let mut iv = [0u8; 12];
@@ -482,7 +472,7 @@ impl PairCodeUtils {
         wrapped_bundle.extend_from_slice(&key_bundle_salt);
         wrapped_bundle.extend_from_slice(&iv);
         aes_256_gcm_encrypt(&enc_key, &iv, b"", &bundle, &mut wrapped_bundle)
-            .map_err(|e| PairCodeError::CryptoError(format!("AES-GCM encryption failed: {e}")))?;
+            .map_err(PairCodeError::BundleAead)?;
 
         Ok((wrapped_bundle, new_adv_secret))
     }
@@ -493,35 +483,53 @@ impl PairCodeUtils {
     }
 }
 
-/// Errors that can occur during pair code operations.
+/// Errors raised by wacore-side pair-code validation, key derivation, and
+/// protocol-bundle building. The high-level crate wraps this in
+/// `whatsapp_rust::pair_code::PairError` and adds an IQ-failure variant for the
+/// transport layer.
 #[derive(Debug, thiserror::Error)]
 pub enum PairCodeError {
-    #[error("Phone number is required")]
+    #[error("phone number is required")]
     PhoneNumberRequired,
 
-    #[error("Phone number is too short (must be at least 7 digits)")]
+    #[error("phone number is too short (must be at least 7 digits)")]
     PhoneNumberTooShort,
 
-    #[error("Phone number must not start with 0 (use international format)")]
+    #[error("phone number must not start with 0 (use international format)")]
     PhoneNumberNotInternational,
 
-    #[error("Invalid custom code: must be 8 characters from Crockford Base32 alphabet")]
+    #[error("invalid custom code: must be 8 characters from Crockford Base32 alphabet")]
     InvalidCustomCode,
 
-    #[error("Invalid wrapped data: expected {expected} bytes, got {got}")]
+    #[error("invalid wrapped data: expected {expected} bytes, got {got}")]
     InvalidWrappedData { expected: usize, got: usize },
 
-    #[error("Cryptographic operation failed: {0}")]
-    CryptoError(String),
+    #[error("primary device sent an invalid ephemeral public key")]
+    InvalidPrimaryEphemeralKey(#[source] CurveError),
 
-    #[error("Not in waiting state for pair code notification")]
+    #[error("primary device sent an invalid identity public key")]
+    InvalidPrimaryIdentityKey(#[source] CurveError),
+
+    #[error("ephemeral key agreement failed")]
+    EphemeralKeyAgreement(#[source] CurveError),
+
+    #[error("identity key agreement failed")]
+    IdentityKeyAgreement(#[source] CurveError),
+
+    #[error("HKDF expand failed for adv_secret")]
+    AdvSecretKeyDerivation,
+
+    #[error("HKDF expand failed for bundle encryption key")]
+    BundleKeyDerivation,
+
+    #[error("AES-GCM encryption of key bundle failed")]
+    BundleAead(#[source] CryptoProviderError),
+
+    #[error("not in waiting state for pair code notification")]
     NotWaiting,
 
-    #[error("Server response missing pairing ref")]
+    #[error("server response missing pairing ref")]
     MissingPairingRef,
-
-    #[error("Request failed: {0}")]
-    RequestFailed(String),
 }
 
 #[cfg(test)]
@@ -931,18 +939,18 @@ mod tests {
     #[test]
     fn test_pair_code_error_display() {
         let err = PairCodeError::PhoneNumberRequired;
-        assert_eq!(err.to_string(), "Phone number is required");
+        assert_eq!(err.to_string(), "phone number is required");
 
         let err = PairCodeError::PhoneNumberTooShort;
         assert_eq!(
             err.to_string(),
-            "Phone number is too short (must be at least 7 digits)"
+            "phone number is too short (must be at least 7 digits)"
         );
 
         let err = PairCodeError::InvalidCustomCode;
         assert_eq!(
             err.to_string(),
-            "Invalid custom code: must be 8 characters from Crockford Base32 alphabet"
+            "invalid custom code: must be 8 characters from Crockford Base32 alphabet"
         );
 
         let err = PairCodeError::InvalidWrappedData {
@@ -951,8 +959,28 @@ mod tests {
         };
         assert_eq!(
             err.to_string(),
-            "Invalid wrapped data: expected 80 bytes, got 50"
+            "invalid wrapped data: expected 80 bytes, got 50"
         );
+    }
+
+    #[test]
+    fn invalid_primary_ephemeral_key_preserves_curve_source() {
+        let err = PairCodeError::InvalidPrimaryEphemeralKey(CurveError::NoKeyTypeIdentifier);
+        let src = std::error::Error::source(&err).expect("source preserved");
+        let curve = src
+            .downcast_ref::<CurveError>()
+            .expect("downcasts to CurveError");
+        assert!(matches!(curve, CurveError::NoKeyTypeIdentifier));
+    }
+
+    #[test]
+    fn bundle_aead_preserves_crypto_provider_source() {
+        let err = PairCodeError::BundleAead(CryptoProviderError::BadInput);
+        let src = std::error::Error::source(&err).expect("source preserved");
+        let cpe = src
+            .downcast_ref::<CryptoProviderError>()
+            .expect("downcasts to CryptoProviderError");
+        assert!(matches!(cpe, CryptoProviderError::BadInput));
     }
 
     #[test]

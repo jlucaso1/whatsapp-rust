@@ -40,7 +40,7 @@ impl NoiseCipher {
         let iv = generate_iv(counter);
         let mut out = Vec::with_capacity(plaintext.len() + TAG_LEN);
         aes_256_gcm_encrypt(&self.key, &iv, b"", plaintext, &mut out)
-            .map_err(|e| NoiseError::CryptoError(format!("{e}")))?;
+            .map_err(NoiseError::Encrypt)?;
         Ok(out)
     }
 
@@ -54,8 +54,7 @@ impl NoiseCipher {
         buffer: &mut B,
     ) -> Result<()> {
         let iv = generate_iv(counter);
-        aes_256_gcm_encrypt_in_place(&self.key, &iv, b"", buffer)
-            .map_err(|e| NoiseError::CryptoError(format!("{e}")))
+        aes_256_gcm_encrypt_in_place(&self.key, &iv, b"", buffer).map_err(NoiseError::Encrypt)
     }
 
     /// Decrypts ciphertext (with 16-byte tag appended) in-place within the
@@ -68,8 +67,7 @@ impl NoiseCipher {
         buffer: &mut B,
     ) -> Result<()> {
         let iv = generate_iv(counter);
-        aes_256_gcm_decrypt_in_place(&self.key, &iv, b"", buffer)
-            .map_err(|e| NoiseError::CryptoError(format!("Decrypt failed: {e}")))
+        aes_256_gcm_decrypt_in_place(&self.key, &iv, b"", buffer).map_err(NoiseError::Decrypt)
     }
 }
 
@@ -154,7 +152,7 @@ impl NoiseState {
         let iv = generate_iv(self.post_increment_counter()?);
         let mut out = Vec::with_capacity(plaintext.len() + TAG_LEN);
         aes_256_gcm_encrypt(&self.key, &iv, &self.hash, plaintext, &mut out)
-            .map_err(|e| NoiseError::CryptoError(format!("{e}")))?;
+            .map_err(NoiseError::Encrypt)?;
         self.authenticate(&out);
         Ok(out)
     }
@@ -164,8 +162,7 @@ impl NoiseState {
         let iv = generate_iv(self.post_increment_counter()?);
         let aad = self.hash;
         let start = out.len();
-        aes_256_gcm_encrypt(&self.key, &iv, &aad, plaintext, out)
-            .map_err(|e| NoiseError::CryptoError(format!("{e}")))?;
+        aes_256_gcm_encrypt(&self.key, &iv, &aad, plaintext, out).map_err(NoiseError::Encrypt)?;
         self.authenticate(&out[start..]);
         Ok(())
     }
@@ -176,7 +173,7 @@ impl NoiseState {
         let iv = generate_iv(self.post_increment_counter()?);
         let mut out = Vec::with_capacity(ciphertext.len().saturating_sub(TAG_LEN));
         aes_256_gcm_decrypt(&self.key, &iv, &aad, ciphertext, &mut out)
-            .map_err(|e| NoiseError::CryptoError(format!("Noise decrypt failed: {e}")))?;
+            .map_err(NoiseError::Decrypt)?;
         self.authenticate(ciphertext);
         Ok(out)
     }
@@ -184,14 +181,11 @@ impl NoiseState {
     /// Zero-allocation decryption that appends the plaintext to the provided buffer.
     pub fn decrypt_into(&mut self, ciphertext: &[u8], out: &mut Vec<u8>) -> Result<()> {
         if ciphertext.len() < TAG_LEN {
-            return Err(NoiseError::CryptoError(
-                "Ciphertext too short (missing tag)".into(),
-            ));
+            return Err(NoiseError::CiphertextTooShort);
         }
         let aad = self.hash;
         let iv = generate_iv(self.post_increment_counter()?);
-        aes_256_gcm_decrypt(&self.key, &iv, &aad, ciphertext, out)
-            .map_err(|e| NoiseError::CryptoError(format!("Noise decrypt failed: {e}")))?;
+        aes_256_gcm_decrypt(&self.key, &iv, &aad, ciphertext, out).map_err(NoiseError::Decrypt)?;
         self.authenticate(ciphertext);
         Ok(())
     }

@@ -420,9 +420,7 @@ fn parse_newsletter_metadata(value: &serde_json::Value) -> Result<NewsletterMeta
     let jid_str = value["id"]
         .as_str()
         .ok_or_else(|| MexError::PayloadParsing("missing newsletter id".into()))?;
-    let jid: Jid = jid_str
-        .parse()
-        .map_err(|e| MexError::PayloadParsing(format!("invalid newsletter JID: {e}")))?;
+    let jid: Jid = jid_str.parse()?;
 
     let thread = &value["thread_metadata"];
 

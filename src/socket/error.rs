@@ -1,15 +1,17 @@
 use thiserror::Error;
+use wacore::handshake::NoiseError;
+use wacore_binary::error::BinaryError;
 
 #[derive(Debug, Error)]
 pub enum SocketError {
-    #[error("Socket is closed")]
+    #[error("socket is closed")]
     SocketClosed,
-    #[error("Noise handshake failed: {0}")]
-    NoiseHandshake(String),
-    #[error("I/O error: {0}")]
+    #[error("I/O error")]
     Io(#[from] std::io::Error),
-    #[error("Crypto error: {0}")]
-    Crypto(String),
+    #[error("noise cipher operation failed")]
+    Cipher(#[from] NoiseError),
+    #[error("binary protocol marshalling failed")]
+    Marshal(#[source] BinaryError),
 }
 
 pub type Result<T> = std::result::Result<T, SocketError>;
@@ -78,5 +80,40 @@ impl EncryptSendError {
             self.kind,
             EncryptSendErrorKind::Transport | EncryptSendErrorKind::ChannelClosed
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wacore::libsignal::crypto::CryptoProviderError;
+
+    #[test]
+    fn cipher_preserves_noise_source_through_socket_error() {
+        let noise = NoiseError::Decrypt(CryptoProviderError::AuthFailed);
+        let se: SocketError = noise.into();
+        // First hop: SocketError → NoiseError
+        let src = std::error::Error::source(&se).expect("source preserved");
+        let ne = src
+            .downcast_ref::<NoiseError>()
+            .expect("downcasts to NoiseError");
+        assert!(matches!(ne, NoiseError::Decrypt(_)));
+        // Second hop: NoiseError → CryptoProviderError
+        let inner = std::error::Error::source(ne).expect("inner source preserved");
+        let cpe = inner
+            .downcast_ref::<CryptoProviderError>()
+            .expect("downcasts to CryptoProviderError");
+        assert!(matches!(cpe, CryptoProviderError::AuthFailed));
+    }
+
+    #[test]
+    fn marshal_preserves_binary_error_source() {
+        let be = BinaryError::InvalidNode;
+        let se = SocketError::Marshal(be);
+        let src = std::error::Error::source(&se).expect("source preserved");
+        let inner = src
+            .downcast_ref::<BinaryError>()
+            .expect("downcasts to BinaryError");
+        assert!(matches!(inner, BinaryError::InvalidNode));
     }
 }

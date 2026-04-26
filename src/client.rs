@@ -2506,10 +2506,16 @@ impl Client {
                         }
                         continue;
                     }
-                    let is_db_locked = e.downcast_ref::<wacore::store::error::StoreError>()
-                        .is_some_and(|se| matches!(se, wacore::store::error::StoreError::Database(msg) if msg.contains("locked") || msg.contains("busy")))
+                    let is_db_locked = e
+                        .downcast_ref::<wacore::store::error::StoreError>()
+                        .is_some_and(|se| se.is_database_busy_or_locked())
                         || e.downcast_ref::<crate::appstate_sync::AppStateSyncError>()
-                            .is_some_and(|ase| matches!(ase, crate::appstate_sync::AppStateSyncError::Store(wacore::store::error::StoreError::Database(msg)) if msg.contains("locked") || msg.contains("busy")));
+                            .is_some_and(|ase| match ase {
+                                crate::appstate_sync::AppStateSyncError::Store(se) => {
+                                    se.is_database_busy_or_locked()
+                                }
+                                _ => false,
+                            });
                     if is_db_locked && attempt < APP_STATE_RETRY_MAX_ATTEMPTS {
                         let backoff = Duration::from_millis(200 * attempt as u64 + 150);
                         warn!(target: "Client/AppState", "Attempt {} for {:?} failed due to locked DB; backing off {:?} and retrying", attempt, name, backoff);
@@ -3608,7 +3614,7 @@ impl Client {
 
         let plaintext_buf = wacore_binary::marshal::marshal_auto(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");
-            SocketError::Crypto("Marshal error".to_string())
+            SocketError::Marshal(e)
         })?;
 
         self.send_raw_bytes(plaintext_buf).await

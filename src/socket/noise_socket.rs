@@ -180,7 +180,7 @@ impl NoiseSocket {
         let counter = self.read_counter.fetch_add(1, Ordering::SeqCst);
         self.read_key
             .decrypt_in_place_with_counter(counter, &mut ciphertext)
-            .map_err(|e| SocketError::Crypto(e.to_string()))?;
+            .map_err(SocketError::Cipher)?;
         Ok(ciphertext)
     }
 }

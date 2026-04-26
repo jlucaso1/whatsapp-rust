@@ -68,6 +68,8 @@ pub mod key_pair_serde {
         if bytes.len() != 64 {
             return Err(serde::de::Error::invalid_length(bytes.len(), &"64"));
         }
+        // reason: serde::de::Error::custom flattens to a String at the boundary —
+        // serde's error model has no source-chain preservation.
         let private_key = PrivateKey::deserialize(&bytes[0..32])
             .map_err(|e| serde::de::Error::custom(e.to_string()))?;
         let public_key = PublicKey::from_djb_public_key_bytes(&bytes[32..64])

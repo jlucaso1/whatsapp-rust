@@ -27,7 +27,7 @@ enum DieselOrStore {
 impl From<DieselOrStore> for StoreError {
     fn from(e: DieselOrStore) -> Self {
         match e {
-            DieselOrStore::Diesel(e) => StoreError::Database(e.to_string()),
+            DieselOrStore::Diesel(e) => StoreError::Database(Box::new(e)),
             DieselOrStore::Store(e) => e,
         }
     }
@@ -124,7 +124,7 @@ impl diesel::r2d2::CustomizeConnection<SqliteConnection, diesel::r2d2::Error>
 fn parse_database_path(database_url: &str) -> Result<String> {
     // Reject in-memory databases
     if database_url == ":memory:" {
-        return Err(StoreError::Database(
+        return Err(StoreError::InvalidConfig(
             "Snapshot not supported for in-memory databases".to_string(),
         ));
     }
@@ -140,7 +140,7 @@ fn parse_database_path(database_url: &str) -> Result<String> {
 
     // Check if the resulting path looks like an in-memory marker
     if path == ":memory:" || path.starts_with(":memory:?") {
-        return Err(StoreError::Database(
+        return Err(StoreError::InvalidConfig(
             "Snapshot not supported for in-memory databases".to_string(),
         ));
     }
@@ -158,25 +158,25 @@ impl SqliteStore {
             .max_size(pool_size)
             .connection_customizer(Box::new(ConnectionOptions))
             .build(manager)
-            .map_err(|e| StoreError::Connection(e.to_string()))?;
+            .map_err(|e| StoreError::Connection(Box::new(e)))?;
 
         let pool_clone = pool.clone();
         tokio::task::spawn_blocking(move || -> std::result::Result<(), StoreError> {
             let mut conn = pool_clone
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
 
             diesel::sql_query("PRAGMA journal_mode = WAL;")
                 .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             conn.run_pending_migrations(MIGRATIONS)
-                .map_err(|e| StoreError::Migration(e.to_string()))?;
+                .map_err(StoreError::Migration)?;
 
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
 
         let database_path = parse_database_path(database_url)?;
 
@@ -211,14 +211,14 @@ impl SqliteStore {
             .clone()
             .acquire_owned()
             .await
-            .map_err(|e| StoreError::Database(format!("Semaphore error: {}", e)))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
         let result = tokio::task::spawn_blocking(move || {
             let res = f();
             drop(permit);
             res
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(result)
     }
 
@@ -240,7 +240,7 @@ impl SqliteStore {
                 .clone()
                 .acquire_owned()
                 .await
-                .map_err(|e| StoreError::Database(format!("Semaphore error: {}", e)))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             let pool = self.pool.clone();
             let op = make_op();
@@ -250,7 +250,7 @@ impl SqliteStore {
                     let _permit = permit;
                     let mut conn = pool
                         .get()
-                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(Box::new(e))))?;
                     op(&mut conn).map_err(DieselOrStore::Diesel)
                 })
                 .await;
@@ -264,14 +264,13 @@ impl SqliteStore {
                     tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                 }
                 Ok(Err(e)) => return Err(e.into()),
-                Err(e) => return Err(StoreError::Database(e.to_string())),
+                Err(e) => return Err(StoreError::Database(Box::new(e))),
             }
         }
 
-        Err(StoreError::Database(format!(
-            "{} exhausted retries",
-            op_name
-        )))
+        Err(StoreError::RetriesExhausted {
+            op: op_name.to_string(),
+        })
     }
 
     fn serialize_keypair(&self, key_pair: &KeyPair) -> Result<Vec<u8>> {
@@ -283,16 +282,16 @@ impl SqliteStore {
 
     fn deserialize_keypair(&self, bytes: &[u8]) -> Result<KeyPair> {
         if bytes.len() != 64 {
-            return Err(StoreError::Serialization(format!(
+            return Err(StoreError::Validation(format!(
                 "Invalid KeyPair length: {}",
                 bytes.len()
             )));
         }
 
         let private_key = PrivateKey::deserialize(&bytes[0..32])
-            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            .map_err(|e| StoreError::Serialization(Box::new(e)))?;
         let public_key = PublicKey::from_djb_public_key_bytes(&bytes[32..64])
-            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            .map_err(|e| StoreError::Serialization(Box::new(e)))?;
 
         Ok(KeyPair::new(public_key, private_key))
     }
@@ -485,18 +484,18 @@ impl SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<bool> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
 
             let count: i64 = device::table
                 .filter(device::id.eq(device_id))
                 .count()
                 .get_result(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             Ok(count > 0)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     pub async fn load_device_data_for_device(&self, device_id: i32) -> Result<Option<CoreDevice>> {
@@ -506,16 +505,16 @@ impl SqliteStore {
         let row = tokio::task::spawn_blocking(move || -> Result<Option<DeviceRow>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let result = device::table
                 .filter(device::id.eq(device_id))
                 .first::<DeviceRow>(&mut conn)
                 .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(result)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
 
         if let Some(row) = row {
             let pn = if !row.pn.is_empty() {
@@ -535,18 +534,19 @@ impl SqliteStore {
 
             let signed_pre_key_signature: [u8; 64] =
                 row.signed_pre_key_signature.try_into().map_err(|_| {
-                    StoreError::Serialization("Invalid signed_pre_key_signature length".to_string())
+                    StoreError::Validation("Invalid signed_pre_key_signature length".to_string())
                 })?;
 
-            let adv_secret_key: [u8; 32] = row.adv_secret_key.try_into().map_err(|_| {
-                StoreError::Serialization("Invalid adv_secret_key length".to_string())
-            })?;
+            let adv_secret_key: [u8; 32] = row
+                .adv_secret_key
+                .try_into()
+                .map_err(|_| StoreError::Validation("Invalid adv_secret_key length".to_string()))?;
 
             let account = row
                 .account
                 .map(|data| {
                     wacore::store::device::account_serde::from_bytes(&data)
-                        .map_err(|e| StoreError::Serialization(e.to_string()))
+                        .map_err(|e| StoreError::Serialization(Box::new(e)))
                 })
                 .transpose()?;
 
@@ -594,10 +594,11 @@ impl SqliteStore {
         const MAX_RETRIES: u32 = 5;
 
         for attempt in 0..=MAX_RETRIES {
-            let permit =
-                db_semaphore.clone().acquire_owned().await.map_err(|e| {
-                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
-                })?;
+            let permit = db_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             let pool_clone = pool.clone();
             let address_clone = address_owned.clone();
@@ -607,7 +608,7 @@ impl SqliteStore {
                 tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
                     let mut conn = pool_clone
                         .get()
-                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(Box::new(e))))?;
                     diesel::insert_into(identities::table)
                         .values((
                             identities::address.eq(address_clone),
@@ -640,14 +641,13 @@ impl SqliteStore {
                     continue;
                 }
                 Ok(Err(e)) => return Err(e.into()),
-                Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
+                Err(e) => return Err(StoreError::Database(Box::new(e))),
             }
         }
 
-        Err(StoreError::Database(format!(
-            "Identity write failed after {} attempts",
-            MAX_RETRIES + 1
-        )))
+        Err(StoreError::RetriesExhausted {
+            op: format!("identity_write (after {} attempts)", MAX_RETRIES + 1),
+        })
     }
 
     pub async fn delete_identity_for_device(&self, address: &str, device_id: i32) -> Result<()> {
@@ -657,18 +657,18 @@ impl SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             diesel::delete(
                 identities::table
                     .filter(identities::address.eq(address_owned))
                     .filter(identities::device_id.eq(device_id)),
             )
             .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
 
         Ok(())
     }
@@ -684,14 +684,14 @@ impl SqliteStore {
             .with_semaphore(move || -> Result<Option<Vec<u8>>> {
                 let mut conn = pool
                     .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                    .map_err(|e| StoreError::Connection(Box::new(e)))?;
                 let res: Option<Vec<u8>> = identities::table
                     .select(identities::key)
                     .filter(identities::address.eq(address))
                     .filter(identities::device_id.eq(device_id))
                     .first(&mut conn)
                     .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                    .map_err(|e| StoreError::Database(Box::new(e)))?;
                 Ok(res)
             })
             .await?;
@@ -710,14 +710,14 @@ impl SqliteStore {
             .with_semaphore(move || -> Result<Option<Vec<u8>>> {
                 let mut conn = pool
                     .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                    .map_err(|e| StoreError::Connection(Box::new(e)))?;
                 let res: Option<Vec<u8>> = sessions::table
                     .select(sessions::record)
                     .filter(sessions::address.eq(address_for_query.clone()))
                     .filter(sessions::device_id.eq(device_id))
                     .first(&mut conn)
                     .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                    .map_err(|e| StoreError::Database(Box::new(e)))?;
 
                 Ok(res)
             })
@@ -740,10 +740,11 @@ impl SqliteStore {
         const MAX_RETRIES: u32 = 5;
 
         for attempt in 0..=MAX_RETRIES {
-            let permit =
-                db_semaphore.clone().acquire_owned().await.map_err(|e| {
-                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
-                })?;
+            let permit = db_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             let pool_clone = pool.clone();
             let address_clone = address_owned.clone();
@@ -753,7 +754,7 @@ impl SqliteStore {
                 tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
                     let mut conn = pool_clone
                         .get()
-                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(Box::new(e))))?;
                     diesel::insert_into(sessions::table)
                         .values((
                             sessions::address.eq(address_clone),
@@ -786,14 +787,13 @@ impl SqliteStore {
                     continue;
                 }
                 Ok(Err(e)) => return Err(e.into()),
-                Err(e) => return Err(StoreError::Database(format!("Task join error: {}", e))),
+                Err(e) => return Err(StoreError::Database(Box::new(e))),
             }
         }
 
-        Err(StoreError::Database(format!(
-            "Session write failed after {} attempts",
-            MAX_RETRIES + 1
-        )))
+        Err(StoreError::RetriesExhausted {
+            op: format!("session_write (after {} attempts)", MAX_RETRIES + 1),
+        })
     }
 
     pub async fn delete_session_for_device(&self, address: &str, device_id: i32) -> Result<()> {
@@ -803,18 +803,18 @@ impl SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             diesel::delete(
                 sessions::table
                     .filter(sessions::address.eq(address_owned))
                     .filter(sessions::device_id.eq(device_id)),
             )
             .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
 
         Ok(())
     }
@@ -831,7 +831,7 @@ impl SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             diesel::insert_into(sender_keys::table)
                 .values((
                     sender_keys::address.eq(address),
@@ -842,11 +842,11 @@ impl SqliteStore {
                 .do_update()
                 .set(sender_keys::record.eq(&record_vec))
                 .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(())
     }
 
@@ -860,18 +860,18 @@ impl SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let res: Option<Vec<u8>> = sender_keys::table
                 .select(sender_keys::record)
                 .filter(sender_keys::address.eq(address))
                 .filter(sender_keys::device_id.eq(device_id))
                 .first(&mut conn)
                 .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(res)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     pub async fn delete_sender_key_for_device(&self, address: &str, device_id: i32) -> Result<()> {
@@ -880,18 +880,18 @@ impl SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             diesel::delete(
                 sender_keys::table
                     .filter(sender_keys::address.eq(address))
                     .filter(sender_keys::device_id.eq(device_id)),
             )
             .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(())
     }
 
@@ -906,22 +906,22 @@ impl SqliteStore {
             tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
                 let mut conn = pool
                     .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                    .map_err(|e| StoreError::Connection(Box::new(e)))?;
                 let res: Option<Vec<u8>> = app_state_keys::table
                     .select(app_state_keys::key_data)
                     .filter(app_state_keys::key_id.eq(&key_id))
                     .filter(app_state_keys::device_id.eq(device_id))
                     .first(&mut conn)
                     .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                    .map_err(|e| StoreError::Database(Box::new(e)))?;
                 Ok(res)
             })
             .await
-            .map_err(|e| StoreError::Database(e.to_string()))??;
+            .map_err(|e| StoreError::Database(Box::new(e)))??;
 
         if let Some(data) = res {
             let (key, _) = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-                .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                .map_err(|e| StoreError::Serialization(Box::new(e)))?;
             Ok(Some(key))
         } else {
             Ok(None)
@@ -937,11 +937,11 @@ impl SqliteStore {
         let pool = self.pool.clone();
         let key_id = key_id.to_vec();
         let data = bincode::serde::encode_to_vec(&key, bincode::config::standard())
-            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            .map_err(|e| StoreError::Serialization(Box::new(e)))?;
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             diesel::insert_into(app_state_keys::table)
                 .values((
                     app_state_keys::key_id.eq(&key_id),
@@ -952,11 +952,11 @@ impl SqliteStore {
                 .do_update()
                 .set(app_state_keys::key_data.eq(&data))
                 .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(())
     }
 
@@ -969,18 +969,18 @@ impl SqliteStore {
             tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
                 let mut conn = pool
                     .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                    .map_err(|e| StoreError::Connection(Box::new(e)))?;
                 let res: Option<Vec<u8>> = app_state_keys::table
                     .select(app_state_keys::key_id)
                     .filter(app_state_keys::device_id.eq(device_id))
                     .order(app_state_keys::key_id.desc())
                     .first(&mut conn)
                     .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                    .map_err(|e| StoreError::Database(Box::new(e)))?;
                 Ok(res)
             })
             .await
-            .map_err(|e| StoreError::Database(e.to_string()))??;
+            .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(res)
     }
 
@@ -995,22 +995,22 @@ impl SqliteStore {
             tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
                 let mut conn = pool
                     .get()
-                    .map_err(|e| StoreError::Connection(e.to_string()))?;
+                    .map_err(|e| StoreError::Connection(Box::new(e)))?;
                 let res: Option<Vec<u8>> = app_state_versions::table
                     .select(app_state_versions::state_data)
                     .filter(app_state_versions::name.eq(name))
                     .filter(app_state_versions::device_id.eq(device_id))
                     .first(&mut conn)
                     .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                    .map_err(|e| StoreError::Database(Box::new(e)))?;
                 Ok(res)
             })
             .await
-            .map_err(|e| StoreError::Database(e.to_string()))??;
+            .map_err(|e| StoreError::Database(Box::new(e)))??;
 
         if let Some(data) = res {
             let (state, _) = bincode::serde::decode_from_slice(&data, bincode::config::standard())
-                .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                .map_err(|e| StoreError::Serialization(Box::new(e)))?;
             Ok(state)
         } else {
             Ok(HashState::default())
@@ -1025,7 +1025,7 @@ impl SqliteStore {
     ) -> Result<()> {
         let name = name.to_string();
         let data = bincode::serde::encode_to_vec(&state, bincode::config::standard())
-            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            .map_err(|e| StoreError::Serialization(Box::new(e)))?;
         self.with_retry("set_app_state_version", || {
             let name = name.clone();
             let data = data.clone();
@@ -1150,7 +1150,7 @@ impl SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let res: Option<Vec<u8>> = app_state_mutation_macs::table
                 .select(app_state_mutation_macs::value_mac)
                 .filter(app_state_mutation_macs::name.eq(&name))
@@ -1158,11 +1158,11 @@ impl SqliteStore {
                 .filter(app_state_mutation_macs::device_id.eq(device_id))
                 .first(&mut conn)
                 .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(res)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 }
 
@@ -1181,7 +1181,7 @@ impl SignalStore for SqliteStore {
         match blob {
             None => Ok(None),
             Some(v) => Ok(Some(v.try_into().map_err(|v: Vec<u8>| {
-                StoreError::Serialization(format!(
+                StoreError::Validation(format!(
                     "identity key for '{}' has invalid length {} (expected 32)",
                     address,
                     v.len()
@@ -1209,14 +1209,14 @@ impl SignalStore for SqliteStore {
         self.with_semaphore(move || -> Result<bool> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let exists = diesel::select(diesel::dsl::exists(
                 sessions::table
                     .filter(sessions::address.eq(&address_owned))
                     .filter(sessions::device_id.eq(device_id)),
             ))
             .get_result(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(exists)
         })
         .await
@@ -1241,10 +1241,11 @@ impl SignalStore for SqliteStore {
         const MAX_RETRIES: u32 = 5;
 
         for attempt in 0..=MAX_RETRIES {
-            let permit =
-                db_semaphore.clone().acquire_owned().await.map_err(|e| {
-                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
-                })?;
+            let permit = db_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             let pool_clone = pool.clone();
             let record_clone = record.clone();
@@ -1253,7 +1254,7 @@ impl SignalStore for SqliteStore {
                 tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
                     let mut conn = pool_clone
                         .get()
-                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(Box::new(e))))?;
                     diesel::insert_into(prekeys::table)
                         .values((
                             prekeys::id.eq(id as i32),
@@ -1284,13 +1285,13 @@ impl SignalStore for SqliteStore {
                     tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                 }
                 Ok(Err(e)) => return Err(e.into()),
-                Err(e) => return Err(StoreError::Database(e.to_string())),
+                Err(e) => return Err(StoreError::Database(Box::new(e))),
             }
         }
 
-        Err(StoreError::Database(
-            "store_prekey exhausted retries".to_string(),
-        ))
+        Err(StoreError::RetriesExhausted {
+            op: "store_prekey".to_string(),
+        })
     }
 
     async fn store_prekeys_batch(&self, keys: &[(u32, Bytes)], uploaded: bool) -> Result<()> {
@@ -1306,10 +1307,11 @@ impl SignalStore for SqliteStore {
         const MAX_RETRIES: u32 = 5;
 
         for attempt in 0..=MAX_RETRIES {
-            let permit =
-                db_semaphore.clone().acquire_owned().await.map_err(|e| {
-                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
-                })?;
+            let permit = db_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             let pool_clone = pool.clone();
             let keys_clone = keys.clone();
@@ -1318,7 +1320,7 @@ impl SignalStore for SqliteStore {
                 tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
                     let mut conn = pool_clone
                         .get()
-                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(Box::new(e))))?;
 
                     conn.transaction(|conn| {
                         for (id, record) in &keys_clone {
@@ -1354,13 +1356,13 @@ impl SignalStore for SqliteStore {
                     tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                 }
                 Ok(Err(e)) => return Err(e.into()),
-                Err(e) => return Err(StoreError::Database(e.to_string())),
+                Err(e) => return Err(StoreError::Database(Box::new(e))),
             }
         }
 
-        Err(StoreError::Database(
-            "store_prekeys_batch exhausted retries".to_string(),
-        ))
+        Err(StoreError::RetriesExhausted {
+            op: "store_prekeys_batch".to_string(),
+        })
     }
 
     async fn load_prekey(&self, id: u32) -> Result<Option<Bytes>> {
@@ -1369,18 +1371,18 @@ impl SignalStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Option<Bytes>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let res: Option<Vec<u8>> = prekeys::table
                 .select(prekeys::key)
                 .filter(prekeys::id.eq(id as i32))
                 .filter(prekeys::device_id.eq(device_id))
                 .first(&mut conn)
                 .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(res.map(Bytes::from))
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn load_prekeys_batch(&self, ids: &[u32]) -> Result<Vec<(u32, Bytes)>> {
@@ -1393,13 +1395,13 @@ impl SignalStore for SqliteStore {
         self.with_semaphore(move || -> Result<Vec<(u32, Bytes)>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let rows: Vec<(i32, Vec<u8>)> = prekeys::table
                 .select((prekeys::id, prekeys::key))
                 .filter(prekeys::id.eq_any(&ids))
                 .filter(prekeys::device_id.eq(device_id))
                 .load(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(rows
                 .into_iter()
                 .map(|(id, key)| (id as u32, Bytes::from(key)))
@@ -1416,10 +1418,11 @@ impl SignalStore for SqliteStore {
         const MAX_RETRIES: u32 = 5;
 
         for attempt in 0..=MAX_RETRIES {
-            let permit =
-                db_semaphore.clone().acquire_owned().await.map_err(|e| {
-                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
-                })?;
+            let permit = db_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             let pool_clone = pool.clone();
 
@@ -1427,7 +1430,7 @@ impl SignalStore for SqliteStore {
                 tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
                     let mut conn = pool_clone
                         .get()
-                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(Box::new(e))))?;
                     diesel::delete(
                         prekeys::table
                             .filter(prekeys::id.eq(id as i32))
@@ -1450,13 +1453,13 @@ impl SignalStore for SqliteStore {
                     tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                 }
                 Ok(Err(e)) => return Err(e.into()),
-                Err(e) => return Err(StoreError::Database(e.to_string())),
+                Err(e) => return Err(StoreError::Database(Box::new(e))),
             }
         }
 
-        Err(StoreError::Database(
-            "remove_prekey exhausted retries".to_string(),
-        ))
+        Err(StoreError::RetriesExhausted {
+            op: "remove_prekey".to_string(),
+        })
     }
 
     async fn get_max_prekey_id(&self) -> Result<u32> {
@@ -1466,22 +1469,22 @@ impl SignalStore for SqliteStore {
         let _permit = db_semaphore
             .acquire()
             .await
-            .map_err(|e| StoreError::Database(format!("Failed to acquire semaphore: {}", e)))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
 
         tokio::task::spawn_blocking(move || -> Result<u32> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             use diesel::dsl::max;
             let result: Option<i32> = prekeys::table
                 .filter(prekeys::device_id.eq(device_id))
                 .select(max(prekeys::id))
                 .first(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(result.unwrap_or(0) as u32)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn store_signed_prekey(&self, id: u32, record: &[u8]) -> Result<()> {
@@ -1493,10 +1496,11 @@ impl SignalStore for SqliteStore {
         const MAX_RETRIES: u32 = 5;
 
         for attempt in 0..=MAX_RETRIES {
-            let permit =
-                db_semaphore.clone().acquire_owned().await.map_err(|e| {
-                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
-                })?;
+            let permit = db_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             let pool_clone = pool.clone();
             let record_clone = record.clone();
@@ -1505,7 +1509,7 @@ impl SignalStore for SqliteStore {
                 tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
                     let mut conn = pool_clone
                         .get()
-                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(Box::new(e))))?;
                     diesel::insert_into(signed_prekeys::table)
                         .values((
                             signed_prekeys::id.eq(id as i32),
@@ -1532,13 +1536,13 @@ impl SignalStore for SqliteStore {
                     tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                 }
                 Ok(Err(e)) => return Err(e.into()),
-                Err(e) => return Err(StoreError::Database(e.to_string())),
+                Err(e) => return Err(StoreError::Database(Box::new(e))),
             }
         }
 
-        Err(StoreError::Database(
-            "store_signed_prekey exhausted retries".to_string(),
-        ))
+        Err(StoreError::RetriesExhausted {
+            op: "store_signed_prekey".to_string(),
+        })
     }
 
     async fn load_signed_prekey(&self, id: u32) -> Result<Option<Vec<u8>>> {
@@ -1547,18 +1551,18 @@ impl SignalStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Option<Vec<u8>>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let res: Option<Vec<u8>> = signed_prekeys::table
                 .select(signed_prekeys::record)
                 .filter(signed_prekeys::id.eq(id as i32))
                 .filter(signed_prekeys::device_id.eq(device_id))
                 .first(&mut conn)
                 .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(res)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn load_all_signed_prekeys(&self) -> Result<Vec<(u32, Vec<u8>)>> {
@@ -1567,19 +1571,19 @@ impl SignalStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Vec<(u32, Vec<u8>)>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let results: Vec<(i32, Vec<u8>)> = signed_prekeys::table
                 .select((signed_prekeys::id, signed_prekeys::record))
                 .filter(signed_prekeys::device_id.eq(device_id))
                 .load(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(results
                 .into_iter()
                 .map(|(id, record)| (id as u32, record))
                 .collect())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn remove_signed_prekey(&self, id: u32) -> Result<()> {
@@ -1590,10 +1594,11 @@ impl SignalStore for SqliteStore {
         const MAX_RETRIES: u32 = 5;
 
         for attempt in 0..=MAX_RETRIES {
-            let permit =
-                db_semaphore.clone().acquire_owned().await.map_err(|e| {
-                    StoreError::Database(format!("Failed to acquire semaphore: {}", e))
-                })?;
+            let permit = db_semaphore
+                .clone()
+                .acquire_owned()
+                .await
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             let pool_clone = pool.clone();
 
@@ -1601,7 +1606,7 @@ impl SignalStore for SqliteStore {
                 tokio::task::spawn_blocking(move || -> std::result::Result<(), DieselOrStore> {
                     let mut conn = pool_clone
                         .get()
-                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(e.to_string())))?;
+                        .map_err(|e| DieselOrStore::Store(StoreError::Connection(Box::new(e))))?;
                     diesel::delete(
                         signed_prekeys::table
                             .filter(signed_prekeys::id.eq(id as i32))
@@ -1624,13 +1629,13 @@ impl SignalStore for SqliteStore {
                     tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
                 }
                 Ok(Err(e)) => return Err(e.into()),
-                Err(e) => return Err(StoreError::Database(e.to_string())),
+                Err(e) => return Err(StoreError::Database(Box::new(e))),
             }
         }
 
-        Err(StoreError::Database(
-            "remove_signed_prekey exhausted retries".to_string(),
-        ))
+        Err(StoreError::RetriesExhausted {
+            op: "remove_signed_prekey".to_string(),
+        })
     }
 
     async fn put_sender_key(&self, address: &str, record: &[u8]) -> Result<()> {
@@ -1708,20 +1713,20 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Vec<(String, bool)>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let rows: Vec<(String, i32)> = sender_key_devices::table
                 .select((sender_key_devices::device_jid, sender_key_devices::has_key))
                 .filter(sender_key_devices::group_jid.eq(&group_jid))
                 .filter(sender_key_devices::device_id.eq(device_id))
                 .load(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(rows
                 .into_iter()
                 .map(|(jid, has_key)| (jid, has_key != 0))
                 .collect())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn set_sender_key_status(&self, group_jid: &str, entries: &[(&str, bool)]) -> Result<()> {
@@ -1817,7 +1822,7 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Option<LidPnMappingEntry>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let row: Option<(String, String, i64, String, i64)> = lid_pn_mapping::table
                 .select((
                     lid_pn_mapping::lid,
@@ -1830,7 +1835,7 @@ impl ProtocolStore for SqliteStore {
                 .filter(lid_pn_mapping::device_id.eq(device_id))
                 .first(&mut conn)
                 .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(row.map(
                 |(lid, phone_number, created_at, learning_source, updated_at)| LidPnMappingEntry {
                     lid,
@@ -1842,7 +1847,7 @@ impl ProtocolStore for SqliteStore {
             ))
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn get_pn_mapping(&self, phone: &str) -> Result<Option<LidPnMappingEntry>> {
@@ -1852,7 +1857,7 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Option<LidPnMappingEntry>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let row: Option<(String, String, i64, String, i64)> = lid_pn_mapping::table
                 .select((
                     lid_pn_mapping::lid,
@@ -1866,7 +1871,7 @@ impl ProtocolStore for SqliteStore {
                 .order(lid_pn_mapping::updated_at.desc())
                 .first(&mut conn)
                 .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(row.map(
                 |(lid, phone_number, created_at, learning_source, updated_at)| LidPnMappingEntry {
                     lid,
@@ -1878,7 +1883,7 @@ impl ProtocolStore for SqliteStore {
             ))
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn put_lid_mapping(&self, entry: &LidPnMappingEntry) -> Result<()> {
@@ -1930,7 +1935,7 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Vec<LidPnMappingEntry>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let rows: Vec<(String, String, i64, String, i64)> = lid_pn_mapping::table
                 .select((
                     lid_pn_mapping::lid,
@@ -1941,7 +1946,7 @@ impl ProtocolStore for SqliteStore {
                 ))
                 .filter(lid_pn_mapping::device_id.eq(device_id))
                 .load(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(rows
                 .into_iter()
                 .map(
@@ -1958,7 +1963,7 @@ impl ProtocolStore for SqliteStore {
                 .collect())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn save_base_key(&self, address: &str, message_id: &str, base_key: &[u8]) -> Result<()> {
@@ -1971,7 +1976,7 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             diesel::insert_into(base_keys::table)
                 .values((
                     base_keys::address.eq(&address),
@@ -1988,11 +1993,11 @@ impl ProtocolStore for SqliteStore {
                 .do_update()
                 .set(base_keys::base_key.eq(&base_key))
                 .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(())
     }
 
@@ -2010,7 +2015,7 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<bool> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let stored_key: Option<Vec<u8>> = base_keys::table
                 .select(base_keys::base_key)
                 .filter(base_keys::address.eq(&address))
@@ -2018,11 +2023,11 @@ impl ProtocolStore for SqliteStore {
                 .filter(base_keys::device_id.eq(device_id))
                 .first(&mut conn)
                 .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(stored_key.as_ref() == Some(&current_base_key))
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn delete_base_key(&self, address: &str, message_id: &str) -> Result<()> {
@@ -2033,7 +2038,7 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             diesel::delete(
                 base_keys::table
                     .filter(base_keys::address.eq(&address))
@@ -2041,11 +2046,11 @@ impl ProtocolStore for SqliteStore {
                     .filter(base_keys::device_id.eq(device_id)),
             )
             .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(())
     }
 
@@ -2053,12 +2058,12 @@ impl ProtocolStore for SqliteStore {
         let pool = self.pool.clone();
         let device_id = self.device_id;
         let devices_json = serde_json::to_string(&record.devices)
-            .map_err(|e| StoreError::Serialization(e.to_string()))?;
+            .map_err(|e| StoreError::Serialization(Box::new(e)))?;
         let now = wacore::time::now_secs() as i32;
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let raw_id_i32 = record.raw_id.map(|r| r as i32);
             diesel::insert_into(device_registry::table)
                 .values((
@@ -2080,11 +2085,11 @@ impl ProtocolStore for SqliteStore {
                     device_registry::raw_id.eq(raw_id_i32),
                 ))
                 .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(())
     }
 
@@ -2095,7 +2100,7 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Option<DeviceListRecord>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let row: Option<(String, String, i32, Option<String>, Option<i32>)> =
                 device_registry::table
                     .select((
@@ -2109,11 +2114,11 @@ impl ProtocolStore for SqliteStore {
                     .filter(device_registry::device_id.eq(device_id))
                     .first(&mut conn)
                     .optional()
-                    .map_err(|e| StoreError::Database(e.to_string()))?;
+                    .map_err(|e| StoreError::Database(Box::new(e)))?;
             match row {
                 Some((user, devices_json, timestamp, phash, raw_id)) => {
                     let devices: Vec<DeviceInfo> = serde_json::from_str(&devices_json)
-                        .map_err(|e| StoreError::Serialization(e.to_string()))?;
+                        .map_err(|e| StoreError::Serialization(Box::new(e)))?;
                     Ok(Some(DeviceListRecord {
                         user,
                         devices,
@@ -2126,7 +2131,7 @@ impl ProtocolStore for SqliteStore {
             }
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn delete_devices(&self, user: &str) -> Result<()> {
@@ -2136,18 +2141,18 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             diesel::delete(
                 device_registry::table
                     .filter(device_registry::user_id.eq(&user))
                     .filter(device_registry::device_id.eq(device_id)),
             )
             .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(())
     }
 
@@ -2158,7 +2163,7 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Option<TcTokenEntry>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let row: Option<(Vec<u8>, i64, Option<i64>)> = tc_tokens::table
                 .select((
                     tc_tokens::token,
@@ -2169,7 +2174,7 @@ impl ProtocolStore for SqliteStore {
                 .filter(tc_tokens::device_id.eq(device_id))
                 .first(&mut conn)
                 .optional()
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(
                 row.map(|(token, token_timestamp, sender_timestamp)| TcTokenEntry {
                     token,
@@ -2179,7 +2184,7 @@ impl ProtocolStore for SqliteStore {
             )
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn put_tc_token(&self, jid: &str, entry: &TcTokenEntry) -> Result<()> {
@@ -2191,7 +2196,7 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             diesel::insert_into(tc_tokens::table)
                 .values((
                     tc_tokens::jid.eq(&jid),
@@ -2210,11 +2215,11 @@ impl ProtocolStore for SqliteStore {
                     tc_tokens::updated_at.eq(now),
                 ))
                 .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(())
     }
 
@@ -2225,18 +2230,18 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             diesel::delete(
                 tc_tokens::table
                     .filter(tc_tokens::jid.eq(&jid))
                     .filter(tc_tokens::device_id.eq(device_id)),
             )
             .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
         Ok(())
     }
 
@@ -2246,16 +2251,16 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<Vec<String>> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let jids: Vec<String> = tc_tokens::table
                 .select(tc_tokens::jid)
                 .filter(tc_tokens::device_id.eq(device_id))
                 .load(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(jids)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn delete_expired_tc_tokens(&self, cutoff_timestamp: i64) -> Result<u32> {
@@ -2264,18 +2269,18 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<u32> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let deleted = diesel::delete(
                 tc_tokens::table
                     .filter(tc_tokens::token_timestamp.lt(cutoff_timestamp))
                     .filter(tc_tokens::device_id.eq(device_id)),
             )
             .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(deleted as u32)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 
     async fn store_sent_message(
@@ -2347,18 +2352,18 @@ impl ProtocolStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<u32> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
             let deleted = diesel::delete(
                 sent_messages::table
                     .filter(sent_messages::created_at.lt(cutoff_timestamp))
                     .filter(sent_messages::device_id.eq(device_id)),
             )
             .execute(&mut conn)
-            .map_err(|e| StoreError::Database(e.to_string()))?;
+            .map_err(|e| StoreError::Database(Box::new(e)))?;
             Ok(deleted as u32)
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))?
+        .map_err(|e| StoreError::Database(Box::new(e)))?
     }
 }
 
@@ -2405,13 +2410,13 @@ impl DeviceStore for SqliteStore {
             let sanitized = sanitized.trim_matches(['/', '\\', '.']);
 
             if sanitized.is_empty() {
-                return Err(StoreError::Database(
+                return Err(StoreError::InvalidConfig(
                     "Snapshot name cannot be empty after sanitization".to_string(),
                 ));
             }
 
             if sanitized.len() > MAX_LENGTH {
-                return Err(StoreError::Database(format!(
+                return Err(StoreError::InvalidConfig(format!(
                     "Snapshot name exceeds maximum length of {} characters",
                     MAX_LENGTH
                 )));
@@ -2429,7 +2434,7 @@ impl DeviceStore for SqliteStore {
         tokio::task::spawn_blocking(move || -> Result<()> {
             let mut conn = pool
                 .get()
-                .map_err(|e| StoreError::Connection(e.to_string()))?;
+                .map_err(|e| StoreError::Connection(Box::new(e)))?;
 
             let timestamp = wacore::time::now_secs();
 
@@ -2442,20 +2447,18 @@ impl DeviceStore for SqliteStore {
 
             diesel::sql_query(query)
                 .execute(&mut conn)
-                .map_err(|e| StoreError::Database(e.to_string()))?;
+                .map_err(|e| StoreError::Database(Box::new(e)))?;
 
             // Save extra content if provided
             if let Some(data) = extra_data {
                 let extra_path = format!("{}.json", target_path);
-                std::fs::write(&extra_path, data).map_err(|e| {
-                    StoreError::Database(format!("Failed to write snapshot extra content: {}", e))
-                })?;
+                std::fs::write(&extra_path, data)?;
             }
 
             Ok(())
         })
         .await
-        .map_err(|e| StoreError::Database(e.to_string()))??;
+        .map_err(|e| StoreError::Database(Box::new(e)))??;
 
         Ok(())
     }

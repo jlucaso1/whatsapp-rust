@@ -31,6 +31,8 @@ enum KeepaliveResult {
 fn classify_keepalive_error(e: &IqError) -> KeepaliveResult {
     match e {
         IqError::Socket(_)
+        | IqError::EncryptSend(_)
+        | IqError::ClientState(_)
         | IqError::Disconnected(_)
         | IqError::NotConnected
         | IqError::InternalChannelClosed
@@ -229,7 +231,7 @@ mod tests {
     #[test]
     fn test_classify_socket_error_is_fatal() {
         assert_eq!(
-            classify_keepalive_error(&IqError::Socket(SocketError::Crypto("test".to_string()))),
+            classify_keepalive_error(&IqError::Socket(SocketError::SocketClosed)),
             KeepaliveResult::FatalFailure,
         );
     }
