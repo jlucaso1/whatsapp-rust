@@ -6,10 +6,10 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 use wacore::handshake::{
-    HandshakeError as CoreHandshakeError, HandshakeState, build_handshake_header,
+    HandshakeError as CoreHandshakeError, XxHandshakeState, build_handshake_header,
 };
 use wacore::runtime::{Runtime, timeout as rt_timeout};
-use wacore_binary::consts::{NOISE_PATTERN_XX, WA_CONN_HEADER};
+use wacore_binary::consts::WA_CONN_HEADER;
 
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 
@@ -48,10 +48,9 @@ pub async fn do_handshake(
     // Prepare the client payload (convert Device-specific data to bytes)
     let client_payload = device.core.get_client_payload().encode_to_vec();
 
-    let mut handshake_state = HandshakeState::new(
+    let mut handshake_state = XxHandshakeState::new(
         device.core.noise_key.clone(),
         client_payload,
-        NOISE_PATTERN_XX,
         &WA_CONN_HEADER,
     )?;
     let mut frame_decoder = wacore::framing::FrameDecoder::new();
@@ -115,10 +114,13 @@ pub async fn do_handshake(
         .map_err(HandshakeError::Transport)?;
     transport.send(bytes::Bytes::from(framed)).await?;
 
-    let (write_key, read_key) = handshake_state.finish()?;
+    let outcome = handshake_state.finish()?;
     info!("Handshake complete, switching to encrypted communication");
 
     Ok(Arc::new(NoiseSocket::new(
-        runtime, transport, write_key, read_key,
+        runtime,
+        transport,
+        outcome.write_cipher,
+        outcome.read_cipher,
     )))
 }

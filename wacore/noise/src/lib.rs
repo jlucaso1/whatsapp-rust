@@ -43,7 +43,8 @@ pub use edge_routing::{
 };
 pub use error::{NoiseError, Result};
 pub use handshake::{
-    HandshakeError, HandshakeState, HandshakeUtils, NoiseHandshake, Result as HandshakeResult,
-    WA_CERT_PUB_KEY,
+    HandshakeError, HandshakeUtils, IkFallbackInputs, IkHandshakeOutcome, IkHandshakeState,
+    IkServerHelloOutcome, NoiseHandshake, Result as HandshakeResult, VerifiedServerCertChain,
+    WA_CERT_PUB_KEY, XxFallbackHandshakeState, XxHandshakeOutcome, XxHandshakeState,
 };
 pub use state::{NoiseCipher, NoiseKeys, NoiseState, generate_iv};

@@ -273,6 +273,23 @@ pub struct CachedServerCertChain {
     pub leaf: CachedNoiseCert,
 }
 
+impl From<wacore_noise::VerifiedServerCertChain> for CachedServerCertChain {
+    fn from(v: wacore_noise::VerifiedServerCertChain) -> Self {
+        Self {
+            intermediate: CachedNoiseCert {
+                key: v.intermediate_key,
+                not_before: v.intermediate_not_before,
+                not_after: v.intermediate_not_after,
+            },
+            leaf: CachedNoiseCert {
+                key: v.leaf_key,
+                not_before: v.leaf_not_before,
+                not_after: v.leaf_not_after,
+            },
+        }
+    }
+}
+
 impl Default for Device {
     fn default() -> Self {
         Self::new()
