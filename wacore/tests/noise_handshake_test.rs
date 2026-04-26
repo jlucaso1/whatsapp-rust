@@ -269,3 +269,38 @@ fn test_initial_pattern_hash() {
 
     assert_eq!(actual_hash.as_slice(), expected_hash.as_slice());
 }
+
+/// Locks the post-init hash for `Noise_XX_25519_AESGCM_SHA256` (zero-padded to
+/// 32 bytes) with WhatsApp's WA_CONN_HEADER prologue.
+///
+/// The expected value is `SHA256(name_padded || WA_CONN_HEADER)` where
+/// `name_padded` is the 32-byte pattern bytes used directly as `h0` per Noise
+/// § 5.2 (length <= HASHLEN, no SHA256 of the name).
+///
+/// Pre-computed via:
+///     python3 -c "import hashlib; \
+///         h=b'Noise_XX_25519_AESGCM_SHA256\x00\x00\x00\x00'+bytes([0x57,0x41,6,3]); \
+///         print(hashlib.sha256(h).hexdigest())"
+#[test]
+fn test_xx_h_after_init_matches_known_vector() {
+    let nh = NoiseHandshake::new(NOISE_START_PATTERN, &WA_CONN_HEADER)
+        .expect("noise init should succeed");
+
+    let expected: [u8; 32] =
+        hex_to_bytes("ffff0c9267310966f1311170c04b38c79504285bf5edf763e5c946492a50a755");
+    assert_eq!(
+        nh.hash(),
+        &expected,
+        "h after XX init with WA_CONN_HEADER drifted; \
+         padding bug or WA_CONN_HEADER changed"
+    );
+    // h0 == salt0 in Noise: both seeded from the (post-pad/hash) name.
+    // After authenticate(prologue), only `hash` mutates; `salt` is untouched.
+    let expected_salt: [u8; 32] =
+        hex_to_bytes("4e6f6973655f58585f32353531395f41455347434d5f53484132353600000000");
+    assert_eq!(
+        nh.salt(),
+        &expected_salt,
+        "salt should equal raw 32-byte pattern bytes (not hashed)"
+    );
+}
