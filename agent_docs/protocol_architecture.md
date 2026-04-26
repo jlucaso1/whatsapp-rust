@@ -125,3 +125,59 @@ wacore/src/iq/
 ```
 
 Each feature file contains: constants, enums (`StringEnum`), request/response structs (`ProtocolNode`), `IqSpec` impls, and unit tests.
+
+## Noise Handshake Patterns
+
+Three Noise patterns coexist, mirroring WA Web's `WAWebOpenChatSocket`:
+
+| Pattern        | When                                                          | State machine               | Cost                              |
+| -------------- | ------------------------------------------------------------- | --------------------------- | --------------------------------- |
+| **XX**         | First connect / pairing / forced fallback                     | `XxHandshakeState`          | 1.5 RTT                           |
+| **IK**         | Reconnect with valid cached `serverStaticPub`                 | `IkHandshakeState`          | 1 RTT, ships 0-RTT login payload  |
+| **XXfallback** | Server rejects in-flight IK (reply has `static != null`)      | `XxFallbackHandshakeState`  | 1 RTT (reuses already-sent eph.)  |
+
+### Selection (`src/handshake.rs::select_pattern`)
+
+```text
+ik_failures >= 1  ───────────────────────────────────────► XX
+no cached server_cert_chain ─────────────────────────────► XX
+leaf.not_after < now OR intermediate.not_after < now ────► XX
+otherwise ──────────────────────────────────────────────► IK with leaf.key
+```
+
+The counter `Client.ik_handshake_failures: AtomicU32` is per-process and
+not persisted (matches WA Web's `K = 0` reset on process start).
+
+### Invalidation policy
+
+| Error                                              | `ik_handshake_failures` | `server_cert_chain`                              |
+| -------------------------------------------------- | ----------------------- | ------------------------------------------------ |
+| Transient (timeout, disconnect, transport)         | unchanged               | unchanged                                        |
+| Crypto-fatal during IK (cert MAC, decrypt, proto)  | `+= 1`                  | cleared via `DeviceCommand::ClearServerCertChain`|
+| XX or XX-fallback failure                          | unchanged               | unchanged (XX never reads the cache)             |
+| Any successful handshake                           | reset to `0`            | repopulated (XX, XX-fallback) or kept (IK Continue)|
+
+Distinguishing transient from crypto-fatal is via `HandshakeError::is_transient()`
+and `HandshakeError::is_crypto_fatal()`. Getting the classification wrong leads
+to either oscillating back to XX needlessly or looping on a stale cache.
+
+### Persisted state (`Device.server_cert_chain`)
+
+`CachedServerCertChain { intermediate, leaf }` with each cert reduced to
+`{ key: [u8; 32], not_before: i64, not_after: i64 }`. Mirrors the JSON
+shape WA Web persists (`PrefsInfoStore.js:setCertificateChain`) — full
+protobuf signatures + issuer serial are validated at reception and then
+dropped, since they are not needed for IK or expiry checks.
+
+### Logs (matching WA Web's `[socket]` lines)
+
+```
+[socket] doFullHandshake: openChatSocket send hello
+[socket] resumeNoiseHandshake started
+[socket] resumeNoiseHandshake send hello
+[socket] resumeNoiseHandshake rcv hello
+[socket] resumeNoiseHandshake deriving secrets
+[socket] resumeNoiseHandshake failed: serverStaticCiphertext not null —
+  doFallbackHandshake continuing handshake with given server hello
+[socket] continueFullHandshakeCore client finish and deriving secrets
+```
