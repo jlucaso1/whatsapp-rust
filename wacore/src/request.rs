@@ -82,16 +82,14 @@ impl<'a> InfoQuery<'a> {
 pub enum IqError {
     #[error("IQ request timed out")]
     Timeout,
-    #[error("Client is not connected")]
+    #[error("client is not connected")]
     NotConnected,
-    #[error("Received disconnect node during IQ wait: {0:?}")]
+    #[error("received disconnect node during IQ wait: {0:?}")]
     Disconnected(Node),
-    #[error("Received a server error response: code={code}, text='{text}'")]
+    #[error("received a server error response: code={code}, text='{text}'")]
     ServerError { code: u16, text: String },
-    #[error("Internal channel closed unexpectedly")]
+    #[error("internal channel closed unexpectedly")]
     InternalChannelClosed,
-    #[error("Network error: {0}")]
-    Network(String),
 }
 
 /// Lightweight server error that can be embedded in `anyhow::Error` and

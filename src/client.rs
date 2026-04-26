@@ -3608,7 +3608,7 @@ impl Client {
 
         let plaintext_buf = wacore_binary::marshal::marshal_auto(&node).map_err(|e| {
             error!("Failed to marshal node: {e:?}");
-            SocketError::Crypto("Marshal error".to_string())
+            SocketError::Marshal(e)
         })?;
 
         self.send_raw_bytes(plaintext_buf).await
