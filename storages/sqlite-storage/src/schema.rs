@@ -71,6 +71,7 @@ diesel::table! {
         next_pre_key_id -> Integer,
         nct_salt -> Nullable<Binary>,
         server_has_prekeys -> Bool,
+        server_cert_chain -> Nullable<Binary>,
     }
 }
 

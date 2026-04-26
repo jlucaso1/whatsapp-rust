@@ -82,6 +82,7 @@ struct DeviceRow {
     next_pre_key_id: i32,
     nct_salt: Option<Vec<u8>>,
     server_has_prekeys: bool,
+    server_cert_chain: Option<Vec<u8>>,
 }
 
 #[derive(Clone)]
@@ -327,6 +328,15 @@ impl SqliteStore {
         let next_pre_key_id = device_data.next_pre_key_id as i32;
         let server_has_prekeys = device_data.server_has_prekeys;
         let nct_salt: Option<Arc<[u8]>> = device_data.nct_salt.as_deref().map(Arc::from);
+        let server_cert_chain: Option<Arc<[u8]>> = device_data
+            .server_cert_chain
+            .as_ref()
+            .map(|chain| {
+                bincode::serde::encode_to_vec(chain, bincode::config::standard())
+                    .map(Arc::from)
+                    .map_err(|e| StoreError::Serialization(Box::new(e)))
+            })
+            .transpose()?;
         let new_lid: Arc<str> = Arc::from(
             device_data
                 .lid
@@ -355,6 +365,7 @@ impl SqliteStore {
             let edge_routing_info = edge_routing_info.clone();
             let props_hash = props_hash.clone();
             let nct_salt = nct_salt.clone();
+            let server_cert_chain = server_cert_chain.clone();
             let new_lid = Arc::clone(&new_lid);
             let new_pn = Arc::clone(&new_pn);
 
@@ -382,6 +393,7 @@ impl SqliteStore {
                         device::next_pre_key_id.eq(next_pre_key_id),
                         device::server_has_prekeys.eq(server_has_prekeys),
                         device::nct_salt.eq(nct_salt.as_deref()),
+                        device::server_cert_chain.eq(server_cert_chain.as_deref()),
                     ))
                     .on_conflict(device::id)
                     .do_update()
@@ -408,6 +420,7 @@ impl SqliteStore {
                         device::next_pre_key_id.eq(excluded(device::next_pre_key_id)),
                         device::server_has_prekeys.eq(excluded(device::server_has_prekeys)),
                         device::nct_salt.eq(excluded(device::nct_salt)),
+                        device::server_cert_chain.eq(excluded(device::server_cert_chain)),
                     ))
                     .execute(conn)
                     .map(|_| ())
@@ -469,6 +482,7 @@ impl SqliteStore {
                         device::next_pre_key_id.eq(next_pre_key_id),
                         device::server_has_prekeys.eq(server_has_prekeys),
                         device::nct_salt.eq(None::<&[u8]>),
+                        device::server_cert_chain.eq(None::<&[u8]>),
                     ))
                     .execute(conn)
                     .map(|_| device_id)
@@ -574,6 +588,15 @@ impl SqliteStore {
                 server_has_prekeys: row.server_has_prekeys,
                 nct_salt: row.nct_salt,
                 nct_salt_sync_seen: false,
+                server_cert_chain: row
+                    .server_cert_chain
+                    .as_deref()
+                    .map(|bytes| {
+                        bincode::serde::decode_from_slice(bytes, bincode::config::standard())
+                            .map(|(chain, _)| chain)
+                            .map_err(|e| StoreError::Serialization(Box::new(e)))
+                    })
+                    .transpose()?,
             }))
         } else {
             Ok(None)

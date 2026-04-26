@@ -243,6 +243,34 @@ pub struct Device {
     /// This prevents stale history sync data from resurrecting a cleared salt.
     #[serde(skip)]
     pub nct_salt_sync_seen: bool,
+    /// Server cert chain cached from the last successful XX (or XX-fallback)
+    /// handshake. Enables Noise IK on the next connect by exposing
+    /// `leaf.key` as the server's static public key, and lets us reject
+    /// stale entries via `not_after` before even attempting IK.
+    /// `None` forces XX on the next connect.
+    #[serde(default)]
+    pub server_cert_chain: Option<CachedServerCertChain>,
+}
+
+/// Minimal cached form of a Noise certificate. Mirrors the JSON shape WA Web
+/// persists in `waNoiseInfo.certificateChainBuffer` (only `key` plus the
+/// validity window — signatures and issuer_serial are intentionally dropped).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedNoiseCert {
+    /// 32-byte X25519 public key from `NoiseCertificate.Details.key`.
+    pub key: [u8; 32],
+    /// Unix epoch seconds. Validation window from `NoiseCertificate.Details`.
+    pub not_before: i64,
+    pub not_after: i64,
+}
+
+/// Cached form of the server's two-cert chain. `leaf.key` is the server
+/// static public key consumed by Noise IK; the intermediate is kept solely
+/// to mirror WA Web's expiry checks.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CachedServerCertChain {
+    pub intermediate: CachedNoiseCert,
+    pub leaf: CachedNoiseCert,
 }
 
 impl Default for Device {
@@ -298,6 +326,7 @@ impl Device {
             server_has_prekeys: false,
             nct_salt: None,
             nct_salt_sync_seen: false,
+            server_cert_chain: None,
         }
     }
 
@@ -441,6 +470,43 @@ mod tests {
             device.identity_key.public_key.public_key_bytes(),
             restored.identity_key.public_key.public_key_bytes()
         );
+    }
+
+    #[test]
+    fn test_device_server_cert_chain_serde_roundtrip() {
+        let mut device = Device::new();
+        device.server_cert_chain = Some(CachedServerCertChain {
+            intermediate: CachedNoiseCert {
+                key: [0xAA; 32],
+                not_before: 1_700_000_000,
+                not_after: 1_900_000_000,
+            },
+            leaf: CachedNoiseCert {
+                key: [0xBB; 32],
+                not_before: 1_700_000_500,
+                not_after: 1_899_999_500,
+            },
+        });
+
+        let json = serde_json::to_string(&device).expect("serialize should succeed");
+        let restored: Device = serde_json::from_str(&json).expect("deserialize should succeed");
+        assert_eq!(device.server_cert_chain, restored.server_cert_chain);
+    }
+
+    #[test]
+    fn test_device_legacy_record_without_cert_chain_deserializes() {
+        // Devices serialized before this field existed must still load — the
+        // #[serde(default)] attribute is what makes that work.
+        let mut device = Device::new();
+        device.server_cert_chain = None;
+        let json = serde_json::to_string(&device).expect("serialize should succeed");
+        // Strip the field as if a legacy file lacked it entirely.
+        let stripped = json.replace(",\"server_cert_chain\":null", "");
+        assert_ne!(stripped, json, "field was expected to be present in JSON");
+
+        let restored: Device =
+            serde_json::from_str(&stripped).expect("legacy record should deserialize");
+        assert!(restored.server_cert_chain.is_none());
     }
 
     /// Regression: #403

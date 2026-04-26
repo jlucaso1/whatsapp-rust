@@ -1,6 +1,6 @@
 use crate::client_profile::ClientProfile;
 use crate::store::Device;
-use crate::store::device::DevicePropsOverride;
+use crate::store::device::{CachedServerCertChain, DevicePropsOverride};
 use wacore_binary::Jid;
 use waproto::whatsapp as wa;
 
@@ -18,6 +18,13 @@ pub enum DeviceCommand {
     SetAdvSecretKey([u8; 32]),
     SetNctSalt(Option<Vec<u8>>),
     SetNctSaltFromHistorySync(Vec<u8>),
+    /// Cache the server cert chain extracted from a successful XX (or
+    /// XX-fallback) handshake. Enables Noise IK on the next connect.
+    SetServerCertChain(CachedServerCertChain),
+    /// Drop the cached server cert chain (e.g. after IK fails with a
+    /// crypto-fatal error, signalling that the cached `leaf.key` is stale).
+    /// Forces XX on the next connect.
+    ClearServerCertChain,
 }
 
 pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
@@ -64,6 +71,12 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
                 device.nct_salt = Some(salt);
             }
         }
+        DeviceCommand::SetServerCertChain(chain) => {
+            device.server_cert_chain = Some(chain);
+        }
+        DeviceCommand::ClearServerCertChain => {
+            device.server_cert_chain = None;
+        }
     }
 }
 
@@ -71,6 +84,57 @@ pub fn apply_command_to_device(device: &mut Device, command: DeviceCommand) {
 mod tests {
     use super::{DeviceCommand, apply_command_to_device};
     use crate::store::Device;
+    use crate::store::device::{CachedNoiseCert, CachedServerCertChain};
+
+    fn dummy_chain() -> CachedServerCertChain {
+        CachedServerCertChain {
+            intermediate: CachedNoiseCert {
+                key: [0x11; 32],
+                not_before: 1_700_000_000,
+                not_after: 1_900_000_000,
+            },
+            leaf: CachedNoiseCert {
+                key: [0x22; 32],
+                not_before: 1_700_000_100,
+                not_after: 1_899_999_900,
+            },
+        }
+    }
+
+    #[test]
+    fn set_server_cert_chain_populates_field() {
+        let mut device = Device::new();
+        assert!(device.server_cert_chain.is_none());
+
+        let chain = dummy_chain();
+        apply_command_to_device(
+            &mut device,
+            DeviceCommand::SetServerCertChain(chain.clone()),
+        );
+        assert_eq!(device.server_cert_chain, Some(chain));
+    }
+
+    #[test]
+    fn clear_server_cert_chain_drops_field() {
+        let mut device = Device::new();
+        device.server_cert_chain = Some(dummy_chain());
+
+        apply_command_to_device(&mut device, DeviceCommand::ClearServerCertChain);
+        assert!(device.server_cert_chain.is_none());
+    }
+
+    #[test]
+    fn set_then_clear_roundtrips() {
+        let mut device = Device::new();
+        let chain = dummy_chain();
+        apply_command_to_device(
+            &mut device,
+            DeviceCommand::SetServerCertChain(chain.clone()),
+        );
+        assert_eq!(device.server_cert_chain.as_ref(), Some(&chain));
+        apply_command_to_device(&mut device, DeviceCommand::ClearServerCertChain);
+        assert!(device.server_cert_chain.is_none());
+    }
 
     #[test]
     fn test_history_sync_salt_backfills_when_no_syncd_mutation_was_seen() {
