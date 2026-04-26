@@ -644,11 +644,10 @@ mod tests {
 
     #[test]
     fn derive_firefox_uses_companion_web_client_wire() {
-        // Regression: proto Firefox=2 vs CWCT Firefox=3.
         let p = props(Some("Linux"), Some(wa::device_props::PlatformType::Firefox));
         let (id, display) = derive_companion_platform(&p);
         assert_eq!(id, CompanionWebClientType::Firefox);
-        assert_eq!(id.code(), 3);
+        assert_eq!(id.wire_byte(), b'3');
         assert_eq!(display, "Firefox (Linux)");
     }
 
@@ -657,21 +656,44 @@ mod tests {
         let p = props(Some("Windows"), Some(wa::device_props::PlatformType::Edge));
         let (id, display) = derive_companion_platform(&p);
         assert_eq!(id, CompanionWebClientType::Edge);
-        assert_eq!(id.code(), 2);
+        assert_eq!(id.wire_byte(), b'2');
         assert_eq!(display, "Edge (Windows)");
     }
 
     #[test]
-    fn derive_android_phone_falls_back_to_other_web_client_and_chrome() {
-        // Regression: previously ("16","Android (Android)"); server rejects.
+    fn derive_android_phone_uses_dedicated_letter_and_android_label() {
         let p = props(
             Some("Android"),
             Some(wa::device_props::PlatformType::AndroidPhone),
         );
         let (id, display) = derive_companion_platform(&p);
-        assert_eq!(id, CompanionWebClientType::OtherWebClient);
-        assert_eq!(id.code(), 9);
-        assert_eq!(display, "Chrome (Android)");
+        assert_eq!(id, CompanionWebClientType::AndroidPhone);
+        assert_eq!(id.wire_byte(), b'e');
+        assert_eq!(display, "Android (Android)");
+    }
+
+    #[test]
+    fn derive_android_tablet_uses_dedicated_letter() {
+        let p = props(
+            Some("Android"),
+            Some(wa::device_props::PlatformType::AndroidTablet),
+        );
+        let (id, display) = derive_companion_platform(&p);
+        assert_eq!(id, CompanionWebClientType::AndroidTablet);
+        assert_eq!(id.wire_byte(), b'd');
+        assert_eq!(display, "Android (Android)");
+    }
+
+    #[test]
+    fn derive_android_ambiguous_uses_dedicated_letter() {
+        let p = props(
+            Some("Android"),
+            Some(wa::device_props::PlatformType::AndroidAmbiguous),
+        );
+        let (id, display) = derive_companion_platform(&p);
+        assert_eq!(id, CompanionWebClientType::AndroidAmbiguous);
+        assert_eq!(id.wire_byte(), b'f');
+        assert_eq!(display, "Android (Android)");
     }
 
     #[test]
@@ -712,11 +734,16 @@ mod tests {
         );
     }
 
-    /// Total scan: display always `<valid_browser> (Linux)` for every proto variant.
+    /// Every proto variant produces a wire byte from the server's
+    /// accept-list and a display whose label is one of the known emitter
+    /// cohorts (`Browser` for web, `Android` for Android).
     #[test]
-    fn derive_display_always_uses_valid_browser_for_every_proto_variant() {
+    fn derive_display_uses_known_label_for_every_proto_variant() {
         use wa::device_props::PlatformType as P;
-        const VALID_BROWSERS: &[&str] = &["Chrome", "Edge", "Firefox", "IE", "Opera", "Safari"];
+        const SERVER_ACCEPT_LIST: &[u8] = b"0123456789abcdefghijklm";
+        const KNOWN_LABELS: &[&str] = &[
+            "Chrome", "Edge", "Firefox", "IE", "Opera", "Safari", "Android",
+        ];
         for pt in [
             P::Unknown,
             P::Chrome,
@@ -747,14 +774,14 @@ mod tests {
             let p = props(Some("Linux"), Some(pt));
             let (id, display) = derive_companion_platform(&p);
             assert!(
-                (0..=9).contains(&id.code()),
-                "{pt:?} produced wire {} outside CompanionWebClientType range",
-                id.code()
+                SERVER_ACCEPT_LIST.contains(&id.wire_byte()),
+                "{pt:?} wire byte {:?} outside server accept list",
+                id.wire_byte() as char,
             );
-            let browser = display.split(" (").next().unwrap();
+            let label = display.split(" (").next().unwrap();
             assert!(
-                VALID_BROWSERS.contains(&browser),
-                "{pt:?} produced display {display:?} with invalid browser {browser:?}"
+                KNOWN_LABELS.contains(&label),
+                "{pt:?} produced display {display:?} with unexpected label {label:?}"
             );
             assert!(
                 display.ends_with(" (Linux)"),
@@ -968,7 +995,7 @@ mod tests {
 
     #[test]
     fn companion_hello_iq_shape() {
-        let iq = build_iq("16", "Android (Android)");
+        let iq = build_iq("e", "Android (Android)");
         assert_eq!(iq.tag, "iq");
 
         let reg = iq
@@ -1000,14 +1027,14 @@ mod tests {
 
     #[test]
     fn companion_hello_iq_android_wire_strings() {
-        let iq = build_iq("9", "Chrome (Android)");
+        let iq = build_iq("e", "Android (Android)");
         let reg = iq
             .get_optional_child_by_tag(&["link_code_companion_reg"])
             .unwrap();
-        assert_eq!(child_bytes(reg, "companion_platform_id"), b"9");
+        assert_eq!(child_bytes(reg, "companion_platform_id"), b"e");
         assert_eq!(
             child_bytes(reg, "companion_platform_display"),
-            b"Chrome (Android)"
+            b"Android (Android)"
         );
     }
 
@@ -1034,18 +1061,18 @@ mod tests {
             ..Default::default()
         };
         let (pid, pdisp) = resolve_companion_platform(&PairCodeOptions::default(), &props);
-        assert_eq!(pid, CompanionWebClientType::OtherWebClient);
-        assert_eq!(pid.code(), 9);
-        assert_eq!(pdisp, "Chrome (Android)");
+        assert_eq!(pid, CompanionWebClientType::AndroidPhone);
+        assert_eq!(pid.wire_byte(), b'e');
+        assert_eq!(pdisp, "Android (Android)");
 
         let iq = build_iq(&pid.to_string(), &pdisp);
         let reg = iq
             .get_optional_child_by_tag(&["link_code_companion_reg"])
             .unwrap();
-        assert_eq!(child_bytes(reg, "companion_platform_id"), b"9");
+        assert_eq!(child_bytes(reg, "companion_platform_id"), b"e");
         assert_eq!(
             child_bytes(reg, "companion_platform_display"),
-            b"Chrome (Android)"
+            b"Android (Android)"
         );
     }
 

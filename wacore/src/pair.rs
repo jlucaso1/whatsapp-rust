@@ -420,7 +420,7 @@ mod tests {
     }
 
     #[test]
-    fn make_qr_data_renders_each_client_type_decimal_integer() {
+    fn make_qr_data_renders_each_client_type_wire_byte() {
         let state = dummy_device_state();
         for (ct, wire) in [
             (CompanionWebClientType::Unknown, "0"),
@@ -433,6 +433,9 @@ mod tests {
             (CompanionWebClientType::Electron, "7"),
             (CompanionWebClientType::Uwp, "8"),
             (CompanionWebClientType::OtherWebClient, "9"),
+            (CompanionWebClientType::AndroidTablet, "d"),
+            (CompanionWebClientType::AndroidPhone, "e"),
+            (CompanionWebClientType::AndroidAmbiguous, "f"),
         ] {
             let qr = PairUtils::make_qr_data(&state, "r", ct);
             assert_eq!(qr.rsplit(',').next(), Some(wire), "{ct:?}");
@@ -551,7 +554,9 @@ mod tests {
             (wa::device_props::PlatformType::Edge, "2"),
             (wa::device_props::PlatformType::Desktop, "7"),
             (wa::device_props::PlatformType::Uwp, "8"),
-            (wa::device_props::PlatformType::AndroidPhone, "9"),
+            (wa::device_props::PlatformType::AndroidPhone, "e"),
+            (wa::device_props::PlatformType::AndroidTablet, "d"),
+            (wa::device_props::PlatformType::AndroidAmbiguous, "f"),
             (wa::device_props::PlatformType::IosPhone, "9"),
             (wa::device_props::PlatformType::Vr, "9"),
             (wa::device_props::PlatformType::Unknown, "0"),
@@ -598,6 +603,9 @@ mod tests {
             CompanionWebClientType::Electron,
             CompanionWebClientType::Uwp,
             CompanionWebClientType::OtherWebClient,
+            CompanionWebClientType::AndroidTablet,
+            CompanionWebClientType::AndroidPhone,
+            CompanionWebClientType::AndroidAmbiguous,
         ] {
             let qr = PairUtils::make_qr_data(&state, "the-ref", ct);
             let (pairing_ref, noise, identity) = PairUtils::parse_qr_code(&qr)
@@ -702,18 +710,19 @@ mod tests {
         assert_eq!(err.text, "hmac-mismatch");
     }
 
-    /// QR trailing field == `code()` (parity with `companion_platform_id`).
+    /// QR trailing field is the wire byte of `companion_platform_id`.
     #[test]
-    fn qr_trailing_field_matches_companion_web_client_type_code() {
+    fn qr_trailing_field_matches_companion_web_client_type_wire_byte() {
         let state = dummy_device_state();
         for ct in [
             CompanionWebClientType::Chrome,
             CompanionWebClientType::OtherWebClient,
             CompanionWebClientType::Uwp,
+            CompanionWebClientType::AndroidPhone,
         ] {
             let qr = PairUtils::make_qr_data(&state, "r", ct);
             let trailing = qr.rsplit(',').next().unwrap();
-            assert_eq!(trailing, ct.code().to_string());
+            assert_eq!(trailing, &(ct.wire_byte() as char).to_string());
         }
     }
 }
