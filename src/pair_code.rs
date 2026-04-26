@@ -52,13 +52,25 @@ use log::{error, info, warn};
 
 use std::sync::Arc;
 use wacore::libsignal::protocol::KeyPair;
-use wacore::pair_code::{PairCodeError, PairCodeState, PairCodeUtils, resolve_companion_platform};
+use wacore::pair_code::{PairCodeState, PairCodeUtils, resolve_companion_platform};
 use wacore_binary::Jid;
 use wacore_binary::{NodeContent, NodeContentRef, NodeRef};
 
-// Re-export types for user convenience
 pub use wacore::companion_reg::CompanionWebClientType;
-pub use wacore::pair_code::PairCodeOptions;
+pub use wacore::pair_code::{PairCodeError, PairCodeOptions};
+
+/// Errors raised by the high-level pair-code flow.
+///
+/// Wraps `wacore::pair_code::PairCodeError` (validation, key derivation, bundle
+/// building) and adds the IQ transport layer via `RequestFailed`.
+#[derive(Debug, thiserror::Error)]
+pub enum PairError {
+    #[error(transparent)]
+    PairCode(#[from] PairCodeError),
+
+    #[error("pair-code IQ request failed")]
+    RequestFailed(#[from] IqError),
+}
 
 impl Client {
     /// Initiates pair code authentication as an alternative to QR code pairing.
@@ -99,7 +111,7 @@ impl Client {
     pub async fn pair_with_code(
         self: &Arc<Self>,
         options: PairCodeOptions,
-    ) -> Result<String, PairCodeError> {
+    ) -> Result<String, PairError> {
         // Strip non-digit characters from phone number (allows "+1-555-123-4567" format)
         let phone_number: String = options
             .phone_number
@@ -109,20 +121,20 @@ impl Client {
 
         // Validate phone number
         if phone_number.is_empty() {
-            return Err(PairCodeError::PhoneNumberRequired);
+            return Err(PairCodeError::PhoneNumberRequired.into());
         }
         if phone_number.len() < 7 {
-            return Err(PairCodeError::PhoneNumberTooShort);
+            return Err(PairCodeError::PhoneNumberTooShort.into());
         }
         if phone_number.starts_with('0') {
-            return Err(PairCodeError::PhoneNumberNotInternational);
+            return Err(PairCodeError::PhoneNumberNotInternational.into());
         }
 
         // Generate or validate code
         let code = match &options.custom_code {
             Some(custom) => {
                 if !PairCodeUtils::validate_code(custom) {
-                    return Err(PairCodeError::InvalidCustomCode);
+                    return Err(PairCodeError::InvalidCustomCode.into());
                 }
                 custom.to_uppercase()
             }
@@ -192,12 +204,8 @@ impl Client {
             timeout: Some(std::time::Duration::from_secs(30)),
         };
 
-        let response = self
-            .send_iq(query)
-            .await
-            .map_err(|e: IqError| PairCodeError::RequestFailed(e.to_string()))?;
+        let response = self.send_iq(query).await?;
 
-        // Extract pairing ref from response
         let pairing_ref = PairCodeUtils::parse_companion_hello_response(response.get())
             .ok_or(PairCodeError::MissingPairingRef)?;
 
@@ -372,4 +380,37 @@ pub(crate) async fn handle_pair_code_notification(
     *client.pair_code_state.lock().await = PairCodeState::Completed;
 
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pair_error_request_failed_preserves_iq_source() {
+        let iq = IqError::ServerError {
+            code: 400,
+            text: "bad-request".into(),
+        };
+        let pe: PairError = iq.into();
+        let src = std::error::Error::source(&pe).expect("source preserved");
+        let downcast = src.downcast_ref::<IqError>().expect("downcasts to IqError");
+        assert!(matches!(downcast, IqError::ServerError { code: 400, .. }));
+    }
+
+    #[test]
+    fn pair_error_paircode_transparent_walks_to_curve_error() {
+        use wacore::libsignal::protocol::CurveError;
+        // Wrap a wacore PairCodeError that itself carries a CurveError source.
+        // Because PairError::PairCode is `transparent`, walking source() once
+        // skips the transparent layer and lands directly on the CurveError.
+        let pe: PairError =
+            PairCodeError::EphemeralKeyAgreement(CurveError::NoKeyTypeIdentifier).into();
+        assert_eq!(pe.to_string(), "ephemeral key agreement failed");
+        let src = std::error::Error::source(&pe).expect("source preserved");
+        let curve = src
+            .downcast_ref::<CurveError>()
+            .expect("downcasts to CurveError through transparent wrapper");
+        assert!(matches!(curve, CurveError::NoKeyTypeIdentifier));
+    }
 }
