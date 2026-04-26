@@ -9,7 +9,7 @@
 use crate::runtime::{AbortHandle, Runtime, ShutdownSignal, wait_for_shutdown};
 use crate::store::commands::{DeviceCommand, apply_command_to_device};
 use crate::store::device::Device;
-use crate::store::error::{StoreError, db_err};
+use crate::store::error::StoreError;
 use crate::store::traits::Backend;
 use async_lock::RwLock;
 use event_listener::Event;
@@ -34,15 +34,15 @@ impl PersistenceManager {
     /// Create a PersistenceManager with a backend implementation.
     pub async fn new(backend: Arc<dyn Backend>) -> Result<Self, StoreError> {
         debug!("PersistenceManager: Ensuring device row exists.");
-        let exists = backend.exists().await.map_err(db_err)?;
+        let exists = backend.exists().await?;
         if !exists {
             debug!("PersistenceManager: No device row found. Creating new device row.");
-            let id = backend.create().await.map_err(db_err)?;
+            let id = backend.create().await?;
             debug!("PersistenceManager: Created device row with id={id}.");
         }
 
         debug!("PersistenceManager: Attempting to load device data via Backend.");
-        let device_data_opt = backend.load().await.map_err(db_err)?;
+        let device_data_opt = backend.load().await?;
 
         let device = if let Some(serializable_device) = device_data_opt {
             debug!(
@@ -103,7 +103,7 @@ impl PersistenceManager {
             if let Err(e) = self.backend.save(&serializable_device).await {
                 // Restore dirty flag so the next tick retries the save
                 self.dirty.store(true, Ordering::Release);
-                return Err(db_err(e));
+                return Err(e);
             }
             debug!("Device state saved successfully.");
         }
@@ -122,7 +122,6 @@ impl PersistenceManager {
             self.backend
                 .snapshot_db(name, extra_content)
                 .await
-                .map_err(db_err)
         }
         #[cfg(not(feature = "debug-snapshots"))]
         {
@@ -202,7 +201,6 @@ impl PersistenceManager {
         self.backend
             .get_sender_key_devices(group_jid)
             .await
-            .map_err(db_err)
     }
 
     pub async fn set_sender_key_status(
@@ -213,13 +211,11 @@ impl PersistenceManager {
         self.backend
             .set_sender_key_status(group_jid, entries)
             .await
-            .map_err(db_err)
     }
 
     pub async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<(), StoreError> {
         self.backend
             .clear_sender_key_devices(group_jid)
             .await
-            .map_err(db_err)
     }
 }
