@@ -15,10 +15,11 @@ use wacore::libsignal::store::{
     PreKeyStore as WacorePreKeyStore, SignedPreKeyStore as WacoreSignedPreKeyStore,
 };
 
-fn signal_err<E: std::fmt::Display>(
-    context: &'static str,
-) -> impl FnOnce(E) -> SignalProtocolError {
-    move |e| SignalProtocolError::InvalidState(context, e.to_string())
+fn signal_err<E>(context: &'static str) -> impl FnOnce(E) -> SignalProtocolError
+where
+    E: Into<Box<dyn std::error::Error + Send + Sync + 'static>>,
+{
+    move |e| SignalProtocolError::BackendError(context, e.into())
 }
 
 #[derive(Clone)]

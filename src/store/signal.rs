@@ -220,9 +220,7 @@ impl IdentityKeyStore for Device {
                 })?,
             )
             .await
-            .map_err(|e| {
-                SignalProtocolError::InvalidState("backend put_identity", e.to_string())
-            })?;
+            .map_err(|e| SignalProtocolError::BackendError("backend put_identity", Box::new(e)))?;
 
         match existing_identity_opt {
             None => Ok(IdentityChange::NewOrUnchanged),
@@ -248,9 +246,7 @@ impl IdentityKeyStore for Device {
             .backend
             .load_identity(address.as_str())
             .await
-            .map_err(|e| {
-                SignalProtocolError::InvalidState("backend get_identity", e.to_string())
-            })?;
+            .map_err(|e| SignalProtocolError::BackendError("backend get_identity", Box::new(e)))?;
 
         match identity_bytes {
             Some(bytes) if !bytes.is_empty() => {
@@ -479,7 +475,7 @@ impl SenderKeyStore for Device {
         self.backend
             .put_sender_key(sender_key_name.cache_key(), &serialized_record)
             .await
-            .map_err(|e| SignalProtocolError::InvalidState("store_sender_key", e.to_string()))
+            .map_err(|e| SignalProtocolError::BackendError("store_sender_key", Box::new(e)))
     }
 
     async fn load_sender_key(
@@ -490,7 +486,7 @@ impl SenderKeyStore for Device {
             .backend
             .get_sender_key(sender_key_name.cache_key())
             .await
-            .map_err(|e| SignalProtocolError::InvalidState("load_sender_key", e.to_string()))?
+            .map_err(|e| SignalProtocolError::BackendError("load_sender_key", Box::new(e)))?
         {
             Some(data) => {
                 let record = SenderKeyRecord::deserialize(&data)?;
