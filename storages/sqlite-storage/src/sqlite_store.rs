@@ -591,12 +591,28 @@ impl SqliteStore {
                 server_cert_chain: row
                     .server_cert_chain
                     .as_deref()
-                    .map(|bytes| {
-                        bincode::serde::decode_from_slice(bytes, bincode::config::standard())
-                            .map(|(chain, _)| chain)
-                            .map_err(|e| StoreError::Serialization(Box::new(e)))
-                    })
-                    .transpose()?,
+                    .and_then(|bytes| {
+                        // The cert chain is a perf cache, not load-bearing
+                        // identity. A corrupt blob (truncated row, format
+                        // change between versions) must NOT block startup —
+                        // log it and degrade to None so the next connect
+                        // simply pays one XX handshake to repopulate.
+                        match bincode::serde::decode_from_slice(
+                            bytes,
+                            bincode::config::standard(),
+                        ) {
+                            Ok((chain, _)) => Some(chain),
+                            Err(e) => {
+                                log::warn!(
+                                    "device {} server_cert_chain blob ({} bytes) failed to decode: {e}; \
+                                     dropping cache, next connect will use XX",
+                                    self.device_id,
+                                    bytes.len(),
+                                );
+                                None
+                            }
+                        }
+                    }),
             }))
         } else {
             Ok(None)
@@ -2883,6 +2899,102 @@ mod tests {
         assert!(
             loaded.is_some(),
             "device data should be loadable by configured id"
+        );
+    }
+
+    /// Round-trips a `CachedServerCertChain` through the SQLite schema:
+    /// save → close store → reopen on the same db_name → load. Exercises
+    /// the `2026-04-26-000000_add_server_cert_chain` migration plus the
+    /// bincode encode/decode path in `save_device_data_for_device` /
+    /// `load_device_data_for_device` (the part that the in-memory backend
+    /// integration tests don't reach).
+    #[tokio::test]
+    async fn test_server_cert_chain_survives_save_load_roundtrip() {
+        use portable_atomic::AtomicU64;
+        use std::sync::atomic::Ordering;
+        use wacore::store::device::{CachedNoiseCert, CachedServerCertChain};
+
+        static COUNTER: AtomicU64 = AtomicU64::new(200);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        // shared-cache so a second SqliteStore opened on the same name
+        // sees the same on-disk state — the closest we can get to a real
+        // process restart inside a single test run.
+        let db_name = format!(
+            "file:memdb_certchain_{}_{}?mode=memory&cache=shared",
+            std::process::id(),
+            id
+        );
+
+        let device_id = 7;
+        let chain = CachedServerCertChain {
+            intermediate: CachedNoiseCert {
+                key: [0xAB; 32],
+                not_before: 1_700_000_000,
+                not_after: 1_900_000_000,
+            },
+            leaf: CachedNoiseCert {
+                key: [0xCD; 32],
+                not_before: 1_700_000_500,
+                not_after: 1_899_999_500,
+            },
+        };
+
+        // First store: create + populate. Keep it alive until after the
+        // second store opens — `cache=shared` only persists the in-memory
+        // database while at least one connection is open. Dropping the
+        // first store would also drop the schema before the second can
+        // see it.
+        let _writer = SqliteStore::new_for_device(&db_name, device_id)
+            .await
+            .expect("create store");
+        _writer.create_new_device().await.expect("create device");
+
+        let mut device = _writer
+            .load_device_data_for_device(device_id)
+            .await
+            .expect("load")
+            .expect("device should exist after create");
+        device.server_cert_chain = Some(chain.clone());
+        _writer
+            .save_device_data_for_device(device_id, &device)
+            .await
+            .expect("save with cert chain");
+
+        // Second store on the SAME shared-cache db: this exercises the
+        // exact path a fresh-process load would take — schema migration
+        // already applied, BLOB column present, and the bincode-encoded
+        // chain decoded by the load path.
+        let store = SqliteStore::new_for_device(&db_name, device_id)
+            .await
+            .expect("reopen store");
+        let loaded = store
+            .load_device_data_for_device(device_id)
+            .await
+            .expect("load")
+            .expect("device should exist after reopen");
+        assert_eq!(
+            loaded.server_cert_chain.as_ref(),
+            Some(&chain),
+            "server_cert_chain must survive a save/load roundtrip"
+        );
+
+        // Sanity: clearing the chain and saving leaves the column as NULL,
+        // not as an empty serialized struct.
+        let mut device = loaded;
+        device.server_cert_chain = None;
+        store
+            .save_device_data_for_device(device_id, &device)
+            .await
+            .expect("save with cleared cert chain");
+
+        let reloaded = store
+            .load_device_data_for_device(device_id)
+            .await
+            .expect("reload")
+            .expect("device should exist");
+        assert!(
+            reloaded.server_cert_chain.is_none(),
+            "cleared chain must round-trip as None"
         );
     }
 }
