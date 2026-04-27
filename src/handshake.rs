@@ -187,6 +187,10 @@ pub async fn do_handshake(
         now_secs,
     );
 
+    // Tracks whether `run_ik_handshake` pivoted to XXfallback before any
+    // failure surfaced. Read by the post-failure invalidation gate below.
+    let mut fallback_taken = false;
+
     let result = match pattern {
         HandshakePattern::Xx => {
             debug!("[socket] doFullHandshake: openChatSocket send hello");
@@ -206,6 +210,7 @@ pub async fn do_handshake(
                 server_static_pub,
                 transport.clone(),
                 transport_events,
+                &mut fallback_taken,
             )
             .await
         }
@@ -229,10 +234,19 @@ pub async fn do_handshake(
             )))
         }
         Err(e) => {
-            // Only IK paths can produce a crypto-fatal error here that means
-            // "the cached server static is bad". XX never reads the cache,
-            // so an XX failure does not need to invalidate.
-            if matches!(pattern, HandshakePattern::Ik(_)) && e.is_crypto_fatal() {
+            // Cache invalidation is gated on THREE conditions:
+            //   1. We picked IK (XX never reads the cache)
+            //   2. The crypto-fatal classification fires (i.e. the failure
+            //      mode points at a stale or poisoned static)
+            //   3. We did NOT pivot to XXfallback before the failure. Once
+            //      the server replies with `static.is_some()`, IK proper has
+            //      been processed by the server (and the IK cache implication
+            //      is moot — the server is asking for re-derivation via
+            //      fallback). Failures past that point are XXfallback / wire
+            //      problems, not stale-cache symptoms, so neither the counter
+            //      nor the on-disk cache should be touched.
+            if matches!(pattern, HandshakePattern::Ik(_)) && !fallback_taken && e.is_crypto_fatal()
+            {
                 warn!(
                     "[socket] resumeNoiseHandshake failed crypto-fatally; \
                      clearing cached server cert chain and forcing XX next connect: {e}"
@@ -282,12 +296,17 @@ async fn run_xx_handshake(
     })
 }
 
+/// `fallback_taken` is set to `true` the moment we pivot from IK to
+/// XXfallback. The caller uses this to skip cache invalidation for failures
+/// that happen after the server has already accepted (and effectively
+/// responded to) the IK ClientHello.
 async fn run_ik_handshake(
     runtime: &Arc<dyn Runtime>,
     device: &wacore::store::Device,
     server_static_pub: [u8; 32],
     transport: Arc<dyn Transport>,
     transport_events: &mut async_channel::Receiver<TransportEvent>,
+    fallback_taken: &mut bool,
 ) -> Result<HandshakeSuccess> {
     let client_payload = device.get_client_payload().encode_to_vec();
     let mut ik = IkHandshakeState::new(
@@ -316,6 +335,11 @@ async fn run_ik_handshake(
             })
         }
         IkServerHelloOutcome::Fallback(inputs) => {
+            // Mark the pivot before any operation that could fail, so a
+            // partial XXfallback (e.g. malformed XXfallback ServerHello,
+            // transport error mid-finish) does not look like a stale-cache
+            // signal to the orchestrator.
+            *fallback_taken = true;
             warn!(
                 "[socket] resumeNoiseHandshake failed: serverStaticCiphertext not null — \
                  doFallbackHandshake continuing handshake with given server hello"

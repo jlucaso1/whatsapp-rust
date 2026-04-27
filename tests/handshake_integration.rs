@@ -111,12 +111,10 @@ fn new_transport_pair() -> (
     async_channel::Sender<TransportEvent>,
     async_channel::Receiver<TransportEvent>,
 ) {
-    let sent = Arc::new(StdMutex::new(Vec::new()));
     let transport = Arc::new(CaptureTransport {
-        sent: Arc::clone(&sent),
+        sent: Arc::new(StdMutex::new(Vec::new())),
     });
     let (events_tx, events_rx) = async_channel::unbounded::<TransportEvent>();
-    let _ = sent; // used via transport.sent
     (transport, events_tx, events_rx)
 }
 
@@ -392,6 +390,127 @@ async fn cold_start_xx_then_cached_ik_reconnect() {
         "IK ClientHello carries client static"
     );
     assert!(ch.payload.is_some(), "IK ClientHello carries 0-RTT payload");
+}
+
+/// IK→fallback responder that intentionally corrupts the XXfallback
+/// ServerHello body so the initiator fails AFTER pivoting to XXfallback.
+///
+/// Concretely: reads the IK ClientHello to harvest `client_eph_pub`,
+/// generates a server ephemeral, then sends a ServerHello whose `static`
+/// and `payload` are random bytes (not produced by a real responder
+/// transcript). The XXfallback initiator authenticates the prologue +
+/// ephemerals, derives `ee`, and then tries to AEAD-decrypt the static
+/// — which must fail with a `NoiseError::Decrypt` (crypto-fatal).
+///
+/// `static.is_some()` in the response is what triggers the pivot, so the
+/// orchestrator sees `fallback_taken = true` by the time the AEAD failure
+/// surfaces. Used to assert that post-pivot failures don't poison the
+/// IK cache.
+async fn ik_serve_fallback_with_corrupt_payloads(
+    transport: &Arc<CaptureTransport>,
+    events_tx: &async_channel::Sender<TransportEvent>,
+) {
+    wait_for_send(transport, 1).await;
+
+    let server_eph = KeyPair::generate(&mut rand::rng());
+    let server_eph_pub: [u8; 32] = server_eph.public_key.public_key_bytes().try_into().unwrap();
+
+    let server_hello = wa::HandshakeMessage {
+        server_hello: Some(wa::handshake_message::ServerHello {
+            ephemeral: Some(server_eph_pub.to_vec()),
+            // `static.is_some()` triggers the IK→XXfallback pivot in the
+            // initiator. The actual bytes are garbage so XXfallback's
+            // AEAD on `server_static` will fail.
+            r#static: Some(vec![0xCC; 32 + 16]),
+            payload: Some(vec![0xDE; 64]),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let mut sh_bytes = Vec::new();
+    server_hello.encode(&mut sh_bytes).unwrap();
+    let framed = wacore::framing::encode_frame(&sh_bytes, None).unwrap();
+    events_tx
+        .send(TransportEvent::DataReceived(framed.into()))
+        .await
+        .unwrap();
+}
+
+/// Regression: when the IK handshake pivots to XXfallback and the
+/// fallback path itself fails crypto-fatally, the orchestrator must NOT
+/// invalidate the cached server cert chain or bump
+/// `ik_handshake_failures`. Once the server has signaled fallback by
+/// replying with `static.is_some()`, the IK ClientHello has been
+/// processed — subsequent failures are XXfallback / wire issues, not
+/// stale-cache symptoms.
+///
+/// Mirrors the layered-cause test from CodeRabbit's review feedback.
+#[tokio::test]
+async fn post_xxfallback_failure_does_not_invalidate_ik_cache() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let pm = paired_pm().await;
+    let counter = Arc::new(AtomicU32::new(0));
+
+    // Pre-seed a valid-looking chain with a sentinel `not_after` so we can
+    // distinguish "untouched" from "cleared and rewritten by some path".
+    const SENTINEL_NOT_AFTER: i64 = 1_899_999_999;
+    use wacore::store::{CachedNoiseCert, CachedServerCertChain, DeviceCommand};
+    pm.process_command(DeviceCommand::SetServerCertChain(CachedServerCertChain {
+        intermediate: CachedNoiseCert {
+            key: [0xCC; 32],
+            not_before: 1_700_000_000,
+            not_after: SENTINEL_NOT_AFTER,
+        },
+        leaf: CachedNoiseCert {
+            key: [0xAA; 32],
+            not_before: 1_700_000_500,
+            not_after: SENTINEL_NOT_AFTER,
+        },
+    }))
+    .await;
+
+    let (transport, events_tx, mut events_rx) = new_transport_pair();
+    let transport_clone = transport.clone();
+    let task = tokio::spawn(async move {
+        ik_serve_fallback_with_corrupt_payloads(&transport_clone, &events_tx).await;
+    });
+
+    let result = do_handshake(
+        runtime(),
+        pm.as_ref(),
+        counter.as_ref(),
+        transport.clone(),
+        &mut events_rx,
+    )
+    .await;
+    task.await.unwrap();
+
+    assert!(
+        result.is_err(),
+        "post-pivot AEAD failure must surface as Err"
+    );
+    let err = result.err().unwrap();
+    assert!(
+        err.is_crypto_fatal(),
+        "AEAD decrypt failure on XXfallback ServerHello must classify as crypto-fatal: {err:?}"
+    );
+
+    // Cache must be untouched: the failure happened post-pivot, so the
+    // orchestrator's invalidation gate must have skipped both the clear
+    // and the counter increment.
+    let device = pm.get_device_snapshot().await;
+    let chain = device
+        .server_cert_chain
+        .as_ref()
+        .expect("post-fallback failure must NOT clear the cached chain");
+    assert_eq!(chain.leaf.not_after, SENTINEL_NOT_AFTER);
+    assert_eq!(chain.intermediate.not_after, SENTINEL_NOT_AFTER);
+    assert_eq!(
+        counter.load(std::sync::atomic::Ordering::Acquire),
+        0,
+        "post-fallback failure must NOT increment ik_handshake_failures"
+    );
 }
 
 /// Regression: the IK Continue branch in `do_handshake` must NOT issue a
