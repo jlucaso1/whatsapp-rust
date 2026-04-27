@@ -25,7 +25,11 @@ pub enum BlocklistAction {
 }
 /// Request node for updating blocklist.
 ///
-/// Wire format: `<item action="block|unblock" jid="...@s.whatsapp.net"/>`
+/// Modern WA exige `jid` em formato **LID** e, ao bloquear, `pn_jid`
+/// adicional com o PN do contato. Sem `pn_jid` o servidor responde
+/// `code=400 bad-request` (verificado contra Baileys e WA Web 2026-04).
+///
+/// Wire format: `<item action="block" jid="...@lid" pn_jid="...@s.whatsapp.net"/>`
 #[derive(Debug, Clone, crate::ProtocolNode)]
 #[protocol(tag = "item")]
 pub struct BlocklistItemRequest {
@@ -33,6 +37,8 @@ pub struct BlocklistItemRequest {
     pub jid: Jid,
     #[attr(name = "action", string_enum)]
     pub action: BlocklistAction,
+    #[attr(name = "pn_jid", jid, optional)]
+    pub pn_jid: Option<Jid>,
 }
 
 impl BlocklistItemRequest {
@@ -40,6 +46,7 @@ impl BlocklistItemRequest {
         Self {
             jid: jid.clone(),
             action,
+            pn_jid: None,
         }
     }
 
@@ -49,6 +56,15 @@ impl BlocklistItemRequest {
 
     pub fn unblock(jid: &Jid) -> Self {
         Self::new(jid, BlocklistAction::Unblock)
+    }
+
+    /// Block usando `lid` e `pn_jid` explícitos (formato moderno do WA).
+    pub fn block_with_pn(lid: &Jid, pn_jid: &Jid) -> Self {
+        Self {
+            jid: lid.clone(),
+            action: BlocklistAction::Block,
+            pn_jid: Some(pn_jid.clone()),
+        }
     }
 }
 /// A single blocklist entry from the response.
@@ -154,6 +170,13 @@ impl UpdateBlocklistSpec {
     pub fn unblock(jid: &Jid) -> Self {
         Self {
             request: BlocklistItemRequest::unblock(jid),
+        }
+    }
+
+    /// Block com `lid` + `pn_jid` (formato moderno exigido por WA 2026+).
+    pub fn block_with_pn(lid: &Jid, pn_jid: &Jid) -> Self {
+        Self {
+            request: BlocklistItemRequest::block_with_pn(lid, pn_jid),
         }
     }
 }
@@ -282,5 +305,37 @@ mod tests {
 
         let unblock_spec = UpdateBlocklistSpec::unblock(&jid);
         assert_eq!(unblock_spec.request.action, BlocklistAction::Unblock);
+    }
+
+    #[test]
+    fn test_block_with_pn_emits_pn_jid_attr() {
+        let lid: Jid = "12345678901234@lid".parse().unwrap();
+        let pn: Jid = "5511999999999@s.whatsapp.net".parse().unwrap();
+        let request = BlocklistItemRequest::block_with_pn(&lid, &pn);
+        let node = request.into_node();
+
+        assert_eq!(node.tag, "item");
+        assert!(node.attrs.get("action").is_some_and(|v| v == "block"));
+        assert!(
+            node.attrs
+                .get("jid")
+                .is_some_and(|v| v == "12345678901234@lid")
+        );
+        assert!(
+            node.attrs
+                .get("pn_jid")
+                .is_some_and(|v| v == "5511999999999@s.whatsapp.net")
+        );
+    }
+
+    #[test]
+    fn test_unblock_omits_pn_jid_attr() {
+        let lid: Jid = "12345678901234@lid".parse().unwrap();
+        let request = BlocklistItemRequest::unblock(&lid);
+        let node = request.into_node();
+
+        assert_eq!(node.tag, "item");
+        assert!(node.attrs.get("action").is_some_and(|v| v == "unblock"));
+        assert!(node.attrs.get("pn_jid").is_none());
     }
 }
