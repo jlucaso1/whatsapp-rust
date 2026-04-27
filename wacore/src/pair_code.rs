@@ -81,9 +81,6 @@ fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], rounds: u32, output: &mut [u
 /// Validity duration for pair codes (approximately).
 const PAIR_CODE_VALIDITY_SECS: u64 = 180;
 
-/// Pairs `id` with the display string built from `props.os`. Single
-/// source of truth for the os→display step shared by [`derive_companion_platform`]
-/// and [`resolve_companion_platform`].
 fn build_id_and_display(
     id: CompanionWebClientType,
     props: &wa::DeviceProps,
@@ -674,10 +671,6 @@ mod tests {
         assert_eq!(display, "Edge (Windows)");
     }
 
-    /// Android `PlatformType` values map to `Chrome` (`'1'`) — what real
-    /// WA Web on Chrome-Android emits. The Android letters `'e'`/`'d'`/`'f'`
-    /// require explicit opt-in via `PairCodeOptions::platform_id` because
-    /// the server validates them against Android-side attestation.
     #[test]
     fn derive_android_platform_types_map_to_chrome() {
         use wa::device_props::PlatformType as P;
@@ -715,9 +708,6 @@ mod tests {
         );
     }
 
-    /// Missing/invalid props collapse to `OtherWebClient` (`'9'`), the
-    /// catch-all WA Web emits when `info().name` doesn't match a known
-    /// browser.
     #[test]
     fn derive_unknown_proto_yields_other_web_client_id_and_chrome_display() {
         let p = props(None, None);
@@ -730,8 +720,6 @@ mod tests {
         );
     }
 
-    /// Every proto variant produces a server-acceptable wire byte (`'1'..'9'`)
-    /// and a `<Browser> (<OS>)` display with a known browser label.
     #[test]
     fn derive_display_uses_known_label_for_every_proto_variant() {
         use wa::device_props::PlatformType as P;
@@ -1040,10 +1028,6 @@ mod tests {
         assert_eq!(child_bytes(reg, "link_code_pairing_nonce"), b"0");
     }
 
-    /// `build_companion_hello_iq` is byte-passthrough for the platform
-    /// id/display strings. Pins the explicit Android-letter shape so a
-    /// caller that opts in via `PairCodeOptions::platform_id =
-    /// Some(AndroidPhone)` still gets the right wire bytes.
     #[test]
     fn companion_hello_iq_passes_through_explicit_android_letter() {
         let iq = build_iq("e", "Android (16)");
@@ -1071,10 +1055,6 @@ mod tests {
         );
     }
 
-    /// E2E regression: mobile DeviceProps + default options must emit a
-    /// server-accepted `companion_hello`. Android* derives to Chrome
-    /// (`'1'`) + `"Chrome (Android)"`, matching real WA Web on
-    /// Chrome-Android.
     #[test]
     fn android_device_props_emit_server_accepted_companion_hello() {
         let props = wa::DeviceProps {

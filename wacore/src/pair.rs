@@ -553,8 +553,6 @@ mod tests {
             (wa::device_props::PlatformType::Edge, "2"),
             (wa::device_props::PlatformType::Desktop, "7"),
             (wa::device_props::PlatformType::Uwp, "8"),
-            // Android* maps to Chrome ('1') — what real WA Web on
-            // Chrome-Android emits and what the server accepts.
             (wa::device_props::PlatformType::AndroidPhone, "1"),
             (wa::device_props::PlatformType::AndroidTablet, "1"),
             (wa::device_props::PlatformType::AndroidAmbiguous, "1"),
@@ -575,7 +573,6 @@ mod tests {
         }
     }
 
-    /// Bare `DeviceProps` produces 5-field QR with trailing "9" (catch-all).
     #[test]
     fn auto_derive_default_device_props_yields_other_web_client_nine() {
         use crate::companion_reg::companion_web_client_type_for_props;

@@ -1,6 +1,5 @@
-//! `companion_platform_id` + `companion_platform_display` emission for
-//! pair-code and QR linking. Encoding only — the wire field is never
-//! parsed back into this enum.
+//! `companion_platform_id` + `companion_platform_display` emission.
+//! Encoding only.
 
 use waproto::whatsapp as wa;
 
@@ -8,10 +7,9 @@ use waproto::whatsapp as wa;
 /// Concatenate with `make_qr_data` output to get a scannable deep-link URL.
 pub const NATIVE_CAMERA_DEEP_LINK_PREFIX: &str = "https://wa.me/settings/linked_devices#";
 
-/// Each variant has a fixed single-byte ASCII wire form. Web codes follow
-/// `WAWebCompanionRegClientUtils.DEVICE_PLATFORM`; the Android letters
-/// come from the official Android client and require server-side
-/// attestation, so they are reachable only through explicit opt-in.
+/// Web codes follow `WAWebCompanionRegClientUtils.DEVICE_PLATFORM`.
+/// Android letters need server-side attestation, so they're reachable
+/// only through explicit opt-in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum CompanionWebClientType {
     Chrome,
@@ -22,11 +20,9 @@ pub enum CompanionWebClientType {
     Safari,
     Electron,
     Uwp,
-    /// Catch-all WA Web emits when the browser detection returns a name
-    /// that doesn't match any known cohort. Also the safe default for
-    /// platforms with no confirmed wire byte. The proto's `UNKNOWN`
-    /// (`'0'`) is intentionally not represented: real browsers never
-    /// emit it and the server rejects it.
+    /// Default fallback. The proto's `UNKNOWN` (wire `'0'`) is absent
+    /// because WA Web never emits it from a real browser and the server
+    /// rejects it.
     #[default]
     OtherWebClient,
     AndroidTablet,
@@ -81,19 +77,12 @@ pub const fn companion_browser_name(ct: CompanionWebClientType) -> &'static str 
     }
 }
 
-/// Maps `DeviceProps::PlatformType` to a wire variant.
-///
-/// Android variants map to `Chrome`: that's what real WA Web on
-/// Chrome-Android emits (`info().name === "Chrome"`) and what the server
-/// accepts without attestation. The Android letters `'e'`/`'d'`/`'f'`
-/// stay reachable through explicit opt-in via `PairCodeOptions::platform_id`
-/// but require Android-side signing material the server validates.
-///
-/// Platforms without a confirmed wire byte (iOS, AR/VR, etc.) and the
-/// proto's `UNKNOWN` collapse to `OtherWebClient` (`'9'`). `'0'` is
-/// deliberately unreachable: WA Web only emits it when `info().name` is
-/// null, which doesn't happen in a real browser, and the server rejects
-/// it from any non-WA-Web client.
+/// Android maps to `Chrome` because that's what real WA Web on
+/// Chrome-Android emits and what the server accepts; the Android
+/// letters need attestation we can't fake from this crate, so they
+/// stay behind `PairCodeOptions::platform_id`. iOS/AR/VR and the
+/// proto's `UNKNOWN` collapse to `OtherWebClient` — `'0'` would be
+/// server-rejected.
 pub const fn companion_web_client_type_for_platform(
     pt: wa::device_props::PlatformType,
 ) -> CompanionWebClientType {
@@ -215,9 +204,6 @@ mod tests {
         }
     }
 
-    /// Android values map to `Chrome` (`'1'`) — what real WA Web on
-    /// Chrome-Android emits and what the server accepts. The Android
-    /// letters stay opt-in only.
     #[test]
     fn android_platform_types_map_to_chrome() {
         use CompanionWebClientType as C;
@@ -258,8 +244,6 @@ mod tests {
         }
     }
 
-    /// `P::Unknown` collapses to `OtherWebClient` — the server rejects
-    /// `'0'` from any non-WA-Web client.
     #[test]
     fn proto_unknown_collapses_to_other_web_client() {
         use CompanionWebClientType as C;
@@ -270,7 +254,6 @@ mod tests {
         );
     }
 
-    /// Explicit opt-in via the enum still renders the right wire byte.
     #[test]
     fn android_variants_still_emit_their_wire_bytes_when_used_directly() {
         assert_eq!(CompanionWebClientType::AndroidPhone.wire_byte(), b'e');
