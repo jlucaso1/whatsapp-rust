@@ -1,11 +1,5 @@
-//! `companion_platform_id` and `companion_platform_display` emission.
-//!
-//! Server accepts 23 single-byte ids: digits `0..9` (WA Web) and letters
-//! `a..m`. Only the 13 with a confirmed platform meaning are exposed.
-//! Sources: WA Web `WAWebCompanionRegClientUtils` for the digits; the
-//! official WhatsApp Android client for the mobile letters `d`, `e`,
-//! `f`. Adding the rest without binary or wire confirmation risks
-//! mislabelling the device on the primary side.
+//! `companion_platform_id` + `companion_platform_display` emission.
+//! Encoding only.
 
 use waproto::whatsapp as wa;
 
@@ -13,14 +7,11 @@ use waproto::whatsapp as wa;
 /// Concatenate with `make_qr_data` output to get a scannable deep-link URL.
 pub const NATIVE_CAMERA_DEEP_LINK_PREFIX: &str = "https://wa.me/settings/linked_devices#";
 
-/// Encode-only: every variant has a fixed single-byte ASCII wire form.
-/// Decoding from the wire is not modelled because this crate only emits
-/// the field, never receives it.
+/// Web codes follow `WAWebCompanionRegClientUtils.DEVICE_PLATFORM`.
+/// Android letters need server-side attestation, so they're reachable
+/// only through explicit opt-in.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum CompanionWebClientType {
-    // Web (digit codes from WAWebCompanionRegClientUtils.DEVICE_PLATFORM).
-    #[default]
-    Unknown,
     Chrome,
     Edge,
     Firefox,
@@ -29,8 +20,11 @@ pub enum CompanionWebClientType {
     Safari,
     Electron,
     Uwp,
+    /// Default fallback. The proto's `UNKNOWN` (wire `'0'`) is absent
+    /// because WA Web never emits it from a real browser and the server
+    /// rejects it.
+    #[default]
     OtherWebClient,
-    // Mobile (letter codes from the official WhatsApp Android client).
     AndroidTablet,
     AndroidPhone,
     AndroidAmbiguous,
@@ -40,7 +34,6 @@ impl CompanionWebClientType {
     /// Single-byte ASCII id placed in `<companion_platform_id>`.
     pub const fn wire_byte(self) -> u8 {
         match self {
-            Self::Unknown => b'0',
             Self::Chrome => b'1',
             Self::Edge => b'2',
             Self::Firefox => b'3',
@@ -75,8 +68,7 @@ pub const fn companion_browser_name(ct: CompanionWebClientType) -> &'static str 
         CompanionWebClientType::Ie => "IE",
         CompanionWebClientType::Opera => "Opera",
         CompanionWebClientType::Safari => "Safari",
-        CompanionWebClientType::Unknown
-        | CompanionWebClientType::Electron
+        CompanionWebClientType::Electron
         | CompanionWebClientType::Uwp
         | CompanionWebClientType::OtherWebClient
         | CompanionWebClientType::AndroidTablet
@@ -85,16 +77,18 @@ pub const fn companion_browser_name(ct: CompanionWebClientType) -> &'static str 
     }
 }
 
-/// Maps `DeviceProps::PlatformType` to a wire variant. Variants without
-/// a confirmed letter fall back to `OtherWebClient` ('9'), which the
-/// server still accepts.
+/// Android maps to `Chrome` because that's what real WA Web on
+/// Chrome-Android emits and what the server accepts; the Android
+/// letters need attestation we can't fake from this crate, so they
+/// stay behind `PairCodeOptions::platform_id`. iOS/AR/VR and the
+/// proto's `UNKNOWN` collapse to `OtherWebClient` — `'0'` would be
+/// server-rejected.
 pub const fn companion_web_client_type_for_platform(
     pt: wa::device_props::PlatformType,
 ) -> CompanionWebClientType {
     use CompanionWebClientType as C;
     use wa::device_props::PlatformType as P;
     match pt {
-        P::Unknown => C::Unknown,
         P::Chrome => C::Chrome,
         P::Firefox => C::Firefox,
         P::Ie => C::Ie,
@@ -103,10 +97,9 @@ pub const fn companion_web_client_type_for_platform(
         P::Edge => C::Edge,
         P::Desktop => C::Electron,
         P::Uwp => C::Uwp,
-        P::AndroidPhone => C::AndroidPhone,
-        P::AndroidTablet => C::AndroidTablet,
-        P::AndroidAmbiguous => C::AndroidAmbiguous,
-        P::Ipad
+        P::AndroidPhone | P::AndroidTablet | P::AndroidAmbiguous => C::Chrome,
+        P::Unknown
+        | P::Ipad
         | P::Ohana
         | P::Aloha
         | P::Catalina
@@ -127,7 +120,7 @@ pub fn companion_web_client_type_for_props(props: &wa::DeviceProps) -> Companion
         .platform_type
         .and_then(|v| wa::device_props::PlatformType::try_from(v).ok())
         .map(companion_web_client_type_for_platform)
-        .unwrap_or_default()
+        .unwrap_or(CompanionWebClientType::OtherWebClient)
 }
 
 /// `companion_platform_display` body. Server validates only length
@@ -153,7 +146,6 @@ mod tests {
 
     #[test]
     fn wire_byte_matches_wa_web() {
-        assert_eq!(CompanionWebClientType::Unknown.wire_byte(), b'0');
         assert_eq!(CompanionWebClientType::Chrome.wire_byte(), b'1');
         assert_eq!(CompanionWebClientType::Edge.wire_byte(), b'2');
         assert_eq!(CompanionWebClientType::Firefox.wire_byte(), b'3');
@@ -174,7 +166,6 @@ mod tests {
 
     #[test]
     fn display_renders_wire_byte_as_char() {
-        assert_eq!(format!("{}", CompanionWebClientType::Unknown), "0");
         assert_eq!(format!("{}", CompanionWebClientType::Chrome), "1");
         assert_eq!(format!("{}", CompanionWebClientType::OtherWebClient), "9");
         assert_eq!(format!("{}", CompanionWebClientType::AndroidPhone), "e");
@@ -183,65 +174,53 @@ mod tests {
     }
 
     #[test]
-    fn default_is_unknown_zero() {
+    fn default_is_other_web_client_nine() {
         assert_eq!(
             CompanionWebClientType::default(),
-            CompanionWebClientType::Unknown,
+            CompanionWebClientType::OtherWebClient,
         );
-        assert_eq!(CompanionWebClientType::default().wire_byte(), b'0');
+        assert_eq!(CompanionWebClientType::default().wire_byte(), b'9');
     }
 
     #[test]
-    fn browser_platform_types_round_trip() {
+    fn browser_and_desktop_platform_types_map_to_their_variants() {
         use CompanionWebClientType as C;
         use wa::device_props::PlatformType as P;
-        assert_eq!(companion_web_client_type_for_platform(P::Chrome), C::Chrome);
-        assert_eq!(
-            companion_web_client_type_for_platform(P::Firefox),
-            C::Firefox
-        );
-        assert_eq!(companion_web_client_type_for_platform(P::Edge), C::Edge);
-        assert_eq!(companion_web_client_type_for_platform(P::Safari), C::Safari);
-        assert_eq!(companion_web_client_type_for_platform(P::Opera), C::Opera);
-        assert_eq!(companion_web_client_type_for_platform(P::Ie), C::Ie);
+        for (pt, expected) in [
+            (P::Chrome, C::Chrome),
+            (P::Firefox, C::Firefox),
+            (P::Edge, C::Edge),
+            (P::Safari, C::Safari),
+            (P::Opera, C::Opera),
+            (P::Ie, C::Ie),
+            (P::Desktop, C::Electron),
+            (P::Uwp, C::Uwp),
+        ] {
+            assert_eq!(
+                companion_web_client_type_for_platform(pt),
+                expected,
+                "{pt:?}"
+            );
+        }
     }
 
     #[test]
-    fn desktop_maps_to_electron_and_uwp_preserved() {
+    fn android_platform_types_map_to_chrome() {
         use CompanionWebClientType as C;
         use wa::device_props::PlatformType as P;
-        assert_eq!(
-            companion_web_client_type_for_platform(P::Desktop),
-            C::Electron
-        );
-        assert_eq!(companion_web_client_type_for_platform(P::Uwp), C::Uwp);
-    }
-
-    #[test]
-    fn android_platform_types_map_to_dedicated_letters() {
-        use CompanionWebClientType as C;
-        use wa::device_props::PlatformType as P;
-        assert_eq!(
-            companion_web_client_type_for_platform(P::AndroidPhone),
-            C::AndroidPhone,
-        );
-        assert_eq!(
-            companion_web_client_type_for_platform(P::AndroidTablet),
-            C::AndroidTablet,
-        );
-        assert_eq!(
-            companion_web_client_type_for_platform(P::AndroidAmbiguous),
-            C::AndroidAmbiguous,
-        );
+        for pt in [P::AndroidPhone, P::AndroidTablet, P::AndroidAmbiguous] {
+            assert_eq!(
+                companion_web_client_type_for_platform(pt),
+                C::Chrome,
+                "{pt:?}"
+            );
+        }
     }
 
     #[test]
     fn unconfirmed_platform_types_collapse_to_other() {
         use CompanionWebClientType as C;
         use wa::device_props::PlatformType as P;
-        // No confirmed letter for these yet (would need iOS/Mac/Quest RE
-        // or live capture). Fallback to OtherWebClient ('9') stays
-        // server-valid.
         for pt in [
             P::Ipad,
             P::IosPhone,
@@ -260,9 +239,26 @@ mod tests {
             assert_eq!(
                 companion_web_client_type_for_platform(pt),
                 C::OtherWebClient,
-                "{pt:?} must fall back to OtherWebClient",
+                "{pt:?}",
             );
         }
+    }
+
+    #[test]
+    fn proto_unknown_collapses_to_other_web_client() {
+        use CompanionWebClientType as C;
+        use wa::device_props::PlatformType as P;
+        assert_eq!(
+            companion_web_client_type_for_platform(P::Unknown),
+            C::OtherWebClient,
+        );
+    }
+
+    #[test]
+    fn android_variants_still_emit_their_wire_bytes_when_used_directly() {
+        assert_eq!(CompanionWebClientType::AndroidPhone.wire_byte(), b'e');
+        assert_eq!(CompanionWebClientType::AndroidTablet.wire_byte(), b'd');
+        assert_eq!(CompanionWebClientType::AndroidAmbiguous.wire_byte(), b'f');
     }
 
     #[test]
@@ -278,52 +274,44 @@ mod tests {
     }
 
     #[test]
-    fn for_props_missing_platform_type_is_unknown() {
+    fn for_props_missing_platform_type_is_other_web_client() {
         let props = wa::DeviceProps::default();
         assert_eq!(
             companion_web_client_type_for_props(&props),
-            CompanionWebClientType::Unknown,
+            CompanionWebClientType::OtherWebClient,
         );
     }
 
     #[test]
-    fn for_props_invalid_platform_type_is_unknown() {
+    fn for_props_invalid_platform_type_is_other_web_client() {
         let props = wa::DeviceProps {
             platform_type: Some(9999),
             ..Default::default()
         };
         assert_eq!(
             companion_web_client_type_for_props(&props),
-            CompanionWebClientType::Unknown,
+            CompanionWebClientType::OtherWebClient,
         );
     }
 
     #[test]
     fn browser_name_for_six_valid_browsers() {
-        assert_eq!(
-            companion_browser_name(CompanionWebClientType::Chrome),
-            "Chrome"
-        );
-        assert_eq!(companion_browser_name(CompanionWebClientType::Edge), "Edge");
-        assert_eq!(
-            companion_browser_name(CompanionWebClientType::Firefox),
-            "Firefox"
-        );
-        assert_eq!(companion_browser_name(CompanionWebClientType::Ie), "IE");
-        assert_eq!(
-            companion_browser_name(CompanionWebClientType::Opera),
-            "Opera"
-        );
-        assert_eq!(
-            companion_browser_name(CompanionWebClientType::Safari),
-            "Safari"
-        );
+        use CompanionWebClientType as C;
+        for (ct, name) in [
+            (C::Chrome, "Chrome"),
+            (C::Edge, "Edge"),
+            (C::Firefox, "Firefox"),
+            (C::Ie, "IE"),
+            (C::Opera, "Opera"),
+            (C::Safari, "Safari"),
+        ] {
+            assert_eq!(companion_browser_name(ct), name, "{ct:?}");
+        }
     }
 
     #[test]
     fn browser_name_for_non_browser_falls_back_to_chrome() {
         for ct in [
-            CompanionWebClientType::Unknown,
             CompanionWebClientType::Electron,
             CompanionWebClientType::Uwp,
             CompanionWebClientType::OtherWebClient,

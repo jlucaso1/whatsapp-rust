@@ -81,14 +81,19 @@ fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], rounds: u32, output: &mut [u
 /// Validity duration for pair codes (approximately).
 const PAIR_CODE_VALIDITY_SECS: u64 = 180;
 
+fn build_id_and_display(
+    id: CompanionWebClientType,
+    props: &wa::DeviceProps,
+) -> (CompanionWebClientType, String) {
+    let os = props.os.as_deref().unwrap_or("");
+    (id, companion_platform_display(id, os))
+}
+
 /// `(companion_platform_id, companion_platform_display)` per WA Web's
 /// `Alt/DeviceLinkingIq.js`. Display always Browser-valid (see
 /// `companion_platform_display`).
 pub fn derive_companion_platform(props: &wa::DeviceProps) -> (CompanionWebClientType, String) {
-    let id = companion_web_client_type_for_props(props);
-    let os = props.os.as_deref().unwrap_or("");
-    let display = companion_platform_display(id, os);
-    (id, display)
+    build_id_and_display(companion_web_client_type_for_props(props), props)
 }
 
 /// Honours `PairCodeOptions::platform_id` override; display is always
@@ -100,9 +105,7 @@ pub fn resolve_companion_platform(
     let id = options
         .platform_id
         .unwrap_or_else(|| companion_web_client_type_for_props(props));
-    let os = props.os.as_deref().unwrap_or("");
-    let display = companion_platform_display(id, os);
-    (id, display)
+    build_id_and_display(id, props)
 }
 
 /// Options for pair code authentication.
@@ -669,39 +672,14 @@ mod tests {
     }
 
     #[test]
-    fn derive_android_phone_uses_dedicated_letter_and_android_label() {
-        let p = props(
-            Some("Android"),
-            Some(wa::device_props::PlatformType::AndroidPhone),
-        );
-        let (id, display) = derive_companion_platform(&p);
-        assert_eq!(id, CompanionWebClientType::AndroidPhone);
-        assert_eq!(id.wire_byte(), b'e');
-        assert_eq!(display, "Android (Android)");
-    }
-
-    #[test]
-    fn derive_android_tablet_uses_dedicated_letter() {
-        let p = props(
-            Some("Android"),
-            Some(wa::device_props::PlatformType::AndroidTablet),
-        );
-        let (id, display) = derive_companion_platform(&p);
-        assert_eq!(id, CompanionWebClientType::AndroidTablet);
-        assert_eq!(id.wire_byte(), b'd');
-        assert_eq!(display, "Android (Android)");
-    }
-
-    #[test]
-    fn derive_android_ambiguous_uses_dedicated_letter() {
-        let p = props(
-            Some("Android"),
-            Some(wa::device_props::PlatformType::AndroidAmbiguous),
-        );
-        let (id, display) = derive_companion_platform(&p);
-        assert_eq!(id, CompanionWebClientType::AndroidAmbiguous);
-        assert_eq!(id.wire_byte(), b'f');
-        assert_eq!(display, "Android (Android)");
+    fn derive_android_platform_types_map_to_chrome() {
+        use wa::device_props::PlatformType as P;
+        for pt in [P::AndroidPhone, P::AndroidTablet, P::AndroidAmbiguous] {
+            let (id, display) = derive_companion_platform(&props(Some("Android"), Some(pt)));
+            assert_eq!(id, CompanionWebClientType::Chrome, "{pt:?}");
+            assert_eq!(id.wire_byte(), b'1', "{pt:?}");
+            assert_eq!(display, "Chrome (Android)", "{pt:?}");
+        }
     }
 
     #[test]
@@ -731,20 +709,17 @@ mod tests {
     }
 
     #[test]
-    fn derive_unknown_proto_yields_unknown_id_and_chrome_display() {
+    fn derive_unknown_proto_yields_other_web_client_id_and_chrome_display() {
         let p = props(None, None);
         assert_eq!(
             derive_companion_platform(&p),
             (
-                CompanionWebClientType::Unknown,
+                CompanionWebClientType::OtherWebClient,
                 "Chrome (Linux)".to_string()
             )
         );
     }
 
-    /// Every proto variant produces a wire byte from the server's
-    /// accept-list and a display whose label is one of the known emitter
-    /// cohorts (`Browser` for web, `Android` for Android).
     #[test]
     fn derive_display_uses_known_label_for_every_proto_variant() {
         use wa::device_props::PlatformType as P;
@@ -1054,15 +1029,15 @@ mod tests {
     }
 
     #[test]
-    fn companion_hello_iq_android_wire_strings() {
-        let iq = build_iq("e", "Android (Android)");
+    fn companion_hello_iq_passes_through_explicit_android_letter() {
+        let iq = build_iq("e", "Android (16)");
         let reg = iq
             .get_optional_child_by_tag(&["link_code_companion_reg"])
             .unwrap();
         assert_eq!(child_bytes(reg, "companion_platform_id"), b"e");
         assert_eq!(
             child_bytes(reg, "companion_platform_display"),
-            b"Android (Android)"
+            b"Android (16)"
         );
     }
 
@@ -1080,27 +1055,26 @@ mod tests {
         );
     }
 
-    /// E2E: mobile DeviceProps + default options emit server-valid companion_hello.
     #[test]
-    fn android_device_props_emit_server_valid_companion_hello() {
+    fn android_device_props_emit_server_accepted_companion_hello() {
         let props = wa::DeviceProps {
             os: Some("Android".into()),
             platform_type: Some(wa::device_props::PlatformType::AndroidPhone as i32),
             ..Default::default()
         };
         let (pid, pdisp) = resolve_companion_platform(&PairCodeOptions::default(), &props);
-        assert_eq!(pid, CompanionWebClientType::AndroidPhone);
-        assert_eq!(pid.wire_byte(), b'e');
-        assert_eq!(pdisp, "Android (Android)");
+        assert_eq!(pid, CompanionWebClientType::Chrome);
+        assert_eq!(pid.wire_byte(), b'1');
+        assert_eq!(pdisp, "Chrome (Android)");
 
         let iq = build_iq(&pid.to_string(), &pdisp);
         let reg = iq
             .get_optional_child_by_tag(&["link_code_companion_reg"])
             .unwrap();
-        assert_eq!(child_bytes(reg, "companion_platform_id"), b"e");
+        assert_eq!(child_bytes(reg, "companion_platform_id"), b"1");
         assert_eq!(
             child_bytes(reg, "companion_platform_display"),
-            b"Android (Android)"
+            b"Chrome (Android)"
         );
     }
 
