@@ -39,6 +39,19 @@ pub enum CallAction {
         joinable: bool,
         is_video: bool,
         audio: Vec<CallAudioCodec>,
+        /// Set on group calls. Primary group signal per `WAWebVoipGatingUtils`.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        group_jid: Option<Jid>,
+    },
+    /// Group-call notification fan-out to members. No offer-receipt expected;
+    /// the generic call ack is enough (router handles it via `should_ack`).
+    OfferNotice {
+        call_id: String,
+        call_creator: Jid,
+        /// `media == "video"` per `WAWebHandleVoipOfferNotice`.
+        is_video: bool,
+        /// `type == "group"` per `WAWebHandleVoipOfferNotice`.
+        is_group: bool,
     },
     PreAccept {
         call_id: String,
@@ -66,6 +79,7 @@ impl CallAction {
     pub fn call_id(&self) -> &str {
         match self {
             Self::Offer { call_id, .. }
+            | Self::OfferNotice { call_id, .. }
             | Self::PreAccept { call_id, .. }
             | Self::Accept { call_id, .. }
             | Self::Reject { call_id, .. }
@@ -76,6 +90,7 @@ impl CallAction {
     pub fn call_creator(&self) -> &Jid {
         match self {
             Self::Offer { call_creator, .. }
+            | Self::OfferNotice { call_creator, .. }
             | Self::PreAccept { call_creator, .. }
             | Self::Accept { call_creator, .. }
             | Self::Reject { call_creator, .. }

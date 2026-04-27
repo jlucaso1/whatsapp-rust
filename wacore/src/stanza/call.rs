@@ -8,7 +8,14 @@ use wacore_binary::{Jid, Node, NodeRef};
 use crate::time::from_secs;
 use crate::types::call::{CallAction, CallAudioCodec, IncomingCall};
 
-const KNOWN_ACTIONS: &[&str] = &["offer", "preaccept", "accept", "reject", "terminate"];
+const KNOWN_ACTIONS: &[&str] = &[
+    "offer",
+    "offer_notice",
+    "preaccept",
+    "accept",
+    "reject",
+    "terminate",
+];
 
 pub fn parse_call_stanza(node: &NodeRef<'_>) -> Result<Option<IncomingCall>> {
     if node.tag != "call" {
@@ -97,6 +104,7 @@ fn parse_action(node: &NodeRef<'_>) -> Result<CallAction> {
                 .optional_string("joinable")
                 .map(|s| s == "1")
                 .unwrap_or(false);
+            let group_jid = attrs.optional_jid("group-jid");
 
             attrs.finish().map_err(|e| anyhow!("<offer> attrs: {e}"))?;
 
@@ -117,6 +125,20 @@ fn parse_action(node: &NodeRef<'_>) -> Result<CallAction> {
                 joinable,
                 is_video,
                 audio,
+                group_jid,
+            }
+        }
+        "offer_notice" => {
+            let is_video = attrs.optional_string("media").is_some_and(|s| s == "video");
+            let is_group = attrs.optional_string("type").is_some_and(|s| s == "group");
+            attrs
+                .finish()
+                .map_err(|e| anyhow!("<offer_notice> attrs: {e}"))?;
+            CallAction::OfferNotice {
+                call_id,
+                call_creator,
+                is_video,
+                is_group,
             }
         }
         "preaccept" => CallAction::PreAccept {
@@ -254,6 +276,7 @@ mod tests {
                 joinable,
                 is_video,
                 audio,
+                group_jid,
             } => {
                 assert_eq!(call_id, "CALL-ID-0001");
                 assert_eq!(call_creator, fake_caller_lid());
@@ -266,6 +289,7 @@ mod tests {
                 assert_eq!(audio[0].enc, "opus");
                 assert_eq!(audio[0].rate, 16000);
                 assert_eq!(audio[1].rate, 8000);
+                assert_eq!(group_jid, None);
             }
             other => panic!("expected Offer, got {other:?}"),
         }
@@ -328,6 +352,88 @@ mod tests {
                 assert!(audio.is_empty());
             }
             other => panic!("expected Offer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn offer_with_group_jid() {
+        let group_jid = Jid::new("123456789", Server::Group);
+        let node = base_call_builder()
+            .children([offer_builder_base()
+                .attr("group-jid", group_jid.clone())
+                .children([NodeBuilder::new("audio")
+                    .attr("enc", "opus")
+                    .attr("rate", "16000")
+                    .build()])
+                .build()])
+            .build();
+
+        let call = parse_call_stanza(&as_ref(&node)).unwrap().unwrap();
+        match call.action {
+            CallAction::Offer {
+                group_jid: parsed_group,
+                ..
+            } => {
+                assert_eq!(parsed_group, Some(group_jid));
+            }
+            other => panic!("expected Offer, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn offer_notice_group_audio_call() {
+        let node = NodeBuilder::new("call")
+            .attr("from", fake_caller_lid())
+            .attr("id", "STANZA-ID-GROUP")
+            .attr("t", "1766847151")
+            .children([NodeBuilder::new("offer_notice")
+                .attr("call-creator", fake_caller_lid())
+                .attr("call-id", "GROUP-CALL-ID")
+                .attr("media", "audio")
+                .attr("type", "group")
+                .build()])
+            .build();
+
+        let call = parse_call_stanza(&as_ref(&node)).unwrap().unwrap();
+        match call.action {
+            CallAction::OfferNotice {
+                call_id,
+                call_creator,
+                is_video,
+                is_group,
+            } => {
+                assert_eq!(call_id, "GROUP-CALL-ID");
+                assert_eq!(call_creator, fake_caller_lid());
+                assert!(!is_video);
+                assert!(is_group);
+            }
+            other => panic!("expected OfferNotice, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn offer_notice_video_flag() {
+        let node = NodeBuilder::new("call")
+            .attr("from", fake_caller_lid())
+            .attr("id", "STANZA-ID-GROUP")
+            .attr("t", "1766847151")
+            .children([NodeBuilder::new("offer_notice")
+                .attr("call-creator", fake_caller_lid())
+                .attr("call-id", "GROUP-CALL-ID")
+                .attr("media", "video")
+                .attr("type", "group")
+                .build()])
+            .build();
+
+        let call = parse_call_stanza(&as_ref(&node)).unwrap().unwrap();
+        match call.action {
+            CallAction::OfferNotice {
+                is_video, is_group, ..
+            } => {
+                assert!(is_video);
+                assert!(is_group);
+            }
+            other => panic!("expected OfferNotice, got {other:?}"),
         }
     }
 
