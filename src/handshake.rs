@@ -118,9 +118,11 @@ enum HandshakePattern {
 ///   - the device is registered (paired) — IK without a registered
 ///     identity is rejected by the server and would loop indefinitely
 ///     on transient-classified failures
-///   - we have not failed an IK in this process yet (counter < threshold)
+///   - the in-process IK failure counter has not reached the threshold
+///     (`ik_failures < IK_FAILURE_THRESHOLD`)
 ///   - the device has a cached cert chain
-///   - both leaf and intermediate are still within their validity window
+///   - `now_secs` falls within both the leaf and the intermediate
+///     `[not_before, not_after)` validity windows
 fn select_pattern(
     device: &wacore::store::Device,
     ik_failures: u32,
@@ -138,7 +140,14 @@ fn select_pattern(
     let Some(chain) = device.server_cert_chain.as_ref() else {
         return HandshakePattern::Xx;
     };
-    if now_secs >= chain.leaf.not_after || now_secs >= chain.intermediate.not_after {
+    // `not_before` defends against backwards clock skew (RTC reset, frozen
+    // container clock); `not_after` is the standard expiry check. Both
+    // certs in the chain must overlap `now_secs` for IK to be safe.
+    if now_secs < chain.leaf.not_before
+        || now_secs < chain.intermediate.not_before
+        || now_secs >= chain.leaf.not_after
+        || now_secs >= chain.intermediate.not_after
+    {
         return HandshakePattern::Xx;
     }
     HandshakePattern::Ik(chain.leaf.key)
@@ -452,6 +461,35 @@ mod tests {
     fn select_pattern_with_expired_intermediate_returns_xx() {
         let mut device = paired_device();
         device.server_cert_chain = Some(cached_chain([0xAA; 32], 1_900_000_000, 1_700_000_500));
+        assert_eq!(
+            select_pattern(&device, 0, 1_800_000_000),
+            HandshakePattern::Xx
+        );
+    }
+
+    /// `cached_chain` pins both certs' `not_before` at 1_700_000_000. Pick a
+    /// `now_secs` strictly before that to exercise the backwards-clock-skew
+    /// defense; the gate must reject IK even though `not_after` would
+    /// otherwise be in the future.
+    #[test]
+    fn select_pattern_with_clock_before_leaf_not_before_returns_xx() {
+        let mut device = paired_device();
+        device.server_cert_chain = Some(cached_chain([0xAA; 32], 1_900_000_000, 1_900_000_000));
+        assert_eq!(
+            select_pattern(&device, 0, 1_699_999_999),
+            HandshakePattern::Xx
+        );
+    }
+
+    /// Same defense, but probing the intermediate-only path: leaf is barely
+    /// in-window, intermediate is in the future. The gate rejects on the
+    /// stricter of the two.
+    #[test]
+    fn select_pattern_with_clock_before_intermediate_not_before_returns_xx() {
+        let mut device = paired_device();
+        let mut chain = cached_chain([0xAA; 32], 1_900_000_000, 1_900_000_000);
+        chain.intermediate.not_before = 1_800_000_001;
+        device.server_cert_chain = Some(chain);
         assert_eq!(
             select_pattern(&device, 0, 1_800_000_000),
             HandshakePattern::Xx

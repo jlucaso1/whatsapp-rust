@@ -682,7 +682,7 @@ mod tests {
         fn new() -> (Self, [u8; 32]) {
             let kp = KeyPair::generate(&mut rand::rng());
             let server_static_pub: [u8; 32] = kp.public_key.public_key_bytes().try_into().unwrap();
-            let cert_chain_bytes = build_cert_chain_bytes(&server_static_pub);
+            let cert_chain_bytes = crate::test_util::build_cert_chain_bytes(&server_static_pub);
             (
                 Self {
                     identity_kp: kp,
@@ -699,50 +699,6 @@ mod tests {
                 .try_into()
                 .expect("X25519 pub key is always 32 bytes")
         }
-    }
-
-    /// Builds a minimal CertChain bytes blob whose leaf.key matches the
-    /// given static key. Skips signatures since `verify_server_cert`
-    /// only checks shape + key bytes (signatures aren't verified by our
-    /// implementation today).
-    fn build_cert_chain_bytes(server_static_pub: &[u8; 32]) -> Vec<u8> {
-        // Intermediate details
-        let intermediate_details = noise_certificate::Details {
-            serial: Some(1),
-            issuer_serial: Some(0),
-            key: Some(vec![0xCC; 32]),
-            not_before: Some(1_700_000_000),
-            not_after: Some(1_900_000_000),
-        };
-        let mut intermediate_details_bytes = Vec::new();
-        intermediate_details
-            .encode(&mut intermediate_details_bytes)
-            .unwrap();
-
-        // Leaf details
-        let leaf_details = noise_certificate::Details {
-            serial: Some(2),
-            issuer_serial: Some(1),
-            key: Some(server_static_pub.to_vec()),
-            not_before: Some(1_700_000_500),
-            not_after: Some(1_899_999_500),
-        };
-        let mut leaf_details_bytes = Vec::new();
-        leaf_details.encode(&mut leaf_details_bytes).unwrap();
-
-        let chain = wa::CertChain {
-            leaf: Some(wa::cert_chain::NoiseCertificate {
-                details: Some(leaf_details_bytes),
-                signature: Some(vec![0u8; 64]),
-            }),
-            intermediate: Some(wa::cert_chain::NoiseCertificate {
-                details: Some(intermediate_details_bytes),
-                signature: Some(vec![0u8; 64]),
-            }),
-        };
-        let mut bytes = Vec::new();
-        chain.encode(&mut bytes).unwrap();
-        bytes
     }
 
     /// Variant of `xx_serve` that also returns the server's ephemeral key

@@ -39,6 +39,9 @@ pub mod framing;
 mod handshake;
 mod state;
 
+#[cfg(any(test, feature = "test-util"))]
+pub mod test_util;
+
 pub use edge_routing::{
     EdgeRoutingError, MAX_EDGE_ROUTING_LEN, build_edge_routing_preintro, build_handshake_header,
 };

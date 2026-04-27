@@ -92,9 +92,6 @@ wacore-noise = { path = "./wacore/noise", version = "0.5.0" }
 waproto = { path = "./waproto", version = "0.5.0" }
 yoke = { version = "0.8", features = ["derive"] }
 
-[lints]
-workspace = true
-
 [features]
 debug-diagnostics = ["wacore/debug-diagnostics"]
 debug-snapshots = ["wacore/debug-snapshots"]
@@ -150,6 +147,10 @@ whatsapp-rust-ureq-http-client = { path = "./http_clients/ureq-client", version 
 
 [dev-dependencies]
 uuid = { workspace = true, features = ["v4"] }
+wacore-noise = { path = "./wacore/noise", features = ["test-util"] }
+
+[lints]
+workspace = true
 
 [[example]]
 name = "benchmark"

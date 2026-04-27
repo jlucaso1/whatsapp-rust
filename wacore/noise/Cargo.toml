@@ -10,6 +10,11 @@ description = "Noise Protocol implementation for WhatsApp with AES-256-GCM"
 [lib]
 crate-type = ["rlib"]
 
+[features]
+# Exposes `wacore_noise::test_util` (cert-chain bytes builder, etc.) so
+# downstream crates can share fixtures with the unit tests in this crate.
+test-util = []
+
 [dependencies]
 anyhow = { workspace = true }
 bytes = { workspace = true }
