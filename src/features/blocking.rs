@@ -21,42 +21,28 @@ impl<'a> Blocking<'a> {
     }
 
     /// Resolve `bare` (LID or PN) into the `(lid, pn)` pair the server expects
-    /// on blocklist stanzas. Errors stay generic to avoid leaking user IDs.
+    /// on blocklist stanzas.
     async fn resolve_lid_pn(&self, bare: Jid) -> Result<(Jid, Jid), IqError> {
-        if bare.is_lid() {
-            let entry = self
-                .client
-                .get_lid_pn_entry(&bare)
-                .await
-                .map_err(|_| IqError::ServerError {
-                    code: 0,
-                    text: "blocklist: LID↔PN lookup failed".to_string(),
-                })?
-                .ok_or(IqError::ServerError {
-                    code: 0,
-                    text: "blocklist: no LID↔PN mapping for provided jid".to_string(),
-                })?;
-            Ok((bare, Jid::pn(entry.phone_number)))
-        } else if bare.is_pn() {
-            let entry = self
-                .client
-                .get_lid_pn_entry(&bare)
-                .await
-                .map_err(|_| IqError::ServerError {
-                    code: 0,
-                    text: "blocklist: LID↔PN lookup failed".to_string(),
-                })?
-                .ok_or(IqError::ServerError {
-                    code: 0,
-                    text: "blocklist: no LID↔PN mapping for provided jid".to_string(),
-                })?;
-            Ok((Jid::lid(entry.lid), bare))
-        } else {
-            Err(IqError::ServerError {
-                code: 0,
-                text: "blocklist: jid is neither PN nor LID".to_string(),
-            })
+        if !(bare.is_lid() || bare.is_pn()) {
+            return Err(IqError::EncodeError(anyhow::anyhow!(
+                "blocklist: jid is neither PN nor LID"
+            )));
         }
+        let entry = self
+            .client
+            .get_lid_pn_entry(&bare)
+            .await
+            .map_err(IqError::EncodeError)?
+            .ok_or_else(|| {
+                IqError::EncodeError(anyhow::anyhow!(
+                    "blocklist: no LID↔PN mapping for provided jid"
+                ))
+            })?;
+        Ok(if bare.is_lid() {
+            (bare, Jid::pn(entry.phone_number))
+        } else {
+            (Jid::lid(entry.lid), bare)
+        })
     }
 
     /// Block a contact. Accepts either LID or PN; the wire stanza always

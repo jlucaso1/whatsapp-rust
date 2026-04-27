@@ -56,9 +56,8 @@ impl BlocklistItemRequest {
     /// Construct a block request with the LID and PN required on the wire.
     pub fn block_with_pn(lid: &Jid, pn_jid: &Jid) -> Self {
         Self {
-            jid: lid.clone(),
-            action: BlocklistAction::Block,
             pn_jid: Some(pn_jid.clone()),
+            ..Self::new(lid, BlocklistAction::Block)
         }
     }
 }
