@@ -2406,6 +2406,7 @@ dependencies = [
  "uuid",
  "wacore",
  "wacore-binary",
+ "wacore-noise",
  "waproto",
  "whatsapp-rust-sqlite-storage",
  "whatsapp-rust-tokio-transport",

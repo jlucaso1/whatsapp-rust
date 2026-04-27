@@ -71,14 +71,6 @@ impl NoiseCipher {
     }
 }
 
-fn to_array(slice: &[u8], name: &'static str) -> Result<[u8; 32]> {
-    slice.try_into().map_err(|_| NoiseError::InvalidKeyLength {
-        name,
-        expected: 32,
-        got: slice.len(),
-    })
-}
-
 fn sha256_digest(data: &[u8]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(data);
@@ -111,10 +103,15 @@ impl NoiseState {
     }
 
     /// Creates a new Noise state with the given pattern and prologue.
+    ///
+    /// Per Noise spec § 5.2: when `protocol_name` is ≤ HASHLEN bytes, append
+    /// zero bytes to make HASHLEN; otherwise hash with SHA256.
     pub fn new(pattern: impl AsRef<[u8]>, prologue: &[u8]) -> Result<Self> {
         let pattern = pattern.as_ref();
-        let h: [u8; 32] = if pattern.len() == 32 {
-            to_array(pattern, "noise pattern prefix")?
+        let h: [u8; 32] = if pattern.len() <= 32 {
+            let mut h = [0u8; 32];
+            h[..pattern.len()].copy_from_slice(pattern);
+            h
         } else {
             sha256_digest(pattern)
         };
@@ -247,6 +244,40 @@ mod tests {
             .expect("initialization should succeed");
 
         assert_ne!(noise.hash(), noise.salt());
+    }
+
+    #[test]
+    fn test_protocol_name_short_is_zero_padded() {
+        // Spec § 5.2: name <= HASHLEN bytes is zero-padded, NOT hashed.
+        // The 28-byte unpadded form must produce the same h0 as the 32-byte
+        // pre-padded form, after applying the same prologue.
+        let prologue = b"test";
+        let unpadded = NoiseState::new(b"Noise_XX_25519_AESGCM_SHA256", prologue)
+            .expect("unpadded init should succeed");
+        let padded = NoiseState::new(b"Noise_XX_25519_AESGCM_SHA256\0\0\0\0", prologue)
+            .expect("padded init should succeed");
+        assert_eq!(unpadded.hash(), padded.hash());
+        assert_eq!(unpadded.salt(), padded.salt());
+    }
+
+    #[test]
+    fn test_protocol_name_long_is_hashed() {
+        // 36-byte XXfallback name exceeds HASHLEN, so h0 = SHA256(name).
+        // We isolate the name-handling branch by constructing two states with
+        // identical prologues: one that hashes (>32 byte name) and one with a
+        // hand-computed 32-byte equivalent. They must converge.
+        let prologue = b"prologue-bytes";
+        let long_name: &[u8] = b"Noise_XXfallback_25519_AESGCM_SHA256";
+        let state_long =
+            NoiseState::new(long_name, prologue).expect("long-name init should succeed");
+
+        // Build the same handshake state with the pre-hashed name (32 bytes).
+        let prehashed = sha256_digest(long_name);
+        let state_short =
+            NoiseState::new(prehashed, prologue).expect("short-name init should succeed");
+
+        assert_eq!(state_long.hash(), state_short.hash());
+        assert_eq!(state_long.salt(), state_short.salt());
     }
 
     #[test]

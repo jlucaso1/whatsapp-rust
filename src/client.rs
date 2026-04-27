@@ -310,6 +310,14 @@ pub struct Client {
     /// Uses an AtomicBool instead of probing the noise_socket mutex to avoid
     /// TOCTOU races where `try_lock()` fails due to contention, not disconnection.
     is_connected: Arc<AtomicBool>,
+
+    /// Per-process counter of consecutive Noise IK handshake failures, scoped
+    /// to the lifetime of this `Client`. Mirrors `K` in WA Web's
+    /// `WAWebOpenChatSocket` (`ChatSocket.js`): on the first failure within a
+    /// process, the next connect skips IK and falls back to XX so a stale
+    /// cached `serverStaticPublic` doesn't trap us in a loop. Reset to 0 on
+    /// any successful handshake (XX, IK, or XXfallback).
+    pub(crate) ik_handshake_failures: Arc<AtomicU32>,
     /// Terminal shutdown (process-wide). Fired ONLY by `disconnect()`.
     /// Long-lived subscribers that must outlive reconnect cycles (saver,
     /// device registry cleanup) subscribe here.
@@ -732,6 +740,7 @@ impl Client {
             is_connecting: Arc::new(AtomicBool::new(false)),
             is_running: Arc::new(AtomicBool::new(false)),
             is_connected: Arc::new(AtomicBool::new(false)),
+            ik_handshake_failures: Arc::new(AtomicU32::new(0)),
             shutdown_notifier: wacore::runtime::ShutdownNotifier::new(),
             connection_shutdown: std::sync::Mutex::new(wacore::runtime::ShutdownNotifier::new()),
             last_data_received_ms: Arc::new(AtomicU64::new(0)),
@@ -1197,11 +1206,10 @@ impl Client {
         })??;
         debug!("Version fetch and transport connection established.");
 
-        let device_snapshot = self.persistence_manager.get_device_snapshot().await;
-
         let noise_socket = match handshake::do_handshake(
             self.runtime.clone(),
-            &device_snapshot,
+            &self.persistence_manager,
+            &self.ik_handshake_failures,
             transport.clone(),
             &mut transport_events,
         )
