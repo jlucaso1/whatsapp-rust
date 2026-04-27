@@ -23,13 +23,8 @@ pub enum BlocklistAction {
     #[wire = "unblock"]
     Unblock,
 }
-/// Request node for updating blocklist.
-///
-/// Modern WA exige `jid` em formato **LID** e, ao bloquear, `pn_jid`
-/// adicional com o PN do contato. Sem `pn_jid` o servidor responde
-/// `code=400 bad-request` (verificado contra Baileys e WA Web 2026-04).
-///
-/// Wire format: `<item action="block" jid="...@lid" pn_jid="...@s.whatsapp.net"/>`
+/// Wire requires `jid` in LID and an additional `pn_jid` (PN) when blocking;
+/// servers reject PN-only blocks.
 #[derive(Debug, Clone, crate::ProtocolNode)]
 #[protocol(tag = "item")]
 pub struct BlocklistItemRequest {
@@ -58,7 +53,7 @@ impl BlocklistItemRequest {
         Self::new(jid, BlocklistAction::Unblock)
     }
 
-    /// Block usando `lid` e `pn_jid` explícitos (formato moderno do WA).
+    /// Construct a block request with the LID and PN required on the wire.
     pub fn block_with_pn(lid: &Jid, pn_jid: &Jid) -> Self {
         Self {
             jid: lid.clone(),
@@ -173,7 +168,7 @@ impl UpdateBlocklistSpec {
         }
     }
 
-    /// Block com `lid` + `pn_jid` (formato moderno exigido por WA 2026+).
+    /// Construct a block spec with the LID and PN required on the wire.
     pub fn block_with_pn(lid: &Jid, pn_jid: &Jid) -> Self {
         Self {
             request: BlocklistItemRequest::block_with_pn(lid, pn_jid),

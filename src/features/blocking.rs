@@ -20,88 +20,66 @@ impl<'a> Blocking<'a> {
         Self { client }
     }
 
-    /// Block a contact.
-    ///
-    /// Modern WA exige `jid=LID` + `pn_jid=PN` no stanza; sem `pn_jid` o
-    /// servidor responde `400 bad-request`. Resolve o par via
-    /// `get_lid_pn_entry` antes de enviar — aceita LID ou PN como input.
-    pub async fn block(&self, jid: &Jid) -> Result<(), IqError> {
-        debug!(target: "Blocking", "Blocking contact: {}", jid);
-        let bare = jid.to_non_ad();
-        let (lid_jid, pn_jid) = if bare.is_lid() {
+    /// Resolve `bare` (LID or PN) into the `(lid, pn)` pair the server expects
+    /// on blocklist stanzas. Errors stay generic to avoid leaking user IDs.
+    async fn resolve_lid_pn(&self, bare: Jid) -> Result<(Jid, Jid), IqError> {
+        if bare.is_lid() {
             let entry = self
                 .client
                 .get_lid_pn_entry(&bare)
                 .await
-                .map_err(|e| IqError::ServerError {
+                .map_err(|_| IqError::ServerError {
                     code: 0,
-                    text: format!("get_lid_pn_entry: {e}"),
+                    text: "blocklist: LID↔PN lookup failed".to_string(),
                 })?
                 .ok_or(IqError::ServerError {
                     code: 0,
-                    text: format!("no LID↔PN mapping for {bare}"),
+                    text: "blocklist: no LID↔PN mapping for provided jid".to_string(),
                 })?;
-            (bare, Jid::pn(entry.phone_number))
+            Ok((bare, Jid::pn(entry.phone_number)))
         } else if bare.is_pn() {
             let entry = self
                 .client
                 .get_lid_pn_entry(&bare)
                 .await
-                .map_err(|e| IqError::ServerError {
+                .map_err(|_| IqError::ServerError {
                     code: 0,
-                    text: format!("get_lid_pn_entry: {e}"),
+                    text: "blocklist: LID↔PN lookup failed".to_string(),
                 })?
                 .ok_or(IqError::ServerError {
                     code: 0,
-                    text: format!("no LID↔PN mapping for {bare}"),
+                    text: "blocklist: no LID↔PN mapping for provided jid".to_string(),
                 })?;
-            (Jid::lid(entry.lid), bare)
+            Ok((Jid::lid(entry.lid), bare))
         } else {
-            return Err(IqError::ServerError {
+            Err(IqError::ServerError {
                 code: 0,
-                text: format!("block: jid {bare} is neither PN nor LID"),
-            });
-        };
+                text: "blocklist: jid is neither PN nor LID".to_string(),
+            })
+        }
+    }
+
+    /// Block a contact. Accepts either LID or PN; the wire stanza always
+    /// carries both (`jid=LID, pn_jid=PN`) — modern WA rejects PN-only blocks.
+    pub async fn block(&self, jid: &Jid) -> Result<(), IqError> {
+        debug!(target: "Blocking", "Blocking contact");
+        let (lid_jid, pn_jid) = self.resolve_lid_pn(jid.to_non_ad()).await?;
         self.client
             .execute(UpdateBlocklistSpec::block_with_pn(&lid_jid, &pn_jid))
             .await?;
-        debug!(target: "Blocking", "Successfully blocked contact: lid={lid_jid} pn={pn_jid}");
+        debug!(target: "Blocking", "Successfully blocked contact");
         Ok(())
     }
 
-    /// Unblock a contact.
-    ///
-    /// Modern WA exige `jid=LID` no `<item action="unblock"/>`. Resolve para
-    /// LID via mapping se o input for PN.
+    /// Unblock a contact. Stanza only needs the LID, but PN input is accepted
+    /// and resolved through the mapping.
     pub async fn unblock(&self, jid: &Jid) -> Result<(), IqError> {
-        debug!(target: "Blocking", "Unblocking contact: {}", jid);
-        let bare = jid.to_non_ad();
-        let lid_jid = if bare.is_lid() {
-            bare
-        } else if bare.is_pn() {
-            let entry = self
-                .client
-                .get_lid_pn_entry(&bare)
-                .await
-                .map_err(|e| IqError::ServerError {
-                    code: 0,
-                    text: format!("get_lid_pn_entry: {e}"),
-                })?
-                .ok_or(IqError::ServerError {
-                    code: 0,
-                    text: format!("no LID↔PN mapping for {bare}"),
-                })?;
-            Jid::lid(entry.lid)
-        } else {
-            return Err(IqError::ServerError {
-                code: 0,
-                text: format!("unblock: jid {bare} is neither PN nor LID"),
-            });
-        };
+        debug!(target: "Blocking", "Unblocking contact");
+        let (lid_jid, _) = self.resolve_lid_pn(jid.to_non_ad()).await?;
         self.client
             .execute(UpdateBlocklistSpec::unblock(&lid_jid))
             .await?;
-        debug!(target: "Blocking", "Successfully unblocked contact: lid={lid_jid}");
+        debug!(target: "Blocking", "Successfully unblocked contact");
         Ok(())
     }
 
