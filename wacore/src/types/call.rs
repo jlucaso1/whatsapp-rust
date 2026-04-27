@@ -39,32 +39,19 @@ pub enum CallAction {
         joinable: bool,
         is_video: bool,
         audio: Vec<CallAudioCodec>,
-        /// `group-jid` attr no `<offer>` quando a chamada é em grupo. Baileys
-        /// usa isto pra distinguir DM de grupo (ver Socket/messages-recv.ts:1552).
-        /// Em DM o `from` do `<call>` é o caller; em grupo, também é o caller —
-        /// só o offer carrega o grupo.
+        /// Set on group calls. Primary group signal per `WAWebVoipGatingUtils`.
         #[serde(skip_serializing_if = "Option::is_none")]
         group_jid: Option<Jid>,
-        /// `type="group"` attr no `<offer>` — segundo sinal que Baileys usa
-        /// pra marcar chamada de grupo. Em alguns layouts de stanza só esse
-        /// vem, sem `group-jid`.
-        #[serde(skip_serializing_if = "std::ops::Not::not")]
-        is_group_type: bool,
     },
-    /// Notificação de chamada de grupo: WA Web entrega `<offer_notice>` (não
-    /// `<offer>`) pra membros do grupo quando alguém inicia uma chamada de
-    /// grupo. Diferente do `<offer>` 1:1, não há ack/reject — é só uma
-    /// notificação de "rolando call". Atributos confirmados em captura:
-    /// `call-creator`, `call-id`, `media`, `type="group"`, `reason`,
-    /// `caller_pn`. Não tem `group-jid` — caller deve ser cruzado com cache
-    /// de membros pra descobrir o grupo.
+    /// Group-call notification fan-out to members. No offer-receipt expected;
+    /// the generic call ack is enough (router handles it via `should_ack`).
     OfferNotice {
         call_id: String,
         call_creator: Jid,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        media: Option<String>,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        caller_pn: Option<Jid>,
+        /// `media == "video"` per `WAWebHandleVoipOfferNotice`.
+        is_video: bool,
+        /// `type == "group"` per `WAWebHandleVoipOfferNotice`.
+        is_group: bool,
     },
     PreAccept {
         call_id: String,
