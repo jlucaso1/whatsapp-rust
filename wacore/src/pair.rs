@@ -423,7 +423,6 @@ mod tests {
     fn make_qr_data_renders_each_client_type_wire_byte() {
         let state = dummy_device_state();
         for (ct, wire) in [
-            (CompanionWebClientType::Unknown, "0"),
             (CompanionWebClientType::Chrome, "1"),
             (CompanionWebClientType::Edge, "2"),
             (CompanionWebClientType::Firefox, "3"),
@@ -554,12 +553,14 @@ mod tests {
             (wa::device_props::PlatformType::Edge, "2"),
             (wa::device_props::PlatformType::Desktop, "7"),
             (wa::device_props::PlatformType::Uwp, "8"),
-            (wa::device_props::PlatformType::AndroidPhone, "e"),
-            (wa::device_props::PlatformType::AndroidTablet, "d"),
-            (wa::device_props::PlatformType::AndroidAmbiguous, "f"),
+            // Android* maps to Chrome ('1') — what real WA Web on
+            // Chrome-Android emits and what the server accepts.
+            (wa::device_props::PlatformType::AndroidPhone, "1"),
+            (wa::device_props::PlatformType::AndroidTablet, "1"),
+            (wa::device_props::PlatformType::AndroidAmbiguous, "1"),
             (wa::device_props::PlatformType::IosPhone, "9"),
             (wa::device_props::PlatformType::Vr, "9"),
-            (wa::device_props::PlatformType::Unknown, "0"),
+            (wa::device_props::PlatformType::Unknown, "9"),
         ];
         let state = dummy_device_state();
         for (pt, expected_wire) in cases {
@@ -574,9 +575,9 @@ mod tests {
         }
     }
 
-    /// Bare `DeviceProps` produces 5-field QR with trailing "0", no panic.
+    /// Bare `DeviceProps` produces 5-field QR with trailing "9" (catch-all).
     #[test]
-    fn auto_derive_default_device_props_yields_unknown_zero() {
+    fn auto_derive_default_device_props_yields_other_web_client_nine() {
         use crate::companion_reg::companion_web_client_type_for_props;
         use waproto::whatsapp as wa;
 
@@ -585,7 +586,7 @@ mod tests {
         let qr = PairUtils::make_qr_data(&state, "ref", ct);
         let parts: Vec<&str> = qr.split(',').collect();
         assert_eq!(parts.len(), 5);
-        assert_eq!(parts[4], "0");
+        assert_eq!(parts[4], "9");
     }
 
     /// `make_qr_data` output must always round-trip through `parse_qr_code`.
@@ -593,7 +594,6 @@ mod tests {
     fn round_trip_make_then_parse_for_every_client_type() {
         let state = dummy_device_state();
         for ct in [
-            CompanionWebClientType::Unknown,
             CompanionWebClientType::Chrome,
             CompanionWebClientType::Edge,
             CompanionWebClientType::Firefox,
