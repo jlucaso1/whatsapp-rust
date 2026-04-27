@@ -168,16 +168,10 @@ to either oscillating back to XX needlessly or looping on a stale cache.
 storage layout WA Web uses in `PrefsInfoStore.js:setCertificateChain` —
 only those fields end up on disk.
 
-Reception-time validation in `verify_server_cert` checks structural
-shape, the intermediate issuer-serial pin (must equal `WA_CERT_ISSUER_SERIAL`),
-the chain link (`leaf.issuer_serial == intermediate.serial`), and that
-`leaf.key` equals the `static` decrypted from the Noise transcript. Full
-XEd25519 signature verification against `WA_CERT_PUB_KEY` (matching
-`WAVerifyChainCertificateWA6`) is **not yet implemented** and is a
-deliberate follow-up — the AEAD MAC of the Noise channel already
-authenticates the chain bytes as coming from a server in possession of
-the static private key, so this gap is defense in depth. Same gap exists
-in whatsmeow and Baileys today.
+`verify_server_cert` checks structural shape, the issuer-serial pin, the
+chain link, and that `leaf.key` matches the decrypted Noise static.
+Ed25519 signature verification against `WA_CERT_PUB_KEY` is intentionally
+skipped (would break the e2e mock server). Same posture as whatsmeow.
 
 ### Logs (matching WA Web's `[socket]` lines)
 

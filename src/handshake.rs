@@ -18,8 +18,7 @@ use wacore_binary::consts::WA_CONN_HEADER;
 
 const NOISE_HANDSHAKE_RESPONSE_TIMEOUT: Duration = Duration::from_secs(20);
 
-/// Threshold mirroring WA Web's `$ = 1` in `WAWebOpenChatSocket`: after a
-/// single IK failure within the process, the next connect skips IK.
+/// One IK failure per process before falling back to XX (matches WA Web).
 const IK_FAILURE_THRESHOLD: u32 = 1;
 
 #[derive(Debug, Error)]
@@ -113,24 +112,14 @@ enum HandshakePattern {
     Ik([u8; 32]),
 }
 
-/// Mirrors the dispatcher in `WAWebOpenChatSocket` (`ChatSocket.js`):
-/// IK is selected only when ALL of these hold:
-///   - the device is registered (paired) — IK without a registered
-///     identity is rejected by the server and would loop indefinitely
-///     on transient-classified failures
-///   - the in-process IK failure counter has not reached the threshold
-///     (`ik_failures < IK_FAILURE_THRESHOLD`)
-///   - the device has a cached cert chain
-///   - `now_secs` falls within both the leaf and the intermediate
-///     `[not_before, not_after)` validity windows
 fn select_pattern(
     device: &wacore::store::Device,
     ik_failures: u32,
     now_secs: i64,
 ) -> HandshakePattern {
-    // Defends against legacy DBs that persisted a chain pre-pairing under
-    // older revisions of this code; `do_handshake` now refuses to write
-    // such a chain in the first place.
+    // Unregistered + cached chain is a signal of a legacy DB written before
+    // the registration gate; `do_handshake` no longer creates that state but
+    // we still need to refuse IK against it.
     if !device.is_registered() {
         return HandshakePattern::Xx;
     }
@@ -140,9 +129,7 @@ fn select_pattern(
     let Some(chain) = device.server_cert_chain.as_ref() else {
         return HandshakePattern::Xx;
     };
-    // `not_before` defends against backwards clock skew (RTC reset, frozen
-    // container clock); `not_after` is the standard expiry check. Both
-    // certs in the chain must overlap `now_secs` for IK to be safe.
+    // `not_before` covers backwards clock skew, `not_after` is normal expiry.
     if now_secs < chain.leaf.not_before
         || now_secs < chain.intermediate.not_before
         || now_secs >= chain.leaf.not_after
@@ -153,21 +140,14 @@ fn select_pattern(
     HandshakePattern::Ik(chain.leaf.key)
 }
 
-/// Outcome shared by all three patterns. The optional `server_cert_chain` is
-/// `Some` for XX-fresh and XX-fallback (they bring back a fresh chain that
-/// must be persisted) and `None` for IK Continue (the on-disk cache stays
-/// authoritative).
+/// `server_cert_chain` is `Some` for XX / XX-fallback (fresh chain to persist)
+/// and `None` for IK Continue (on-disk cache stays authoritative).
 struct HandshakeSuccess {
     write_cipher: NoiseCipher,
     read_cipher: NoiseCipher,
     server_cert_chain: Option<VerifiedServerCertChain>,
 }
 
-/// Mirrors `WAWebProcessCertificate.Certificate.js:35`
-/// (`if (a && !screenLockEnabled)`): only persist the chain once the device
-/// has reached the registered/paired state. Persisting on a still-unpaired
-/// device causes the next connect to pick IK, which the server rejects for
-/// an unregistered identity, producing a transient-classified loop.
 fn should_persist_cert_chain(device: &wacore::store::Device) -> bool {
     device.is_registered()
 }
@@ -187,8 +167,6 @@ pub async fn do_handshake(
         now_secs,
     );
 
-    // Tracks whether `run_ik_handshake` pivoted to XXfallback before any
-    // failure surfaced. Read by the post-failure invalidation gate below.
     let mut fallback_taken = false;
 
     let result = match pattern {
@@ -234,17 +212,9 @@ pub async fn do_handshake(
             )))
         }
         Err(e) => {
-            // Cache invalidation is gated on THREE conditions:
-            //   1. We picked IK (XX never reads the cache)
-            //   2. The crypto-fatal classification fires (i.e. the failure
-            //      mode points at a stale or poisoned static)
-            //   3. We did NOT pivot to XXfallback before the failure. Once
-            //      the server replies with `static.is_some()`, IK proper has
-            //      been processed by the server (and the IK cache implication
-            //      is moot — the server is asking for re-derivation via
-            //      fallback). Failures past that point are XXfallback / wire
-            //      problems, not stale-cache symptoms, so neither the counter
-            //      nor the on-disk cache should be touched.
+            // Skip invalidation past the XXfallback pivot: by that point the
+            // server has already accepted our IK ClientHello and the cache
+            // is no longer the implicated party.
             if matches!(pattern, HandshakePattern::Ik(_)) && !fallback_taken && e.is_crypto_fatal()
             {
                 warn!(
@@ -296,10 +266,8 @@ async fn run_xx_handshake(
     })
 }
 
-/// `fallback_taken` is set to `true` the moment we pivot from IK to
-/// XXfallback. The caller uses this to skip cache invalidation for failures
-/// that happen after the server has already accepted (and effectively
-/// responded to) the IK ClientHello.
+/// `fallback_taken` is set to `true` once we pivot from IK to XXfallback,
+/// before any operation that could fail.
 async fn run_ik_handshake(
     runtime: &Arc<dyn Runtime>,
     device: &wacore::store::Device,
@@ -335,10 +303,6 @@ async fn run_ik_handshake(
             })
         }
         IkServerHelloOutcome::Fallback(inputs) => {
-            // Mark the pivot before any operation that could fail, so a
-            // partial XXfallback (e.g. malformed XXfallback ServerHello,
-            // transport error mid-finish) does not look like a stale-cache
-            // signal to the orchestrator.
             *fallback_taken = true;
             warn!(
                 "[socket] resumeNoiseHandshake failed: serverStaticCiphertext not null — \
@@ -464,7 +428,6 @@ mod tests {
     fn select_pattern_after_one_failure_returns_xx() {
         let mut device = paired_device();
         device.server_cert_chain = Some(cached_chain([0xAA; 32], 1_900_000_000, 1_900_000_000));
-        // Even with a cached chain, the IK_FAILURE_THRESHOLD gate forces XX.
         assert_eq!(
             select_pattern(&device, IK_FAILURE_THRESHOLD, 1_800_000_000),
             HandshakePattern::Xx
@@ -491,10 +454,6 @@ mod tests {
         );
     }
 
-    /// `cached_chain` pins both certs' `not_before` at 1_700_000_000. Pick a
-    /// `now_secs` strictly before that to exercise the backwards-clock-skew
-    /// defense; the gate must reject IK even though `not_after` would
-    /// otherwise be in the future.
     #[test]
     fn select_pattern_with_clock_before_leaf_not_before_returns_xx() {
         let mut device = paired_device();
@@ -505,9 +464,6 @@ mod tests {
         );
     }
 
-    /// Same defense, but probing the intermediate-only path: leaf is barely
-    /// in-window, intermediate is in the future. The gate rejects on the
-    /// stricter of the two.
     #[test]
     fn select_pattern_with_clock_before_intermediate_not_before_returns_xx() {
         let mut device = paired_device();
@@ -520,11 +476,6 @@ mod tests {
         );
     }
 
-    /// Regression: an unpaired device that previously persisted a cert chain
-    /// (e.g. running pre-fix code, then upgrading) must NOT pick IK on the
-    /// next connect. The server rejects IK from an unregistered identity and
-    /// the rejection classifies as transient → infinite reconnect loop. See
-    /// `WAWebProcessCertificate.Certificate.js:35` (`if (a && ...)`).
     #[test]
     fn select_pattern_unregistered_device_returns_xx_even_with_valid_cache() {
         let mut device = wacore::store::Device::new();
@@ -539,9 +490,6 @@ mod tests {
         );
     }
 
-    /// Regression for the persistence-side gate. Mirrors WA Web's
-    /// `Certificate.js:35` — only paired devices write the chain so that
-    /// the unpaired-then-restart flow can never seed an IK attempt.
     #[test]
     fn should_persist_cert_chain_unregistered_returns_false() {
         let device = wacore::store::Device::new();

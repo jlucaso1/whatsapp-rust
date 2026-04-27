@@ -8,28 +8,9 @@ use waproto::whatsapp::{self as wa, CertChain, HandshakeMessage};
 
 const WA_CERT_ISSUER_SERIAL: i64 = 0;
 
-/// Ed25519 public key of the WhatsApp Noise certificate issuer.
-///
-/// ## Intentionally unused — do not gate the handshake on this.
-///
-/// `verify_server_cert` does NOT verify the intermediate's Ed25519 signature
-/// against this key, and that is a deliberate trade-off:
-///
-///   1. **e2e testability**: the in-tree mock server (`bartender`) cannot
-///      produce signatures under the real Meta-controlled issuer key, so
-///      enabling verification would block the whole e2e suite or force a
-///      fragile `danger-skip-cert-verify` feature gate.
-///   2. **Status quo**: `whatsmeow` ships the same gap. We do not claim
-///      stronger guarantees than the upstream Go reference.
-///   3. **Channel integrity**: the cert chain travels inside the Noise
-///      AEAD-protected handshake, so a passive observer cannot substitute
-///      it. The remaining attack surface is a server-static-key
-///      compromise — outside this implementation's threat model.
-///
-/// The constant is kept exported because removing it would be a SemVer
-/// break for users who happen to pin it. If you ever reach for it inside
-/// `verify_server_cert`, you also need to ship a non-load-bearing
-/// `cert-verify-disable` feature for the e2e crate; do not skip that step.
+/// Ed25519 issuer key for the Noise cert chain. Intentionally unused: wiring
+/// it into `verify_server_cert` would block the e2e mock server. Kept
+/// exported for SemVer; do not make it load-bearing without an opt-out.
 pub const WA_CERT_PUB_KEY: [u8; 32] = [
     0x14, 0x23, 0x75, 0x57, 0x4d, 0x0a, 0x58, 0x71, 0x66, 0xaa, 0xe7, 0x1e, 0xbe, 0x51, 0x64, 0x37,
     0xc4, 0xa2, 0x8b, 0x73, 0xe3, 0x69, 0x5c, 0x6c, 0xe1, 0xf7, 0xf9, 0x54, 0x5d, 0xa8, 0xee, 0x6b,
@@ -564,13 +545,7 @@ impl IkHandshakeState {
         Ok(buf)
     }
 
-    /// Reads the ServerHello and either completes the IK handshake or
-    /// reports that the server requested an XX-fallback.
-    ///
-    /// The dispatcher follows WA Web's rule (`ChatSocket.js:232`): when
-    /// `serverHello.static == null` the IK is accepted; when present, the
-    /// server has rotated its static and is asking the client to fall back
-    /// to XX using the ephemeral that was already sent.
+    /// `serverHello.static.is_some()` signals fallback (server rotated static).
     pub fn read_server_hello(self, response_bytes: &[u8]) -> Result<IkServerHelloOutcome> {
         let server_hello = HandshakeUtils::parse_server_hello_body(response_bytes)?;
 

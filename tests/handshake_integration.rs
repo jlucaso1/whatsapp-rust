@@ -265,12 +265,7 @@ async fn pm() -> Arc<whatsapp_rust::store::persistence_manager::PersistenceManag
     )
 }
 
-/// Builds a PersistenceManager whose Device looks like it has already
-/// completed pairing (`pn` is populated). The XX→IK orchestration only
-/// runs on registered devices — see `select_pattern` and
-/// `should_persist_cert_chain` in `src/handshake.rs`, which mirror
-/// `WAWebProcessCertificate.Certificate.js:35`. Tests that exercise the
-/// IK path therefore must seed registration state up front.
+/// `pm()` seeded with a `pn`, so `select_pattern` will consider IK.
 async fn paired_pm() -> Arc<whatsapp_rust::store::persistence_manager::PersistenceManager> {
     let pm = pm().await;
     pm.process_command(wacore::store::DeviceCommand::SetId(Some(
@@ -392,20 +387,8 @@ async fn cold_start_xx_then_cached_ik_reconnect() {
     assert!(ch.payload.is_some(), "IK ClientHello carries 0-RTT payload");
 }
 
-/// IK→fallback responder that intentionally corrupts the XXfallback
-/// ServerHello body so the initiator fails AFTER pivoting to XXfallback.
-///
-/// Concretely: reads the IK ClientHello to harvest `client_eph_pub`,
-/// generates a server ephemeral, then sends a ServerHello whose `static`
-/// and `payload` are random bytes (not produced by a real responder
-/// transcript). The XXfallback initiator authenticates the prologue +
-/// ephemerals, derives `ee`, and then tries to AEAD-decrypt the static
-/// — which must fail with a `NoiseError::Decrypt` (crypto-fatal).
-///
-/// `static.is_some()` in the response is what triggers the pivot, so the
-/// orchestrator sees `fallback_taken = true` by the time the AEAD failure
-/// surfaces. Used to assert that post-pivot failures don't poison the
-/// IK cache.
+/// Sends a fallback-shaped ServerHello (`static.is_some()`) with garbage
+/// AEAD payloads, so the initiator pivots and then fails inside XXfallback.
 async fn ik_serve_fallback_with_corrupt_payloads(
     transport: &Arc<CaptureTransport>,
     events_tx: &async_channel::Sender<TransportEvent>,
@@ -418,9 +401,6 @@ async fn ik_serve_fallback_with_corrupt_payloads(
     let server_hello = wa::HandshakeMessage {
         server_hello: Some(wa::handshake_message::ServerHello {
             ephemeral: Some(server_eph_pub.to_vec()),
-            // `static.is_some()` triggers the IK→XXfallback pivot in the
-            // initiator. The actual bytes are garbage so XXfallback's
-            // AEAD on `server_static` will fail.
             r#static: Some(vec![0xCC; 32 + 16]),
             payload: Some(vec![0xDE; 64]),
             ..Default::default()
@@ -436,15 +416,6 @@ async fn ik_serve_fallback_with_corrupt_payloads(
         .unwrap();
 }
 
-/// Regression: when the IK handshake pivots to XXfallback and the
-/// fallback path itself fails crypto-fatally, the orchestrator must NOT
-/// invalidate the cached server cert chain or bump
-/// `ik_handshake_failures`. Once the server has signaled fallback by
-/// replying with `static.is_some()`, the IK ClientHello has been
-/// processed — subsequent failures are XXfallback / wire issues, not
-/// stale-cache symptoms.
-///
-/// Mirrors the layered-cause test from CodeRabbit's review feedback.
 #[tokio::test]
 async fn post_xxfallback_failure_does_not_invalidate_ik_cache() {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -513,14 +484,6 @@ async fn post_xxfallback_failure_does_not_invalidate_ik_cache() {
     );
 }
 
-/// Regression: the IK Continue branch in `do_handshake` must NOT issue a
-/// `SetServerCertChain` command. The on-disk chain stays authoritative
-/// across IK Continue successes (the server demonstrably still owns the
-/// cached static, so there is nothing new to cache).
-///
-/// Captured by tagging the on-disk chain with a sentinel `not_after` value
-/// that the responder does NOT serve. After IK Continue, that sentinel
-/// must survive — proving the orchestrator did not silently overwrite.
 #[tokio::test]
 async fn ik_continue_does_not_overwrite_cached_chain() {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -529,9 +492,7 @@ async fn ik_continue_does_not_overwrite_cached_chain() {
     let counter = Arc::new(AtomicU32::new(0));
     let server = Arc::new(InProcessServer::new());
 
-    // Sentinel `not_after` that no responder would naturally produce; if the
-    // orchestrator overwrites the chain, the responder's `1_899_999_500`
-    // value (from `build_cert_chain_bytes`) replaces it.
+    // Sentinel distinct from anything `build_cert_chain_bytes` produces.
     const SENTINEL_NOT_AFTER: i64 = 1_899_999_999;
     use wacore::store::{CachedNoiseCert, CachedServerCertChain, DeviceCommand};
     pm.process_command(DeviceCommand::SetServerCertChain(CachedServerCertChain {
@@ -586,21 +547,12 @@ async fn ik_continue_does_not_overwrite_cached_chain() {
     );
 }
 
-/// Regression: post-pair-success, the next XX (triggered by the
-/// server-initiated 515 disconnect) MUST persist the cert chain. This is
-/// the second half of the WA Web flow: XX-1 unpaired skips persistence,
-/// then pair-success populates `pn` over the encrypted channel, then 515
-/// reconnect drives XX-2 paired which finally seeds the cache for
-/// subsequent IK reconnects.
-///
-/// We approximate the in-channel pair-success by issuing a `SetId`
-/// command between the two `do_handshake` calls — same end-state as the
-/// real flow.
+/// XX-1 unpaired (no persist) → SetId (mocks pair-success) → XX-2 paired
+/// (persists). Mirrors the post-515 reconnect.
 #[tokio::test]
 async fn xx_after_pair_success_persists_cert_chain() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    // Step 1: unpaired device, XX, NO persistence.
     let pm = pm().await;
     let counter = Arc::new(AtomicU32::new(0));
     let server = Arc::new(InProcessServer::new());
@@ -629,14 +581,11 @@ async fn xx_after_pair_success_persists_cert_chain() {
         "unpaired XX must not persist chain"
     );
 
-    // Step 2: pair-success arrives over the encrypted channel; we model
-    // its persistent effect by setting `pn` directly.
     pm.process_command(wacore::store::DeviceCommand::SetId(Some(
         "12345@s.whatsapp.net".parse().unwrap(),
     )))
     .await;
 
-    // Step 3: 515 disconnect → reconnect → XX again, this time paired.
     let (transport2, events_tx2, mut events_rx2) = new_transport_pair();
     let server_t2 = transport2.clone();
     let server_c2 = server.clone();
@@ -667,16 +616,9 @@ async fn xx_after_pair_success_persists_cert_chain() {
     );
 }
 
-/// Regression for the bug behind PR #598's unpaired-then-restart loop:
-///
-/// 1. Cold start with an UNPAIRED device → XX must succeed.
-/// 2. After the handshake, `server_cert_chain` MUST stay `None`. If it
-///    were persisted, the next reconnect would pick IK against an
-///    unregistered identity, the server would close the channel, and the
-///    transient classification would loop forever (see the original
-///    `log.txt` symptom of "Will attempt to reconnect ... attempt N").
-///
-/// Mirrors `WAWebProcessCertificate.Certificate.js:35` (`if (a && ...)`).
+/// Regression: PR #598's unpaired-then-restart loop. XX must not persist
+/// the chain when `pn` is unset, otherwise the next connect picks IK
+/// against an unregistered identity and the server closes mid-handshake.
 #[tokio::test]
 async fn unpaired_xx_does_not_persist_cert_chain() {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -713,11 +655,7 @@ async fn unpaired_xx_does_not_persist_cert_chain() {
         !device.is_registered(),
         "precondition: device must still be unpaired"
     );
-    assert!(
-        device.server_cert_chain.is_none(),
-        "unpaired device must NOT persist the cert chain — that would force \
-         IK on the next connect and trigger the unpaired-IK reject loop"
-    );
+    assert!(device.server_cert_chain.is_none());
     assert_eq!(counter.load(std::sync::atomic::Ordering::Acquire), 0);
 }
 
