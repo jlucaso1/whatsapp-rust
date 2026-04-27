@@ -115,6 +115,9 @@ enum HandshakePattern {
 
 /// Mirrors the dispatcher in `WAWebOpenChatSocket` (`ChatSocket.js`):
 /// IK is selected only when ALL of these hold:
+///   - the device is registered (paired) — IK without a registered
+///     identity is rejected by the server and would loop indefinitely
+///     on transient-classified failures
 ///   - we have not failed an IK in this process yet (counter < threshold)
 ///   - the device has a cached cert chain
 ///   - both leaf and intermediate are still within their validity window
@@ -123,6 +126,12 @@ fn select_pattern(
     ik_failures: u32,
     now_secs: i64,
 ) -> HandshakePattern {
+    // Defends against legacy DBs that persisted a chain pre-pairing under
+    // older revisions of this code; `do_handshake` now refuses to write
+    // such a chain in the first place.
+    if !device.is_registered() {
+        return HandshakePattern::Xx;
+    }
     if ik_failures >= IK_FAILURE_THRESHOLD {
         return HandshakePattern::Xx;
     }
@@ -143,6 +152,15 @@ struct HandshakeSuccess {
     write_cipher: NoiseCipher,
     read_cipher: NoiseCipher,
     server_cert_chain: Option<VerifiedServerCertChain>,
+}
+
+/// Mirrors `WAWebProcessCertificate.Certificate.js:35`
+/// (`if (a && !screenLockEnabled)`): only persist the chain once the device
+/// has reached the registered/paired state. Persisting on a still-unpaired
+/// device causes the next connect to pick IK, which the server rejects for
+/// an unregistered identity, producing a transient-classified loop.
+fn should_persist_cert_chain(device: &wacore::store::Device) -> bool {
+    device.is_registered()
 }
 
 pub async fn do_handshake(
@@ -186,9 +204,9 @@ pub async fn do_handshake(
 
     match result {
         Ok(success) => {
-            if let Some(chain) = success.server_cert_chain {
-                // WA Web does this in WAWebProcessCertificate: persist the
-                // freshly-validated chain so the next connect can attempt IK.
+            if let Some(chain) = success.server_cert_chain
+                && should_persist_cert_chain(&device_snapshot)
+            {
                 persistence_manager
                     .process_command(DeviceCommand::SetServerCertChain(chain.into()))
                     .await;
@@ -383,9 +401,15 @@ mod tests {
         }
     }
 
+    fn paired_device() -> wacore::store::Device {
+        let mut device = wacore::store::Device::new();
+        device.pn = Some("12345@s.whatsapp.net".parse().unwrap());
+        device
+    }
+
     #[test]
     fn select_pattern_no_cache_returns_xx() {
-        let device = wacore::store::Device::new();
+        let device = paired_device();
         assert_eq!(
             select_pattern(&device, 0, 1_800_000_000),
             HandshakePattern::Xx
@@ -394,7 +418,7 @@ mod tests {
 
     #[test]
     fn select_pattern_with_valid_cache_returns_ik() {
-        let mut device = wacore::store::Device::new();
+        let mut device = paired_device();
         let pub_key = [0xAA; 32];
         device.server_cert_chain = Some(cached_chain(pub_key, 1_900_000_000, 1_900_000_000));
         assert_eq!(
@@ -405,7 +429,7 @@ mod tests {
 
     #[test]
     fn select_pattern_after_one_failure_returns_xx() {
-        let mut device = wacore::store::Device::new();
+        let mut device = paired_device();
         device.server_cert_chain = Some(cached_chain([0xAA; 32], 1_900_000_000, 1_900_000_000));
         // Even with a cached chain, the IK_FAILURE_THRESHOLD gate forces XX.
         assert_eq!(
@@ -416,7 +440,7 @@ mod tests {
 
     #[test]
     fn select_pattern_with_expired_leaf_returns_xx() {
-        let mut device = wacore::store::Device::new();
+        let mut device = paired_device();
         device.server_cert_chain = Some(cached_chain([0xAA; 32], 1_700_000_500, 1_900_000_000));
         assert_eq!(
             select_pattern(&device, 0, 1_800_000_000),
@@ -426,12 +450,48 @@ mod tests {
 
     #[test]
     fn select_pattern_with_expired_intermediate_returns_xx() {
-        let mut device = wacore::store::Device::new();
+        let mut device = paired_device();
         device.server_cert_chain = Some(cached_chain([0xAA; 32], 1_900_000_000, 1_700_000_500));
         assert_eq!(
             select_pattern(&device, 0, 1_800_000_000),
             HandshakePattern::Xx
         );
+    }
+
+    /// Regression: an unpaired device that previously persisted a cert chain
+    /// (e.g. running pre-fix code, then upgrading) must NOT pick IK on the
+    /// next connect. The server rejects IK from an unregistered identity and
+    /// the rejection classifies as transient → infinite reconnect loop. See
+    /// `WAWebProcessCertificate.Certificate.js:35` (`if (a && ...)`).
+    #[test]
+    fn select_pattern_unregistered_device_returns_xx_even_with_valid_cache() {
+        let mut device = wacore::store::Device::new();
+        assert!(
+            !device.is_registered(),
+            "fresh Device::new() must be unpaired"
+        );
+        device.server_cert_chain = Some(cached_chain([0xAA; 32], 1_900_000_000, 1_900_000_000));
+        assert_eq!(
+            select_pattern(&device, 0, 1_800_000_000),
+            HandshakePattern::Xx
+        );
+    }
+
+    /// Regression for the persistence-side gate. Mirrors WA Web's
+    /// `Certificate.js:35` — only paired devices write the chain so that
+    /// the unpaired-then-restart flow can never seed an IK attempt.
+    #[test]
+    fn should_persist_cert_chain_unregistered_returns_false() {
+        let device = wacore::store::Device::new();
+        assert!(!device.is_registered());
+        assert!(!should_persist_cert_chain(&device));
+    }
+
+    #[test]
+    fn should_persist_cert_chain_registered_returns_true() {
+        let device = paired_device();
+        assert!(device.is_registered());
+        assert!(should_persist_cert_chain(&device));
     }
 
     #[test]

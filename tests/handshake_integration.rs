@@ -307,6 +307,21 @@ async fn pm() -> Arc<whatsapp_rust::store::persistence_manager::PersistenceManag
     )
 }
 
+/// Builds a PersistenceManager whose Device looks like it has already
+/// completed pairing (`pn` is populated). The XX→IK orchestration only
+/// runs on registered devices — see `select_pattern` and
+/// `should_persist_cert_chain` in `src/handshake.rs`, which mirror
+/// `WAWebProcessCertificate.Certificate.js:35`. Tests that exercise the
+/// IK path therefore must seed registration state up front.
+async fn paired_pm() -> Arc<whatsapp_rust::store::persistence_manager::PersistenceManager> {
+    let pm = pm().await;
+    pm.process_command(wacore::store::DeviceCommand::SetId(Some(
+        "12345@s.whatsapp.net".parse().unwrap(),
+    )))
+    .await;
+    pm
+}
+
 fn runtime() -> Arc<dyn wacore::runtime::Runtime> {
     Arc::new(whatsapp_rust::runtime_impl::TokioRuntime)
 }
@@ -315,7 +330,11 @@ fn runtime() -> Arc<dyn wacore::runtime::Runtime> {
 async fn cold_start_xx_then_cached_ik_reconnect() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let pm = pm().await;
+    // The XX→IK reconnect path runs only for paired devices; an unpaired
+    // device intentionally sticks to XX and never persists the chain (see
+    // `should_persist_cert_chain`). Real cold-start happens unpaired and
+    // is covered by the unit tests in `src/handshake.rs`.
+    let pm = paired_pm().await;
     let counter = Arc::new(AtomicU32::new(0));
     let server = InProcessServer::new();
     let server_static_pub_expected = server.server_static_pub();
@@ -415,6 +434,60 @@ async fn cold_start_xx_then_cached_ik_reconnect() {
     assert!(ch.payload.is_some(), "IK ClientHello carries 0-RTT payload");
 }
 
+/// Regression for the bug behind PR #598's unpaired-then-restart loop:
+///
+/// 1. Cold start with an UNPAIRED device → XX must succeed.
+/// 2. After the handshake, `server_cert_chain` MUST stay `None`. If it
+///    were persisted, the next reconnect would pick IK against an
+///    unregistered identity, the server would close the channel, and the
+///    transient classification would loop forever (see the original
+///    `log.txt` symptom of "Will attempt to reconnect ... attempt N").
+///
+/// Mirrors `WAWebProcessCertificate.Certificate.js:35` (`if (a && ...)`).
+#[tokio::test]
+async fn unpaired_xx_does_not_persist_cert_chain() {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let pm = pm().await; // Intentionally NOT paired_pm — that's the point.
+    let counter = Arc::new(AtomicU32::new(0));
+    let server = Arc::new(InProcessServer::new());
+
+    let (transport, events_tx, mut events_rx) = new_transport_pair();
+    let server_clone = server.clone();
+    let server_t = transport.clone();
+    let task = tokio::spawn(async move {
+        xx_serve_full(&server_clone, &server_t, &events_tx).await;
+    });
+
+    let result = do_handshake(
+        runtime(),
+        pm.as_ref(),
+        counter.as_ref(),
+        transport.clone(),
+        &mut events_rx,
+    )
+    .await;
+    task.await.unwrap();
+
+    assert!(
+        result.is_ok(),
+        "XX handshake on unpaired device should succeed: {:?}",
+        result.err()
+    );
+
+    let device = pm.get_device_snapshot().await;
+    assert!(
+        !device.is_registered(),
+        "precondition: device must still be unpaired"
+    );
+    assert!(
+        device.server_cert_chain.is_none(),
+        "unpaired device must NOT persist the cert chain — that would force \
+         IK on the next connect and trigger the unpaired-IK reject loop"
+    );
+    assert_eq!(counter.load(std::sync::atomic::Ordering::Acquire), 0);
+}
+
 /// IK-reject responder: parses the IK ClientHello, then replies with an
 /// XX-shaped ServerHello (carrying `static != null`) using the
 /// XXfallback pattern. The client must:
@@ -489,7 +562,7 @@ async fn ik_serve_force_fallback_then_consume_finish(
 async fn ik_rejected_recovers_via_xxfallback_and_repopulates_cache() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let pm = pm().await;
+    let pm = paired_pm().await;
     let counter = Arc::new(AtomicU32::new(0));
     let server = Arc::new(InProcessServer::new());
     let server_static_pub_expected = server.server_static_pub();
@@ -550,7 +623,7 @@ async fn ik_rejected_recovers_via_xxfallback_and_repopulates_cache() {
 async fn ik_with_stale_cache_invalidates_and_increments_counter() {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let pm = pm().await;
+    let pm = paired_pm().await;
     let counter = Arc::new(AtomicU32::new(0));
 
     // Pre-seed the device with a STALE cert chain — the leaf.key is wrong

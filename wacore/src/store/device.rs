@@ -366,6 +366,16 @@ impl Device {
         self.pn.is_some() && !self.push_name.is_empty()
     }
 
+    /// Mirrors WA Web `WAWebUserPrefsMultiDevice.isRegistered()`
+    /// (`!!(m() && getMaybeMeDevicePn())`): a device is registered iff pairing
+    /// has populated its phone-number JID. Used by the Noise handshake to
+    /// gate IK selection and cert-chain persistence so that an unpaired
+    /// device that displayed a QR but was killed before scanning never ends
+    /// up with a stale `server_cert_chain` driving the next connect into IK.
+    pub fn is_registered(&self) -> bool {
+        self.pn.is_some()
+    }
+
     pub fn set_device_props(&mut self, o: DevicePropsOverride) {
         if let Some(os) = o.os {
             self.device_props.os = Some(os);
