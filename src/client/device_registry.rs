@@ -365,9 +365,20 @@ impl Client {
                         .await;
                 }
                 // WA Web's `updateGroupParticipantsInTransaction` deletes the
-                // device JID from each affected group's senderKey Map.
-                self.delete_sender_key_rows_for_device(user, device_id)
-                    .await;
+                // device JID from each affected group's senderKey Map. Skip
+                // the registry update on failure: a half-applied state where
+                // `resolve_devices` says "gone" but the tracker still vouches
+                // `has_key=true` would silently skip SKDM redistribution.
+                if let Err(e) = self
+                    .delete_sender_key_rows_for_device(user, device_id)
+                    .await
+                {
+                    warn!(
+                        "patch_device_remove: sender-key cleanup failed for {user}:{device_id}: {e} \
+                         — aborting registry update"
+                    );
+                    return;
+                }
                 if let Err(e) = self.update_device_list(record).await {
                     warn!("patch_device_remove: failed to persist: {e}");
                 }
@@ -381,7 +392,15 @@ impl Client {
     /// is also evicted for groups that indexed the removed JID — necessary
     /// because a future re-add of the same device_id would otherwise hit
     /// a stale `has_key=true` entry and skip SKDM.
-    async fn delete_sender_key_rows_for_device(&self, user: &str, device_id: u32) {
+    ///
+    /// Cache eviction runs only after the DB delete succeeds; on failure the
+    /// error is propagated so the caller can leave both DB and cache in their
+    /// pre-call state rather than half-applying the cleanup.
+    async fn delete_sender_key_rows_for_device(
+        &self,
+        user: &str,
+        device_id: u32,
+    ) -> Result<(), wacore::store::error::StoreError> {
         let lookup = self.resolve_lookup_keys(user).await;
         let servers = [wacore_binary::Server::Lid, wacore_binary::Server::Pn];
         let mut candidates: Vec<String> = Vec::with_capacity(4);
@@ -393,19 +412,16 @@ impl Client {
             }
         }
         let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
-        if let Err(e) = self
-            .persistence_manager
+        self.persistence_manager
             .delete_sender_key_device_rows(&refs)
-            .await
-        {
-            warn!("delete_sender_key_rows_for_device: {e}");
-        }
+            .await?;
 
         for key in lookup.all_keys() {
             self.sender_key_device_cache
                 .invalidate_entries_for_device(key, device_id as u16)
                 .await;
         }
+        Ok(())
     }
 
     /// Update key_index for a device in the registry.
