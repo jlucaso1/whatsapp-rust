@@ -2119,44 +2119,75 @@ mod tests {
         );
     }
 
-    /// Regression: `resolve_skdm_targets` must NOT short-circuit when the
-    /// `sender_key_devices` table is empty. The previous early-exit
-    /// (`if cached_map.is_empty() return None`) caused the caller in
-    /// `send_message_impl` to skip SKDM distribution on the first send to
-    /// any group with empty cache — a state that occurred routinely after
-    /// `clear_all_sender_key_devices` wipes triggered by identity changes.
+    /// Regression: with `sender_key_devices` empty for the group AND
+    /// participant devices known to the registry, `resolve_skdm_targets` must
+    /// return `Some(needs_skdm)` listing every participant device — proving
+    /// that the empty-cache short-circuit is gone.
     ///
-    /// Post-fix, the function falls through to `resolve_devices`. In this
-    /// test environment that resolver has no transport → returns Err →
-    /// function returns None. We can't observe the success path here, but
-    /// we can assert that the empty-cache fast path is gone by verifying
-    /// `SenderKeyDeviceMap` no longer exposes `is_empty`.
+    /// Pre-populates `device_registry_cache` so `resolve_devices` (called by
+    /// `resolve_skdm_targets`) succeeds without network. With the legacy
+    /// `if cached_map.is_empty() return None`, this test fails because the
+    /// function returns `None` before ever calling `resolve_devices`.
     #[tokio::test]
-    async fn resolve_skdm_targets_does_not_short_circuit_on_empty_cache() {
+    async fn resolve_skdm_targets_distributes_when_cache_empty_but_devices_known() {
         use wacore::client::context::GroupInfo;
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
         use wacore::types::message::AddressingMode;
 
         let client = crate::test_utils::create_test_client().await;
         let group_jid = "120363161500776365@g.us";
         let own_lid = Jid::from_str("193832511623409:13@lid").unwrap();
 
-        let participants: Vec<Jid> = [
-            "271060335329480@lid",
-            "77610646245392@lid",
-            "276661023027320@lid",
-        ]
-        .into_iter()
-        .map(|s| Jid::from_str(s).unwrap())
-        .collect();
+        let participant_users = ["271060335329480", "77610646245392", "276661023027320"];
 
-        let group_info = GroupInfo::new(participants, AddressingMode::Lid);
+        // Pre-populate device registry so `resolve_devices` returns Ok in
+        // tests (no network). One device per participant — single-device
+        // entry is enough for the filter assertion.
+        for user in &participant_users {
+            let record = DeviceListRecord {
+                user: (*user).into(),
+                devices: vec![DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                }],
+                timestamp: wacore::time::now_secs(),
+                phash: None,
+                raw_id: None,
+            };
+            client
+                .device_registry_cache
+                .insert((*user).into(), record)
+                .await;
+        }
 
-        // Without a real transport this returns None via the resolver-Err branch.
-        // The point of the test is that it CALLS resolve_devices instead of
-        // shortcutting on `cached_map.is_empty()`.
-        let _ = client
+        let participants: Vec<Jid> = participant_users
+            .iter()
+            .map(|u| Jid::from_str(&format!("{u}@lid")).unwrap())
+            .collect();
+
+        let group_info = GroupInfo::new(participants.clone(), AddressingMode::Lid);
+
+        let result = client
             .resolve_skdm_targets(group_jid, &group_info, &own_lid)
-            .await;
+            .await
+            .expect(
+                "empty sender_key_devices + known participant devices must resolve to \
+                 Some(needs_skdm). If this is None, the early-exit short-circuit was \
+                 reintroduced — the bug that ships bare skmsg without SKDM bundles is back.",
+            );
+
+        // Every participant device must be flagged as needing SKDM.
+        assert_eq!(
+            result.len(),
+            participants.len(),
+            "expected one needs_skdm entry per participant device, got {result:?}"
+        );
+        for user in &participant_users {
+            assert!(
+                result.iter().any(|j| j.user == *user),
+                "participant {user} missing from needs_skdm: {result:?}"
+            );
+        }
     }
 
     /// Regression: a single retry-receipt-inserted `has_key=false` row must
