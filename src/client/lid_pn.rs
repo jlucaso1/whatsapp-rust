@@ -295,51 +295,26 @@ impl Client {
         resolved
     }
 
-    /// Resolve a JID into the canonical form used for Signal session and
-    /// sender-key lookups. Mirrors WA Web's `SignalAddress.toString()`
-    /// (`WAWeb/Signal/Address.js`):
-    ///
-    /// - LID / HostedLid: already in canonical form, returned as-is.
-    /// - PN: upgraded to `{lid_user}@lid` when a mapping is known, kept as
-    ///   `{user}@s.whatsapp.net` (mapped to `@c.us` at format time) otherwise.
-    /// - Hosted: upgraded to `{lid_user}@hosted.lid` when a mapping is known,
-    ///   kept as `{user}@hosted` otherwise. WA Web hardcodes device=99 for
-    ///   hosted; we preserve whatever device the input carries so a
-    ///   misformed JID is still routable rather than silently dropped.
+    /// Mirrors WA Web `SignalAddress.toString()` (`WAWeb/Signal/Address.js`):
+    /// upgrade Pn → Lid and Hosted → HostedLid when a mapping is known, else
+    /// preserve the input.
     pub(crate) async fn resolve_encryption_jid(&self, target: &Jid) -> Jid {
         use wacore_binary::Server;
-        match target.server {
-            Server::Lid | Server::HostedLid => target.clone(),
-            Server::Pn => self
-                .upgrade_to_lid_namespace(target, Server::Lid)
-                .await
-                .unwrap_or_else(|| {
-                    debug!("[SEND-LOCK] No LID mapping for {target}, using PN");
-                    target.clone()
-                }),
-            Server::Hosted => self
-                .upgrade_to_lid_namespace(target, Server::HostedLid)
-                .await
-                .unwrap_or_else(|| target.clone()),
-            _ => target.clone(),
-        }
-    }
-
-    async fn upgrade_to_lid_namespace(
-        &self,
-        target: &Jid,
-        lid_server: wacore_binary::Server,
-    ) -> Option<Jid> {
-        let lid_user = self.lid_pn_cache.get_current_lid(&target.user).await?;
-        let upgraded = Jid {
-            user: lid_user.into(),
-            server: lid_server,
-            device: target.device,
-            agent: target.agent,
-            integrator: target.integrator,
+        let lid_server = match target.server {
+            Server::Pn => Server::Lid,
+            Server::Hosted => Server::HostedLid,
+            _ => return target.clone(),
         };
-        debug!("[SEND-LOCK] Resolved {target} to {upgraded} for session lock");
-        Some(upgraded)
+        match self.lid_pn_cache.get_current_lid(&target.user).await {
+            Some(lid_user) => Jid {
+                user: lid_user.into(),
+                server: lid_server,
+                device: target.device,
+                agent: target.agent,
+                integrator: target.integrator,
+            },
+            None => target.clone(),
+        }
     }
 
     /// Swap a JID's namespace between PN and LID, preserving device/agent/integrator.
@@ -560,8 +535,6 @@ mod tests {
         assert_eq!(resolved, pn_jid);
     }
 
-    /// WA Web `SignalAddress.toString()` for Hosted with known LID:
-    /// `[lid_user, ":99", "@hosted.lid"]`.
     #[tokio::test]
     async fn test_resolve_encryption_jid_hosted_with_lid_upgrades_to_hosted_lid() {
         let client: Arc<Client> = create_test_client().await;
@@ -582,8 +555,6 @@ mod tests {
         assert_eq!(resolved.device, 99);
     }
 
-    /// WA Web `SignalAddress.toString()` for Hosted without a known LID:
-    /// `[user, ":99", "@hosted"]` (no upgrade).
     #[tokio::test]
     async fn test_resolve_encryption_jid_hosted_no_mapping_keeps_hosted() {
         let client: Arc<Client> = create_test_client().await;
@@ -595,8 +566,6 @@ mod tests {
         assert_eq!(resolved, hosted);
     }
 
-    /// HostedLid is already in the canonical (LID-keyed) form WA Web
-    /// uses internally, so resolution is a no-op.
     #[tokio::test]
     async fn test_resolve_encryption_jid_preserves_hosted_lid() {
         let client: Arc<Client> = create_test_client().await;

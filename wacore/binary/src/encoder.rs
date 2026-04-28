@@ -1430,11 +1430,8 @@ mod tests {
         Ok(())
     }
 
-    /// Pre-#391, the encoder wrote `jid.agent` instead of the
-    /// server-derived `domain_type`. For directly constructed JIDs the
-    /// `agent` field defaults to 0, so any server other than `Pn` would
-    /// encode wrong. This test pins down the practical impact for Hosted
-    /// and HostedLid when they're built without going through the parser.
+    /// Pin domain_type for direct-constructed Hosted/HostedLid JIDs (default
+    /// `agent=0`); pre-#391 these encoded as `0` instead of `128`/`129`.
     #[test]
     fn test_direct_constructed_hosted_encodes_correct_domain_type() -> TestResult {
         let mut hosted = Jid::new("100000000000001", jid::Server::Hosted);
