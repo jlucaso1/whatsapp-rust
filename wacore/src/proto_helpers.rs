@@ -95,9 +95,9 @@ pub trait MessageExt {
     /// wrapper types (device_sent, ephemeral, view_once, etc.) without cloning.
     fn into_base_message(self) -> wa::Message;
     fn is_ephemeral(&self) -> bool;
-    /// Covers both the legacy `view_once_message{_v2}` wrapper (also when nested
-    /// inside `device_sent`/`ephemeral`) and the inline `view_once` flag on
-    /// modern image/video/audio/extended-text payloads.
+    /// Covers the legacy `view_once_message{_v2,_v2_extension}` wrappers (in any
+    /// nesting order under `device_sent`/`ephemeral`) and the inline `view_once`
+    /// flag on modern image/video/audio/extended-text payloads.
     fn is_view_once(&self) -> bool;
     /// Gets the caption for media messages (Image, Video, Document).
     fn get_caption(&self) -> Option<&str>;
@@ -235,22 +235,30 @@ impl MessageExt for wa::Message {
 
     fn is_view_once(&self) -> bool {
         let mut current = self;
-        if let Some(inner) = current
-            .device_sent_message
-            .as_ref()
-            .and_then(|m| m.message.as_ref())
-        {
-            current = inner;
-        }
-        if let Some(inner) = current
-            .ephemeral_message
-            .as_ref()
-            .and_then(|m| m.message.as_ref())
-        {
-            current = inner;
-        }
-        if current.view_once_message.is_some() || current.view_once_message_v2.is_some() {
-            return true;
+        loop {
+            if current.view_once_message.is_some()
+                || current.view_once_message_v2.is_some()
+                || current.view_once_message_v2_extension.is_some()
+            {
+                return true;
+            }
+            if let Some(inner) = current
+                .device_sent_message
+                .as_ref()
+                .and_then(|m| m.message.as_ref())
+            {
+                current = inner;
+                continue;
+            }
+            if let Some(inner) = current
+                .ephemeral_message
+                .as_ref()
+                .and_then(|m| m.message.as_ref())
+            {
+                current = inner;
+                continue;
+            }
+            break;
         }
 
         let base = self.get_base_message();
@@ -1805,5 +1813,38 @@ mod tests {
     #[test]
     fn is_view_once_false_for_empty_message() {
         assert!(!wa::Message::default().is_view_once());
+    }
+
+    #[test]
+    fn is_view_once_detects_v2_extension_wrapper() {
+        let msg = wa::Message {
+            view_once_message_v2_extension: Some(Box::new(wa::message::FutureProofMessage {
+                message: Some(Box::new(wa::Message::default())),
+            })),
+            ..Default::default()
+        };
+        assert!(msg.is_view_once());
+    }
+
+    #[test]
+    fn is_view_once_detects_ephemeral_device_sent_view_once() {
+        let msg = wa::Message {
+            ephemeral_message: Some(Box::new(wa::message::FutureProofMessage {
+                message: Some(Box::new(wa::Message {
+                    device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                        message: Some(Box::new(wa::Message {
+                            view_once_message_v2: Some(Box::new(wa::message::FutureProofMessage {
+                                message: Some(Box::new(wa::Message::default())),
+                            })),
+                            ..Default::default()
+                        })),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })),
+            })),
+            ..Default::default()
+        };
+        assert!(msg.is_view_once());
     }
 }
