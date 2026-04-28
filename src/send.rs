@@ -699,12 +699,33 @@ impl Client {
                     let jid_str = jid.to_string();
                     // Cache-only invalidation re-reads the same stale rows on
                     // the next send. Drop the persisted state too so the next
-                    // send takes the full-distribution path.
-                    if (jid.is_group() || jid.is_status_broadcast())
-                        && let Err(e) =
-                            client.persistence_manager.clear_sender_key_devices(&jid_str).await
-                    {
-                        log::warn!("phash mismatch: clear_sender_key_devices failed: {e}");
+                    // send takes the full-distribution path. If the clear
+                    // fails, fall back to deleting the bot's own sender key
+                    // for the chat — the next send will see `!key_exists`
+                    // and force_skdm without depending on the tracker.
+                    if jid.is_group() || jid.is_status_broadcast() {
+                        let cleared = client
+                            .persistence_manager
+                            .clear_sender_key_devices(&jid_str)
+                            .await;
+                        if let Err(e) = cleared {
+                            log::warn!(
+                                "phash mismatch: clear_sender_key_devices failed: {e} — \
+                                 deleting own sender key as fallback to force redistribution"
+                            );
+                            use wacore::libsignal::store::sender_key_name::SenderKeyName;
+                            use wacore::types::jid::JidExt;
+                            let snapshot =
+                                client.persistence_manager.get_device_snapshot().await;
+                            for own in snapshot.lid.iter().chain(snapshot.pn.iter()) {
+                                let sk =
+                                    SenderKeyName::from_parts(&jid_str, own.to_protocol_address().as_str());
+                                client.signal_cache.delete_sender_key(sk.cache_key()).await;
+                            }
+                            let _ = client
+                                .flush_signal_cache_logged("phash-mismatch-fallback", None)
+                                .await;
+                        }
                     }
                     client.sender_key_device_cache.invalidate(&jid_str).await;
                     if invalidate_group_cache {

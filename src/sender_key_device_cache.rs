@@ -84,6 +84,25 @@ impl SenderKeyDeviceCache {
         self.inner.invalidate(group_jid).await;
     }
 
+    /// Drop cache entries whose map indexes the given (user, device_id). Needed
+    /// after a device is removed: a future re-add of the same device_id would
+    /// otherwise hit a stale `has_key=true` entry and skip SKDM redistribution.
+    pub(crate) async fn invalidate_entries_for_device(&self, user: &str, device_id: u16) {
+        let to_drop: Vec<String> = self
+            .inner
+            .iter()
+            .filter_map(|(group_jid, map)| {
+                map.devices
+                    .get(user)
+                    .and_then(|devmap| devmap.get(&device_id))
+                    .map(|_| group_jid.as_ref().clone())
+            })
+            .collect();
+        for g in to_drop {
+            self.inner.invalidate(&g).await;
+        }
+    }
+
     #[cfg(feature = "debug-diagnostics")]
     pub(crate) fn entry_count(&self) -> u64 {
         self.inner.entry_count()

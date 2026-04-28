@@ -377,9 +377,10 @@ impl Client {
 
     /// Delete `sender_key_devices` rows whose `device_jid` matches the given
     /// (user, device_id) under either LID or PN addressing. Both alias keys
-    /// for the user are tried via `resolve_lookup_keys`. Touches DB then
-    /// invalidates the in-memory cache for groups that may have indexed the
-    /// removed JID.
+    /// for the user are tried via `resolve_lookup_keys`. The in-memory cache
+    /// is also evicted for groups that indexed the removed JID — necessary
+    /// because a future re-add of the same device_id would otherwise hit
+    /// a stale `has_key=true` entry and skip SKDM.
     async fn delete_sender_key_rows_for_device(&self, user: &str, device_id: u32) {
         let lookup = self.resolve_lookup_keys(user).await;
         let servers = [wacore_binary::Server::Lid, wacore_binary::Server::Pn];
@@ -398,6 +399,12 @@ impl Client {
             .await
         {
             warn!("delete_sender_key_rows_for_device: {e}");
+        }
+
+        for key in lookup.all_keys() {
+            self.sender_key_device_cache
+                .invalidate_entries_for_device(key, device_id as u16)
+                .await;
         }
     }
 
@@ -1462,6 +1469,41 @@ mod tests {
     }
 
     // ── SKDM flow regression tests ─────────────────────────────────────
+
+    /// After remove, the in-memory cache must not return `has_key=true` for
+    /// the removed JID. A future re-add of the same device_id would otherwise
+    /// hit the stale entry and skip SKDM redistribution.
+    #[tokio::test]
+    async fn patch_device_remove_evicts_cached_has_key_for_removed_device() {
+        use crate::sender_key_device_cache::SenderKeyDeviceMap;
+
+        let client = create_test_client().await;
+        let user = "15551234567";
+        setup_device_record(&client, user, &[0, 5]).await;
+
+        let group = "120363000000000001@g.us";
+        let map = SenderKeyDeviceMap::from_db_rows(&[(format!("{user}:5@s.whatsapp.net"), true)]);
+        client
+            .sender_key_device_cache
+            .get_or_init(group, async { std::sync::Arc::new(map) })
+            .await;
+
+        client.patch_device_remove(user, 5).await;
+
+        let reloaded = client
+            .sender_key_device_cache
+            .get_or_init(group, async {
+                std::sync::Arc::new(SenderKeyDeviceMap::from_db_rows(
+                    &client
+                        .persistence_manager
+                        .get_sender_key_devices(group)
+                        .await
+                        .unwrap(),
+                ))
+            })
+            .await;
+        assert_eq!(reloaded.device_has_key(user, 5), None);
+    }
 
     #[tokio::test]
     async fn patch_device_remove_clears_sender_key_device_rows() {

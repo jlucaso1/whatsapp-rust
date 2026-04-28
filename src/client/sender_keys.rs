@@ -82,17 +82,20 @@ impl Client {
             return;
         }
 
-        let rows = match self
+        // Read failure → rotate anyway. Better to pay the redistribute cost
+        // than leave the sender key in place after a removal we couldn't audit.
+        let (rows, read_failed) = match self
             .persistence_manager
             .get_sender_key_devices(group_jid)
             .await
         {
-            Ok(rows) => rows,
+            Ok(r) => (r, false),
             Err(e) => {
                 log::warn!(
-                    "rotate_sender_key_on_participant_remove: read failed for {group_jid}: {e}"
+                    "rotate_sender_key_on_participant_remove: read failed for {group_jid}: {e} \
+                     — rotating conservatively"
                 );
-                return;
+                (Vec::new(), true)
             }
         };
 
@@ -103,7 +106,7 @@ impl Client {
                     .ok()
                     .is_some_and(|jid| removed_user_ids.iter().any(|u| *u == jid.user.as_str()))
         });
-        if !any_had_key {
+        if !read_failed && !any_had_key {
             return;
         }
 
