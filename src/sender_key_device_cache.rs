@@ -46,6 +46,9 @@ impl SenderKeyDeviceMap {
         }
     }
 
+    /// Test-only — production code reads via `device_has_key` / `is_user_forgotten`.
+    /// Used by cache-invalidation regression tests in `device_registry`.
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.devices.is_empty()
     }

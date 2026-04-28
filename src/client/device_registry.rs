@@ -352,17 +352,13 @@ impl Client {
         self.delete_sessions_for_devices(user, &non_primary_ids)
             .await;
 
-        // Clear persisted SKDM tracking across ALL groups so stale has_key=true
-        // rows don't survive restart. Identity changes are rare so the cost is acceptable.
-        if let Err(e) = self
-            .persistence_manager
-            .backend()
-            .clear_all_sender_key_devices()
-            .await
-        {
-            warn!("clear_device_record: failed to clear persisted sender key devices: {e}");
-        }
-        self.sender_key_device_cache.invalidate_all();
+        // SKDM tracking is left untouched on identity change to mirror WA Web's
+        // `WAWebUpdateLocalSignalSession`: it deletes the Signal session but
+        // calls `markForgetSenderKey` only on retry receipts, per-group/per-device.
+        // The previous global wipe here was over-eager — it forced the bot to
+        // re-distribute SKDM to every device of every group on every identity
+        // rotation, and worse, left `sender_key_devices` empty long enough that
+        // the next group send hit the no-distribution path (see `resolve_skdm_targets`).
     }
 
     /// Remove a device from the registry after a device remove notification.
