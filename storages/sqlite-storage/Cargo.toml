@@ -20,7 +20,7 @@ diesel = { version = "2.3.7", default-features = false, features = [
     "r2d2",
     "32-column-tables",
 ] }
-diesel_migrations = { version = "2.3.1", default-features = false, features = [
+diesel_migrations = { version = "2.3.2", default-features = false, features = [
     "sqlite",
 ] }
 libsqlite3-sys = { version = "0.36", default-features = false, optional = true }
