@@ -546,13 +546,18 @@ mod tests {
             .await
             .unwrap();
 
-        let mut hosted = Jid::new(user, Server::Hosted);
-        hosted.device = 99;
-        let resolved = client.resolve_encryption_jid(&hosted).await;
+        for device in [99u16, 7] {
+            let mut hosted = Jid::new(user, Server::Hosted);
+            hosted.device = device;
+            let resolved = client.resolve_encryption_jid(&hosted).await;
 
-        assert_eq!(resolved.user, lid);
-        assert_eq!(resolved.server, Server::HostedLid);
-        assert_eq!(resolved.device, 99);
+            assert_eq!(resolved.user, lid);
+            assert_eq!(resolved.server, Server::HostedLid);
+            assert_eq!(
+                resolved.device, device,
+                "device must round-trip, not be coerced to 99"
+            );
+        }
     }
 
     #[tokio::test]
