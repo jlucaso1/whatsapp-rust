@@ -218,8 +218,10 @@ impl Client {
     /// 4. Replace the full device record
     ///
     /// If `signed_bytes` is absent, falls back to simple append (lenient).
-    /// When a genuinely new device is added, invalidates the sender key device
-    /// cache so SKDM will be sent on the next group message.
+    ///
+    /// New devices need no explicit cache invalidation: `resolve_skdm_targets`
+    /// queries the registry on each send and `device_has_key()` returns `None`
+    /// for unseen device IDs, dropping them into `needs_skdm` automatically.
     pub(crate) async fn patch_device_add(
         &self,
         user: &str,
@@ -360,8 +362,22 @@ impl Client {
             let before = record.devices.len();
             record.devices.retain(|d| d.device_id != device_id);
             if record.devices.len() != before {
-                if device_id != 0 {
-                    self.delete_sessions_for_devices(user, &[device_id as u16])
+                // JID-keyed structures (Signal sessions, sender_key_devices)
+                // store device as u16. A blind cast for ids > u16::MAX would
+                // truncate to a different value and cleanup the wrong device.
+                let Ok(device_id_u16) = u16::try_from(device_id) else {
+                    warn!(
+                        "patch_device_remove: device_id {device_id} > u16::MAX — skipping \
+                         session/SKDM cleanup but still persisting registry removal"
+                    );
+                    if let Err(e) = self.update_device_list(record).await {
+                        warn!("patch_device_remove: failed to persist: {e}");
+                    }
+                    return;
+                };
+
+                if device_id_u16 != 0 {
+                    self.delete_sessions_for_devices(user, &[device_id_u16])
                         .await;
                 }
                 // WA Web's `updateGroupParticipantsInTransaction` deletes the
@@ -370,7 +386,7 @@ impl Client {
                 // `resolve_devices` says "gone" but the tracker still vouches
                 // `has_key=true` would silently skip SKDM redistribution.
                 if let Err(e) = self
-                    .delete_sender_key_rows_for_device(user, device_id)
+                    .delete_sender_key_rows_for_device(user, device_id_u16)
                     .await
                 {
                     warn!(
@@ -399,7 +415,7 @@ impl Client {
     async fn delete_sender_key_rows_for_device(
         &self,
         user: &str,
-        device_id: u32,
+        device_id: u16,
     ) -> Result<(), wacore::store::error::StoreError> {
         let lookup = self.resolve_lookup_keys(user).await;
         let servers = [wacore_binary::Server::Lid, wacore_binary::Server::Pn];
@@ -407,7 +423,7 @@ impl Client {
         for server in servers {
             for key in lookup.all_keys() {
                 let mut jid = Jid::new(key, server);
-                jid.device = device_id as u16;
+                jid.device = device_id;
                 candidates.push(jid.to_string());
             }
         }
@@ -418,7 +434,7 @@ impl Client {
 
         for key in lookup.all_keys() {
             self.sender_key_device_cache
-                .invalidate_entries_for_device(key, device_id as u16)
+                .invalidate_entries_for_device(key, device_id)
                 .await;
         }
         Ok(())
