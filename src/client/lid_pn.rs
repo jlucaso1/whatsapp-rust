@@ -549,6 +549,8 @@ mod tests {
         for device in [99u16, 7] {
             let mut hosted = Jid::new(user, Server::Hosted);
             hosted.device = device;
+            hosted.agent = 0xAB;
+            hosted.integrator = 0xBEEF;
             let resolved = client.resolve_encryption_jid(&hosted).await;
 
             assert_eq!(resolved.user, lid);
@@ -557,6 +559,8 @@ mod tests {
                 resolved.device, device,
                 "device must round-trip, not be coerced to 99"
             );
+            assert_eq!(resolved.agent, hosted.agent);
+            assert_eq!(resolved.integrator, hosted.integrator);
         }
     }
 
