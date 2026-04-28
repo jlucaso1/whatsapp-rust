@@ -95,6 +95,9 @@ pub trait MessageExt {
     /// wrapper types (device_sent, ephemeral, view_once, etc.) without cloning.
     fn into_base_message(self) -> wa::Message;
     fn is_ephemeral(&self) -> bool;
+    /// Covers both the legacy `view_once_message{_v2}` wrapper (also when nested
+    /// inside `device_sent`/`ephemeral`) and the inline `view_once` flag on
+    /// modern image/video/audio/extended-text payloads.
     fn is_view_once(&self) -> bool;
     /// Gets the caption for media messages (Image, Video, Document).
     fn get_caption(&self) -> Option<&str>;
@@ -231,7 +234,41 @@ impl MessageExt for wa::Message {
     }
 
     fn is_view_once(&self) -> bool {
-        self.view_once_message.is_some() || self.view_once_message_v2.is_some()
+        let mut current = self;
+        if let Some(inner) = current
+            .device_sent_message
+            .as_ref()
+            .and_then(|m| m.message.as_ref())
+        {
+            current = inner;
+        }
+        if let Some(inner) = current
+            .ephemeral_message
+            .as_ref()
+            .and_then(|m| m.message.as_ref())
+        {
+            current = inner;
+        }
+        if current.view_once_message.is_some() || current.view_once_message_v2.is_some() {
+            return true;
+        }
+
+        let base = self.get_base_message();
+        matches!(
+            base.image_message.as_deref().and_then(|m| m.view_once),
+            Some(true)
+        ) || matches!(
+            base.video_message.as_deref().and_then(|m| m.view_once),
+            Some(true)
+        ) || matches!(
+            base.audio_message.as_deref().and_then(|m| m.view_once),
+            Some(true)
+        ) || matches!(
+            base.extended_text_message
+                .as_deref()
+                .and_then(|m| m.view_once),
+            Some(true)
+        )
     }
 
     fn get_caption(&self) -> Option<&str> {
@@ -1643,5 +1680,130 @@ mod tests {
         let ctx = wrapped.message_context_info.as_ref().unwrap();
         assert_eq!(ctx.message_secret.as_deref(), Some(secret.as_slice()));
         assert!(ctx.message_association.is_some());
+    }
+
+    #[test]
+    fn is_view_once_detects_legacy_wrapper() {
+        let msg = wa::Message {
+            view_once_message: Some(Box::new(wa::message::FutureProofMessage {
+                message: Some(Box::new(wa::Message::default())),
+            })),
+            ..Default::default()
+        };
+        assert!(msg.is_view_once());
+
+        let msg_v2 = wa::Message {
+            view_once_message_v2: Some(Box::new(wa::message::FutureProofMessage {
+                message: Some(Box::new(wa::Message::default())),
+            })),
+            ..Default::default()
+        };
+        assert!(msg_v2.is_view_once());
+    }
+
+    #[test]
+    fn is_view_once_detects_wrapper_nested_in_device_sent() {
+        let msg = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                message: Some(Box::new(wa::Message {
+                    view_once_message_v2: Some(Box::new(wa::message::FutureProofMessage {
+                        message: Some(Box::new(wa::Message::default())),
+                    })),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(msg.is_view_once());
+    }
+
+    #[test]
+    fn is_view_once_detects_inline_image_flag() {
+        let msg = wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage {
+                view_once: Some(true),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(msg.is_view_once());
+    }
+
+    #[test]
+    fn is_view_once_detects_inline_video_flag() {
+        let msg = wa::Message {
+            video_message: Some(Box::new(wa::message::VideoMessage {
+                view_once: Some(true),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(msg.is_view_once());
+    }
+
+    #[test]
+    fn is_view_once_detects_inline_audio_flag() {
+        let msg = wa::Message {
+            audio_message: Some(Box::new(wa::message::AudioMessage {
+                view_once: Some(true),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(msg.is_view_once());
+    }
+
+    #[test]
+    fn is_view_once_detects_inline_extended_text_flag() {
+        let msg = wa::Message {
+            extended_text_message: Some(Box::new(wa::message::ExtendedTextMessage {
+                view_once: Some(true),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(msg.is_view_once());
+    }
+
+    #[test]
+    fn is_view_once_detects_inline_flag_through_device_sent() {
+        let msg = wa::Message {
+            device_sent_message: Some(Box::new(wa::message::DeviceSentMessage {
+                message: Some(Box::new(wa::Message {
+                    image_message: Some(Box::new(wa::message::ImageMessage {
+                        view_once: Some(true),
+                        ..Default::default()
+                    })),
+                    ..Default::default()
+                })),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(msg.is_view_once());
+    }
+
+    #[test]
+    fn is_view_once_false_for_plain_image() {
+        let msg = wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage::default())),
+            ..Default::default()
+        };
+        assert!(!msg.is_view_once());
+
+        let msg_explicit_false = wa::Message {
+            image_message: Some(Box::new(wa::message::ImageMessage {
+                view_once: Some(false),
+                ..Default::default()
+            })),
+            ..Default::default()
+        };
+        assert!(!msg_explicit_false.is_view_once());
+    }
+
+    #[test]
+    fn is_view_once_false_for_empty_message() {
+        assert!(!wa::Message::default().is_view_once());
     }
 }
