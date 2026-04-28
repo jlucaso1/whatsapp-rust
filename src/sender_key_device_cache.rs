@@ -84,12 +84,6 @@ impl SenderKeyDeviceCache {
         self.inner.invalidate(group_jid).await;
     }
 
-    /// Invalidate all entries. Used on raw_id mismatch (identity change)
-    /// to force SKDM redistribution for all groups.
-    pub(crate) fn invalidate_all(&self) {
-        self.inner.invalidate_all();
-    }
-
     #[cfg(feature = "debug-diagnostics")]
     pub(crate) fn entry_count(&self) -> u64 {
         self.inner.entry_count()

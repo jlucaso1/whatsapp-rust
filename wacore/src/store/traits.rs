@@ -230,6 +230,10 @@ pub trait ProtocolStore: Send + Sync {
     /// Clear all sender key device tracking for a group (on sender key rotation).
     async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<()>;
 
+    /// Delete specific `sender_key_devices` rows by device JID across all groups.
+    /// Mirrors WA Web's per-group `senderKey.delete(deviceJid)` cleanup.
+    async fn delete_sender_key_device_rows(&self, device_jids: &[&str]) -> Result<()>;
+
     /// Clear all sender key device tracking across ALL groups.
     /// Called on identity change (raw_id mismatch) to force SKDM redistribution.
     async fn clear_all_sender_key_devices(&self) -> Result<()>;

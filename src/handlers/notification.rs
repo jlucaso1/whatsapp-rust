@@ -1192,10 +1192,9 @@ async fn handle_group_notification(client: &Arc<Client>, node: Arc<OwnedNodeRef>
                 }
             }
             GroupNotificationAction::Remove { participants, .. } => {
+                let users: Vec<&str> = participants.iter().map(|p| p.jid.user.as_str()).collect();
                 let group_cache = client.get_group_cache().await;
                 if let Some(mut info) = group_cache.get(&notification.group_jid).await {
-                    let users: Vec<&str> =
-                        participants.iter().map(|p| p.jid.user.as_str()).collect();
                     info.remove_participants(&users);
                     group_cache
                         .insert(notification.group_jid.clone(), info)
@@ -1206,6 +1205,12 @@ async fn handle_group_notification(client: &Arc<Client>, node: Arc<OwnedNodeRef>
                         notification.group_jid, participants.len()
                     );
                 }
+                client
+                    .rotate_sender_key_on_participant_remove(
+                        &notification.group_jid.to_string(),
+                        &users,
+                    )
+                    .await;
             }
             _ => {}
         }

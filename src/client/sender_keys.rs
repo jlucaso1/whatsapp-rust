@@ -67,6 +67,69 @@ impl Client {
         Ok(())
     }
 
+    /// Forward-secrecy rotation when participants leave a group. Mirrors WA
+    /// Web's `removeParticipantInfo` (`GroupParticipantHelpers.js`): if any
+    /// removed user had `has_key=true`, delete the bot's own sender key for
+    /// the group and wipe `sender_key_devices` so the next send takes the
+    /// `force_skdm=true` path (`!key_exists`) and redistributes to all
+    /// remaining participants.
+    pub(crate) async fn rotate_sender_key_on_participant_remove(
+        &self,
+        group_jid: &str,
+        removed_user_ids: &[&str],
+    ) {
+        if removed_user_ids.is_empty() {
+            return;
+        }
+
+        let rows = match self
+            .persistence_manager
+            .get_sender_key_devices(group_jid)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                log::warn!(
+                    "rotate_sender_key_on_participant_remove: read failed for {group_jid}: {e}"
+                );
+                return;
+            }
+        };
+
+        let any_had_key = rows.iter().any(|(jid_str, has_key)| {
+            *has_key
+                && jid_str
+                    .parse::<Jid>()
+                    .ok()
+                    .is_some_and(|jid| removed_user_ids.iter().any(|u| *u == jid.user.as_str()))
+        });
+        if !any_had_key {
+            return;
+        }
+
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+        use wacore::types::jid::JidExt;
+        let snapshot = self.persistence_manager.get_device_snapshot().await;
+        for own_jid in snapshot.lid.iter().chain(snapshot.pn.iter()) {
+            let sk_name =
+                SenderKeyName::from_parts(group_jid, own_jid.to_protocol_address().as_str());
+            self.signal_cache
+                .delete_sender_key(sk_name.cache_key())
+                .await;
+        }
+        self.flush_signal_cache_logged("rotate_sender_key_on_participant_remove", None)
+            .await;
+
+        if let Err(e) = self
+            .persistence_manager
+            .clear_sender_key_devices(group_jid)
+            .await
+        {
+            log::warn!("rotate_sender_key_on_participant_remove: clear DB failed: {e}");
+        }
+        self.sender_key_device_cache.invalidate(group_jid).await;
+    }
+
     /// Take a sent message for retry handling. Checks L1 cache first (if enabled),
     /// then falls back to DB. On miss, tries an alternate PN/LID key to handle
     /// mapping changes between send time and retry time (WAWebLidMigrationUtils

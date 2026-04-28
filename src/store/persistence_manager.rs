@@ -253,6 +253,15 @@ impl PersistenceManager {
     pub async fn clear_sender_key_devices(&self, group_jid: &str) -> Result<(), StoreError> {
         self.backend.clear_sender_key_devices(group_jid).await
     }
+
+    pub async fn delete_sender_key_device_rows(
+        &self,
+        device_jids: &[&str],
+    ) -> Result<(), StoreError> {
+        self.backend
+            .delete_sender_key_device_rows(device_jids)
+            .await
+    }
 }
 
 #[cfg(test)]

@@ -390,6 +390,9 @@ impl<'a> Groups<'a> {
                 info.remove_participants(&accepted);
                 group_cache.insert(jid.clone(), info).await;
             }
+            self.client
+                .rotate_sender_key_on_participant_remove(&jid.to_string(), &accepted)
+                .await;
         }
         Ok(result)
     }

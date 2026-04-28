@@ -232,8 +232,6 @@ impl Client {
             return;
         };
 
-        let devices_before: Vec<u32> = record.devices.iter().map(|d| d.device_id).collect();
-
         let signed_bytes = key_index_info.and_then(|ki| ki.signed_bytes.as_deref());
 
         if let Some(bytes) = signed_bytes {
@@ -277,15 +275,9 @@ impl Client {
             self.append_device_if_new(&mut record, device_id, device.key_index);
         }
 
-        // Detect new devices: any device_id present now that wasn't before.
-        // Invalidate sender key device cache so SKDM is sent on next group message.
-        let has_new_device = record
-            .devices
-            .iter()
-            .any(|d| !devices_before.contains(&d.device_id));
-        if has_new_device {
-            self.sender_key_device_cache.invalidate_all();
-        }
+        // New devices are picked up automatically by `resolve_skdm_targets`:
+        // unknown device → `device_has_key()` returns `None` → falls into
+        // `needs_skdm`. No global cache invalidation needed.
 
         if let Err(e) = self.update_device_list(record).await {
             warn!("patch_device_add: failed to persist: {e}");
@@ -372,11 +364,40 @@ impl Client {
                     self.delete_sessions_for_devices(user, &[device_id as u16])
                         .await;
                 }
-                self.sender_key_device_cache.invalidate_all();
+                // WA Web's `updateGroupParticipantsInTransaction` deletes the
+                // device JID from each affected group's senderKey Map.
+                self.delete_sender_key_rows_for_device(user, device_id)
+                    .await;
                 if let Err(e) = self.update_device_list(record).await {
                     warn!("patch_device_remove: failed to persist: {e}");
                 }
             }
+        }
+    }
+
+    /// Delete `sender_key_devices` rows whose `device_jid` matches the given
+    /// (user, device_id) under either LID or PN addressing. Both alias keys
+    /// for the user are tried via `resolve_lookup_keys`. Touches DB then
+    /// invalidates the in-memory cache for groups that may have indexed the
+    /// removed JID.
+    async fn delete_sender_key_rows_for_device(&self, user: &str, device_id: u32) {
+        let lookup = self.resolve_lookup_keys(user).await;
+        let servers = [wacore_binary::Server::Lid, wacore_binary::Server::Pn];
+        let mut candidates: Vec<String> = Vec::with_capacity(4);
+        for server in servers {
+            for key in lookup.all_keys() {
+                let mut jid = Jid::new(key, server);
+                jid.device = device_id as u16;
+                candidates.push(jid.to_string());
+            }
+        }
+        let refs: Vec<&str> = candidates.iter().map(|s| s.as_str()).collect();
+        if let Err(e) = self
+            .persistence_manager
+            .delete_sender_key_device_rows(&refs)
+            .await
+        {
+            warn!("delete_sender_key_rows_for_device: {e}");
         }
     }
 
@@ -1101,18 +1122,17 @@ mod tests {
         assert_eq!(updated.devices[0].device_id, 0);
     }
 
-    // ── Sender key device cache invalidation tests ──────────────────────
+    // ── Sender key device cache: post-fix behavior ──────────────────────
 
+    /// `device_has_key` returns `None` for unknown devices, so an added device
+    /// naturally falls into `needs_skdm` on the next send without any cache wipe.
     #[tokio::test]
-    async fn test_patch_device_add_invalidates_sender_key_cache() {
+    async fn test_patch_device_add_keeps_cache_warm_new_device_seen_as_unknown() {
         use crate::sender_key_device_cache::SenderKeyDeviceMap;
 
         let client = create_test_client().await;
-
-        // Pre-populate device registry with device 0 only
         setup_device_record(&client, "15551234567", &[0]).await;
 
-        // Warm the sender key device cache for a group
         let group = "120363000000000001@g.us";
         let map =
             SenderKeyDeviceMap::from_db_rows(&[("15551234567:0@s.whatsapp.net".into(), true)]);
@@ -1121,23 +1141,17 @@ mod tests {
             .get_or_init(group, async { std::sync::Arc::new(map) })
             .await;
 
-        // Add device 3 — should invalidate sender key cache
         let elem = make_device_element(3, Some(5));
         client.patch_device_add("15551234567", &elem, None).await;
 
-        // Sender key cache should be cleared (get_or_init would need to re-fetch)
-        // We verify by checking that the cached map doesn't contain the old entry
-        // anymore through the cache's internal state. Since invalidate_all() was
-        // called, re-init will produce a fresh map.
-        let fresh_map = SenderKeyDeviceMap::from_db_rows(&[]);
-        let result = client
+        let warm = client
             .sender_key_device_cache
-            .get_or_init(group, async { std::sync::Arc::new(fresh_map) })
+            .get_or_init(group, async {
+                panic!("cache should still be warm — no global invalidation")
+            })
             .await;
-        assert!(
-            result.is_empty(),
-            "sender key cache should have been invalidated and re-initialized empty"
-        );
+        assert_eq!(warm.device_has_key("15551234567", 0), Some(true));
+        assert_eq!(warm.device_has_key("15551234567", 3), None);
     }
 
     #[tokio::test]
@@ -1194,36 +1208,43 @@ mod tests {
         assert!(!cached.is_empty(), "cache should still be warm");
     }
 
+    /// On remove, the sender_key_devices DB row for the device is dropped
+    /// (mirrors WA Web's `senderKey.delete(deviceJid)`). The next resolve sees
+    /// the device gone from the registry and skips it, so no SKDM redistribution
+    /// is needed for surviving devices.
     #[tokio::test]
-    async fn test_patch_device_remove_invalidates_sender_key_cache() {
-        use crate::sender_key_device_cache::SenderKeyDeviceMap;
-
+    async fn test_patch_device_remove_clears_row_and_keeps_others_warm() {
         let client = create_test_client().await;
-
         setup_device_record(&client, "15551234567", &[0, 3]).await;
 
-        // Warm sender key device cache
         let group = "120363000000000001@g.us";
-        let map = SenderKeyDeviceMap::from_db_rows(&[
-            ("15551234567:0@s.whatsapp.net".into(), true),
-            ("15551234567:3@s.whatsapp.net".into(), true),
-        ]);
         client
-            .sender_key_device_cache
-            .get_or_init(group, async { std::sync::Arc::new(map) })
-            .await;
+            .persistence_manager
+            .set_sender_key_status(
+                group,
+                &[
+                    ("15551234567:0@s.whatsapp.net", true),
+                    ("15551234567:3@s.whatsapp.net", true),
+                ],
+            )
+            .await
+            .unwrap();
 
-        // Remove device 3 — should invalidate sender key cache
         client.patch_device_remove("15551234567", 3).await;
 
-        let fresh_map = SenderKeyDeviceMap::from_db_rows(&[]);
-        let result = client
-            .sender_key_device_cache
-            .get_or_init(group, async { std::sync::Arc::new(fresh_map) })
-            .await;
+        let rows = client
+            .persistence_manager
+            .get_sender_key_devices(group)
+            .await
+            .unwrap();
         assert!(
-            result.is_empty(),
-            "sender key cache should have been invalidated after device removal"
+            rows.iter()
+                .any(|(j, _)| j == "15551234567:0@s.whatsapp.net")
+        );
+        assert!(
+            !rows
+                .iter()
+                .any(|(j, _)| j == "15551234567:3@s.whatsapp.net")
         );
     }
 
@@ -1437,6 +1458,195 @@ mod tests {
         assert!(
             backend.get_devices(pn).await.unwrap().is_none(),
             "DB[pn] must be deleted after canonical flip"
+        );
+    }
+
+    // ── SKDM flow regression tests ─────────────────────────────────────
+
+    #[tokio::test]
+    async fn patch_device_remove_clears_sender_key_device_rows() {
+        let client = create_test_client().await;
+        let user = "15551234567";
+        setup_device_record(&client, user, &[0, 5]).await;
+
+        let group = "120363000000000001@g.us";
+        let device_jid = format!("{user}:5@s.whatsapp.net");
+        client
+            .persistence_manager
+            .set_sender_key_status(group, &[(device_jid.as_str(), true)])
+            .await
+            .unwrap();
+
+        client.patch_device_remove(user, 5).await;
+
+        let rows = client
+            .persistence_manager
+            .get_sender_key_devices(group)
+            .await
+            .unwrap();
+        assert!(rows.iter().all(|(jid, _)| jid != &device_jid));
+    }
+
+    #[tokio::test]
+    async fn patch_device_add_preserves_unrelated_group_caches() {
+        use crate::sender_key_device_cache::SenderKeyDeviceMap;
+
+        let client = create_test_client().await;
+        setup_device_record(&client, "15551234567", &[0]).await;
+
+        let group = "120363000000000002@g.us";
+        let map =
+            SenderKeyDeviceMap::from_db_rows(&[("99999999999:0@s.whatsapp.net".into(), true)]);
+        client
+            .sender_key_device_cache
+            .get_or_init(group, async { std::sync::Arc::new(map) })
+            .await;
+
+        let elem = make_device_element(3, Some(5));
+        client.patch_device_add("15551234567", &elem, None).await;
+
+        let warm = client
+            .sender_key_device_cache
+            .get_or_init(group, async {
+                panic!("cache should still be warm — no global invalidation")
+            })
+            .await;
+        assert_eq!(warm.device_has_key("99999999999", 0), Some(true));
+    }
+
+    #[tokio::test]
+    async fn patch_device_remove_preserves_unrelated_group_caches() {
+        use crate::sender_key_device_cache::SenderKeyDeviceMap;
+
+        let client = create_test_client().await;
+        setup_device_record(&client, "15551234567", &[0, 5]).await;
+
+        let group = "120363000000000002@g.us";
+        let map =
+            SenderKeyDeviceMap::from_db_rows(&[("99999999999:0@s.whatsapp.net".into(), true)]);
+        client
+            .sender_key_device_cache
+            .get_or_init(group, async { std::sync::Arc::new(map) })
+            .await;
+
+        client.patch_device_remove("15551234567", 5).await;
+
+        let warm = client
+            .sender_key_device_cache
+            .get_or_init(group, async {
+                panic!("cache should still be warm — no global invalidation")
+            })
+            .await;
+        assert_eq!(warm.device_has_key("99999999999", 0), Some(true));
+    }
+
+    /// Forward secrecy: removing a participant who had `has_key=true` must
+    /// drop the bot's own sender key and clear the group's tracker so the
+    /// next send forces full SKDM redistribution.
+    #[tokio::test]
+    async fn participant_remove_rotates_sender_key_when_any_had_key() {
+        use std::str::FromStr;
+        use wacore::libsignal::protocol::SenderKeyRecord;
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+        use wacore::types::jid::JidExt;
+
+        let client = create_test_client().await;
+        let group = "120363000000000001@g.us";
+        let own_lid = Jid::from_str("193832511623409:13@lid").unwrap();
+        client
+            .persistence_manager
+            .process_command(crate::store::commands::DeviceCommand::SetLid(Some(
+                own_lid.clone(),
+            )))
+            .await;
+
+        let sk_name = SenderKeyName::from_parts(group, own_lid.to_protocol_address().as_str());
+        client
+            .signal_cache
+            .put_sender_key(&sk_name, SenderKeyRecord::new_empty())
+            .await;
+
+        client
+            .persistence_manager
+            .set_sender_key_status(
+                group,
+                &[
+                    ("271060335329480:0@lid", true),
+                    ("77610646245392:0@lid", true),
+                ],
+            )
+            .await
+            .unwrap();
+
+        client
+            .rotate_sender_key_on_participant_remove(group, &["271060335329480"])
+            .await;
+
+        let device_arc = client.persistence_manager.get_device_arc().await;
+        let device = device_arc.read().await;
+        let key = client
+            .signal_cache
+            .get_sender_key(&sk_name, &*device.backend)
+            .await
+            .unwrap();
+        assert!(
+            key.is_none(),
+            "sender key must be deleted on remove rotation"
+        );
+
+        let rows = client
+            .persistence_manager
+            .get_sender_key_devices(group)
+            .await
+            .unwrap();
+        assert!(rows.is_empty(), "sender_key_devices must be cleared");
+    }
+
+    /// No rotation when removed participants never received an SKDM — there
+    /// is nothing for them to decrypt forward, so don't pay the redistribute cost.
+    #[tokio::test]
+    async fn participant_remove_skips_rotation_when_none_had_key() {
+        use std::str::FromStr;
+        use wacore::libsignal::protocol::SenderKeyRecord;
+        use wacore::libsignal::store::sender_key_name::SenderKeyName;
+        use wacore::types::jid::JidExt;
+
+        let client = create_test_client().await;
+        let group = "120363000000000001@g.us";
+        let own_lid = Jid::from_str("193832511623409:13@lid").unwrap();
+        client
+            .persistence_manager
+            .process_command(crate::store::commands::DeviceCommand::SetLid(Some(
+                own_lid.clone(),
+            )))
+            .await;
+
+        let sk_name = SenderKeyName::from_parts(group, own_lid.to_protocol_address().as_str());
+        client
+            .signal_cache
+            .put_sender_key(&sk_name, SenderKeyRecord::new_empty())
+            .await;
+
+        client
+            .persistence_manager
+            .set_sender_key_status(group, &[("271060335329480:0@lid", false)])
+            .await
+            .unwrap();
+
+        client
+            .rotate_sender_key_on_participant_remove(group, &["271060335329480"])
+            .await;
+
+        let device_arc = client.persistence_manager.get_device_arc().await;
+        let device = device_arc.read().await;
+        let key = client
+            .signal_cache
+            .get_sender_key(&sk_name, &*device.backend)
+            .await
+            .unwrap();
+        assert!(
+            key.is_some(),
+            "sender key must survive when removed had no key"
         );
     }
 }
