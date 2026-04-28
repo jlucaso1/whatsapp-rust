@@ -1854,6 +1854,30 @@ impl ProtocolStore for SqliteStore {
         .await
     }
 
+    async fn delete_sender_key_device_rows(&self, device_jids: &[&str]) -> Result<()> {
+        if device_jids.is_empty() {
+            return Ok(());
+        }
+        let device_id = self.device_id;
+        let owned: Arc<Vec<String>> = Arc::new(device_jids.iter().map(|s| s.to_string()).collect());
+        self.with_retry("delete_sender_key_device_rows", || {
+            let owned = Arc::clone(&owned);
+            Box::new(move |conn: &mut SqliteConnection| {
+                const CHUNK: usize = 190;
+                for chunk in owned.chunks(CHUNK) {
+                    diesel::delete(
+                        sender_key_devices::table
+                            .filter(sender_key_devices::device_jid.eq_any(chunk))
+                            .filter(sender_key_devices::device_id.eq(device_id)),
+                    )
+                    .execute(conn)?;
+                }
+                Ok(())
+            })
+        })
+        .await
+    }
+
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;

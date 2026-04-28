@@ -385,6 +385,18 @@ impl ProtocolStore for InMemoryBackend {
         Ok(())
     }
 
+    async fn delete_sender_key_device_rows(&self, device_jids: &[&str]) -> Result<()> {
+        if device_jids.is_empty() {
+            return Ok(());
+        }
+        let mut state = self.state.lock().await;
+        let targets: std::collections::HashSet<&str> = device_jids.iter().copied().collect();
+        for group_map in state.sender_key_devices.values_mut() {
+            group_map.retain(|jid, _| !targets.contains(jid.as_str()));
+        }
+        Ok(())
+    }
+
     // --- LID-PN Mapping ---
 
     async fn get_lid_mapping(&self, lid: &str) -> Result<Option<LidPnMappingEntry>> {

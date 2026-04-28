@@ -696,10 +696,38 @@ impl Client {
                             client.invalidate_device_cache(&own_pn.user).await;
                         }
                     }
-                    client
-                        .sender_key_device_cache
-                        .invalidate(&jid.to_string())
-                        .await;
+                    let jid_str = jid.to_string();
+                    // Cache-only invalidation re-reads the same stale rows on
+                    // the next send. Drop the persisted state too so the next
+                    // send takes the full-distribution path. If the clear
+                    // fails, fall back to deleting the bot's own sender key
+                    // for the chat — the next send will see `!key_exists`
+                    // and force_skdm without depending on the tracker.
+                    if jid.is_group() || jid.is_status_broadcast() {
+                        let cleared = client
+                            .persistence_manager
+                            .clear_sender_key_devices(&jid_str)
+                            .await;
+                        if let Err(e) = cleared {
+                            log::warn!(
+                                "phash mismatch: clear_sender_key_devices failed: {e} — \
+                                 deleting own sender key as fallback to force redistribution"
+                            );
+                            use wacore::libsignal::store::sender_key_name::SenderKeyName;
+                            use wacore::types::jid::JidExt;
+                            let snapshot =
+                                client.persistence_manager.get_device_snapshot().await;
+                            for own in snapshot.lid.iter().chain(snapshot.pn.iter()) {
+                                let sk =
+                                    SenderKeyName::from_parts(&jid_str, own.to_protocol_address().as_str());
+                                client.signal_cache.delete_sender_key(sk.cache_key()).await;
+                            }
+                            let _ = client
+                                .flush_signal_cache_logged("phash-mismatch-fallback", None)
+                                .await;
+                        }
+                    }
+                    client.sender_key_device_cache.invalidate(&jid_str).await;
                     if invalidate_group_cache {
                         client.get_group_cache().await.invalidate(&jid).await;
                     }
@@ -966,13 +994,40 @@ impl Client {
                 let sender_key_name = SenderKeyName::from_parts(&to_str, sender_address.as_str());
 
                 let device_guard = device_store_arc.read().await;
-                let key_exists = self
+                let record = self
                     .signal_cache
                     .get_sender_key(&sender_key_name, &*device_guard.backend)
-                    .await?
-                    .is_some();
+                    .await?;
+                let key_exists = record.is_some();
 
-                force_key_distribution || !key_exists
+                // WA Web posts SenderKeyExpired with `PERIODIC_ROTATION` after
+                // a chain advances past a threshold. Captured-js doesn't show
+                // the value; 1000 mirrors common Signal hygiene defaults.
+                const SENDER_KEY_ROTATION_THRESHOLD: u32 = 1000;
+                let needs_rotation = record
+                    .and_then(|mut r| r.sender_key_state_mut().ok().cloned())
+                    .and_then(|state| state.sender_chain_key().map(|ck| ck.iteration()))
+                    .is_some_and(|iter| iter >= SENDER_KEY_ROTATION_THRESHOLD);
+                drop(device_guard);
+
+                if needs_rotation {
+                    log::info!(
+                        "Periodic sender-key rotation for {to} (chain iteration ≥ {SENDER_KEY_ROTATION_THRESHOLD})"
+                    );
+                    self.signal_cache
+                        .delete_sender_key(sender_key_name.cache_key())
+                        .await;
+                    if let Err(e) = self
+                        .persistence_manager
+                        .clear_sender_key_devices(&to_str)
+                        .await
+                    {
+                        log::warn!("periodic rotation: clear_sender_key_devices failed: {e}");
+                    }
+                    self.sender_key_device_cache.invalidate(&to_str).await;
+                }
+
+                force_key_distribution || !key_exists || needs_rotation
             };
 
             let mut store_adapter = self.signal_adapter_from(device_store_arc.clone());
@@ -1231,7 +1286,16 @@ impl Client {
         }
 
         if let Some((rx, phash, msg_id)) = ack {
-            self.spawn_phash_validation(rx, phash, tc_issue_target.clone(), false, msg_id);
+            // Group sends also invalidate group cache on mismatch — server's
+            // participant set diverged, the next send needs a fresh query.
+            let invalidate_group = tc_issue_target.is_group();
+            self.spawn_phash_validation(
+                rx,
+                phash,
+                tc_issue_target.clone(),
+                invalidate_group,
+                msg_id,
+            );
         }
 
         if let Some(update) = skdm_update {
