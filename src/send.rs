@@ -554,10 +554,8 @@ impl Client {
             })
             .await;
 
-        // Empty cache means "first send to this group OR table just wiped".
-        // Don't short-circuit: let the natural filter (`device_has_key().unwrap_or(false)`)
-        // mark every device as needing SKDM. Mirrors WA Web, where an empty
-        // `senderKey` Map is iterated as `false` for every participant.
+        // No empty-cache early-exit: WA Web iterates an empty `senderKey` Map
+        // as `false` per participant, so the filter below must run unconditionally.
         let is_lid_mode = group_info.addressing_mode == wacore::types::message::AddressingMode::Lid;
         let jids_to_resolve: Vec<Jid> = group_info
             .participants
@@ -2072,27 +2070,14 @@ mod tests {
         }
     }
 
-    /// Regression for the empty-cache SKDM bug. When `sender_key_devices` is empty
-    /// for a group (fresh DB, post-restart, or after the legacy
-    /// `clear_all_sender_key_devices` wipe), the natural filter must mark every
-    /// resolved device as needing SKDM. Mirrors WA Web, where an empty
-    /// `senderKey` Map is iterated as `false` for every participant.
     #[test]
     fn empty_sender_key_device_map_marks_all_devices_for_skdm() {
         use crate::sender_key_device_cache::SenderKeyDeviceMap;
 
         let map = SenderKeyDeviceMap::from_db_rows(&[]);
-        assert_eq!(
-            map.device_has_key("271060335329480", 0),
-            None,
-            "unknown device → device_has_key returns None"
-        );
-        assert!(
-            !map.is_user_forgotten("271060335329480"),
-            "unknown user is not forgotten"
-        );
+        assert_eq!(map.device_has_key("271060335329480", 0), None);
+        assert!(!map.is_user_forgotten("271060335329480"));
 
-        // Simulate the downstream filter that would run if the early-exit were removed.
         let all_resolved_devices: Vec<Jid> = [
             "271060335329480@lid",
             "77610646245392@lid",
@@ -2111,23 +2096,10 @@ mod tests {
             })
             .collect();
 
-        assert_eq!(
-            needs_skdm.len(),
-            all_resolved_devices.len(),
-            "with empty cache, EVERY resolved device should need SKDM — \
-             so the early-exit at src/send.rs:557 is incorrect"
-        );
+        assert_eq!(needs_skdm.len(), all_resolved_devices.len());
     }
 
-    /// Regression: with `sender_key_devices` empty for the group AND
-    /// participant devices known to the registry, `resolve_skdm_targets` must
-    /// return `Some(needs_skdm)` listing every participant device — proving
-    /// that the empty-cache short-circuit is gone.
-    ///
-    /// Pre-populates `device_registry_cache` so `resolve_devices` (called by
-    /// `resolve_skdm_targets`) succeeds without network. With the legacy
-    /// `if cached_map.is_empty() return None`, this test fails because the
-    /// function returns `None` before ever calling `resolve_devices`.
+    /// Fails if the empty-cache early-exit is reintroduced.
     #[tokio::test]
     async fn resolve_skdm_targets_distributes_when_cache_empty_but_devices_known() {
         use wacore::client::context::GroupInfo;
@@ -2140,9 +2112,7 @@ mod tests {
 
         let participant_users = ["271060335329480", "77610646245392", "276661023027320"];
 
-        // Pre-populate device registry so `resolve_devices` returns Ok in
-        // tests (no network). One device per participant — single-device
-        // entry is enough for the filter assertion.
+        // Pre-populate so `resolve_devices` succeeds without a transport.
         for user in &participant_users {
             let record = DeviceListRecord {
                 user: (*user).into(),
@@ -2170,31 +2140,14 @@ mod tests {
         let result = client
             .resolve_skdm_targets(group_jid, &group_info, &own_lid)
             .await
-            .expect(
-                "empty sender_key_devices + known participant devices must resolve to \
-                 Some(needs_skdm). If this is None, the early-exit short-circuit was \
-                 reintroduced — the bug that ships bare skmsg without SKDM bundles is back.",
-            );
+            .expect("None means the empty-cache early-exit is back");
 
-        // Every participant device must be flagged as needing SKDM.
-        assert_eq!(
-            result.len(),
-            participants.len(),
-            "expected one needs_skdm entry per participant device, got {result:?}"
-        );
+        assert_eq!(result.len(), participants.len());
         for user in &participant_users {
-            assert!(
-                result.iter().any(|j| j.user == *user),
-                "participant {user} missing from needs_skdm: {result:?}"
-            );
+            assert!(result.iter().any(|j| j.user == *user));
         }
     }
 
-    /// Regression: a single retry-receipt-inserted `has_key=false` row must
-    /// flag every other resolved device as needing SKDM (via the `is_user_forgotten`
-    /// branch of the filter, conservatively triggering full redistribution).
-    /// Mirrors the production behavior observed in the log: after one retry
-    /// receipt arrived, the next group send distributed SKDM to all 89 devices.
     #[test]
     fn single_forgotten_row_keeps_full_distribution() {
         use crate::sender_key_device_cache::SenderKeyDeviceMap;

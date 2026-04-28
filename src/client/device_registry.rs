@@ -352,13 +352,9 @@ impl Client {
         self.delete_sessions_for_devices(user, &non_primary_ids)
             .await;
 
-        // SKDM tracking is left untouched on identity change to mirror WA Web's
-        // `WAWebUpdateLocalSignalSession`: it deletes the Signal session but
-        // calls `markForgetSenderKey` only on retry receipts, per-group/per-device.
-        // The previous global wipe here was over-eager — it forced the bot to
-        // re-distribute SKDM to every device of every group on every identity
-        // rotation, and worse, left `sender_key_devices` empty long enough that
-        // the next group send hit the no-distribution path (see `resolve_skdm_targets`).
+        // WA Web's `WAWebUpdateLocalSignalSession` only calls `markForgetSenderKey`
+        // on retry receipts, per-group/per-device. A global SKDM wipe here would
+        // empty the tracker often enough to feed the no-distribution path.
     }
 
     /// Remove a device from the registry after a device remove notification.
