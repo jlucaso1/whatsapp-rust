@@ -295,39 +295,25 @@ impl Client {
         resolved
     }
 
-    /// Resolve the encryption JID for a given target JID.
-    /// This uses the same logic as the receiving path to ensure consistent
-    /// lock keys between sending and receiving.
-    ///
-    /// For PN JIDs, this checks if a LID mapping exists and returns the LID.
-    /// This ensures that sending and receiving use the same session lock.
+    /// Mirrors WA Web `SignalAddress.toString()` (`WAWeb/Signal/Address.js`):
+    /// upgrade Pn → Lid and Hosted → HostedLid when a mapping is known, else
+    /// preserve the input.
     pub(crate) async fn resolve_encryption_jid(&self, target: &Jid) -> Jid {
-        if target.is_lid() {
-            // Already a LID - use it directly
-            target.clone()
-        } else if target.is_pn() {
-            // PN JID - check if we have a LID mapping
-            if let Some(lid_user) = self.lid_pn_cache.get_current_lid(&target.user).await {
-                let lid_jid = Jid {
-                    user: lid_user.into(),
-                    server: wacore_binary::Server::Lid,
-                    device: target.device,
-                    agent: target.agent,
-                    integrator: target.integrator,
-                };
-                debug!(
-                    "[SEND-LOCK] Resolved {} to LID {} for session lock",
-                    target, lid_jid
-                );
-                lid_jid
-            } else {
-                // No LID mapping - use PN as-is
-                debug!("[SEND-LOCK] No LID mapping for {}, using PN", target);
-                target.clone()
-            }
-        } else {
-            // Other server type - use as-is
-            target.clone()
+        use wacore_binary::Server;
+        let lid_server = match target.server {
+            Server::Pn => Server::Lid,
+            Server::Hosted => Server::HostedLid,
+            _ => return target.clone(),
+        };
+        match self.lid_pn_cache.get_current_lid(&target.user).await {
+            Some(lid_user) => Jid {
+                user: lid_user.into(),
+                server: lid_server,
+                device: target.device,
+                agent: target.agent,
+                integrator: target.integrator,
+            },
+            None => target.clone(),
         }
     }
 
@@ -547,6 +533,57 @@ mod tests {
         let resolved = client.resolve_encryption_jid(&pn_jid).await;
 
         assert_eq!(resolved, pn_jid);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_encryption_jid_hosted_with_lid_upgrades_to_hosted_lid() {
+        let client: Arc<Client> = create_test_client().await;
+        let user = "55999999999";
+        let lid = "100000012345678";
+
+        client
+            .add_lid_pn_mapping(lid, user, LearningSource::PeerPnMessage)
+            .await
+            .unwrap();
+
+        for device in [99u16, 7] {
+            let mut hosted = Jid::new(user, Server::Hosted);
+            hosted.device = device;
+            hosted.agent = 0xAB;
+            hosted.integrator = 0xBEEF;
+            let resolved = client.resolve_encryption_jid(&hosted).await;
+
+            assert_eq!(resolved.user, lid);
+            assert_eq!(resolved.server, Server::HostedLid);
+            assert_eq!(
+                resolved.device, device,
+                "device must round-trip, not be coerced to 99"
+            );
+            assert_eq!(resolved.agent, hosted.agent);
+            assert_eq!(resolved.integrator, hosted.integrator);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_resolve_encryption_jid_hosted_no_mapping_keeps_hosted() {
+        let client: Arc<Client> = create_test_client().await;
+        let mut hosted = Jid::new("55999999999", Server::Hosted);
+        hosted.device = 99;
+
+        let resolved = client.resolve_encryption_jid(&hosted).await;
+
+        assert_eq!(resolved, hosted);
+    }
+
+    #[tokio::test]
+    async fn test_resolve_encryption_jid_preserves_hosted_lid() {
+        let client: Arc<Client> = create_test_client().await;
+        let mut hosted_lid = Jid::new("100000012345678", Server::HostedLid);
+        hosted_lid.device = 99;
+
+        let resolved = client.resolve_encryption_jid(&hosted_lid).await;
+
+        assert_eq!(resolved, hosted_lid);
     }
 
     #[tokio::test]
