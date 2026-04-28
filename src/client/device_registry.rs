@@ -352,17 +352,9 @@ impl Client {
         self.delete_sessions_for_devices(user, &non_primary_ids)
             .await;
 
-        // Clear persisted SKDM tracking across ALL groups so stale has_key=true
-        // rows don't survive restart. Identity changes are rare so the cost is acceptable.
-        if let Err(e) = self
-            .persistence_manager
-            .backend()
-            .clear_all_sender_key_devices()
-            .await
-        {
-            warn!("clear_device_record: failed to clear persisted sender key devices: {e}");
-        }
-        self.sender_key_device_cache.invalidate_all();
+        // WA Web's `WAWebUpdateLocalSignalSession` only calls `markForgetSenderKey`
+        // on retry receipts, per-group/per-device. A global SKDM wipe here would
+        // empty the tracker often enough to feed the no-distribution path.
     }
 
     /// Remove a device from the registry after a device remove notification.

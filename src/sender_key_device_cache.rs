@@ -46,6 +46,7 @@ impl SenderKeyDeviceMap {
         }
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.devices.is_empty()
     }

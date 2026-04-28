@@ -554,10 +554,8 @@ impl Client {
             })
             .await;
 
-        if cached_map.is_empty() {
-            return None;
-        }
-
+        // No empty-cache early-exit: WA Web iterates an empty `senderKey` Map
+        // as `false` per participant, so the filter below must run unconditionally.
         let is_lid_mode = group_info.addressing_mode == wacore::types::message::AddressingMode::Lid;
         let jids_to_resolve: Vec<Jid> = group_info
             .participants
@@ -2070,6 +2068,118 @@ mod tests {
                 jid2_str
             );
         }
+    }
+
+    #[test]
+    fn empty_sender_key_device_map_marks_all_devices_for_skdm() {
+        use crate::sender_key_device_cache::SenderKeyDeviceMap;
+
+        let map = SenderKeyDeviceMap::from_db_rows(&[]);
+        assert_eq!(map.device_has_key("271060335329480", 0), None);
+        assert!(!map.is_user_forgotten("271060335329480"));
+
+        let all_resolved_devices: Vec<Jid> = [
+            "271060335329480@lid",
+            "77610646245392@lid",
+            "276661023027320:5@lid",
+        ]
+        .into_iter()
+        .map(|s| Jid::from_str(s).unwrap())
+        .collect();
+
+        let needs_skdm: Vec<&Jid> = all_resolved_devices
+            .iter()
+            .filter(|device| {
+                !map.device_has_key(&device.user, device.device)
+                    .unwrap_or(false)
+                    || map.is_user_forgotten(&device.user)
+            })
+            .collect();
+
+        assert_eq!(needs_skdm.len(), all_resolved_devices.len());
+    }
+
+    /// Fails if the empty-cache early-exit is reintroduced.
+    #[tokio::test]
+    async fn resolve_skdm_targets_distributes_when_cache_empty_but_devices_known() {
+        use wacore::client::context::GroupInfo;
+        use wacore::store::traits::{DeviceInfo, DeviceListRecord};
+        use wacore::types::message::AddressingMode;
+
+        let client = crate::test_utils::create_test_client().await;
+        let group_jid = "120363161500776365@g.us";
+        let own_lid = Jid::from_str("193832511623409:13@lid").unwrap();
+
+        let participant_users = ["271060335329480", "77610646245392", "276661023027320"];
+
+        // Pre-populate so `resolve_devices` succeeds without a transport.
+        for user in &participant_users {
+            let record = DeviceListRecord {
+                user: (*user).into(),
+                devices: vec![DeviceInfo {
+                    device_id: 0,
+                    key_index: None,
+                }],
+                timestamp: wacore::time::now_secs(),
+                phash: None,
+                raw_id: None,
+            };
+            client
+                .device_registry_cache
+                .insert((*user).into(), record)
+                .await;
+        }
+
+        let participants: Vec<Jid> = participant_users
+            .iter()
+            .map(|u| Jid::from_str(&format!("{u}@lid")).unwrap())
+            .collect();
+
+        let group_info = GroupInfo::new(participants.clone(), AddressingMode::Lid);
+
+        let result = client
+            .resolve_skdm_targets(group_jid, &group_info, &own_lid)
+            .await
+            .expect("None means the empty-cache early-exit is back");
+
+        assert_eq!(result.len(), participants.len());
+        for user in &participant_users {
+            assert!(result.iter().any(|j| j.user == *user));
+        }
+    }
+
+    #[test]
+    fn single_forgotten_row_keeps_full_distribution() {
+        use crate::sender_key_device_cache::SenderKeyDeviceMap;
+
+        let map = SenderKeyDeviceMap::from_db_rows(&[("271060335329480@lid".to_string(), false)]);
+        assert_eq!(map.device_has_key("271060335329480", 0), Some(false));
+        assert!(map.is_user_forgotten("271060335329480"));
+
+        let all_resolved_devices: Vec<Jid> = [
+            "271060335329480@lid",
+            "77610646245392@lid",
+            "276661023027320:5@lid",
+        ]
+        .into_iter()
+        .map(|s| Jid::from_str(s).unwrap())
+        .collect();
+
+        let needs_skdm: Vec<&Jid> = all_resolved_devices
+            .iter()
+            .filter(|device| {
+                !map.device_has_key(&device.user, device.device)
+                    .unwrap_or(false)
+                    || map.is_user_forgotten(&device.user)
+            })
+            .collect();
+
+        assert_eq!(
+            needs_skdm.len(),
+            3,
+            "after retry inserts one row, ALL devices correctly flagged for SKDM \
+             (this is what unblocks redistribution on the SECOND message)"
+        );
     }
 
     #[test]
