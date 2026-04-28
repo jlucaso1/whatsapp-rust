@@ -1430,6 +1430,43 @@ mod tests {
         Ok(())
     }
 
+    /// Pre-#391, the encoder wrote `jid.agent` instead of the
+    /// server-derived `domain_type`. For directly constructed JIDs the
+    /// `agent` field defaults to 0, so any server other than `Pn` would
+    /// encode wrong. This test pins down the practical impact for Hosted
+    /// and HostedLid when they're built without going through the parser.
+    #[test]
+    fn test_direct_constructed_hosted_encodes_correct_domain_type() -> TestResult {
+        let mut hosted = Jid::new("100000000000001", jid::Server::Hosted);
+        hosted.device = 99;
+        assert_eq!(
+            hosted.agent, 0,
+            "default agent for direct construction is 0"
+        );
+
+        let mut hosted_lid = Jid::new("100000000000002", jid::Server::HostedLid);
+        hosted_lid.device = 99;
+        assert_eq!(hosted_lid.agent, 0);
+
+        for (jid, expected) in [(&hosted, 128u8), (&hosted_lid, 129u8)] {
+            let node = NodeBuilder::new("to").attr("jid", jid.clone()).build();
+            let mut buf = Vec::new();
+            Encoder::new(Cursor::new(&mut buf))?.write_node(&node)?;
+
+            let pos = buf
+                .iter()
+                .position(|&b| b == token::AD_JID)
+                .expect("AD_JID marker present");
+            assert_eq!(
+                buf[pos + 1],
+                expected,
+                "direct-constructed {jid} must emit domain_type {expected} \
+                 (pre-#391 would have emitted agent=0)"
+            );
+        }
+        Ok(())
+    }
+
     /// Regression test: strings at the PACKED_MAX boundary must be classified
     /// normally, while strings above it must be emitted as raw bytes (skipping
     /// SipHash/PHF classification entirely).
