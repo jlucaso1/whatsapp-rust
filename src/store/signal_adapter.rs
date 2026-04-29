@@ -156,14 +156,16 @@ impl IdentityKeyStore for IdentityAdapter {
 
     async fn is_trusted_identity(
         &self,
-        address: &ProtocolAddress,
-        identity: &IdentityKey,
-        direction: Direction,
+        _address: &ProtocolAddress,
+        _identity: &IdentityKey,
+        _direction: Direction,
     ) -> Result<bool, SignalProtocolError> {
-        let device = self.0.device.read().await;
-        IdentityKeyStore::is_trusted_identity(&*device, address, identity, direction)
-            .await
-            .map_err(signal_err("is_trusted_identity"))
+        // WAWebProtocolStoreUnifiedApi.isTrustedIdentity always returns true;
+        // identity changes surface via save_identity. Avoid acquiring the
+        // device RwLock just to delegate to a stub — the read is acquired N
+        // times per group send (once per recipient device) and adds
+        // contention pressure under any future parallel encrypt path.
+        Ok(true)
     }
 
     async fn get_identity(
