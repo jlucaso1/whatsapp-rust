@@ -7,12 +7,15 @@ use crate::messages::MessageUtils;
 use crate::reporting_token::{
     build_reporting_node, generate_reporting_token, prepare_message_with_context,
 };
+use crate::runtime::{AbortHandle, Runtime};
 use crate::types::jid::JidExt;
 use crate::types::jid::make_sender_key_name;
 use anyhow::{Result, anyhow};
+use futures::stream::{FuturesUnordered, StreamExt};
 use prost::Message as ProtoMessage;
 use rand::{CryptoRng, Rng};
 use std::collections::HashSet;
+use std::future::Future;
 use wacore_binary::Node;
 use wacore_binary::builder::NodeBuilder;
 use wacore_binary::{Jid, JidExt as _};
@@ -337,11 +340,128 @@ pub struct EncryptResult {
     pub had_unregistered_device: bool,
 }
 
+/// Maximum number of concurrent per-device crypto tasks during group send
+/// fan-out. Picked from the `perf-audit` benchmark: speedup plateaus around
+/// 16 on Oracle ARM64; 32 gives only ~10% more for double the task overhead.
+const ENCRYPT_FANOUT_CONCURRENCY: usize = 16;
+
+/// Per-task encrypt result, shipped from a spawned task back to the orchestrator.
+struct EncryptOneResult {
+    enc_type: &'static str,
+    is_prekey: bool,
+    ciphertext: Vec<u8>,
+    mediatype: Option<String>,
+    hide_decrypt_fail: bool,
+}
+
+/// Surfaces a spawned task that didn't deliver its result — either the task
+/// itself panicked or the runtime tore it down (e.g., during shutdown).
+/// Surfacing this as an Err lets the encrypt fan-out fall through to its
+/// existing log+skip path instead of propagating a panic.
+#[derive(Debug, thiserror::Error)]
+#[error("spawned task did not produce a result (panic or runtime shutdown)")]
+struct SpawnCanceled;
+
+/// Future returned by [`spawn_oneshot`]. Holds the spawned task's
+/// [`AbortHandle`] until the result is received, so dropping the future mid-
+/// flight (e.g., the outer send was cancelled by a timeout) cancels the
+/// in-flight crypto work instead of orphaning it.
+struct Spawned<T> {
+    rx: futures::channel::oneshot::Receiver<T>,
+    abort: Option<AbortHandle>,
+}
+
+impl<T> Future for Spawned<T> {
+    type Output = std::result::Result<T, SpawnCanceled>;
+
+    fn poll(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Self::Output> {
+        match std::pin::Pin::new(&mut self.rx).poll(cx) {
+            std::task::Poll::Ready(Ok(value)) => {
+                // Result delivered: disarm so Drop doesn't try to abort an
+                // already-completed task.
+                if let Some(handle) = self.abort.take() {
+                    handle.detach();
+                }
+                std::task::Poll::Ready(Ok(value))
+            }
+            std::task::Poll::Ready(Err(_)) => {
+                if let Some(handle) = self.abort.take() {
+                    handle.detach();
+                }
+                std::task::Poll::Ready(Err(SpawnCanceled))
+            }
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl<T> Drop for Spawned<T> {
+    fn drop(&mut self) {
+        // If the future was dropped before completion, abort the spawned
+        // task to stop the wasted CPU work. AbortHandle::abort is a no-op
+        // after the task has already finished, so this is always safe.
+        if let Some(handle) = self.abort.take() {
+            handle.abort();
+        }
+    }
+}
+
+/// Spawn `fut` on the runtime and return a future that resolves to its
+/// output. Cancellation propagates: dropping the returned future aborts
+/// the spawned task. A spawned-task panic surfaces as `Err(SpawnCanceled)`
+/// rather than a panic on `rx.await`.
+#[cfg(not(target_arch = "wasm32"))]
+fn spawn_oneshot<F, T>(
+    rt: &dyn Runtime,
+    fut: F,
+) -> impl Future<Output = std::result::Result<T, SpawnCanceled>> + Send + 'static
+where
+    F: Future<Output = T> + Send + 'static,
+    T: Send + 'static,
+{
+    let (tx, rx) = futures::channel::oneshot::channel();
+    let abort = rt.spawn(Box::pin(async move {
+        let _ = tx.send(fut.await);
+    }));
+    Spawned {
+        rx,
+        abort: Some(abort),
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+fn spawn_oneshot<F, T>(
+    rt: &dyn Runtime,
+    fut: F,
+) -> impl Future<Output = std::result::Result<T, SpawnCanceled>> + 'static
+where
+    F: Future<Output = T> + 'static,
+    T: 'static,
+{
+    let (tx, rx) = futures::channel::oneshot::channel();
+    let abort = rt.spawn(Box::pin(async move {
+        let _ = tx.send(fut.await);
+    }));
+    Spawned {
+        rx,
+        abort: Some(abort),
+    }
+}
+
 /// Encrypt padded plaintext for each device JID, producing participant `<to>` nodes.
+///
+/// Per-device Signal sessions are independent (different ratchet state per
+/// recipient), so this fans the encrypt loop out across tokio tasks bounded
+/// by [`ENCRYPT_FANOUT_CONCURRENCY`]. Each task clones the store handles
+/// (Arc bumps under the hood); the shared cache provides interior mutability.
 ///
 /// Callers must hold per-device session locks before calling this function —
 /// concurrent ratchet mutations will corrupt Signal session state.
 pub async fn encrypt_for_devices<'a, S, I, P, SP>(
+    runtime: &dyn Runtime,
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
     devices: &[Jid],
@@ -350,8 +470,8 @@ pub async fn encrypt_for_devices<'a, S, I, P, SP>(
     mediatype: Option<&str>,
 ) -> Result<EncryptResult>
 where
-    S: crate::libsignal::protocol::SessionStore + Send + Sync,
-    I: crate::libsignal::protocol::IdentityKeyStore + Send + Sync,
+    S: crate::libsignal::protocol::SessionStore + Clone + Send + Sync + 'static,
+    I: crate::libsignal::protocol::IdentityKeyStore + Clone + Send + Sync + 'static,
     P: crate::libsignal::protocol::PreKeyStore + Send + Sync,
     SP: crate::libsignal::protocol::SignedPreKeyStore + Send + Sync,
 {
@@ -443,122 +563,140 @@ where
             Err(e) => return Err(e),
         };
 
-        for &idx in &indices_needing_prekeys {
-            let device_jid = &devices[idx];
-            // Use the LID-normalized encryption JID for session creation
+        // Parallel session establishment via process_prekey_bundle. Each
+        // recipient device has an independent Signal session and an
+        // independent prekey bundle, so the X3DH derivation runs on a
+        // separate task per device, bounded at ENCRYPT_FANOUT_CONCURRENCY.
+        // Spawning goes through `Runtime::spawn` (the platform-agnostic
+        // abstraction) plus a oneshot channel for result delivery —
+        // `FuturesUnordered` handles the in-flight window.
+        let prekey_bundles = std::sync::Arc::new(prekey_bundles);
+        let total = indices_needing_prekeys.len();
+        let mut next_spawn = 0usize;
+
+        let make_session_task = |spawn_idx: usize| {
+            let idx = indices_needing_prekeys[spawn_idx];
+            let device_jid = devices[idx].clone();
             let mut encryption_jid = encryption_overrides[idx]
-                .as_ref()
-                .unwrap_or(device_jid)
-                .clone();
+                .clone()
+                .unwrap_or_else(|| device_jid.clone());
 
             // Normalize agent to 0 for LID JIDs to match how pre-key bundles are stored.
-            // The JID parsing logic in `prekeys.rs` forces agent=0 for LID, so we must match that here.
+            // prekeys.rs forces agent=0 for LID; we must match that here.
             if encryption_jid.is_lid() {
                 encryption_jid.agent = 0;
             }
 
-            encryption_jid.reset_protocol_address(&mut reusable_addr);
             let lookup_jid = device_jid.normalize_for_prekey_bundle();
-            match prekey_bundles.get(&lookup_jid) {
-                Some(bundle) => {
-                    match process_prekey_bundle(
-                        &reusable_addr,
-                        stores.session_store,
-                        stores.identity_store,
-                        bundle,
-                        &mut rand::make_rng::<rand::rngs::StdRng>(),
-                        UsePQRatchet::No,
-                    )
-                    .await
-                    {
-                        Ok(_) => {
-                            // Session established successfully
-                        }
-                        Err(SignalProtocolError::UntrustedIdentity(ref addr)) => {
-                            // The stored identity doesn't match the server's identity.
-                            // This typically happens when a user reinstalls WhatsApp.
-                            // We trust the server's identity and update our local store,
-                            // then retry establishing the session.
-                            log::info!(
-                                "Untrusted identity for device {}. Updating identity and retrying session establishment.",
-                                addr
-                            );
+            let bundles = prekey_bundles.clone();
+            let mut session_store = stores.session_store.clone();
+            let mut identity_store = stores.identity_store.clone();
 
-                            // Get the new identity from the prekey bundle and save it
-                            let new_identity = match bundle.identity_key() {
-                                Ok(key) => key,
-                                Err(e) => {
-                                    log::warn!(
-                                        "Failed to get identity key from bundle for {}: {:?}. Skipping device.",
-                                        addr,
-                                        e
-                                    );
-                                    continue;
-                                }
-                            };
+            spawn_oneshot(runtime, async move {
+                let mut addr = crate::types::jid::make_reusable_protocol_address();
+                encryption_jid.reset_protocol_address(&mut addr);
 
-                            // Save the new identity (this replaces the old one)
-                            if let Err(e) = stores
-                                .identity_store
-                                .save_identity(&reusable_addr, new_identity)
-                                .await
-                            {
+                let Some(bundle) = bundles.get(&lookup_jid) else {
+                    log::warn!(
+                        "No pre-key bundle returned for device {}. This device will be skipped for encryption.",
+                        addr
+                    );
+                    return Ok::<(), anyhow::Error>(());
+                };
+
+                let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+                match process_prekey_bundle(
+                    &addr,
+                    &mut session_store,
+                    &mut identity_store,
+                    bundle,
+                    &mut rng,
+                    UsePQRatchet::No,
+                )
+                .await
+                {
+                    Ok(_) => Ok(()),
+                    Err(SignalProtocolError::UntrustedIdentity(_)) => {
+                        // Identity rotation: server returned a new identity (e.g., user
+                        // reinstalled WhatsApp). Trust the server, persist, retry once.
+                        log::info!(
+                            "Untrusted identity for device {}. Updating identity and retrying session establishment.",
+                            addr
+                        );
+                        let new_identity = match bundle.identity_key() {
+                            Ok(key) => key,
+                            Err(e) => {
                                 log::warn!(
-                                    "Failed to save updated identity for {}: {:?}. Skipping device.",
+                                    "Failed to get identity key from bundle for {}: {:?}. Skipping device.",
                                     addr,
                                     e
                                 );
-                                continue;
+                                return Ok(());
                             }
-
-                            log::debug!(
-                                "Identity updated for {}. Retrying session establishment.",
-                                addr
-                            );
-
-                            // Retry processing the prekey bundle with the updated identity
-                            match process_prekey_bundle(
-                                &reusable_addr,
-                                stores.session_store,
-                                stores.identity_store,
-                                bundle,
-                                &mut rand::make_rng::<rand::rngs::StdRng>(),
-                                UsePQRatchet::No,
-                            )
-                            .await
-                            {
-                                Ok(_) => {
-                                    log::info!(
-                                        "Successfully established session with {} after identity update.",
-                                        addr
-                                    );
-                                }
-                                Err(e) => {
-                                    log::warn!(
-                                        "Failed to establish session with {} even after identity update: {:?}. Skipping device.",
-                                        addr,
-                                        e
-                                    );
-                                    continue;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            // Propagate other unexpected errors
-                            return Err(anyhow::anyhow!(
-                                "Failed to process pre-key bundle for {}: {:?}",
-                                reusable_addr,
+                        };
+                        if let Err(e) = identity_store.save_identity(&addr, new_identity).await {
+                            log::warn!(
+                                "Failed to save updated identity for {}: {:?}. Skipping device.",
+                                addr,
                                 e
-                            ));
+                            );
+                            return Ok(());
+                        }
+                        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+                        match process_prekey_bundle(
+                            &addr,
+                            &mut session_store,
+                            &mut identity_store,
+                            bundle,
+                            &mut rng,
+                            UsePQRatchet::No,
+                        )
+                        .await
+                        {
+                            Ok(_) => {
+                                log::info!(
+                                    "Successfully established session with {} after identity update.",
+                                    addr
+                                );
+                                Ok(())
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "Failed to establish session with {} even after identity update: {:?}. Skipping device.",
+                                    addr,
+                                    e
+                                );
+                                Ok(())
+                            }
                         }
                     }
+                    Err(e) => Err(anyhow::anyhow!(
+                        "Failed to process pre-key bundle for {}: {:?}",
+                        addr,
+                        e
+                    )),
                 }
-                None => {
+            })
+        };
+
+        let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
+        while next_spawn < total && in_flight.len() < ENCRYPT_FANOUT_CONCURRENCY {
+            in_flight.push(make_session_task(next_spawn));
+            next_spawn += 1;
+        }
+        while let Some(spawn_result) = in_flight.next().await {
+            match spawn_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => return Err(e),
+                Err(SpawnCanceled) => {
                     log::warn!(
-                        "No pre-key bundle returned for device {}. This device will be skipped for encryption.",
-                        &reusable_addr
+                        "Session-establishment task did not deliver a result; skipping device."
                     );
                 }
+            }
+            if next_spawn < total {
+                in_flight.push(make_session_task(next_spawn));
+                next_spawn += 1;
             }
         }
     }
@@ -567,36 +705,78 @@ where
     let mut includes_prekey_message = false;
     let mut encrypted_devices = Vec::with_capacity(devices.len());
 
-    for (idx, device_jid) in devices.iter().enumerate() {
-        let encryption_jid = encryption_overrides[idx].as_ref().unwrap_or(device_jid);
-        encryption_jid.reset_protocol_address(&mut reusable_addr);
+    // Parallel encrypt fan-out. The wire-order of `<to>` participants does
+    // not need to match the input device order: WA Web's `phash` (computed
+    // both client and server side) sorts before hashing, and our
+    // `participant_list_hash` does the same. Collecting in completion order
+    // lets the fastest encrypts ship first.
+    let plaintext_arc: std::sync::Arc<[u8]> = std::sync::Arc::from(plaintext_to_encrypt);
+    let mediatype_owned: Option<String> = mediatype.map(|s| s.to_string());
 
-        match message_encrypt(
-            plaintext_to_encrypt,
-            &reusable_addr,
-            stores.session_store,
-            stores.identity_store,
-        )
-        .await
-        {
-            Ok(encrypted_payload) => {
-                let Some((enc_type, is_prekey, serialized_bytes)) =
-                    extract_ciphertext(encrypted_payload)
-                else {
-                    continue;
-                };
-                includes_prekey_message |= is_prekey;
+    let total = devices.len();
+    let mut next_spawn = 0usize;
+
+    let make_encrypt_task = |idx: usize| {
+        let device_jid = devices[idx].clone();
+        let encryption_jid = encryption_overrides[idx]
+            .clone()
+            .unwrap_or_else(|| device_jid.clone());
+        let plaintext = plaintext_arc.clone();
+        let mediatype = mediatype_owned.clone();
+        let mut session_store = stores.session_store.clone();
+        let mut identity_store = stores.identity_store.clone();
+
+        spawn_oneshot(runtime, async move {
+            let mut addr = crate::types::jid::make_reusable_protocol_address();
+            encryption_jid.reset_protocol_address(&mut addr);
+
+            match message_encrypt(&plaintext, &addr, &mut session_store, &mut identity_store).await
+            {
+                Ok(encrypted_payload) => {
+                    let Some((enc_type, is_prekey, serialized_bytes)) =
+                        extract_ciphertext(encrypted_payload)
+                    else {
+                        return (device_jid, Ok(None));
+                    };
+                    (
+                        device_jid,
+                        Ok(Some(EncryptOneResult {
+                            enc_type,
+                            is_prekey,
+                            ciphertext: serialized_bytes.to_vec(),
+                            mediatype,
+                            hide_decrypt_fail,
+                        })),
+                    )
+                }
+                Err(e) => {
+                    let addr_str = addr.to_string();
+                    (device_jid, Err(format!("{addr_str}: {e}")))
+                }
+            }
+        })
+    };
+
+    let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
+    while next_spawn < total && in_flight.len() < ENCRYPT_FANOUT_CONCURRENCY {
+        in_flight.push(make_encrypt_task(next_spawn));
+        next_spawn += 1;
+    }
+    while let Some(spawn_result) = in_flight.next().await {
+        match spawn_result {
+            Ok((device_jid, Ok(Some(one)))) => {
+                includes_prekey_message |= one.is_prekey;
 
                 let mut enc_builder = NodeBuilder::new("enc")
                     .attr("v", stanza::ENC_VERSION)
-                    .attr("type", enc_type);
-                if let Some(mt) = mediatype {
+                    .attr("type", one.enc_type);
+                if let Some(mt) = one.mediatype.as_deref() {
                     enc_builder = enc_builder.attr("mediatype", mt);
                 }
-                if hide_decrypt_fail {
+                if one.hide_decrypt_fail {
                     enc_builder = enc_builder.attr("decrypt-fail", "hide");
                 }
-                let enc_node = enc_builder.bytes(serialized_bytes).build();
+                let enc_node = enc_builder.bytes(one.ciphertext).build();
 
                 participant_nodes.push(
                     NodeBuilder::new("to")
@@ -604,15 +784,25 @@ where
                         .children([enc_node])
                         .build(),
                 );
-                encrypted_devices.push(device_jid.clone());
+                encrypted_devices.push(device_jid);
             }
-            Err(e) => {
-                log::warn!(
-                    "Failed to encrypt for device {}: {}. Skipping.",
-                    &reusable_addr,
-                    e
-                );
+            Ok((_, Ok(None))) => {
+                // extract_ciphertext returned None; skip silently as the
+                // serial path did.
             }
+            Ok((_, Err(msg))) => {
+                log::warn!("Failed to encrypt for device: {msg}. Skipping.");
+            }
+            Err(SpawnCanceled) => {
+                // Spawned task panicked or runtime tore it down. Same
+                // log+skip semantics as a regular encrypt failure.
+                log::warn!("Encrypt task did not deliver a result; skipping device.");
+            }
+        }
+
+        if next_spawn < total {
+            in_flight.push(make_encrypt_task(next_spawn));
+            next_spawn += 1;
         }
     }
 
@@ -666,11 +856,12 @@ pub struct PreparedDmStanza {
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_dm_stanza<
     'a,
-    S: crate::libsignal::protocol::SessionStore + Send + Sync,
-    I: crate::libsignal::protocol::IdentityKeyStore + Send + Sync,
+    S: crate::libsignal::protocol::SessionStore + Clone + Send + Sync + 'static,
+    I: crate::libsignal::protocol::IdentityKeyStore + Clone + Send + Sync + 'static,
     P: crate::libsignal::protocol::PreKeyStore + Send + Sync,
     SP: crate::libsignal::protocol::SignedPreKeyStore + Send + Sync,
 >(
+    runtime: &dyn Runtime,
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
     own_jid: &Jid,
@@ -734,6 +925,7 @@ pub async fn prepare_dm_stanza<
 
     if !recipient_devices.is_empty() {
         let result = encrypt_for_devices(
+            runtime,
             stores,
             resolver,
             &recipient_devices,
@@ -748,6 +940,7 @@ pub async fn prepare_dm_stanza<
 
     if !own_other_devices.is_empty() {
         let result = encrypt_for_devices(
+            runtime,
             stores,
             resolver,
             &own_other_devices,
@@ -981,11 +1174,12 @@ pub struct PreparedGroupStanza {
 #[allow(clippy::too_many_arguments)]
 pub async fn prepare_group_stanza<
     'a,
-    S: crate::libsignal::protocol::SessionStore + Send + Sync,
-    I: crate::libsignal::protocol::IdentityKeyStore + Send + Sync,
+    S: crate::libsignal::protocol::SessionStore + Clone + Send + Sync + 'static,
+    I: crate::libsignal::protocol::IdentityKeyStore + Clone + Send + Sync + 'static,
     P: crate::libsignal::protocol::PreKeyStore + Send + Sync,
     SP: crate::libsignal::protocol::SignedPreKeyStore + Send + Sync,
 >(
+    runtime: &dyn Runtime,
     stores: &mut SignalStores<'a, S, I, P, SP>,
     resolver: &dyn SendContextResolver,
     group_info: &mut GroupInfo,
@@ -1181,6 +1375,7 @@ pub async fn prepare_group_stanza<
         // but does NOT rethrow. SKDM distribution failure must not prevent the group
         // message from being sent. Only successfully encrypted devices are tracked.
         match encrypt_for_devices(
+            runtime,
             stores,
             resolver,
             distribution_list,

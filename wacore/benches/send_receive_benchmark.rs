@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::hint::black_box;
 use wacore::client::context::{GroupInfo, SendContextResolver};
 use wacore::messages::MessageUtils;
+use wacore::runtime::{AbortHandle, Runtime};
 use wacore::send::{SignalStores, prepare_group_stanza, prepare_peer_stanza};
 use wacore::types::jid::{JidExt, make_sender_key_name};
 use wacore::types::message::AddressingMode;
@@ -34,10 +35,72 @@ type SigResult<T> = wacore_libsignal::protocol::error::Result<T>;
 // In-memory Signal stores
 // ---------------------------------------------------------------------------
 
+// Bench runtime: real thread-pool executor so `Runtime::spawn` actually
+// runs the spawned future in the background, mirroring how production
+// drives the parallel encrypt fan-out. `sleep` / `spawn_blocking` are not
+// exercised by the encrypt path.
+struct BenchRuntime {
+    pool: futures::executor::ThreadPool,
+}
+
+impl Default for BenchRuntime {
+    fn default() -> Self {
+        Self {
+            pool: futures::executor::ThreadPool::new().expect("create bench thread pool"),
+        }
+    }
+}
+
+#[async_trait]
+impl Runtime for BenchRuntime {
+    fn spawn(
+        &self,
+        future: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>,
+    ) -> AbortHandle {
+        use futures::task::SpawnExt;
+        let _ = self.pool.spawn(future);
+        AbortHandle::noop()
+    }
+
+    fn sleep(
+        &self,
+        _duration: std::time::Duration,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        unimplemented!("BenchRuntime::sleep is not used by the bench")
+    }
+
+    fn spawn_blocking(
+        &self,
+        _f: Box<dyn FnOnce() + Send + 'static>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> {
+        unimplemented!("BenchRuntime::spawn_blocking is not used by the bench")
+    }
+
+    fn yield_now(&self) -> Option<std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>> {
+        None
+    }
+}
+
+/// Bench fixture wrapping shared identity state. `Clone` is an Arc bump,
+/// so spawned tasks see the same backing map as production adapters do
+/// (whose internal cache is Arc-shared). Without this, the parallel
+/// encrypt fan-out would deep-copy the HashMap per task and the bench
+/// would over-count clone work that doesn't happen in production.
+#[derive(Clone)]
 struct MemIdentityStore {
     key_pair: IdentityKeyPair,
     reg_id: u32,
-    identities: HashMap<ProtocolAddress, IdentityKey>,
+    identities: std::sync::Arc<std::sync::Mutex<HashMap<ProtocolAddress, IdentityKey>>>,
+}
+
+impl MemIdentityStore {
+    fn new(key_pair: IdentityKeyPair, reg_id: u32) -> Self {
+        Self {
+            key_pair,
+            reg_id,
+            identities: std::sync::Arc::new(std::sync::Mutex::new(HashMap::new())),
+        }
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
@@ -54,8 +117,9 @@ impl IdentityKeyStore for MemIdentityStore {
         a: &ProtocolAddress,
         id: &IdentityKey,
     ) -> SigResult<IdentityChange> {
-        let changed = self.identities.get(a).is_some_and(|e| e != id);
-        self.identities.insert(a.clone(), *id);
+        let mut guard = self.identities.lock().unwrap();
+        let changed = guard.get(a).is_some_and(|e| e != id);
+        guard.insert(a.clone(), *id);
         Ok(IdentityChange::from_changed(changed))
     }
     async fn is_trusted_identity(
@@ -67,7 +131,7 @@ impl IdentityKeyStore for MemIdentityStore {
         Ok(true)
     }
     async fn get_identity(&self, a: &ProtocolAddress) -> SigResult<Option<IdentityKey>> {
-        Ok(self.identities.get(a).cloned())
+        Ok(self.identities.lock().unwrap().get(a).cloned())
     }
 }
 
@@ -113,19 +177,22 @@ impl SignedPreKeyStore for MemSignedPreKeyStore {
     }
 }
 
-struct MemSessionStore(HashMap<ProtocolAddress, SessionRecord>);
+/// Bench fixture wrapping shared session state — see `MemIdentityStore`
+/// for the rationale.
+#[derive(Clone, Default)]
+struct MemSessionStore(std::sync::Arc<std::sync::Mutex<HashMap<ProtocolAddress, SessionRecord>>>);
 
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl SessionStore for MemSessionStore {
     async fn load_session(&self, a: &ProtocolAddress) -> SigResult<Option<SessionRecord>> {
-        Ok(self.0.get(a).cloned())
+        Ok(self.0.lock().unwrap().get(a).cloned())
     }
     async fn has_session(&self, a: &ProtocolAddress) -> SigResult<bool> {
-        Ok(self.0.contains_key(a))
+        Ok(self.0.lock().unwrap().contains_key(a))
     }
     async fn store_session(&mut self, a: &ProtocolAddress, r: SessionRecord) -> SigResult<()> {
-        self.0.insert(a.clone(), r);
+        self.0.lock().unwrap().insert(a.clone(), r);
         Ok(())
     }
 }
@@ -200,14 +267,10 @@ impl User {
         Self {
             jid,
             address,
-            identity: MemIdentityStore {
-                key_pair: identity_key_pair,
-                reg_id,
-                identities: HashMap::new(),
-            },
+            identity: MemIdentityStore::new(identity_key_pair, reg_id),
             prekeys,
             signed_prekeys,
-            sessions: MemSessionStore(HashMap::new()),
+            sessions: MemSessionStore::default(),
             sender_keys: MemSenderKeyStore(HashMap::new()),
             prekey_pair: pk_pair,
             signed_prekey_pair: spk_pair,
@@ -556,7 +619,9 @@ fn setup_group_recv() -> GrpRecvData {
         signed_prekey_store: &alice.signed_prekeys,
     };
 
+    let runtime = BenchRuntime::default();
     let result = futures::executor::block_on(prepare_group_stanza(
+        &runtime,
         &mut stores,
         &resolver,
         &mut group_info,
@@ -625,7 +690,9 @@ fn run_group_send(d: &mut GrpSendData) {
         signed_prekey_store: &d.alice.signed_prekeys,
     };
 
+    let runtime = BenchRuntime::default();
     let result = futures::executor::block_on(prepare_group_stanza(
+        &runtime,
         &mut stores,
         &d.resolver,
         &mut group_info,
