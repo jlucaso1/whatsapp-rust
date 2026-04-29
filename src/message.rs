@@ -1803,8 +1803,8 @@ mod tests {
         )
         .await;
 
-        let pn_user = "556381080408";
-        let lid_user = "208512558833832";
+        let pn_user = "559980000001";
+        let lid_user = "100000012345678";
 
         assert_eq!(
             client.lid_pn_cache.get_current_lid(pn_user).await,
@@ -1814,7 +1814,7 @@ mod tests {
 
         let node = NodeBuilder::new("message")
             .attr("from", "status@broadcast")
-            .attr("id", "2A84359EC28B28E2E6CA")
+            .attr("id", "TEST_COLD_CACHE_ID")
             .attr("participant", format!("{pn_user}@s.whatsapp.net").as_str())
             .attr("participant_lid", format!("{lid_user}@lid").as_str())
             .attr("t", "1777415965")
@@ -1896,8 +1896,8 @@ mod tests {
         )
         .await;
 
-        let pn_user = "556381080408";
-        let lid_user = "208512558833832";
+        let pn_user = "559980000001";
+        let lid_user = "100000012345678";
         let device_id: u16 = 99;
 
         let node = NodeBuilder::new("message")
