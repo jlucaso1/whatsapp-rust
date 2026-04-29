@@ -1445,9 +1445,16 @@ impl Client {
         alt: Option<&Jid>,
         is_offline: bool,
     ) {
-        let (lid_user, pn_user, source) = if sender.is_lid() {
+        use wacore_binary::Server;
+        // Hosted/HostedLid follow the same PN↔LID alt rule as their plain
+        // counterparts, so parse_message_info populates sender_alt for them
+        // too. Mirror that here or those mappings get dropped silently.
+        let sender_is_lid = matches!(sender.server, Server::Lid | Server::HostedLid);
+        let sender_is_pn = matches!(sender.server, Server::Pn | Server::Hosted);
+
+        let (lid_user, pn_user, source) = if sender_is_lid {
             if let Some(alt_jid) = alt
-                && alt_jid.is_pn()
+                && matches!(alt_jid.server, Server::Pn | Server::Hosted)
             {
                 (
                     &sender.user,
@@ -1457,9 +1464,9 @@ impl Client {
             } else {
                 return;
             }
-        } else if sender.is_pn() {
+        } else if sender_is_pn {
             if let Some(alt_jid) = alt
-                && alt_jid.is_lid()
+                && matches!(alt_jid.server, Server::Lid | Server::HostedLid)
             {
                 (
                     &alt_jid.user,
