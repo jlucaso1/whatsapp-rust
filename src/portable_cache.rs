@@ -299,6 +299,33 @@ where
             .unwrap_or(0)
     }
 
+    /// Eager snapshot iterator over `(Arc<K>, V)` — matches `moka::Cache::iter`'s
+    /// shape but diverges on semantics: snapshot, not lazy. Includes
+    /// expired-but-not-yet-evicted entries (consistent with `entry_count`).
+    /// Caller must not `.await` with the writer guard held from the same task —
+    /// would deadlock on single-threaded runtimes.
+    pub fn iter(&self) -> std::vec::IntoIter<(Arc<K>, V)> {
+        for _ in 0..1024 {
+            if let Some(guard) = self.inner.try_read() {
+                return Self::snapshot(&guard).into_iter();
+            }
+            std::hint::spin_loop();
+        }
+        log::warn!(
+            "PortableCache::iter: could not acquire read lock after retries; \
+             returning empty snapshot"
+        );
+        Vec::new().into_iter()
+    }
+
+    fn snapshot(guard: &CacheInner<K, V>) -> Vec<(Arc<K>, V)> {
+        guard
+            .map
+            .iter()
+            .map(|(k, e)| (Arc::new(k.clone()), e.value.clone()))
+            .collect()
+    }
+
     /// Get or insert (single-flight). Takes key by value.
     pub async fn get_with<F>(&self, key: K, init: F) -> V
     where
@@ -491,6 +518,24 @@ mod tests {
         let removed = cache.remove("key1").await;
         assert_eq!(removed, Some("v1".to_string()));
         assert!(cache.get("key1").await.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_iter_snapshot_includes_expired() {
+        // Snapshot semantics: iter returns all map entries, including ones
+        // past TTL that haven't been evicted yet. Pin this so the call site
+        // (invalidate_entries_for_device) keeps idempotent invalidation.
+        let cache: PortableCache<String, u32> = PortableCache::builder()
+            .max_capacity(100)
+            .time_to_live(Duration::from_millis(10))
+            .build();
+        cache.insert("a".to_string(), 1).await;
+        cache.insert("b".to_string(), 2).await;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+
+        let mut keys: Vec<String> = cache.iter().map(|(k, _)| k.as_ref().clone()).collect();
+        keys.sort();
+        assert_eq!(keys, vec!["a".to_string(), "b".to_string()]);
     }
 
     #[tokio::test]
