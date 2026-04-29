@@ -1,18 +1,33 @@
-//! Pluggable time provider.
+//! Pluggable time providers.
 //!
-//! By default, uses `chrono::Utc::now()`. Can be overridden globally via
-//! [`set_time_provider`] for environments where `std::time::SystemTime` is
-//! unavailable (e.g. WASM) or for deterministic testing.
+//! Two clocks live here, kept distinct on purpose:
+//!
+//! - **Wall clock** ([`TimeProvider`], [`now_millis`], [`now_utc`]) — answers
+//!   "what time is it?". Can jump backwards (NTP sync, manual clock changes,
+//!   leap-second smearing). Resolution: milliseconds is sufficient for
+//!   timestamps in stanzas, app-state mutations, and log lines.
+//! - **Monotonic clock** ([`MonotonicProvider`], [`Instant`]) — answers
+//!   "how much time passed?". Never moves backwards; immune to NTP
+//!   adjustments. Resolution: nanoseconds where the platform supports it
+//!   (`std::time::Instant` on native; sub-millisecond from `performance.now`
+//!   in browsers, true ns in Node/WASI when those targets supply a custom
+//!   provider).
+//!
+//! Conflating the two — using a wall clock to measure elapsed time — silently
+//! corrupts timeouts and latency metrics whenever the system clock is adjusted
+//! mid-measurement. That is why `std::time` separates `SystemTime` from
+//! `Instant`, and we mirror the split here.
 
 use std::sync::OnceLock;
 
-/// Trait for providing the current time.
+/// Wall-clock provider. Returns the current Unix time. May move backwards
+/// across calls when the system clock is adjusted.
 pub trait TimeProvider: Send + Sync + 'static {
     /// Current time as milliseconds since Unix epoch.
     fn now_millis(&self) -> i64;
 }
 
-/// Default provider using `chrono`.
+/// Default wall-clock provider using `chrono`.
 struct ChronoTimeProvider;
 
 impl TimeProvider for ChronoTimeProvider {
@@ -27,8 +42,8 @@ impl TimeProvider for ChronoTimeProvider {
 
 static TIME_PROVIDER: OnceLock<Box<dyn TimeProvider>> = OnceLock::new();
 
-/// Set a custom time provider. Must be called before any time functions are used.
-/// Returns `Err` if a provider has already been set.
+/// Set a custom wall-clock provider. Must be called before any time function
+/// is used. Returns `Err` if a provider has already been set.
 pub fn set_time_provider(provider: impl TimeProvider) -> Result<(), &'static str> {
     TIME_PROVIDER
         .set(Box::new(provider))
@@ -84,40 +99,130 @@ pub fn from_millis_or_now(ts: i64) -> chrono::DateTime<chrono::Utc> {
     from_millis(ts).unwrap_or_else(now_utc)
 }
 
-/// Portable monotonic instant, replacing `std::time::Instant` which is
-/// unavailable on `wasm32-unknown-unknown`.
-///
-/// Uses `now_millis()` internally — not truly monotonic but sufficient
-/// for elapsed-time measurement and timeout tracking.
+// ---------------------------------------------------------------------------
+// Monotonic clock
+// ---------------------------------------------------------------------------
+
+/// Monotonic-clock provider. Returns nanoseconds since an arbitrary fixed
+/// reference; the only guarantee is that successive calls never return a
+/// smaller value than a previous one.
+pub trait MonotonicProvider: Send + Sync + 'static {
+    /// Nanoseconds since the provider's reference point. The reference is
+    /// implementation-defined (may be process start, system boot, etc.) —
+    /// only differences are meaningful.
+    fn now_nanos(&self) -> u64;
+}
+
+/// Native default: backed by `std::time::Instant`, which is monotonic and
+/// has nanosecond resolution on every supported native platform.
+#[cfg(not(target_arch = "wasm32"))]
+struct StdMonotonicProvider {
+    epoch: std::time::Instant,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl StdMonotonicProvider {
+    // The single legitimate call to `std::time::Instant::now()`: this IS the
+    // default provider backing `wacore::time::Instant`. Everywhere else must
+    // go through this abstraction — see clippy.toml.
+    #[allow(clippy::disallowed_methods)]
+    fn new() -> Self {
+        Self {
+            epoch: std::time::Instant::now(),
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl MonotonicProvider for StdMonotonicProvider {
+    fn now_nanos(&self) -> u64 {
+        // Saturate at u64::MAX (584 years) — well beyond any realistic
+        // process lifetime.
+        self.epoch.elapsed().as_nanos().min(u64::MAX as u128) as u64
+    }
+}
+
+/// WASM fallback when no platform-specific provider has been registered.
+/// Derives nanos from the wall clock; this loses monotonicity guarantees
+/// (NTP can move it backwards) and resolution (ms × 1_000_000). Embedders
+/// should register a real monotonic provider via [`set_monotonic_provider`]
+/// — `performance.now()` in browsers, `process.hrtime.bigint()` in Node,
+/// `wasi:clocks/monotonic-clock` in WASI.
+#[cfg(target_arch = "wasm32")]
+struct WallDerivedMonotonicProvider;
+
+#[cfg(target_arch = "wasm32")]
+impl MonotonicProvider for WallDerivedMonotonicProvider {
+    fn now_nanos(&self) -> u64 {
+        (now_millis().max(0) as u64).saturating_mul(1_000_000)
+    }
+}
+
+static MONOTONIC_PROVIDER: OnceLock<Box<dyn MonotonicProvider>> = OnceLock::new();
+
+/// Set a custom monotonic-clock provider. Must be called before any
+/// [`Instant`] is captured. Returns `Err` if a provider has already been set.
+pub fn set_monotonic_provider(provider: impl MonotonicProvider) -> Result<(), &'static str> {
+    MONOTONIC_PROVIDER
+        .set(Box::new(provider))
+        .map_err(|_| "monotonic provider already set")
+}
+
+#[inline]
+fn now_nanos() -> u64 {
+    MONOTONIC_PROVIDER
+        .get_or_init(default_monotonic_provider)
+        .now_nanos()
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_monotonic_provider() -> Box<dyn MonotonicProvider> {
+    Box::new(StdMonotonicProvider::new())
+}
+
+#[cfg(target_arch = "wasm32")]
+fn default_monotonic_provider() -> Box<dyn MonotonicProvider> {
+    Box::new(WallDerivedMonotonicProvider)
+}
+
+/// Portable monotonic instant. On native targets this wraps `std::time::Instant`
+/// (via the default [`MonotonicProvider`]) and exposes nanosecond resolution.
+/// On `wasm32` targets the embedder should register a sub-millisecond provider
+/// via [`set_monotonic_provider`]; otherwise the fallback derives from the
+/// wall clock and quantizes to milliseconds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Instant(i64);
+pub struct Instant(u64);
 
 impl Instant {
-    /// Capture the current instant.
+    /// Capture the current monotonic instant.
     #[inline]
     pub fn now() -> Self {
-        Self(now_millis())
+        Self(now_nanos())
     }
 
-    /// Duration elapsed since this instant was captured.
+    /// Duration elapsed since this instant was captured. Returns
+    /// [`Duration::ZERO`] if the clock somehow reported a smaller value
+    /// than at capture time — which a well-behaved monotonic provider
+    /// must never do, but we saturate defensively.
     #[inline]
     pub fn elapsed(&self) -> std::time::Duration {
-        let diff = now_millis().saturating_sub(self.0);
-        std::time::Duration::from_millis(diff.max(0) as u64)
+        let now = now_nanos();
+        std::time::Duration::from_nanos(now.saturating_sub(self.0))
     }
 
-    /// Duration from this instant until another (saturating).
+    /// Duration from `earlier` to `self`. Returns [`Duration::ZERO`] if
+    /// `earlier` is after `self`.
     #[inline]
     pub fn saturating_duration_since(&self, earlier: Instant) -> std::time::Duration {
-        let diff = self.0.saturating_sub(earlier.0);
-        std::time::Duration::from_millis(diff.max(0) as u64)
+        std::time::Duration::from_nanos(self.0.saturating_sub(earlier.0))
     }
 }
 
 impl std::ops::Add<std::time::Duration> for Instant {
     type Output = Instant;
     fn add(self, rhs: std::time::Duration) -> Self {
-        Self(self.0.saturating_add(rhs.as_millis() as i64))
+        let rhs_nanos: u64 = rhs.as_nanos().min(u64::MAX as u128) as u64;
+        Self(self.0.saturating_add(rhs_nanos))
     }
 }
 
