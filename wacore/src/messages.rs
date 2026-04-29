@@ -164,6 +164,16 @@ pub fn parse_message_info(
         let participant = attrs.jid("participant");
         let is_from_me = participant.matches_user_or_lid(own_jid, own_lid);
 
+        // Match WAWebMsgParser: read participant_lid/_pn unconditionally so
+        // the LID-PN cache can re-warm from the stanza.
+        let sender_alt = if participant.server.is_pn_family() {
+            attrs.optional_jid("participant_lid")
+        } else if participant.server.is_lid_family() {
+            attrs.optional_jid("participant_pn")
+        } else {
+            None
+        };
+
         MessageSource {
             chat: from.clone(),
             sender: participant.clone(),
@@ -174,6 +184,7 @@ pub fn parse_message_info(
             } else {
                 None
             },
+            sender_alt,
             ..Default::default()
         }
     } else if from.is_group() {
@@ -269,4 +280,75 @@ pub fn parse_message_info(
         is_offline,
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod parse_message_info_tests {
+    use super::*;
+    use std::str::FromStr;
+    use wacore_binary::Jid;
+    use wacore_binary::builder::NodeBuilder;
+
+    #[test]
+    fn status_broadcast_with_participant_lid_populates_sender_alt() {
+        let own_pn = Jid::from_str("559900000000@s.whatsapp.net").unwrap();
+        let own_lid = Jid::from_str("100000000000000@lid").unwrap();
+        let pn_user = "559980000001";
+        let lid_user = "100000012345678";
+        let node = NodeBuilder::new("message")
+            .attr("from", "status@broadcast")
+            .attr("type", "media")
+            .attr("id", "TEST_MSG_ID")
+            .attr("t", "1777415965")
+            .attr("participant", format!("{pn_user}@s.whatsapp.net").as_str())
+            .attr("participant_lid", format!("{lid_user}@lid").as_str())
+            .build();
+
+        let info = parse_message_info(&node.as_node_ref(), &own_pn, Some(&own_lid))
+            .expect("parse_message_info should succeed for status broadcast");
+
+        assert_eq!(info.source.sender.user, pn_user);
+        assert_eq!(info.source.sender.server, wacore_binary::Server::Pn);
+        let alt = info
+            .source
+            .sender_alt
+            .as_ref()
+            .expect("status broadcast must expose participant_lid as sender_alt");
+        assert_eq!(alt.user, lid_user);
+        assert_eq!(alt.server, wacore_binary::Server::Lid);
+    }
+
+    /// Symmetric branch: when `participant` is a LID, `sender_alt` must come
+    /// from `participant_pn`. Pins the `Server::Lid`/`is_lid_family()` arm.
+    #[test]
+    fn status_broadcast_with_participant_pn_populates_sender_alt() {
+        let own_pn = Jid::from_str("559900000000@s.whatsapp.net").unwrap();
+        let own_lid = Jid::from_str("100000000000000@lid").unwrap();
+        let pn_user = "559980000001";
+        let lid_user = "100000012345678";
+        let node = NodeBuilder::new("message")
+            .attr("from", "status@broadcast")
+            .attr("type", "media")
+            .attr("id", "TEST_LID_FIRST_MSG_ID")
+            .attr("t", "1777415965")
+            .attr("participant", format!("{lid_user}@lid").as_str())
+            .attr(
+                "participant_pn",
+                format!("{pn_user}@s.whatsapp.net").as_str(),
+            )
+            .build();
+
+        let info = parse_message_info(&node.as_node_ref(), &own_pn, Some(&own_lid))
+            .expect("parse_message_info should succeed for LID-addressed status");
+
+        assert_eq!(info.source.sender.user, lid_user);
+        assert_eq!(info.source.sender.server, wacore_binary::Server::Lid);
+        let alt = info
+            .source
+            .sender_alt
+            .as_ref()
+            .expect("LID-addressed status broadcast must expose participant_pn as sender_alt");
+        assert_eq!(alt.user, pn_user);
+        assert_eq!(alt.server, wacore_binary::Server::Pn);
+    }
 }
