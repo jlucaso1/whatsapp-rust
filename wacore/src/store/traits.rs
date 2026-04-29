@@ -283,6 +283,17 @@ pub trait ProtocolStore: Send + Sync {
     /// Update the device list for a user (called after usync responses).
     async fn update_device_list(&self, record: DeviceListRecord) -> Result<()>;
 
+    /// Batched variant of `update_device_list`. Backends should override with
+    /// a single transaction; the default loops for correctness. Important on
+    /// usync of large groups, where the per-row commit + spawn_blocking
+    /// overhead dominates wall-clock time when called once per participant.
+    async fn update_device_lists(&self, records: Vec<DeviceListRecord>) -> Result<()> {
+        for record in records {
+            self.update_device_list(record).await?;
+        }
+        Ok(())
+    }
+
     /// Get all known devices for a user.
     async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>>;
 
