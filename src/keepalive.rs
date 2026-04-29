@@ -65,19 +65,22 @@ impl Client {
 
         debug!(target: "Client/Keepalive", "Sending keepalive ping");
 
+        // wall_rtt_ms feeds the WA Web onClockSkewUpdate formula, which
+        // mixes start_ms with serverTime — both halves must be wall-clock.
+        // rtt_monotonic is for the log only.
         let start_ms = wacore::time::now_millis();
+        let rtt_start = wacore::time::Instant::now();
         let iq = wacore::iq::keepalive::KeepaliveSpec::with_timeout(KEEP_ALIVE_RESPONSE_DEADLINE)
             .build_iq();
         match self.send_iq(iq).await {
             Ok(response_node) => {
-                let end_ms = wacore::time::now_millis();
-                let rtt_ms = end_ms - start_ms;
-                debug!(target: "Client/Keepalive", "Received keepalive pong (RTT: {rtt_ms}ms)");
-                // WA Web: onClockSkewUpdate — Math.round((startTime + rtt/2) / 1000 - serverTime)
+                let rtt_monotonic = rtt_start.elapsed();
+                let wall_rtt_ms = wacore::time::now_millis().saturating_sub(start_ms).max(0);
+                debug!(target: "Client/Keepalive", "Received keepalive pong (RTT: {rtt_monotonic:.2?})");
                 self.unified_session.update_server_time_offset_with_rtt(
                     response_node.get(),
                     start_ms,
-                    rtt_ms,
+                    wall_rtt_ms,
                 );
                 KeepaliveResult::Ok
             }
