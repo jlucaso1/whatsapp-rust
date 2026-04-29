@@ -411,12 +411,22 @@ impl SignalStoreCache {
         backend: &dyn SignalStore,
     ) -> Result<Option<Arc<[u8]>>> {
         let key = address.as_str();
+        // Cache check inside scoped lock so concurrent callers don't queue on
+        // the mutex during the backend roundtrip. Mirrors get_session/has_session.
+        {
+            let state = self.identities.lock().await;
+            if let Some(cached) = state.cache.get(key) {
+                return Ok(cached.clone());
+            }
+        }
+        // Backend I/O outside the lock.
+        let data = backend.load_identity(key).await?;
+        let arc_data = data.map(Arc::from);
         let mut state = self.identities.lock().await;
+        // Re-check: another task may have populated the cache while we awaited.
         if let Some(cached) = state.cache.get(key) {
             return Ok(cached.clone());
         }
-        let data = backend.load_identity(key).await?;
-        let arc_data = data.map(Arc::from);
         state.cache.insert(Arc::from(key), arc_data.clone());
         state.evict_if_needed(self.max_entries);
         Ok(arc_data)
