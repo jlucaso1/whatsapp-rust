@@ -161,7 +161,10 @@ pub struct CacheConfig {
     pub group_cache: CacheEntryConfig,
     /// Device registry cache (time_to_live). Default: 1h TTL, 1000 entries.
     pub device_registry_cache: CacheEntryConfig,
-    /// LID-to-phone cache (time_to_idle). Default: 1h timeout, 2000 entries.
+    /// LID-to-phone cache. WAWebLidPnCache uses plain Maps with no expiry
+    /// and no size cap; evicting a still-valid mapping silently downgrades
+    /// Signal addresses to `@c.us`. Default: no timeout, capacity u64::MAX
+    /// (effectively unbounded — moka doesn't expose an `unbounded()` builder).
     pub lid_pn_cache: CacheEntryConfig,
     /// Optional L1 in-memory cache for sent messages (retry support).
     /// Default: capacity 0 (disabled — DB-only, matching WA Web).
@@ -242,7 +245,7 @@ impl Default for CacheConfig {
         Self {
             group_cache: CacheEntryConfig::new(one_hour, 250),
             device_registry_cache: CacheEntryConfig::new(one_hour, 1_000),
-            lid_pn_cache: CacheEntryConfig::new(one_hour, 2_000),
+            lid_pn_cache: CacheEntryConfig::new(None, u64::MAX),
             recent_messages: CacheEntryConfig::new(five_min, 0),
             message_retry_counts: CacheEntryConfig::new(five_min, 500),
             undecryptable_dispatched: CacheEntryConfig::new(five_min, 1_000),
@@ -256,5 +259,24 @@ impl Default for CacheConfig {
             sent_message_ttl_secs: 300,
             cache_stores: CacheStores::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lid_pn_cache_default_is_effectively_unbounded() {
+        let cfg = CacheConfig::default();
+        assert_eq!(
+            cfg.lid_pn_cache.timeout, None,
+            "lid_pn_cache must not expire entries by time; WAWebLidPnCache uses plain Maps"
+        );
+        assert_eq!(
+            cfg.lid_pn_cache.capacity,
+            u64::MAX,
+            "lid_pn_cache must be effectively unbounded; capacity-LRU re-introduces the eviction bug at higher thresholds"
+        );
     }
 }

@@ -1780,6 +1780,96 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_status_broadcast_cold_cache_resolves_to_lid() {
+        use wacore::types::jid::JidExt as _;
+        use wacore_binary::Server;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_status_cold_cache?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
+
+        let pn_user = "556381080408";
+        let lid_user = "208512558833832";
+
+        assert_eq!(
+            client.lid_pn_cache.get_current_lid(pn_user).await,
+            None,
+            "precondition: empty cache for {pn_user}"
+        );
+
+        let node = NodeBuilder::new("message")
+            .attr("from", "status@broadcast")
+            .attr("id", "2A84359EC28B28E2E6CA")
+            .attr("participant", format!("{pn_user}@s.whatsapp.net").as_str())
+            .attr("participant_lid", format!("{lid_user}@lid").as_str())
+            .attr("t", "1777415965")
+            .attr("type", "media")
+            .build();
+
+        let info = client
+            .parse_message_info(&node.as_node_ref())
+            .await
+            .expect("parse_message_info must succeed");
+
+        // Fix #1: parser surfaces participant_lid via sender_alt.
+        let alt = info
+            .source
+            .sender_alt
+            .as_ref()
+            .expect("sender_alt must be populated from participant_lid");
+        assert_eq!(alt.user.as_str(), lid_user);
+        assert_eq!(alt.server, Server::Lid);
+        assert_eq!(info.source.sender.user.as_str(), pn_user);
+        assert_eq!(info.source.sender.server, Server::Pn);
+
+        client
+            .cache_lid_pn_from_message(
+                &info.source.sender,
+                info.source.sender_alt.as_ref(),
+                info.is_offline,
+            )
+            .await;
+
+        // Cache learned the mapping in both directions.
+        assert_eq!(
+            client.lid_pn_cache.get_current_lid(pn_user).await,
+            Some(lid_user.to_string()),
+            "PN→LID lookup must hit"
+        );
+        assert_eq!(
+            client.lid_pn_cache.get_phone_number(lid_user).await,
+            Some(pn_user.to_string()),
+            "LID→PN lookup must hit"
+        );
+
+        // Resolution upgrades to LID and Signal address is the LID form.
+        let resolved = client.resolve_encryption_jid(&info.source.sender).await;
+        assert_eq!(resolved.user.as_str(), lid_user);
+        assert_eq!(resolved.server, Server::Lid);
+        assert_eq!(resolved.device, info.source.sender.device);
+        assert_eq!(
+            resolved.to_protocol_address().to_string(),
+            format!("{lid_user}@lid.0"),
+            "Signal address must be @lid form, not @c.us"
+        );
+    }
+
+    #[tokio::test]
     async fn test_process_session_enc_batch_handles_session_not_found_gracefully() {
         use wacore::libsignal::protocol::{IdentityKeyPair, KeyPair, SignalMessage};
 

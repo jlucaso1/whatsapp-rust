@@ -164,6 +164,15 @@ pub fn parse_message_info(
         let participant = attrs.jid("participant");
         let is_from_me = participant.matches_user_or_lid(own_jid, own_lid);
 
+        // Match WAWebMsgParser: read participant_lid/_pn unconditionally so
+        // the LID-PN cache can re-warm from the stanza. Hosted/HostedLid
+        // participants follow the same PN↔LID alt rule.
+        let sender_alt = match participant.server {
+            Server::Pn | Server::Hosted => attrs.optional_jid("participant_lid"),
+            Server::Lid | Server::HostedLid => attrs.optional_jid("participant_pn"),
+            _ => None,
+        };
+
         MessageSource {
             chat: from.clone(),
             sender: participant.clone(),
@@ -174,6 +183,7 @@ pub fn parse_message_info(
             } else {
                 None
             },
+            sender_alt,
             ..Default::default()
         }
     } else if from.is_group() {
@@ -269,4 +279,39 @@ pub fn parse_message_info(
         is_offline,
         ..Default::default()
     })
+}
+
+#[cfg(test)]
+mod parse_message_info_tests {
+    use super::*;
+    use std::str::FromStr;
+    use wacore_binary::Jid;
+    use wacore_binary::builder::NodeBuilder;
+
+    #[test]
+    fn status_broadcast_with_participant_lid_populates_sender_alt() {
+        let own_pn = Jid::from_str("559900000000@s.whatsapp.net").unwrap();
+        let own_lid = Jid::from_str("100000000000000@lid").unwrap();
+        let node = NodeBuilder::new("message")
+            .attr("from", "status@broadcast")
+            .attr("type", "media")
+            .attr("id", "2A84359EC28B28E2E6CA")
+            .attr("t", "1777415965")
+            .attr("participant", "556381080408@s.whatsapp.net")
+            .attr("participant_lid", "208512558833832@lid")
+            .build();
+
+        let info = parse_message_info(&node.as_node_ref(), &own_pn, Some(&own_lid))
+            .expect("parse_message_info should succeed for status broadcast");
+
+        assert_eq!(info.source.sender.user, "556381080408");
+        assert_eq!(info.source.sender.server, wacore_binary::Server::Pn);
+        let alt = info
+            .source
+            .sender_alt
+            .as_ref()
+            .expect("status broadcast must expose participant_lid as sender_alt");
+        assert_eq!(alt.user, "208512558833832");
+        assert_eq!(alt.server, wacore_binary::Server::Lid);
+    }
 }

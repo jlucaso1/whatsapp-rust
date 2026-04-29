@@ -11,8 +11,12 @@
 //! When multiple LIDs exist for the same phone number (rare), the most recent one
 //! (by `created_at` timestamp) is considered "current".
 //!
-//! Both maps are bounded (max 10 000 entries, 1 h idle TTL) to prevent unbounded
-//! memory growth in long-running sessions.
+//! Both maps are unbounded by default and never expire. WA Web
+//! (`WAWebLidPnCache`) uses plain `Map`s, so a mapping learned at startup or
+//! via usync stays available for every subsequent Signal-address resolution.
+//! A custom `CacheEntryConfig` can impose a capacity bound if memory pressure
+//! requires it, accepting the trade-off that capacity-LRU eviction silently
+//! downgrades Signal addresses to `@c.us`.
 
 use std::sync::Arc;
 
@@ -45,12 +49,14 @@ impl Default for LidPnCache {
 }
 
 impl LidPnCache {
-    /// Create a new empty cache with default settings (1h idle TTL, 10000 entries).
+    /// Create a new empty cache with default settings (no time-based expiry,
+    /// effectively unbounded — matches `WAWebLidPnCache`).
     pub fn new() -> Self {
         Self::with_config(&CacheConfig::default().lid_pn_cache, None)
     }
 
-    /// Create a new cache with custom configuration (uses time_to_idle semantics).
+    /// Create a new cache with custom configuration (uses time_to_idle semantics
+    /// when a timeout is set; default config has none).
     ///
     /// When `store` is `Some`, both internal maps use the custom backend.
     /// When `store` is `None`, both maps use in-process moka caches.
