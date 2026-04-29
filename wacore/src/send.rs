@@ -355,18 +355,19 @@ where
     P: crate::libsignal::protocol::PreKeyStore + Send + Sync,
     SP: crate::libsignal::protocol::SignedPreKeyStore + Send + Sync,
 {
-    // Build a map of device JIDs to their effective encryption JIDs.
-    // For phone number JIDs, check if we have an existing session under the corresponding LID.
-    // This handles the case where a session was established via a message with sender_lid,
-    // and now we're sending a reply using the phone number address.
-    let mut jid_to_encryption_jid: std::collections::HashMap<&Jid, Jid> =
-        std::collections::HashMap::with_capacity(devices.len());
-    let mut jids_needing_prekeys = Vec::with_capacity(devices.len());
+    // Per-device LID upgrade map: encryption_overrides[i] mirrors devices[i].
+    // None = use devices[i] as-is; Some(jid) = use this LID-upgraded version.
+    // The Vec replaces a HashMap<&Jid, Jid> that paid hash + alloc per insert
+    // and per get (~666 of each on a large group). Plain Vec<Option<Jid>> is
+    // direct indexing and contiguous memory.
+    let mut encryption_overrides: Vec<Option<Jid>> = vec![None; devices.len()];
+    // Indices into `devices` for those needing prekey fetch.
+    let mut indices_needing_prekeys: Vec<usize> = Vec::with_capacity(devices.len());
     let mut had_406 = false;
 
     let mut reusable_addr = crate::types::jid::make_reusable_protocol_address();
 
-    for device_jid in devices {
+    for (idx, device_jid) in devices.iter().enumerate() {
         // WhatsApp Web's SignalAddress.toString() normalizes PN → LID before
         // creating signal addresses. We do the same: check LID session FIRST.
         // This prevents using stale PN sessions when a newer LID session exists.
@@ -383,7 +384,7 @@ where
                     lid_jid,
                     device_jid
                 );
-                jid_to_encryption_jid.insert(device_jid, lid_jid);
+                encryption_overrides[idx] = Some(lid_jid);
                 continue;
             }
         }
@@ -396,44 +397,45 @@ where
         // No session found - need to fetch prekeys and create session.
         // Keep device_jid for prekey fetch (server returns bundles keyed by this),
         // but normalize to LID for the actual session creation.
-        let encryption_jid = if device_jid.is_pn() {
-            if let Some(lid_user) = resolver.get_lid_for_phone(&device_jid.user).await {
-                let lid_jid = Jid::lid_device(lid_user, device_jid.device);
-                log::debug!(
-                    "Will create LID session {} for PN {} (no existing session)",
-                    lid_jid,
-                    device_jid
-                );
-                lid_jid
-            } else {
-                device_jid.clone()
-            }
-        } else {
-            device_jid.clone()
-        };
-        jid_to_encryption_jid.insert(device_jid, encryption_jid);
-        // Use original device_jid for prekey fetch (HashMap key match)
-        jids_needing_prekeys.push(device_jid.clone());
+        if device_jid.is_pn()
+            && let Some(lid_user) = resolver.get_lid_for_phone(&device_jid.user).await
+        {
+            let lid_jid = Jid::lid_device(lid_user, device_jid.device);
+            log::debug!(
+                "Will create LID session {} for PN {} (no existing session)",
+                lid_jid,
+                device_jid
+            );
+            encryption_overrides[idx] = Some(lid_jid);
+        }
+        indices_needing_prekeys.push(idx);
     }
 
-    if !jids_needing_prekeys.is_empty() {
+    if !indices_needing_prekeys.is_empty() {
         log::debug!(
             "Fetching prekeys for {} devices without sessions",
-            jids_needing_prekeys.len()
+            indices_needing_prekeys.len()
         );
+        // Materialize the Jid slice for the resolver call. fetch_prekeys
+        // wants &[Jid]; same per-device clone count as the previous Vec
+        // model, just sourced from the indices.
+        let jids_for_fetch: Vec<Jid> = indices_needing_prekeys
+            .iter()
+            .map(|&i| devices[i].clone())
+            .collect();
         // 406 on this batch is all-or-nothing — per-device retries just wasted
         // N·RTT with the same failure. Mark `had_406` so the caller invalidates
         // the users and the next send re-fetches. Matches WA Web's
         // `GroupSkmsgJob`: log, continue without those devices.
         let prekey_bundles = match resolver
-            .fetch_prekeys_for_identity_check(&jids_needing_prekeys)
+            .fetch_prekeys_for_identity_check(&jids_for_fetch)
             .await
         {
             Ok(bundles) => bundles,
             Err(e) if is_device_unregistered_error(&e) => {
                 log::warn!(
                     "Prekey fetch returned 406 for {} device(s); skipping them this round",
-                    jids_needing_prekeys.len()
+                    jids_for_fetch.len()
                 );
                 had_406 = true;
                 std::collections::HashMap::new()
@@ -441,10 +443,11 @@ where
             Err(e) => return Err(e),
         };
 
-        for device_jid in &jids_needing_prekeys {
+        for &idx in &indices_needing_prekeys {
+            let device_jid = &devices[idx];
             // Use the LID-normalized encryption JID for session creation
-            let mut encryption_jid = jid_to_encryption_jid
-                .get(device_jid)
+            let mut encryption_jid = encryption_overrides[idx]
+                .as_ref()
                 .unwrap_or(device_jid)
                 .clone();
 
@@ -564,8 +567,8 @@ where
     let mut includes_prekey_message = false;
     let mut encrypted_devices = Vec::with_capacity(devices.len());
 
-    for device_jid in devices {
-        let encryption_jid = jid_to_encryption_jid.get(device_jid).unwrap_or(device_jid);
+    for (idx, device_jid) in devices.iter().enumerate() {
+        let encryption_jid = encryption_overrides[idx].as_ref().unwrap_or(device_jid);
         encryption_jid.reset_protocol_address(&mut reusable_addr);
 
         match message_encrypt(
