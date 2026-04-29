@@ -142,19 +142,41 @@ impl MonotonicProvider for StdMonotonicProvider {
     }
 }
 
-/// WASM fallback when no platform-specific provider has been registered.
-/// Derives nanos from the wall clock; this loses monotonicity guarantees
-/// (NTP can move it backwards) and resolution (ms × 1_000_000). Embedders
-/// should register a real monotonic provider via [`set_monotonic_provider`]
-/// — `performance.now()` in browsers, `process.hrtime.bigint()` in Node,
-/// `wasi:clocks/monotonic-clock` in WASI.
+/// WASM fallback when no platform provider is registered. Derives nanos
+/// from the wall clock and clamps to non-decreasing so the trait contract
+/// holds across NTP backjumps (the value freezes until the wall clock
+/// catches up). Resolution is ms × 1_000_000; embedders should register
+/// a real provider via [`set_monotonic_provider`] for sub-ms precision.
 #[cfg(target_arch = "wasm32")]
-struct WallDerivedMonotonicProvider;
+struct WallDerivedMonotonicProvider {
+    last: std::sync::atomic::AtomicU64,
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WallDerivedMonotonicProvider {
+    const fn new() -> Self {
+        Self {
+            last: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+}
 
 #[cfg(target_arch = "wasm32")]
 impl MonotonicProvider for WallDerivedMonotonicProvider {
     fn now_nanos(&self) -> u64 {
-        (now_millis().max(0) as u64).saturating_mul(1_000_000)
+        use std::sync::atomic::Ordering;
+        let raw = (now_millis().max(0) as u64).saturating_mul(1_000_000);
+        let mut last = self.last.load(Ordering::Relaxed);
+        loop {
+            let next = raw.max(last);
+            match self
+                .last
+                .compare_exchange_weak(last, next, Ordering::Relaxed, Ordering::Relaxed)
+            {
+                Ok(_) => return next,
+                Err(observed) => last = observed,
+            }
+        }
     }
 }
 
@@ -182,7 +204,7 @@ fn default_monotonic_provider() -> Box<dyn MonotonicProvider> {
 
 #[cfg(target_arch = "wasm32")]
 fn default_monotonic_provider() -> Box<dyn MonotonicProvider> {
-    Box::new(WallDerivedMonotonicProvider)
+    Box::new(WallDerivedMonotonicProvider::new())
 }
 
 /// Portable monotonic instant. On native targets this wraps `std::time::Instant`
