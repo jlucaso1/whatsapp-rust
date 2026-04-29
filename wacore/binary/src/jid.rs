@@ -211,6 +211,19 @@ impl Server {
             Self::Legacy => "c.us",
         }
     }
+
+    /// Phone-number-namespaced servers (`@s.whatsapp.net`, `@hosted`).
+    /// The PN side of the LID↔PN mapping treats these as a single class.
+    #[inline]
+    pub fn is_pn_family(self) -> bool {
+        matches!(self, Self::Pn | Self::Hosted)
+    }
+
+    /// LID-namespaced servers (`@lid`, `@hosted.lid`).
+    #[inline]
+    pub fn is_lid_family(self) -> bool {
+        matches!(self, Self::Lid | Self::HostedLid)
+    }
 }
 
 impl fmt::Display for Server {

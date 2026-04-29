@@ -1445,16 +1445,9 @@ impl Client {
         alt: Option<&Jid>,
         is_offline: bool,
     ) {
-        use wacore_binary::Server;
-        // Hosted/HostedLid follow the same PN↔LID alt rule as their plain
-        // counterparts, so parse_message_info populates sender_alt for them
-        // too. Mirror that here or those mappings get dropped silently.
-        let sender_is_lid = matches!(sender.server, Server::Lid | Server::HostedLid);
-        let sender_is_pn = matches!(sender.server, Server::Pn | Server::Hosted);
-
-        let (lid_user, pn_user, source) = if sender_is_lid {
+        let (lid_user, pn_user, source) = if sender.server.is_lid_family() {
             if let Some(alt_jid) = alt
-                && matches!(alt_jid.server, Server::Pn | Server::Hosted)
+                && alt_jid.server.is_pn_family()
             {
                 (
                     &sender.user,
@@ -1464,9 +1457,9 @@ impl Client {
             } else {
                 return;
             }
-        } else if sender_is_pn {
+        } else if sender.server.is_pn_family() {
             if let Some(alt_jid) = alt
-                && matches!(alt_jid.server, Server::Lid | Server::HostedLid)
+                && alt_jid.server.is_lid_family()
             {
                 (
                     &alt_jid.user,
@@ -1873,6 +1866,102 @@ mod tests {
             resolved.to_protocol_address().to_string(),
             format!("{lid_user}@lid.0"),
             "Signal address must be @lid form, not @c.us"
+        );
+    }
+
+    /// Pins the hosted-family branch + the realistic non-zero device shape.
+    /// Production stanzas almost always have device != 0, and hosted variants
+    /// (`@hosted` / `@hosted.lid`) must flow through cache_lid_pn_from_message.
+    #[tokio::test]
+    async fn test_status_broadcast_hosted_family_with_device_id_resolves_to_hosted_lid() {
+        use wacore::types::jid::JidExt as _;
+        use wacore_binary::Server;
+
+        let backend = Arc::new(
+            SqliteStore::new("file:memdb_status_hosted_device?mode=memory&cache=shared")
+                .await
+                .expect("Failed to create test backend"),
+        );
+        let pm = Arc::new(
+            PersistenceManager::new(backend)
+                .await
+                .expect("test backend should initialize"),
+        );
+        let (client, _sync_rx) = Client::new(
+            Arc::new(crate::runtime_impl::TokioRuntime),
+            pm,
+            mock_transport(),
+            mock_http_client(),
+            None,
+        )
+        .await;
+
+        let pn_user = "556381080408";
+        let lid_user = "208512558833832";
+        let device_id: u16 = 99;
+
+        let node = NodeBuilder::new("message")
+            .attr("from", "status@broadcast")
+            .attr("id", "HOSTED_TEST_ID")
+            .attr(
+                "participant",
+                format!("{pn_user}:{device_id}@hosted").as_str(),
+            )
+            .attr(
+                "participant_lid",
+                format!("{lid_user}:{device_id}@hosted.lid").as_str(),
+            )
+            .attr("t", "1777415965")
+            .attr("type", "media")
+            .build();
+
+        let info = client
+            .parse_message_info(&node.as_node_ref())
+            .await
+            .expect("parse_message_info must succeed");
+
+        assert_eq!(info.source.sender.server, Server::Hosted);
+        assert_eq!(info.source.sender.device, device_id);
+        let alt = info
+            .source
+            .sender_alt
+            .as_ref()
+            .expect("sender_alt must be populated for hosted participant");
+        assert_eq!(alt.server, Server::HostedLid);
+        assert_eq!(alt.user.as_str(), lid_user);
+        assert_eq!(alt.device, device_id);
+
+        client
+            .cache_lid_pn_from_message(
+                &info.source.sender,
+                info.source.sender_alt.as_ref(),
+                info.is_offline,
+            )
+            .await;
+
+        // Hosted variant must reach the cache; without it, learn_lid_pn_mapping
+        // is skipped and the hosted-device fix is incomplete.
+        assert_eq!(
+            client.lid_pn_cache.get_current_lid(pn_user).await,
+            Some(lid_user.to_string()),
+            "PN→LID lookup must work for hosted family"
+        );
+        assert_eq!(
+            client.lid_pn_cache.get_phone_number(lid_user).await,
+            Some(pn_user.to_string()),
+        );
+
+        let resolved = client.resolve_encryption_jid(&info.source.sender).await;
+        assert_eq!(resolved.user.as_str(), lid_user);
+        assert_eq!(resolved.server, Server::HostedLid);
+        assert_eq!(
+            resolved.device, device_id,
+            "device id must be preserved through resolution"
+        );
+        assert_eq!(
+            resolved.to_protocol_address().to_string(),
+            format!("{lid_user}:{device_id}@hosted.lid.0"),
+            "Signal address must be the @hosted.lid form with device suffix"
         );
     }
 

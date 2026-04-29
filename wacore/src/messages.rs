@@ -165,12 +165,13 @@ pub fn parse_message_info(
         let is_from_me = participant.matches_user_or_lid(own_jid, own_lid);
 
         // Match WAWebMsgParser: read participant_lid/_pn unconditionally so
-        // the LID-PN cache can re-warm from the stanza. Hosted/HostedLid
-        // participants follow the same PN↔LID alt rule.
-        let sender_alt = match participant.server {
-            Server::Pn | Server::Hosted => attrs.optional_jid("participant_lid"),
-            Server::Lid | Server::HostedLid => attrs.optional_jid("participant_pn"),
-            _ => None,
+        // the LID-PN cache can re-warm from the stanza.
+        let sender_alt = if participant.server.is_pn_family() {
+            attrs.optional_jid("participant_lid")
+        } else if participant.server.is_lid_family() {
+            attrs.optional_jid("participant_pn")
+        } else {
+            None
         };
 
         MessageSource {
