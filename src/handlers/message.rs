@@ -80,15 +80,15 @@ fn create_chat_lane(client: &Arc<Client>) -> ChatLane {
                     log::debug!(target: "MessageQueue", "Stale worker exiting; remaining messages will be redelivered by server");
                     break;
                 }
-                let start = wacore::time::now_millis() as u64;
+                let start = wacore::time::Instant::now();
                 let client = client_for_worker.clone();
                 Box::pin(client.handle_incoming_message(msg_node)).await;
-                let elapsed = (wacore::time::now_millis() as u64).saturating_sub(start);
-                if elapsed > MAX_MESSAGE_DELAY_MS {
+                let elapsed = start.elapsed();
+                if elapsed.as_millis() as u64 > MAX_MESSAGE_DELAY_MS {
                     warn!(
                         target: "MessageQueue",
                         "Message processing took {:.1}s (MAX_MESSAGE_DELAY is {}s)",
-                        elapsed as f64 / 1000.0,
+                        elapsed.as_secs_f64(),
                         MAX_MESSAGE_DELAY_MS / 1000
                     );
                 }
