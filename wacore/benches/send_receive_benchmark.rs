@@ -515,6 +515,9 @@ struct GrpSendData {
     force_skdm: bool,
     resolver: MockResolver,
     msg: wa::Message,
+    // Built once in setup so the measured body excludes thread-pool startup
+    // (iai-callgrind would otherwise charge the syscalls to the encrypt path).
+    runtime: BenchRuntime,
 }
 
 fn setup_group_send(n: usize) -> GrpSendData {
@@ -546,6 +549,7 @@ fn setup_group_send(n: usize) -> GrpSendData {
         force_skdm: false,
         resolver: MockResolver(devices),
         msg: text_msg(),
+        runtime: BenchRuntime::default(),
     }
 }
 
@@ -690,9 +694,8 @@ fn run_group_send(d: &mut GrpSendData) {
         signed_prekey_store: &d.alice.signed_prekeys,
     };
 
-    let runtime = BenchRuntime::default();
     let result = futures::executor::block_on(prepare_group_stanza(
-        &runtime,
+        &d.runtime,
         &mut stores,
         &d.resolver,
         &mut group_info,
