@@ -15,7 +15,7 @@ bundled-sqlite = ["libsqlite3-sys/bundled"]
 async-trait = { workspace = true }
 bincode = { version = "2.0.1", features = ["serde"] }
 bytes = { workspace = true }
-diesel = { version = "2.3.7", default-features = false, features = [
+diesel = { version = "2.3.8", default-features = false, features = [
     "sqlite",
     "r2d2",
     "32-column-tables",
