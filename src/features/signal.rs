@@ -273,6 +273,7 @@ impl<'a> Signal<'a> {
 
         let mut stores = adapter.as_signal_stores();
         let result = wacore::send::encrypt_for_devices(
+            &*self.client.runtime,
             &mut stores,
             self.client,
             &device_jids,

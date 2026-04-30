@@ -55,7 +55,7 @@ waproto = { workspace = true }
 
 [dev-dependencies]
 aes-gcm = { workspace = true }
-futures = { workspace = true, features = ["executor"] }
+futures = { workspace = true, features = ["executor", "thread-pool"] }
 iai-callgrind = { workspace = true }
 tokio = { workspace = true, features = ["macros", "rt"] }
 

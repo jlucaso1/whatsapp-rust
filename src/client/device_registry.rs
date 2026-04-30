@@ -190,6 +190,65 @@ impl Client {
         Ok(())
     }
 
+    /// Batched variant of [`update_device_list`]. Cache is populated
+    /// synchronously per record (cheap moka inserts); the backend write
+    /// collapses into a single transaction. Used by usync after fetching
+    /// device lists for many users at once, where the per-row commit
+    /// dominated wall-clock time on large groups.
+    pub(crate) async fn update_device_lists(
+        &self,
+        records: Vec<wacore::store::traits::DeviceListRecord>,
+    ) -> Result<()> {
+        use anyhow::Context;
+
+        if records.is_empty() {
+            return Ok(());
+        }
+
+        let mut prepared = Vec::with_capacity(records.len());
+        let mut to_delete: Vec<String> = Vec::new();
+
+        for mut record in records {
+            let original_user = record.user.clone();
+            let lookup = self.resolve_lookup_keys(&original_user).await;
+            let canonical_key = lookup.canonical_key().to_string();
+            record.user.clone_from(&canonical_key);
+
+            let record_for_cache = record.clone();
+            self.device_registry_cache
+                .insert(canonical_key.clone(), record_for_cache)
+                .await;
+
+            if canonical_key != original_user {
+                to_delete.push(original_user);
+            }
+            prepared.push(record);
+        }
+
+        let backend = self.persistence_manager.backend();
+        backend
+            .update_device_lists(prepared)
+            .await
+            .context("Failed to update device lists in backend")?;
+
+        // Canonical-flip cleanup is rare and per-row; keep the original
+        // pattern (invalidate cache + best-effort delete + re-invalidate)
+        // rather than batching deletes. On error we log and continue so a
+        // single bad row doesn't drop the rest of the batch.
+        for original_user in to_delete {
+            self.device_registry_cache.invalidate(&original_user).await;
+            if let Err(e) = backend.delete_devices(&original_user).await {
+                warn!(
+                    "Failed to delete stale device row under {} after canonical flip: {e}",
+                    original_user
+                );
+            }
+            self.device_registry_cache.invalidate(&original_user).await;
+        }
+
+        Ok(())
+    }
+
     /// Invalidate cached device data for a specific user.
     ///
     /// Removes all device registry cache entries (all LID/PN aliases) so the

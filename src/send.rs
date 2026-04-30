@@ -414,6 +414,7 @@ impl Client {
         };
 
         let prepared = match wacore::send::prepare_group_stanza(
+            &*self.runtime,
             &mut stores,
             self,
             &mut group_info,
@@ -455,6 +456,7 @@ impl Client {
                     let mut stores_retry = store_adapter_retry.as_signal_stores();
 
                     wacore::send::prepare_group_stanza(
+                        &*self.runtime,
                         &mut stores_retry,
                         self,
                         &mut group_info,
@@ -951,11 +953,10 @@ impl Client {
             )
             .await?
         } else if to.is_group() {
-            // Group messages: No client-level lock needed.
-            // Each participant device is encrypted separately with its own per-device lock
-            // inside prepare_group_stanza, so we don't need to serialize entire group sends.
-
-            // Preparation work (no lock needed)
+            // Group messages: no client-level lock needed. The encrypt fan-out
+            // inside prepare_group_stanza touches a different Signal session
+            // per recipient device, so concurrent group sends to the same
+            // chat don't race on shared state.
             let mut group_info = self.groups().query_info(&to).await?;
 
             let mut device_snapshot = self.persistence_manager.get_device_snapshot().await;
@@ -1044,6 +1045,7 @@ impl Client {
             };
 
             match wacore::send::prepare_group_stanza(
+                &*self.runtime,
                 &mut stores,
                 self,
                 &mut group_info,
@@ -1088,6 +1090,7 @@ impl Client {
                         let mut stores_retry = store_adapter_retry.as_signal_stores();
 
                         let retry_prepared = wacore::send::prepare_group_stanza(
+                            &*self.runtime,
                             &mut stores_retry,
                             self,
                             &mut group_info,
@@ -1242,6 +1245,7 @@ impl Client {
             let mut stores = store_adapter.as_signal_stores();
 
             let prepared = wacore::send::prepare_dm_stanza(
+                &*self.runtime,
                 &mut stores,
                 self,
                 own_jid,

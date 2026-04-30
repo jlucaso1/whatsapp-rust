@@ -57,6 +57,8 @@ impl Client {
             }
 
             let mut fetched_devices = Vec::with_capacity(response.device_lists.len());
+            let mut device_records: Vec<wacore::store::traits::DeviceListRecord> =
+                Vec::with_capacity(response.device_lists.len());
 
             for user_list in &response.device_lists {
                 // Update device registry (single source of truth for device lists).
@@ -141,19 +143,20 @@ impl Client {
                     fetched_devices.push(jid);
                 }
 
-                let device_list = wacore::store::traits::DeviceListRecord {
+                device_records.push(wacore::store::traits::DeviceListRecord {
                     user: user_list.user.user.to_string(),
                     devices,
                     timestamp: wacore::time::now_secs(),
                     phash: user_list.phash.clone(),
                     raw_id,
-                };
-                if let Err(e) = self.update_device_list(device_list).await {
-                    warn!(
-                        "Failed to update device registry for {}: {}",
-                        user_list.user.user, e
-                    );
-                }
+                });
+            }
+
+            // One batched backend write for the whole usync response — for
+            // large groups this collapses N spawn_blocking SQLite hops into
+            // a single transaction, which dominated the per-send wall-clock.
+            if let Err(e) = self.update_device_lists(device_records).await {
+                warn!("Failed to update device registry batch: {e}");
             }
 
             all_devices.extend(fetched_devices);

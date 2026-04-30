@@ -2156,6 +2156,73 @@ impl ProtocolStore for SqliteStore {
         Ok(())
     }
 
+    async fn update_device_lists(&self, records: Vec<DeviceListRecord>) -> Result<()> {
+        if records.is_empty() {
+            return Ok(());
+        }
+        let device_id = self.device_id;
+        let now = wacore::time::now_secs() as i32;
+
+        // Pre-serialize devices_json once (outside the retry loop and outside
+        // spawn_blocking) so retries are zero-allocation. Each row carries its
+        // own json+raw_id alongside the record.
+        struct PreparedRow {
+            user: String,
+            devices_json: String,
+            timestamp: i32,
+            phash: Option<String>,
+            raw_id: Option<i32>,
+        }
+
+        let prepared: Vec<PreparedRow> = records
+            .into_iter()
+            .map(|r| {
+                let devices_json = serde_json::to_string(&r.devices)
+                    .map_err(|e| StoreError::Serialization(Box::new(e)))?;
+                Ok(PreparedRow {
+                    user: r.user,
+                    devices_json,
+                    timestamp: r.timestamp as i32,
+                    phash: r.phash,
+                    raw_id: r.raw_id.map(|v| v as i32),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let prepared = std::sync::Arc::new(prepared);
+
+        self.with_retry("update_device_lists", move || {
+            let prepared = std::sync::Arc::clone(&prepared);
+            Box::new(move |conn: &mut SqliteConnection| {
+                conn.transaction::<_, DieselError, _>(|conn| {
+                    for row in prepared.iter() {
+                        diesel::insert_into(device_registry::table)
+                            .values((
+                                device_registry::user_id.eq(&row.user),
+                                device_registry::devices_json.eq(&row.devices_json),
+                                device_registry::timestamp.eq(row.timestamp),
+                                device_registry::phash.eq(&row.phash),
+                                device_registry::device_id.eq(device_id),
+                                device_registry::updated_at.eq(now),
+                                device_registry::raw_id.eq(row.raw_id),
+                            ))
+                            .on_conflict((device_registry::user_id, device_registry::device_id))
+                            .do_update()
+                            .set((
+                                device_registry::devices_json.eq(&row.devices_json),
+                                device_registry::timestamp.eq(row.timestamp),
+                                device_registry::phash.eq(&row.phash),
+                                device_registry::updated_at.eq(now),
+                                device_registry::raw_id.eq(row.raw_id),
+                            ))
+                            .execute(conn)?;
+                    }
+                    Ok(())
+                })
+            })
+        })
+        .await
+    }
+
     async fn get_devices(&self, user: &str) -> Result<Option<DeviceListRecord>> {
         let pool = self.pool.clone();
         let device_id = self.device_id;
