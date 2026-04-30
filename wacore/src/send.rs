@@ -605,6 +605,9 @@ where
                 };
 
                 let mut rng = rand::make_rng::<rand::rngs::StdRng>();
+                // No UntrustedIdentity recovery: WA Web's isTrustedIdentity is
+                // unconditional Ok(true) (TOFU), and save_identity inside
+                // process_prekey_bundle persists rotations transparently.
                 match process_prekey_bundle(
                     &addr,
                     &mut session_store,
@@ -616,60 +619,6 @@ where
                 .await
                 {
                     Ok(_) => Ok(()),
-                    Err(SignalProtocolError::UntrustedIdentity(_)) => {
-                        // Identity rotation: server returned a new identity (e.g., user
-                        // reinstalled WhatsApp). Trust the server, persist, retry once.
-                        log::info!(
-                            "Untrusted identity for device {}. Updating identity and retrying session establishment.",
-                            addr
-                        );
-                        let new_identity = match bundle.identity_key() {
-                            Ok(key) => key,
-                            Err(e) => {
-                                log::warn!(
-                                    "Failed to get identity key from bundle for {}: {:?}. Skipping device.",
-                                    addr,
-                                    e
-                                );
-                                return Ok(());
-                            }
-                        };
-                        if let Err(e) = identity_store.save_identity(&addr, new_identity).await {
-                            log::warn!(
-                                "Failed to save updated identity for {}: {:?}. Skipping device.",
-                                addr,
-                                e
-                            );
-                            return Ok(());
-                        }
-                        let mut rng = rand::make_rng::<rand::rngs::StdRng>();
-                        match process_prekey_bundle(
-                            &addr,
-                            &mut session_store,
-                            &mut identity_store,
-                            bundle,
-                            &mut rng,
-                            UsePQRatchet::No,
-                        )
-                        .await
-                        {
-                            Ok(_) => {
-                                log::info!(
-                                    "Successfully established session with {} after identity update.",
-                                    addr
-                                );
-                                Ok(())
-                            }
-                            Err(e) => {
-                                log::warn!(
-                                    "Failed to establish session with {} even after identity update: {:?}. Skipping device.",
-                                    addr,
-                                    e
-                                );
-                                Ok(())
-                            }
-                        }
-                    }
                     Err(e) => Err(anyhow::anyhow!(
                         "Failed to process pre-key bundle for {}: {:?}",
                         addr,
