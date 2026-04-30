@@ -58,7 +58,10 @@ impl Runtime for BenchRuntime {
         future: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'static>>,
     ) -> AbortHandle {
         use futures::task::SpawnExt;
-        let _ = self.pool.spawn(future);
+        // Silent spawn failure would skip a device's encrypt and fake the speedup.
+        self.pool
+            .spawn(future)
+            .expect("bench thread pool spawn failed");
         AbortHandle::noop()
     }
 
