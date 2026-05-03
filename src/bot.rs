@@ -1115,4 +1115,86 @@ mod tests {
 
         assert!(!bot.client().skip_history_sync_enabled());
     }
+
+    // ── MessageContext Arc compatibility boundary ────────────────────────────
+    //
+    // Lock down the contract introduced by switching `message` from Box to Arc.
+    // These tests guarantee:
+    //   • `from_arc` doesn't deep-clone — `message_arc()` returns the same
+    //     allocation (`Arc::ptr_eq`).
+    //   • `message()` exposes the inner message read-only.
+    //   • `into_box()` reclaims via `Arc::try_unwrap` when the Arc is unique
+    //     (no clone), and falls back to deep-clone when shared.
+    async fn make_test_client() -> Arc<crate::client::Client> {
+        let backend = create_test_sqlite_backend().await;
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(TokioWebSocketTransportFactory::new())
+            .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
+            .build()
+            .await
+            .expect("Failed to build bot");
+        bot.client()
+    }
+
+    fn sample_message(text: &str) -> wa::Message {
+        wa::Message {
+            conversation: Some(text.to_string()),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn from_arc_preserves_allocation() {
+        let client = make_test_client().await;
+        let original = Arc::new(sample_message("ping"));
+        let original_ptr = Arc::as_ptr(&original);
+
+        let ctx = MessageContext::from_arc(original, &MessageInfo::default(), client);
+
+        assert_eq!(ctx.message().conversation.as_deref(), Some("ping"));
+        let exposed = ctx.message_arc();
+        // Same allocation: the Arc round-trips without cloning the inner message.
+        assert!(std::ptr::eq(Arc::as_ptr(&exposed), original_ptr));
+    }
+
+    #[tokio::test]
+    async fn into_box_reclaims_when_unique() {
+        // When the inner Arc has refcount 1, `Arc::try_unwrap` succeeds and
+        // moves the message out without cloning. The Arc's allocation is then
+        // freed — observable via a `Weak` sentinel that becomes orphan.
+        // (Box::new still allocates fresh heap for the destination, so
+        //  boxed.as_ref() addresses do not match the original Arc payload —
+        //  hence we use Weak::strong_count, not pointer identity.)
+        let client = make_test_client().await;
+        let arc = Arc::new(sample_message("solo"));
+        let weak = Arc::downgrade(&arc);
+        let ctx = MessageContext::from_arc(arc, &MessageInfo::default(), client);
+        assert_eq!(weak.strong_count(), 1);
+
+        let boxed = ctx.into_box();
+        assert_eq!(boxed.conversation.as_deref(), Some("solo"));
+        assert_eq!(weak.strong_count(), 0);
+        assert!(weak.upgrade().is_none());
+    }
+
+    #[tokio::test]
+    async fn into_box_clones_when_shared() {
+        // With a second outstanding `Arc`, `try_unwrap` returns `Err` and
+        // `into_box` falls back to deep-cloning the inner message. The kept
+        // Arc survives with refcount 1 afterwards.
+        let client = make_test_client().await;
+        let arc = Arc::new(sample_message("shared"));
+        let kept = Arc::clone(&arc);
+        let ctx = MessageContext::from_arc(arc, &MessageInfo::default(), client);
+        assert_eq!(Arc::strong_count(&kept), 2);
+
+        let boxed = ctx.into_box();
+        assert_eq!(boxed.conversation.as_deref(), Some("shared"));
+        // ctx's internal Arc was dropped when into_box returned; only `kept` remains.
+        assert_eq!(Arc::strong_count(&kept), 1);
+        // Boxed message must be a distinct allocation from the surviving Arc.
+        assert!(!std::ptr::eq(boxed.as_ref() as *const _, Arc::as_ptr(&kept)));
+    }
 }
