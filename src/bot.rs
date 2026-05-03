@@ -30,8 +30,12 @@ pub enum BotBuilderError {
     Other(#[from] anyhow::Error),
 }
 
+/// `Arc<wa::Message>` so cloning the context to re-spawn into a fire-and-forget
+/// task only bumps a refcount; deep-cloning per spawn was costly on hot paths
+/// (emoji-challenge, sticker triggers) where the message carries media buffers.
+#[derive(Clone)]
 pub struct MessageContext {
-    pub message: Box<wa::Message>,
+    pub message: Arc<wa::Message>,
     pub info: MessageInfo,
     pub client: Arc<Client>,
 }
@@ -39,7 +43,16 @@ pub struct MessageContext {
 impl MessageContext {
     pub fn from_parts(message: &wa::Message, info: &MessageInfo, client: Arc<Client>) -> Self {
         Self {
-            message: Box::new(message.clone()),
+            message: Arc::new(message.clone()),
+            info: info.clone(),
+            client,
+        }
+    }
+
+    /// Zero-clone alternative when the caller already owns an `Arc`.
+    pub fn from_arc(message: Arc<wa::Message>, info: &MessageInfo, client: Arc<Client>) -> Self {
+        Self {
+            message,
             info: info.clone(),
             client,
         }
