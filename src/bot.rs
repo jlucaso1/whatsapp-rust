@@ -30,6 +30,17 @@ pub enum BotBuilderError {
     Other(#[from] anyhow::Error),
 }
 
+/// Single source of truth for the `Arc::try_unwrap` → `Box` conversion.
+/// Used by [`MessageContext::into_box`] and exercised directly in tests so
+/// production and test code share one implementation — no chance for a
+/// regression in the production path to slip past tests that mirror it.
+fn arc_into_box<T: Clone>(arc: Arc<T>) -> Box<T> {
+    match Arc::try_unwrap(arc) {
+        Ok(value) => Box::new(value),
+        Err(arc) => Box::new((*arc).clone()),
+    }
+}
+
 /// `message` lives behind `Arc` so cloning the context (e.g., re-spawning into
 /// a fire-and-forget task) only bumps a refcount — deep-cloning per spawn was
 /// costly on hot paths (emoji-challenge, sticker triggers) where the message
@@ -84,10 +95,7 @@ impl MessageContext {
     /// ownership. Tries to reclaim the inner `Message` when the `Arc` is
     /// uniquely held; falls back to deep-cloning otherwise.
     pub fn into_box(self) -> Box<wa::Message> {
-        match Arc::try_unwrap(self.message) {
-            Ok(msg) => Box::new(msg),
-            Err(arc) => Box::new((*arc).clone()),
-        }
+        arc_into_box(self.message)
     }
 
     pub fn from_event(event: &Event, client: Arc<Client>) -> Option<Self> {
@@ -1183,7 +1191,7 @@ mod tests {
         // State-level: with a second outstanding `Arc`, into_box drops only
         // its own strong ref; `kept` survives at refcount 1 and the boxed
         // message lives in a distinct allocation. Path-level (clone happens
-        // exactly once) covered in `into_box_skips_clone_when_unique`.
+        // exactly once) covered in `into_box_invokes_clone_exactly_once_when_shared`.
         let client = make_test_client().await;
         let arc = Arc::new(sample_message("shared"));
         let kept = Arc::clone(&arc);
@@ -1203,16 +1211,10 @@ mod tests {
     //
     // The state-level tests above can't distinguish `try_unwrap → Ok` from a
     // hypothetical "always clone, then drop the Arc" impl. This block probes
-    // the algorithm directly: a payload type that increments a shared counter
-    // every time `Clone::clone` runs. We replicate the exact `match
-    // Arc::try_unwrap(...) { Ok => Box::new, Err => clone }` pattern from
-    // `into_box` and assert the counter only changes on the shared path.
-    //
-    // A regression that swaps `into_box` for `Box::new((*self.message).clone())`
-    // would be caught by these tests if the algorithm were exercised; for
-    // ironclad coverage you'd need to make `into_box` itself generic over the
-    // payload type, which is out of scope here. Until then this guarantees
-    // the pattern this PR is shipping behaves as documented.
+    // the algorithm directly: a payload type that bumps a shared counter on
+    // every `Clone::clone`, exercised against the SAME helper the production
+    // path uses. `MessageContext::into_box` delegates to `arc_into_box`, so a
+    // regression in the production path is forced to surface here.
 
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -1229,16 +1231,6 @@ mod tests {
         }
     }
 
-    fn try_unwrap_or_clone<T: Clone>(arc: Arc<T>) -> Box<T> {
-        // Mirror of `MessageContext::into_box`. Kept here as a free function
-        // so it can be exercised against any T — the production version is
-        // monomorphized over `wa::Message` and can't be probed directly.
-        match Arc::try_unwrap(arc) {
-            Ok(v) => Box::new(v),
-            Err(arc) => Box::new((*arc).clone()),
-        }
-    }
-
     #[test]
     fn into_box_skips_clone_when_unique() {
         let counter = Arc::new(AtomicUsize::new(0));
@@ -1247,7 +1239,7 @@ mod tests {
         };
         let arc = Arc::new(payload);
 
-        let _boxed = try_unwrap_or_clone(arc);
+        let _boxed = arc_into_box(arc);
 
         assert_eq!(
             counter.load(Ordering::SeqCst),
@@ -1265,7 +1257,7 @@ mod tests {
         let arc = Arc::new(payload);
         let _kept = Arc::clone(&arc);
 
-        let _boxed = try_unwrap_or_clone(arc);
+        let _boxed = arc_into_box(arc);
 
         assert_eq!(
             counter.load(Ordering::SeqCst),
