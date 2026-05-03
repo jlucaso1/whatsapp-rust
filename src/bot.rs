@@ -30,12 +30,18 @@ pub enum BotBuilderError {
     Other(#[from] anyhow::Error),
 }
 
-/// `Arc<wa::Message>` so cloning the context to re-spawn into a fire-and-forget
-/// task only bumps a refcount; deep-cloning per spawn was costly on hot paths
-/// (emoji-challenge, sticker triggers) where the message carries media buffers.
+/// `message` lives behind `Arc` so cloning the context (e.g., re-spawning into
+/// a fire-and-forget task) only bumps a refcount — deep-cloning per spawn was
+/// costly on hot paths (emoji-challenge, sticker triggers) where the message
+/// carries media buffers.
+///
+/// The field is private to keep the storage representation an implementation
+/// detail. Use [`Self::message`] for read-only access (95% of call sites),
+/// [`Self::message_arc`] when you need to share ownership (e.g., re-spawn),
+/// or [`Self::into_box`] for legacy code that requires `Box<wa::Message>`.
 #[derive(Clone)]
 pub struct MessageContext {
-    pub message: Arc<wa::Message>,
+    message: Arc<wa::Message>,
     pub info: MessageInfo,
     pub client: Arc<Client>,
 }
@@ -55,6 +61,32 @@ impl MessageContext {
             message,
             info: info.clone(),
             client,
+        }
+    }
+
+    /// Read-only access to the underlying message. Replaces direct
+    /// `ctx.message` field access from the previous `Box`-based API.
+    #[inline]
+    pub fn message(&self) -> &wa::Message {
+        &self.message
+    }
+
+    /// Cheap clone of the inner `Arc` for sharing ownership across tasks
+    /// without deep-copying `wa::Message` (typical for [`Self::from_arc`]
+    /// re-spawns). Calling `Arc::clone` directly via `&ctx.message` is no
+    /// longer available since the field is private.
+    #[inline]
+    pub fn message_arc(&self) -> Arc<wa::Message> {
+        Arc::clone(&self.message)
+    }
+
+    /// Compatibility helper for legacy code that needs `Box<wa::Message>`
+    /// ownership. Tries to reclaim the inner `Message` when the `Arc` is
+    /// uniquely held; falls back to deep-cloning otherwise.
+    pub fn into_box(self) -> Box<wa::Message> {
+        match Arc::try_unwrap(self.message) {
+            Ok(msg) => Box::new(msg),
+            Err(arc) => Box::new((*arc).clone()),
         }
     }
 
