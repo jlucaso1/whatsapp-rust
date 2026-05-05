@@ -386,7 +386,7 @@ pub enum Event {
     QrScannedWithoutMultidevice(QrScannedWithoutMultidevice),
     ClientOutdated(ClientOutdated),
 
-    Message(Box<wa::Message>, Arc<MessageInfo>),
+    Message(Arc<wa::Message>, Arc<MessageInfo>),
     Receipt(Receipt),
     UndecryptableMessage(UndecryptableMessage),
     #[serde(skip)]
@@ -466,7 +466,7 @@ pub struct MexNotification {
 }
 
 impl Event {
-    pub fn as_message(&self) -> Option<(&wa::Message, &MessageInfo)> {
+    pub fn as_message(&self) -> Option<(&Arc<wa::Message>, &MessageInfo)> {
         if let Event::Message(msg, info) = self {
             Some((msg, &**info))
         } else {

@@ -30,43 +30,21 @@ pub enum BotBuilderError {
     Other(#[from] anyhow::Error),
 }
 
-/// Single source of truth for the `Arc::try_unwrap` → `Box` conversion.
-/// Used by [`MessageContext::into_box`] and exercised directly in tests so
-/// production and test code share one implementation — no chance for a
-/// regression in the production path to slip past tests that mirror it.
-fn arc_into_box<T: Clone>(arc: Arc<T>) -> Box<T> {
-    match Arc::try_unwrap(arc) {
-        Ok(value) => Box::new(value),
-        Err(arc) => Box::new((*arc).clone()),
-    }
-}
-
-/// `message` lives behind `Arc` so cloning the context (e.g., re-spawning into
-/// a fire-and-forget task) only bumps a refcount — deep-cloning per spawn was
-/// costly on hot paths (emoji-challenge, sticker triggers) where the message
-/// carries media buffers.
-///
-/// The field is private to keep the storage representation an implementation
-/// detail. Use [`Self::message`] for read-only access (95% of call sites),
-/// [`Self::message_arc`] when you need to share ownership (e.g., re-spawn),
-/// or [`Self::into_box`] for legacy code that requires `Box<wa::Message>`.
+/// `message` is `Arc` so cloning the context across spawned tasks only bumps a
+/// refcount, matching the pattern used by serenity's `Context` and matrix-sdk's
+/// `Room`/`Client`.
 #[derive(Clone)]
 pub struct MessageContext {
-    message: Arc<wa::Message>,
+    pub message: Arc<wa::Message>,
     pub info: MessageInfo,
     pub client: Arc<Client>,
 }
 
 impl MessageContext {
     pub fn from_parts(message: &wa::Message, info: &MessageInfo, client: Arc<Client>) -> Self {
-        Self {
-            message: Arc::new(message.clone()),
-            info: info.clone(),
-            client,
-        }
+        Self::from_arc(Arc::new(message.clone()), info, client)
     }
 
-    /// Zero-clone alternative when the caller already owns an `Arc`.
     pub fn from_arc(message: Arc<wa::Message>, info: &MessageInfo, client: Arc<Client>) -> Self {
         Self {
             message,
@@ -75,32 +53,9 @@ impl MessageContext {
         }
     }
 
-    /// Read-only access to the underlying message. Replaces direct
-    /// `ctx.message` field access from the previous `Box`-based API.
-    #[inline]
-    pub fn message(&self) -> &wa::Message {
-        &self.message
-    }
-
-    /// Cheap clone of the inner `Arc` for sharing ownership across tasks
-    /// without deep-copying `wa::Message` (typical for [`Self::from_arc`]
-    /// re-spawns). Calling `Arc::clone` directly via `&ctx.message` is no
-    /// longer available since the field is private.
-    #[inline]
-    pub fn message_arc(&self) -> Arc<wa::Message> {
-        Arc::clone(&self.message)
-    }
-
-    /// Compatibility helper for legacy code that needs `Box<wa::Message>`
-    /// ownership. Tries to reclaim the inner `Message` when the `Arc` is
-    /// uniquely held; falls back to deep-cloning otherwise.
-    pub fn into_box(self) -> Box<wa::Message> {
-        arc_into_box(self.message)
-    }
-
     pub fn from_event(event: &Event, client: Arc<Client>) -> Option<Self> {
         let (msg, info) = event.as_message()?;
-        Some(Self::from_parts(msg, info, client))
+        Some(Self::from_arc(Arc::clone(msg), info, client))
     }
 
     pub async fn send_message(
@@ -1124,16 +1079,8 @@ mod tests {
         assert!(!bot.client().skip_history_sync_enabled());
     }
 
-    // ── MessageContext Arc compatibility boundary ────────────────────────────
-    //
-    // Lock down the contract introduced by switching `message` from Box to Arc.
-    // These tests guarantee:
-    //   • `from_arc` doesn't deep-clone — `message_arc()` returns the same
-    //     allocation (`Arc::ptr_eq`).
-    //   • `message()` exposes the inner message read-only.
-    //   • `into_box()` reclaims via `Arc::try_unwrap` when the Arc is unique
-    //     (no clone), and falls back to deep-clone when shared.
-    async fn make_test_client() -> Arc<crate::client::Client> {
+    #[tokio::test]
+    async fn from_arc_does_not_deep_clone() {
         let backend = create_test_sqlite_backend().await;
         let bot = Bot::builder()
             .with_backend(backend)
@@ -1143,126 +1090,16 @@ mod tests {
             .build()
             .await
             .expect("Failed to build bot");
-        bot.client()
-    }
 
-    fn sample_message(text: &str) -> wa::Message {
-        wa::Message {
-            conversation: Some(text.to_string()),
+        let original = Arc::new(wa::Message {
+            conversation: Some("ping".to_string()),
             ..Default::default()
-        }
-    }
-
-    #[tokio::test]
-    async fn from_arc_preserves_allocation() {
-        let client = make_test_client().await;
-        let original = Arc::new(sample_message("ping"));
+        });
         let original_ptr = Arc::as_ptr(&original);
 
-        let ctx = MessageContext::from_arc(original, &MessageInfo::default(), client);
+        let ctx =
+            MessageContext::from_arc(Arc::clone(&original), &MessageInfo::default(), bot.client());
 
-        assert_eq!(ctx.message().conversation.as_deref(), Some("ping"));
-        let exposed = ctx.message_arc();
-        // Same allocation: the Arc round-trips without cloning the inner message.
-        assert!(std::ptr::eq(Arc::as_ptr(&exposed), original_ptr));
-    }
-
-    #[tokio::test]
-    async fn into_box_with_unique_arc_consumes_strong_ref() {
-        // State-level test: confirms that when the inner Arc has refcount 1,
-        // `into_box` consumes it (Weak sentinel becomes orphan). This alone
-        // does NOT prove `try_unwrap` was taken — a hypothetical impl that
-        // always clones and drops the original would pass the same way.
-        // Path-level coverage lives in `into_box_skips_clone_when_unique`.
-        let client = make_test_client().await;
-        let arc = Arc::new(sample_message("solo"));
-        let weak = Arc::downgrade(&arc);
-        let ctx = MessageContext::from_arc(arc, &MessageInfo::default(), client);
-        assert_eq!(weak.strong_count(), 1);
-
-        let boxed = ctx.into_box();
-        assert_eq!(boxed.conversation.as_deref(), Some("solo"));
-        assert_eq!(weak.strong_count(), 0);
-        assert!(weak.upgrade().is_none());
-    }
-
-    #[tokio::test]
-    async fn into_box_with_shared_arc_preserves_other_strong_refs() {
-        // State-level: with a second outstanding `Arc`, into_box drops only
-        // its own strong ref; `kept` survives at refcount 1 and the boxed
-        // message lives in a distinct allocation. Path-level (clone happens
-        // exactly once) covered in `into_box_invokes_clone_exactly_once_when_shared`.
-        let client = make_test_client().await;
-        let arc = Arc::new(sample_message("shared"));
-        let kept = Arc::clone(&arc);
-        let ctx = MessageContext::from_arc(arc, &MessageInfo::default(), client);
-        assert_eq!(Arc::strong_count(&kept), 2);
-
-        let boxed = ctx.into_box();
-        assert_eq!(boxed.conversation.as_deref(), Some("shared"));
-        assert_eq!(Arc::strong_count(&kept), 1);
-        assert!(!std::ptr::eq(
-            boxed.as_ref() as *const _,
-            Arc::as_ptr(&kept)
-        ));
-    }
-
-    // ── Path-level probe for the `into_box` algorithm ────────────────────────
-    //
-    // The state-level tests above can't distinguish `try_unwrap → Ok` from a
-    // hypothetical "always clone, then drop the Arc" impl. This block probes
-    // the algorithm directly: a payload type that bumps a shared counter on
-    // every `Clone::clone`, exercised against the SAME helper the production
-    // path uses. `MessageContext::into_box` delegates to `arc_into_box`, so a
-    // regression in the production path is forced to surface here.
-
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    struct CloneCounter {
-        count: Arc<AtomicUsize>,
-    }
-
-    impl Clone for CloneCounter {
-        fn clone(&self) -> Self {
-            self.count.fetch_add(1, Ordering::SeqCst);
-            Self {
-                count: Arc::clone(&self.count),
-            }
-        }
-    }
-
-    #[test]
-    fn into_box_skips_clone_when_unique() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let payload = CloneCounter {
-            count: Arc::clone(&counter),
-        };
-        let arc = Arc::new(payload);
-
-        let _boxed = arc_into_box(arc);
-
-        assert_eq!(
-            counter.load(Ordering::SeqCst),
-            0,
-            "try_unwrap path must not invoke Clone"
-        );
-    }
-
-    #[test]
-    fn into_box_invokes_clone_exactly_once_when_shared() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let payload = CloneCounter {
-            count: Arc::clone(&counter),
-        };
-        let arc = Arc::new(payload);
-        let _kept = Arc::clone(&arc);
-
-        let _boxed = arc_into_box(arc);
-
-        assert_eq!(
-            counter.load(Ordering::SeqCst),
-            1,
-            "shared-arc fallback must invoke Clone exactly once"
-        );
+        assert!(std::ptr::eq(Arc::as_ptr(&ctx.message), original_ptr));
     }
 }

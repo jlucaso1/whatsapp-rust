@@ -96,7 +96,7 @@ impl Client {
 
         self.core
             .event_bus
-            .dispatch(Event::Message(Box::new(msg), info));
+            .dispatch(Event::Message(Arc::new(msg), info));
     }
 
     /// Handles a newsletter plaintext message.
