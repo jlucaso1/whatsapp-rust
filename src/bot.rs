@@ -30,16 +30,24 @@ pub enum BotBuilderError {
     Other(#[from] anyhow::Error),
 }
 
+/// `message` is `Arc` so cloning the context across spawned tasks only bumps a
+/// refcount, matching the pattern used by serenity's `Context` and matrix-sdk's
+/// `Room`/`Client`.
+#[derive(Clone)]
 pub struct MessageContext {
-    pub message: Box<wa::Message>,
+    pub message: Arc<wa::Message>,
     pub info: MessageInfo,
     pub client: Arc<Client>,
 }
 
 impl MessageContext {
     pub fn from_parts(message: &wa::Message, info: &MessageInfo, client: Arc<Client>) -> Self {
+        Self::from_arc(Arc::new(message.clone()), info, client)
+    }
+
+    pub fn from_arc(message: Arc<wa::Message>, info: &MessageInfo, client: Arc<Client>) -> Self {
         Self {
-            message: Box::new(message.clone()),
+            message,
             info: info.clone(),
             client,
         }
@@ -47,7 +55,7 @@ impl MessageContext {
 
     pub fn from_event(event: &Event, client: Arc<Client>) -> Option<Self> {
         let (msg, info) = event.as_message()?;
-        Some(Self::from_parts(msg, info, client))
+        Some(Self::from_arc(Arc::clone(msg), info, client))
     }
 
     pub async fn send_message(
@@ -1069,5 +1077,29 @@ mod tests {
             .expect("Failed to build bot");
 
         assert!(!bot.client().skip_history_sync_enabled());
+    }
+
+    #[tokio::test]
+    async fn from_arc_does_not_deep_clone() {
+        let backend = create_test_sqlite_backend().await;
+        let bot = Bot::builder()
+            .with_backend(backend)
+            .with_transport_factory(TokioWebSocketTransportFactory::new())
+            .with_http_client(MockHttpClient)
+            .with_runtime(TokioRuntime)
+            .build()
+            .await
+            .expect("Failed to build bot");
+
+        let original = Arc::new(wa::Message {
+            conversation: Some("ping".to_string()),
+            ..Default::default()
+        });
+        let original_ptr = Arc::as_ptr(&original);
+
+        let ctx =
+            MessageContext::from_arc(Arc::clone(&original), &MessageInfo::default(), bot.client());
+
+        assert!(std::ptr::eq(Arc::as_ptr(&ctx.message), original_ptr));
     }
 }
